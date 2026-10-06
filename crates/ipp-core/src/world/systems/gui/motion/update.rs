@@ -1,15 +1,18 @@
-use super::runtime::{
+use super::runtime_state::{
     GuiMotionChannels, GuiMotionFollows, GuiMotionKey, GuiMotionOwner, GuiMotionValues,
     channel_focus_part, focus_part_channel, notify_sample,
 };
 use super::timing::GuiMotionRows;
-use crate::systems::gui::local::control::{GuiControl, eligibility, entity_control, focus_parts};
-use crate::systems::gui::local::{GUI_MAX_FOCUS_PARTS, GuiBehavior, GuiControlKind, GuiLocalState};
+use crate::systems::gui::local::controls::identity::{
+    GuiControl, eligibility, entity_control, focus_parts,
+};
+use crate::systems::gui::local::{GUI_MAX_FOCUS_PARTS, GuiBehavior, GuiControlKind};
 use crate::systems::gui::presentation::looks::{GuiSkinLook, control_look};
 use crate::systems::gui::presentation::paint::{
     appearance, control_variant, explicit_unchecked, inherited_font_size,
 };
 use crate::systems::gui::presentation::{GuiSkin, GuiTheme};
+use crate::systems::gui::system_state::GuiLocalState;
 use crate::systems::gui::{GuiPartStyle, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
 use crate::systems::{SystemCommitContext, SystemRuntimeAccess};
 use crate::world::WorldSimulationState;

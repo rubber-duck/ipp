@@ -13,7 +13,7 @@ from .model import ROOT, Task
 from .processes import node, run
 
 DIRECTORY = ROOT / "target/performance-build/chart-data"
-CHART_PROFILE = "services::render::plot_label_layout::profile_tests::chart_profile"
+CHART_PROFILE = "services::render::plot::label_layout::profile_tests::chart_profile"
 
 
 def build() -> None:
@@ -24,7 +24,7 @@ def build() -> None:
         shutil.copy2(ROOT / f"target/release/examples/gles_host{suffix}", executable)
         native_contract(output / "contract.bin", release=True)
         compile_client(output, output / "contract.bin")
-        run([node(), "tools/build/chart-data.mjs", str(output)])
+        run([node(), "tools/performance/chart-data.mjs", str(output)])
         write_json(
             output / "build-identity.json",
             {

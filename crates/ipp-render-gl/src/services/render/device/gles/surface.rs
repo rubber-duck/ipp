@@ -2,10 +2,10 @@ use super::super::retained_records::gui_record_layout;
 use super::{ARRAY_BUFFER, DYNAMIC_DRAW, FLOAT, TRIANGLES};
 use super::{GlesRenderDevice, GlesRenderProgram, GlesSurfacePath};
 use crate::RenderError;
-use crate::services::render::gui_records::GUI_RECORD_VERTICES;
-use crate::services::render::surface_path::{
+use crate::services::render::assets::paths::{
     BAND_HEADER_TEXELS, SurfaceBandTexels, SurfaceCurveTexels, SurfacePathTexels,
 };
+use crate::services::render::retained::records::GUI_RECORD_VERTICES;
 use std::{ffi::c_void, ptr};
 
 /// Texture format and borrowed data of one packed path texel upload.
@@ -331,7 +331,7 @@ impl GlesRenderDevice {
         path: &GlesSurfacePath,
         instances: &[super::SurfacePathInstance],
     ) -> Result<i32, RenderError> {
-        if !super::super::surface_instances_exact(instances) {
+        if !super::super::surface_instances::surface_instances_exact(instances) {
             return Err(RenderError::RenderDevice(
                 "surface instance atlas exceeds exact descriptor limits".into(),
             ));
@@ -354,7 +354,10 @@ impl GlesRenderDevice {
 
         let count = i32::try_from(instances.len())
             .map_err(|_| RenderError::RenderDevice("too many surface instances".into()))?;
-        super::super::pack_surface_instances(instances, &mut self.surface_instance_scratch);
+        super::super::surface_instances::pack_surface_instances(
+            instances,
+            &mut self.surface_instance_scratch,
+        );
         Ok(count)
     }
 

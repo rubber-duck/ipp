@@ -11,7 +11,7 @@ use crate::{ComponentValue, EntityId, ErrorReason};
 /// modes and keeps the eligibility fields current.
 #[derive(Default)]
 pub struct GuiSystem {
-    pub(super) local: super::local::GuiLocalState,
+    pub(super) local: super::system_state::GuiLocalState,
     pub(super) motion: super::motion::GuiMotionState,
     pub(super) preferences: super::GuiPreferences,
 }
@@ -82,10 +82,10 @@ impl GuiSystem {
     pub(in crate::world::systems) fn group_item(
         &self,
         world: &crate::world::WorldSimulationState,
-        control: super::local::control::GuiControl,
+        control: super::local::controls::identity::GuiControl,
         ancestry: &[EntityId],
     ) -> Option<super::presentation::GuiGroupItem> {
-        if !super::local::group::item_kind(control.kind) {
+        if !super::local::composites::group::item_kind(control.kind) {
             return None;
         }
         let ancestors = ancestry.split_last()?.1;
@@ -100,8 +100,8 @@ impl GuiSystem {
                     .map(|value| (index, value))
             })?;
         if ancestors[index + 1..].iter().any(|&between| {
-            super::local::control::entity_control(world, &world.state, between)
-                .is_some_and(|between| super::local::group::item_kind(between.kind))
+            super::local::controls::identity::entity_control(world, &world.state, between)
+                .is_some_and(|between| super::local::composites::group::item_kind(between.kind))
         }) {
             return None;
         }
@@ -425,7 +425,7 @@ impl System for GuiSystem {
         &mut self,
         context: &mut crate::systems::SystemOperationContext<'_>,
     ) -> Result<(), ErrorReason> {
-        super::local::group::keep_exclusive_selection(context)
+        super::local::composites::group::keep_exclusive_selection(context)
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
@@ -523,7 +523,3 @@ impl System for GuiSystem {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "motion_lifetime_tests.rs"]
-mod motion_lifetime_tests;

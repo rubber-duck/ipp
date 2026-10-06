@@ -35,9 +35,7 @@ impl GeometryShapePart {
     pub(crate) fn validate(&self) -> Result<(), ErrorReason> {
         self.shape.validate()?;
         self.transform.validate()?;
-        GeometryShapeTransform::from_matrix(crate::systems::camera::model_matrix(
-            &self.transform,
-        )?)?;
+        GeometryShapeTransform::from_matrix(crate::math::model_matrix(&self.transform)?)?;
         if let Some(joints) = self.joints
             && (joints[0] >= MAX_JOINTS as u32
                 || joints[1] >= MAX_JOINTS as u32
@@ -215,7 +213,7 @@ pub(crate) fn geometry_asset_loader() -> impl AssetLoader<Data = GeometryDefinit
     })
 }
 
-impl crate::services::asset_management::writer::AssetEncoder for GeometryDefinition {
+impl crate::services::asset_management::AssetEncoder for GeometryDefinition {
     fn encode_asset(&self, max_bytes: usize) -> Result<Vec<u8>, String> {
         if 12 + self.parts.len() * 80 > max_bytes {
             return Err("Asset output byte budget exhausted".into());
@@ -258,8 +256,9 @@ impl GeometryDefinition {
                 },
                 _ => return Err("Invalid geometry shape".into()),
             };
-            let transform = crate::services::asset_management::skeleton::transform(&record[32..72])
-                .map_err(|error| error.to_string())?;
+            let transform =
+                crate::services::asset_management::formats::skeleton::transform(&record[32..72])
+                    .map_err(|error| error.to_string())?;
             let joints = [word(72), word(76)];
             let part = GeometryShapePart {
                 shape,
@@ -269,8 +268,7 @@ impl GeometryDefinition {
             // The same domain validation applies to each independent shape part.
             part.shape.validate().map_err(|error| error.to_string())?;
             GeometryShapeTransform::from_matrix(
-                crate::systems::camera::model_matrix(&part.transform)
-                    .map_err(|error| error.to_string())?,
+                crate::math::model_matrix(&part.transform).map_err(|error| error.to_string())?,
             )
             .map_err(|error| error.to_string())?;
             if let Some(joints) = part.joints

@@ -1,21 +1,14 @@
 use std::fmt::Write as _;
 
+use crate::typescript::{GUI_PAINT_TEMPLATE, TEMPLATES};
+
 /// Reserve actual maintained template bindings, including imports and re-exports.
 fn template_identifiers() -> &'static std::collections::BTreeSet<String> {
     static NAMES: std::sync::OnceLock<std::collections::BTreeSet<String>> =
         std::sync::OnceLock::new();
     NAMES.get_or_init(|| {
         let mut names = std::collections::BTreeSet::new();
-        for template in [
-            include_str!("codec.template.ts"),
-            include_str!("animation.template.ts"),
-            include_str!("dataset.template.ts"),
-            include_str!("data-authoring.template.ts"),
-            include_str!("geometry.template.ts"),
-            include_str!("skeleton.template.ts"),
-            include_str!("skinning.template.ts"),
-            include_str!("gui-paint.template.ts"),
-        ] {
+        for template in TEMPLATES.into_iter().chain([GUI_PAINT_TEMPLATE]) {
             let mut bindings = String::new();
             for line in template.lines() {
                 if !bindings.is_empty()

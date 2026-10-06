@@ -1,11 +1,11 @@
 /** Static world components; contract resolution belongs to the receiving root. */
 import { createElement } from "react";
 import type { DynamicPropertyInput } from "@ipp/client";
-import type { AssetReference, AssetFieldWrite } from "./assets.js";
+import type { AssetReference, AssetFieldWrite } from "./assets/declarations.js";
 import type { ReactNode } from "react";
 import type { FieldWrite } from "@ipp/client";
-import { guiComponentContract } from "./gui/manifest.js";
-import { plotComponentContract } from "./plot-manifest.js";
+import { guiComponentContract } from "./gui/fields.js";
+import { plotComponentContract } from "./plots/fields.js";
 
 export const ENTITY_HOST_TYPE = "ipp-entity";
 export const CHILDREN_HOST_TYPE = "ipp-children";

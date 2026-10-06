@@ -239,7 +239,7 @@ impl PlotSystem {
             let key = assets
                 .find_source(
                     context.world.world.id,
-                    crate::services::asset_management::font::FONT_TYPE,
+                    crate::services::asset_management::formats::font::FONT_TYPE,
                     source,
                     variant,
                 )
@@ -247,7 +247,7 @@ impl PlotSystem {
             Some((
                 key,
                 assets
-                    .get_typed::<crate::services::asset_management::font::FontAsset>(key)
+                    .get_typed::<crate::services::asset_management::formats::font::FontAsset>(key)
                     .ok_or(ErrorReason::InvalidAsset)?,
             ))
         };

@@ -68,6 +68,8 @@ impl AnimationSystem {
     }
 }
 
+crate::system_parameter!(AnimationSystem);
+
 /// Reusable factory; it retains no mutable world state.
 #[derive(Default)]
 pub struct AnimationSystemFactory;

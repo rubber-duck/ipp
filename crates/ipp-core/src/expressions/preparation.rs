@@ -1,3 +1,6 @@
+//! Declaration validation within the input, node and depth bounds, and preparation of a
+//! shareable plan, synchronously or as a cooperative asynchronous task.
+
 use super::*;
 use std::collections::HashSet;
 
@@ -428,3 +431,7 @@ impl PreparedExpression {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "preparation_tests.rs"]
+mod tests;

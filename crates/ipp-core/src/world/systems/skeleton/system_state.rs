@@ -4,7 +4,7 @@
 #[derive(Default)]
 pub struct SkeletonSystemState {
     pub(super) components:
-        crate::world::component_query::ComponentQuery<crate::components::Skeleton>,
+        crate::world::direct_bindings::component_query::ComponentQuery<crate::components::Skeleton>,
     pub(super) local_scratch: Vec<crate::components::Transform>,
     pub(in crate::world) skeleton_diagnostics: Vec<crate::RenderDiagnostic>,
 }

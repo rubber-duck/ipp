@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from repository_structure import source_imports, structure_errors
+from checks.repository_structure import source_imports, structure_errors
 
 
 class StructureTests(unittest.TestCase):
@@ -159,6 +159,58 @@ const loaded = import("./real.js");
         )
         self.assertEqual(len(errors), 1)
         self.assertIn("#[path]", errors[0])
+
+    def test_plural_system_component_file_is_rejected(self):
+        errors = self.check_tree(
+            {
+                "crates/core/src/world/systems/plot/components.rs": "",
+                "tools/derive/src/world/systems/components.rs": "",
+            }
+        )
+        self.assertEqual(len(errors), 2)
+        self.assertIn("plot/component.rs", errors[0])
+        self.assertIn("systems/component.rs", errors[1])
+
+    def test_component_role_names_outside_systems_are_allowed(self):
+        self.assertEqual(
+            self.check_tree(
+                {
+                    "crates/core/src/components/mod.rs": "mod storage;",
+                    "crates/core/src/components/storage.rs": "",
+                    "crates/core/src/world/systems/plot/component.rs": "",
+                    "crates/core/src/world/systems/surface/curved_component.rs": "",
+                    "crates/protocol/src/components.rs": "",
+                    "crates/core/tests/world/systems/components.rs": "",
+                }
+            ),
+            [],
+        )
+
+    def test_diagnostics_below_the_crate_root_is_rejected(self):
+        errors = self.check_tree(
+            {
+                "crates/core/src/world/systems/canvas/diagnostics.rs": "",
+                "tools/derive/src/codegen/diagnostics.rs": "",
+            }
+        )
+        self.assertEqual(len(errors), 2)
+        self.assertIn("canvas/statistics.rs", errors[0])
+        self.assertIn("codegen/statistics.rs", errors[1])
+        self.assertTrue(all("logging module" in error for error in errors))
+
+    def test_crate_root_diagnostics_and_statistics_are_allowed(self):
+        self.assertEqual(
+            self.check_tree(
+                {
+                    "crates/core/src/diagnostics.rs": "",
+                    "tools/derive/src/diagnostics.rs": "",
+                    "crates/core/tests/diagnostics.rs": "",
+                    "crates/core/src/world/systems/canvas/statistics.rs": "",
+                    "crates/core/src/world/systems/canvas/output_diagnostics_tests.rs": "",
+                }
+            ),
+            [],
+        )
 
     def test_tests_may_use_real_examples_and_commented_imports_are_ignored(self):
         self.assertEqual(

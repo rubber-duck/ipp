@@ -34,15 +34,8 @@ use std::cell::RefCell;
 
 mod boundary;
 mod connection_output;
-mod host;
 
 mod services;
-
-#[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
-mod task_scheduler_testing;
-
-#[cfg(test)]
-mod wasm_host_tests;
 
 thread_local! {
     // wasm32-unknown-unknown is single-threaded; native tests get isolated owners.
@@ -281,7 +274,7 @@ pub extern "C" fn ipp_output_len() -> usize {
 // SAFETY: Unique symbol; compatibility identity has no borrowed storage.
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_schema_hash() -> u64 {
-    ipp_protocol::schema_hash()
+    ipp_protocol::contract::schema_hash()
 }
 
 mod contract {
@@ -290,11 +283,11 @@ mod contract {
     static FIXTURE: OnceLock<Vec<u8>> = OnceLock::new();
 
     fn contract() -> &'static [u8] {
-        ipp_protocol::export_contract()
+        ipp_protocol::contract::export_contract()
     }
 
     fn fixture() -> &'static [u8] {
-        FIXTURE.get_or_init(ipp_protocol::export_layout_fixture)
+        FIXTURE.get_or_init(ipp_protocol::contract::export_layout_fixture)
     }
 
     // SAFETY: Unique exported symbol; pointer refers to the immutable contract that
@@ -327,7 +320,7 @@ mod contract {
     // SAFETY: Unique symbol; runs owned typed writes without host pointers.
     #[unsafe(no_mangle)]
     pub extern "C" fn ipp_fixture_check() -> u32 {
-        u32::from(ipp_protocol::check_layout_fixture())
+        u32::from(ipp_protocol::contract::check_layout_fixture())
     }
 }
 

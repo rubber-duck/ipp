@@ -102,8 +102,14 @@ def affected(
         ):
             ids.extend(["check:format-js", "check:format-python", "check:format-md"])
             ids.extend(suite_ids(["runner"]))
-        elif path.startswith(("tools/check_", "tools/repository_structure")):
+        elif path == "tools/check_workspace.py":
+            ids.append("check:workspace")
+        elif path == "tools/check_repo.py":
             ids.append("check:repository")
+        elif path.startswith("tools/checks/"):
+            # The repository check's libraries have unit tests in the runner suite.
+            ids.append("check:repository")
+            ids.extend(suite_ids(["runner"]))
         elif not owned:
             uncertain.append(path)
     if uncertain and not explicit_suites:

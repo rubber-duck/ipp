@@ -1,60 +1,11 @@
-use super::input_test_support::GuiTestHost;
-use super::local_tests::{GuiTestValue, action, apply, create, frame, outcomes, snapshot};
+use super::test_support::{
+    GuiTestHost, GuiTestValue, action, apply, attached, create, frame, outcomes, presented,
+    snapshot,
+};
 use super::*;
-use crate::components::FlatSurface;
 use crate::services::gui_input::*;
 use crate::systems::gui::GuiSystem;
-use crate::{
-    Command, ComponentValue, EntityPlacementRef, EntityRef, ErrorReason, OutputRef,
-    WorldAttachment, WorldAttachmentToken, WorldId, WorldViewport,
-};
-
-pub(super) fn presented(
-    value: ComponentValue,
-) -> (GuiTestHost, OutputRef, GuiEntityTarget, GuiInputContext) {
-    let mut host = GuiTestHost::default();
-    let world = host
-        .create_world(
-            Default::default(),
-            &super::local_tests::PRESENTED_GUI_SYSTEMS,
-        )
-        .unwrap();
-    let root = create(
-        &mut host,
-        world,
-        ComponentValue::CanvasStyle(Default::default()),
-    );
-    let entity = create(&mut host, world, value);
-    apply(
-        &mut host,
-        world,
-        vec![Command::PlaceEntity {
-            entity: EntityRef::Handle(entity),
-            placement: EntityPlacementRef {
-                parent: Some(EntityRef::Handle(root)),
-                before: None,
-            },
-        }],
-    );
-    let output = OutputRef::canvas(host.host.world_ref(world).unwrap());
-    host.set_root_output(
-        output,
-        WorldViewport {
-            width: 128,
-            height: 128,
-            device_pixel_ratio: 1.0,
-        },
-    )
-    .unwrap();
-    frame(&mut host);
-    let target = snapshot(&mut host, world, entity).target;
-    let context = host
-        .service
-        .bind_context(&host.host, &host.session, output.world())
-        .unwrap()
-        .context;
-    (host, output, target, context)
-}
+use crate::{Command, ComponentValue, EntityRef, ErrorReason, WorldAttachmentToken, WorldId};
 
 fn routed(
     host: &GuiTestHost,
@@ -209,86 +160,6 @@ fn candidate_counter_overflow_rejects_before_any_commit() {
         outcomes(&mut host, target.world.id())[0].result,
         Err(ErrorReason::Capacity)
     );
-}
-
-pub(super) fn attached() -> (
-    GuiTestHost,
-    OutputRef,
-    GuiEntityTarget,
-    GuiInputContext,
-    WorldAttachmentToken,
-) {
-    let (mut host, child, target, _) =
-        presented(ComponentValue::GuiCheckbox(GuiCheckbox::default()));
-    host.clear_root_output(child.world().id());
-    let parent = host
-        .create_world(
-            Default::default(),
-            &[
-                crate::systems::world_attachment::WorldAttachmentSystem::ID,
-                crate::systems::animation::AnimationSystem::ID,
-                crate::systems::asset_dependencies::AssetDependencySystem::ID,
-                crate::systems::hierarchy::HierarchySystem::ID,
-                crate::systems::look_at::LookAtSystem::ID,
-                crate::systems::hierarchy::FinalPropagationSystem::ID,
-                crate::systems::geometry::GeometrySystem::ID,
-                crate::systems::surface::SurfaceSystem::ID,
-                crate::systems::canvas::CanvasSystem::ID,
-                crate::systems::gui::GuiSystem::ID,
-                crate::systems::gui::GuiLayoutSystem::ID,
-            ],
-        )
-        .unwrap();
-    let root = create(
-        &mut host,
-        parent,
-        ComponentValue::CanvasStyle(Default::default()),
-    );
-    let anchor = create(
-        &mut host,
-        parent,
-        ComponentValue::FlatSurface(FlatSurface::default()),
-    );
-    apply(
-        &mut host,
-        parent,
-        vec![
-            Command::insert_value(
-                EntityRef::Handle(anchor),
-                ComponentValue::WorldAttachment(WorldAttachment::surface(child)),
-            ),
-            Command::PlaceEntity {
-                entity: EntityRef::Handle(anchor),
-                placement: EntityPlacementRef {
-                    parent: Some(EntityRef::Handle(root)),
-                    before: None,
-                },
-            },
-        ],
-    );
-    let output = OutputRef::canvas(host.host.world_ref(parent).unwrap());
-    host.set_root_output(
-        output,
-        WorldViewport {
-            width: 128,
-            height: 128,
-            device_pixel_ratio: 1.0,
-        },
-    )
-    .unwrap();
-    frame(&mut host);
-    let context = host
-        .service
-        .bind_context(&host.host, &host.session, output.world())
-        .unwrap()
-        .context;
-    let token = host
-        .publication(host.latest_publication(parent).unwrap())
-        .unwrap()
-        .attachments[0]
-        .token
-        .clone();
-    (host, output, target, context, token)
 }
 
 #[test]

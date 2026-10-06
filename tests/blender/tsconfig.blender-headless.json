@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [
+    "scenarios/blender-headless.ts",
+    "blender-headless.test.ts",
+    "blender-disk-headless.test.ts",
+    "../../integrations/blender/client/disk-import.ts"
+  ]
+}

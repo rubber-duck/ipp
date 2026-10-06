@@ -1,7 +1,7 @@
 use super::payload::{kind, schema, text, write_kind, write_schema};
 use super::*;
 use crate::codec::{ProtocolError, Reader, Writer};
-use crate::wire::*;
+use crate::contract::wire_manifest::*;
 use ipp_core::services::data::{DataSchema, DataSourceKind};
 
 /// Source operations scoped to a physical Host connection.

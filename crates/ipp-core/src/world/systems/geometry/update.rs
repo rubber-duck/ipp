@@ -5,10 +5,9 @@ use crate::services::asset_management::AssetManagementService;
 use crate::world::systems::asset_dependencies::{cached_source_key, source_key_from_fields};
 use crate::world::{WorldSimulationState, systems::SystemRuntimeAccess};
 use crate::{
-    EntityId, ErrorReason,
+    EntityId, ErrorReason, math,
+    services::asset_management::AssetDemandSelection,
     services::asset_management::AssetKey,
-    services::asset_management::service::AssetDemandSelection,
-    systems::camera,
     systems::geometry::{
         CompoundGeometryShape, GEOMETRY_TYPE, GeometryBounds, GeometryDefinition, GeometryShape,
         GeometryShapeTransform, TransformedGeometryShape,
@@ -341,7 +340,7 @@ impl<'a> GeometryReadAccess<'a> {
             .ok_or(ErrorReason::GeometryUnavailable)?;
             let (min, max) = self
                 .assets
-                .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(key)
+                .get_typed::<crate::services::asset_management::formats::mesh_metadata::MeshMetadata>(key)
                 .ok_or(ErrorReason::GeometryUnavailable)?
                 .bounds();
             return Ok(GeometryProgram::Rigid {
@@ -379,7 +378,7 @@ impl<'a> GeometryReadAccess<'a> {
             .map(|part| {
                 Ok(TransformedGeometryShape {
                     shape: part.shape,
-                    transform: GeometryShapeTransform::from_matrix(camera::model_matrix(
+                    transform: GeometryShapeTransform::from_matrix(math::model_matrix(
                         &part.transform,
                     )?)?,
                 })
@@ -457,8 +456,7 @@ impl<'a> GeometryReadAccess<'a> {
         let parts = &mut evaluated.parts;
         parts.reserve(definition.parts.len());
         for part in &definition.parts {
-            let local =
-                GeometryShapeTransform::from_matrix(camera::model_matrix(&part.transform)?)?;
+            let local = GeometryShapeTransform::from_matrix(math::model_matrix(&part.transform)?)?;
             if let Some(joints) = part.joints {
                 let skeleton = if input.skeleton.to_bits() == 0 {
                     self.world
@@ -610,7 +608,9 @@ impl<'a> GeometryReadAccess<'a> {
         .ok_or(ErrorReason::GeometryUnavailable)?;
         let mesh = self
             .assets
-            .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(key)
+            .get_typed::<crate::services::asset_management::formats::mesh_metadata::MeshMetadata>(
+                key,
+            )
             .ok_or(ErrorReason::GeometryUnavailable)?;
         let model = self.geometry_model(entity)?;
         let pose = crate::systems::render::mesh_pose(
@@ -623,7 +623,7 @@ impl<'a> GeometryReadAccess<'a> {
         .map(|(key, weight)| {
             (
                 self.assets
-                    .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(
+                    .get_typed::<crate::services::asset_management::formats::mesh_metadata::MeshMetadata>(
                         AssetKey::from_u64(key.asset),
                     )
                     .expect("resolved pose mesh")

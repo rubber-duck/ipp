@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from pipeline.operations import format_source, source_files
+from pipeline.formatting import format_source, source_files
 
 
 class FormattingTests(unittest.TestCase):
@@ -42,7 +42,7 @@ class FormattingTests(unittest.TestCase):
             (self.root / "src" / name).write_text("unformatted fixture\n")
         (self.root / "target").mkdir()
         (self.root / "target/ignored.ts").write_text("invalid generated TS (\n")
-        self.root_patch = patch("pipeline.operations.ROOT", self.root)
+        self.root_patch = patch("pipeline.formatting.ROOT", self.root)
         self.root_patch.start()
         self.addCleanup(self.root_patch.stop)
 
@@ -66,7 +66,7 @@ class FormattingTests(unittest.TestCase):
         self.assertEqual(source_files(["src/other-checkout"]), [])
 
     def test_linked_worktree_selects_its_own_files(self):
-        with patch("pipeline.operations.ROOT", self.nested):
+        with patch("pipeline.formatting.ROOT", self.nested):
             files = source_files([])
         self.assertIn("src/deleted.ts", files)
         self.assertIn("untracked.py", files)
@@ -85,7 +85,7 @@ class FormattingTests(unittest.TestCase):
             for paths in ([], ["."], ["src"]):
                 with self.subTest(language=language, paths=paths):
                     # Observe the subprocess boundary; discovery uses real Git.
-                    with patch("pipeline.operations.run") as run:
+                    with patch("pipeline.formatting.run") as run:
                         format_source(language, "write", paths)
                     command = run.call_args.args[0]
                     self.assertEqual(command[-len(files) :], files)
@@ -96,7 +96,7 @@ class FormattingTests(unittest.TestCase):
         for language in ("js", "python", "md"):
             for paths in (["src/other-checkout"], ["target"], ["src/deleted.ts"]):
                 with self.subTest(language=language, paths=paths):
-                    with patch("pipeline.operations.run") as run:
+                    with patch("pipeline.formatting.run") as run:
                         format_source(language, "check", paths)
                     run.assert_not_called()
 

@@ -100,7 +100,7 @@ impl crate::components::schema::ComponentLifecycle for ExpressionDriver {
             u16::try_from(self.target_component).map_err(|_| crate::ErrorReason::InvalidValue)?;
         }
         if offset == std::mem::offset_of!(Self, expression_source) as u32 {
-            crate::services::asset_management::service::validate_source(&self.expression_source)?;
+            crate::services::asset_management::validate_source(&self.expression_source)?;
         }
         Ok(())
     }
@@ -108,12 +108,12 @@ impl crate::components::schema::ComponentLifecycle for ExpressionDriver {
     fn validate(&self) -> Result<(), crate::ErrorReason> {
         super::decode_expression_driver_inputs(&self.inputs)?;
         u16::try_from(self.target_component).map_err(|_| crate::ErrorReason::InvalidValue)?;
-        crate::services::asset_management::service::validate_source(&self.expression_source)
+        crate::services::asset_management::validate_source(&self.expression_source)
     }
 
     fn asset_references() -> &'static [crate::components::schema::ComponentAssetReference] {
         &[crate::components::schema::ComponentAssetReference {
-            kind: crate::services::asset_management::expression::EXPRESSION_TYPE.0,
+            kind: crate::services::asset_management::formats::expression::EXPRESSION_TYPE.0,
             source_offset: std::mem::offset_of!(Self, expression_source) as u32,
             variant_offset: std::mem::offset_of!(Self, expression_variant) as u32,
         }]
@@ -122,13 +122,13 @@ impl crate::components::schema::ComponentLifecycle for ExpressionDriver {
     fn resource_demand(
         &self,
         demand: &mut std::collections::BTreeSet<
-            crate::services::asset_management::service::AssetDemandSelection,
+            crate::services::asset_management::AssetDemandSelection,
         >,
     ) {
         if !self.expression_source.is_empty() {
             demand.insert(
-                crate::services::asset_management::service::AssetDemandSelection::new(
-                    crate::services::asset_management::expression::EXPRESSION_TYPE,
+                crate::services::asset_management::AssetDemandSelection::new(
+                    crate::services::asset_management::formats::expression::EXPRESSION_TYPE,
                     &self.expression_source,
                     self.expression_variant,
                 ),

@@ -1,18 +1,7 @@
-//! Native Host service adapters and optional asset output.
+//! Native Host service adapters: the platform `HostServices` implementation and
+//! the native implementations of the core I/O traits.
 
-pub mod asset_output;
+mod host_services;
+pub use host_services::NativeHostServices;
 
 pub mod io;
-
-mod host;
-
-pub use host::NativeHostServices;
-
-mod stream_input;
-
-pub mod http;
-
-mod http_transport;
-
-#[cfg(target_os = "linux")]
-pub mod mapped_input;

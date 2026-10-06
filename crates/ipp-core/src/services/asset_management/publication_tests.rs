@@ -199,8 +199,7 @@ fn two_publications_retain_owned_cpu_content_after_world_demand_and_producer_rel
         .register_client_source(producer, source.clone(), b"original".to_vec())
         .unwrap();
     let key = assets.find(&source).unwrap();
-    let demand =
-        super::super::service::AssetDemandSelection::new(source.kind, &source.uri, source.variant);
+    let demand = super::super::AssetDemandSelection::new(source.kind, &source.uri, source.variant);
     assets.update_user_deltas(producer, BTreeMap::from([(demand.clone(), true)]));
     assets.update_user_deltas(sibling, BTreeMap::from([(demand, true)]));
     poll(&mut assets, &mut data);

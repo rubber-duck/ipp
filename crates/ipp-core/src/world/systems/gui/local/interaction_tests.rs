@@ -1,6 +1,6 @@
-use super::input_test_support::GuiTestHost;
-use super::local_tests::{GuiTestValue, action, apply, create, frame, snapshot};
-use super::receiver_tests::{attached, presented};
+use super::test_support::{
+    GuiTestHost, GuiTestValue, action, apply, attached, create, frame, presented, snapshot,
+};
 use super::*;
 use crate::services::gui_input::*;
 use crate::systems::gui::GuiSystem;

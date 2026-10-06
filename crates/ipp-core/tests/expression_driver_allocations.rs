@@ -4,7 +4,7 @@ mod support;
 use ipp_core::components::{CustomMaterial, ExpressionDriver, Scalar};
 use ipp_core::expressions::*;
 use ipp_core::services::asset_management::{
-    AssetUpload, AssetUploadIdentity, expression::EXPRESSION_TYPE,
+    AssetUpload, AssetUploadIdentity, formats::expression::EXPRESSION_TYPE,
 };
 use ipp_core::systems::constraints::*;
 use ipp_core::*;

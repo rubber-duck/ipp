@@ -3,6 +3,7 @@ use std::fmt::Write as _;
 
 use crate::binary_reader::Reader;
 use crate::model::{GuiPaintKey, GuiSkinLook, GuiSkinLookRow, GuiSkinToken};
+use crate::typescript::GUI_PAINT_TEMPLATE;
 use crate::typescript_names::{js_string, member_identifier};
 
 pub(super) fn read(reader: &mut Reader<'_>) -> Result<Vec<GuiPaintKey>, String> {
@@ -179,7 +180,7 @@ pub(super) fn render(
     out.push_str("] as const);\n");
     render_looks(out, looks);
     render_tokens(out, tokens);
-    out.push_str(include_str!("gui-paint.template.ts"));
+    out.push_str(GUI_PAINT_TEMPLATE);
 }
 
 /// `GUI_SKIN_LOOKS`: each look's `em`, its appearance rows as `GuiTheme.parts`

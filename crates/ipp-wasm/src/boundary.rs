@@ -4,12 +4,16 @@ use crate::connection_output::{
     CONNECTION_METADATA_BYTES, ConnectionOutput, Delivery, MAX_CONNECTIONS, MAX_DELIVERIES,
     MAX_FAILURE_BYTES,
 };
-use crate::host::WasmHost;
+use crate::services::WasmHost;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
 #[path = "boundary_output_tests.rs"]
 mod output_tests;
+
+#[cfg(test)]
+#[path = "boundary_tests.rs"]
+mod tests;
 
 pub(crate) struct WasmHostBoundary {
     last_session: u64,
@@ -41,12 +45,12 @@ impl WasmHostBoundary {
     #[cfg(feature = "instrumentation")]
     pub(crate) fn profile_control(
         &mut self,
-        request: ipp_protocol::profiling::ProfileRequest,
-    ) -> ipp_protocol::profiling::ProfileResponse {
+        request: ipp_protocol::host::profiling::ProfileRequest,
+    ) -> ipp_protocol::host::profiling::ProfileResponse {
         self.host.as_mut().map_or_else(
             || {
-                ipp_protocol::profiling::ProfileResponse::status(
-                    ipp_protocol::profiling::ProfileStatus::Unavailable,
+                ipp_protocol::host::profiling::ProfileResponse::status(
+                    ipp_protocol::host::profiling::ProfileStatus::Unavailable,
                 )
             },
             |host| host.profile_control(u64::MAX, request),
@@ -66,7 +70,7 @@ impl WasmHostBoundary {
         match WasmHost::new() {
             Ok(mut session) => {
                 session.set_task_wakeup(std::sync::Arc::new(
-                    crate::services::task_wakeup::request_update,
+                    crate::services::task_scheduler::wakeup::request_update,
                 ));
                 self.host = Some(session);
                 true
@@ -190,7 +194,7 @@ impl WasmHostBoundary {
 
     pub(crate) fn close(&mut self) {
         #[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
-        crate::task_scheduler_testing::clear();
+        crate::services::task_scheduler::testing::clear();
         if let Some(mut host) = self.host.take() {
             for &id in self.connections.keys() {
                 host.close_connection(id);
@@ -204,7 +208,7 @@ impl WasmHostBoundary {
 
     pub(crate) fn fail(&mut self, error: &str) -> bool {
         #[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
-        crate::task_scheduler_testing::clear();
+        crate::services::task_scheduler::testing::clear();
         diagnostic!(
             Error,
             "[IPP wasm] session.failed session={} reason={}",
@@ -680,13 +684,13 @@ impl WasmHostBoundary {
     pub(crate) fn scheduler_testing_start(&mut self) -> bool {
         self.host
             .as_mut()
-            .is_some_and(crate::task_scheduler_testing::start)
+            .is_some_and(crate::services::task_scheduler::testing::start)
     }
 
     pub(crate) fn scheduler_testing_tick(&mut self) -> u64 {
         self.host
             .as_mut()
-            .map_or(0, crate::task_scheduler_testing::world_tick)
+            .map_or(0, crate::services::task_scheduler::testing::world_tick)
     }
 }
 
@@ -698,7 +702,7 @@ impl std::task::Wake for ResourceCapacityWake {
     }
 
     fn wake_by_ref(self: &std::sync::Arc<Self>) {
-        crate::services::task_wakeup::request_update();
+        crate::services::task_scheduler::wakeup::request_update();
     }
 }
 
@@ -720,4 +724,22 @@ impl WasmHostBoundary {
             .and_then(|host| host.runtime_mut().world_mut(ipp_core::WorldId(world)))
             .map_or(0, |world| world.tick())
     }
+}
+
+/// Trusted read-only scenario observation; never advances a World.
+#[cfg(all(feature = "instrumentation", target_arch = "wasm32"))]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_test_asset_export_world_tick(world: u64) -> u64 {
+    crate::BOUNDARY.with_borrow_mut(|boundary| boundary.asset_export_testing_tick(world))
+}
+
+/// Trusted scenario gate; graphics staging remains owned by the renderer.
+#[cfg(all(
+    feature = "instrumentation",
+    feature = "render",
+    target_arch = "wasm32"
+))]
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_test_asset_export_staging_gate(enabled: u32) {
+    crate::BOUNDARY.with_borrow_mut(|boundary| boundary.asset_export_testing_gate(enabled != 0));
 }

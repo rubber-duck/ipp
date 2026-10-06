@@ -1,5 +1,7 @@
 //! Sparse declaration identities and strict bindings.
 
+use crate::world::direct_bindings::component_binding::ComponentBinding;
+
 /// State belongs to ConstraintSystem; components retain their sole effective values.
 #[derive(Default)]
 pub struct ConstraintSystemState {
@@ -22,9 +24,9 @@ pub struct ConstraintSystemState {
 /// stay live until hooks clear this vector before the corresponding incarnation
 /// changes.
 pub(super) struct ScalarNumericBinding {
-    pub(super) source: crate::world::component_binding::ComponentBinding<crate::components::Scalar>,
-    pub(super) target: crate::world::component_binding::ComponentBinding<crate::components::Scalar>,
-    pub(super) driver: crate::world::component_binding::ComponentBinding<super::LinearDriver>,
+    pub(super) source: ComponentBinding<crate::components::Scalar>,
+    pub(super) target: ComponentBinding<crate::components::Scalar>,
+    pub(super) driver: ComponentBinding<super::LinearDriver>,
 }
 
 /// Prepared mixed evaluation order. No graph traversal or selector resolution

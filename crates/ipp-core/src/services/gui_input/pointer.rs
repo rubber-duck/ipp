@@ -165,3 +165,7 @@ impl GuiPointerLease {
         self.0.id.session
     }
 }
+
+#[cfg(test)]
+#[path = "pointer_tests.rs"]
+mod tests;

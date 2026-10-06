@@ -1,4 +1,6 @@
 //! Explicit compiled membership is the only source of component wire identities.
+//! `component_registry!` generates `ComponentValue` and the World's
+//! `ComponentStorage` from this list.
 
 use crate::components::schema::{ContractSink, write_string};
 ipp_schema_derive::component_registry! {

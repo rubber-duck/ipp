@@ -1,5 +1,5 @@
 /** CanvasWorld ownership, canvas state updates and root claims against fakes;
- * real runtime coverage is tests/react/canvas-world-case.ts. */
+ * real runtime coverage is tests/react/attached-world/scenarios/canvas-world.ts. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createElement } from "react";
@@ -14,21 +14,21 @@ import {
   type WorldCreateOptions,
   type WorldReference,
 } from "@ipp/client";
-import { CanvasContext } from "../src/canvas-context.js";
-import { CanvasWorldSession } from "../src/canvas-world-session.js";
+import { CanvasContext } from "../src/canvas/context.js";
+import { CanvasWorldSession } from "../src/canvas/world-session.js";
 import {
   CanvasWorld,
   validateCanvasWorld,
   type CanvasWorldHandle,
   type CanvasWorldProps,
-} from "../src/canvas-world.js";
+} from "../src/canvas/world.js";
 import {
   AttachedWorldSlot,
   describeAttachedWorld,
-} from "../src/attached-world.js";
-import type { CanvasHost } from "../src/canvas-presentation.js";
+} from "../src/composition/attached-world.js";
+import type { CanvasHost } from "../src/canvas/presentation.js";
 import { createRoot, Entity } from "../src/index.js";
-import { World } from "../src/canvas-scope.js";
+import { World } from "../src/canvas/scope.js";
 
 const CANVAS_SELECTION = ["ipp.canvas"] as const;
 const size = { width: 80, height: 60, devicePixelRatio: 1 };

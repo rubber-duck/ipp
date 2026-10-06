@@ -14,7 +14,7 @@ use systems::{
 #[derive(Default)]
 pub struct LookAtSystem {
     dependencies: super::system_state::LookAtDependencies,
-    references: systems::entity_references::ProducerReferenceIndex,
+    references: super::entity_references::ProducerReferenceIndex,
     bindings: systems::SystemBindings<Self>,
     refresh: bool,
 }

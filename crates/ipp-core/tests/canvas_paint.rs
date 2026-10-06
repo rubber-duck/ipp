@@ -8,7 +8,7 @@ mod support;
 
 use ipp_core::components::schema::FieldValue as SchemaValue;
 use ipp_core::components::{CanvasBox, CanvasPaint, CanvasStyle};
-use ipp_core::services::asset_management::shader::{
+use ipp_core::services::asset_management::formats::shader::{
     ShaderBackendSource, ShaderDefinition, ShaderParameterKind, ShaderRecipe,
 };
 use ipp_core::services::asset_management::{AssetUpload, AssetUploadIdentity};

@@ -16,7 +16,7 @@
 //!
 //! # Design language
 //!
-//! The looks speak the skin lab's design language (`tests/skin-lab/README.md`,
+//! The looks speak the skin lab's design language (`tests/gui/skin-lab/README.md`,
 //! "Design language"), written down here as tokens that every control table
 //! combines, so changing a token changes every control that uses it.
 //!
@@ -82,9 +82,9 @@ use super::part_style::GuiSkinState;
 use super::parts::{GuiPartId, GuiPartVariant, GuiPrimitivePart};
 use crate::systems::gui::layout::scroll_bars::GUI_SCROLL_BAR_EMS;
 use crate::systems::gui::local::GuiControlKind;
-use crate::systems::gui::local::color::COLOR_MARKER_EMS;
-use crate::systems::gui::local::control::GuiControl;
-use crate::systems::gui::local::slider::{DIAL_INSET_EMS, DIAL_SWEEP};
+use crate::systems::gui::local::controls::color::COLOR_MARKER_EMS;
+use crate::systems::gui::local::controls::identity::GuiControl;
+use crate::systems::gui::local::controls::slider::{DIAL_INSET_EMS, DIAL_SWEEP};
 use crate::systems::gui::motion::GuiMotionPart;
 use crate::world::WorldSimulationState;
 use std::sync::LazyLock;

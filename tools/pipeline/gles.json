@@ -288,7 +288,7 @@
     "id": "check:gles-retained-gui",
     "command": [
       "@node",
-      "target/surface-gui-build/retained-gui-native.js",
+      "target/surface-gui-build/retained-gui.native.test.js",
       "@egl"
     ],
     "dependencies": [
@@ -307,15 +307,15 @@
       "crates/ipp-render-gl/Cargo.toml",
       "crates/ipp-server/Cargo.toml",
       "packages/ipp-client/src/native-presentation.ts",
-      "tests/render/retained-gui-native.ts",
-      "tests/render/retained-gui-environment.ts",
-      "tests/render/retained-gui-scenario.ts",
-      "tests/render/retained-gui-fixture.tsx",
-      "tests/render/tsconfig.retained-gui.json",
-      "tools/build_surface_gui.mjs",
-      "tests/render/surface-fixture.tsx",
-      "tests/render/surface-separators-fixture.ts",
-      "tests/render/surface-separators-scenario.ts"
+      "tests/gui/retained/retained-gui.native.test.ts",
+      "tests/gui/retained/support/retained-gui-environment.ts",
+      "tests/gui/retained/scenarios/retained-gui.ts",
+      "tests/gui/retained/pages/retained-gui.tsx",
+      "tests/gui/retained/tsconfig.json",
+      "tools/products/surface-gui-fixtures.mjs",
+      "tests/surfaces/pages/surface.tsx",
+      "tests/surfaces/support/surface-separators.ts",
+      "tests/surfaces/scenarios/surface-separators.ts"
     ]
   },
   {

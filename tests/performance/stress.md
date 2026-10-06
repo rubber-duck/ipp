@@ -12,7 +12,7 @@ Four low-poly humanoids use a real generated Rigify human rig as the bake source
 
 Fixture version 2 adds 32 deforming lattice panels (four in smoke), with 425 source vertices each and shared immutable endpoints across four appearance variants. Shape-key weights animate throughout the ten-second timeline. Surfaces include unlit/PBR factors and textures, a multi-material mesh split, and an affine parent that introduces shear. The four walkers also animate a silhouette shape before skinning.
 
-The [Blender generator](../blender/stress_scene.py) authors supported export features. The shared [runtime supplement](features.ts) adds features without Blender mappings through the generated client, identically for native and browser Hosts. Native bundles retain the supplemental entities, animation assets and shader definitions in the saved World. Browser imports add them before warming. The `.blend` file alone therefore does not contain the complete runtime workload.
+The [Blender generator](../blender/stress_scene.py) authors supported export features. The shared [runtime supplement](support/features.ts) adds features without Blender mappings through the generated client, identically for native and browser Hosts. Native bundles retain the supplemental entities, animation assets and shader definitions in the saved World. Browser imports add them before warming. The `.blend` file alone therefore does not contain the complete runtime workload.
 
 | Area | Workload and observations |
 | --- | --- |
@@ -23,7 +23,7 @@ The [Blender generator](../blender/stress_scene.py) authors supported export fea
 | Geometry/cameras | Generated and authored bounds; inline and immutable-resource box/sphere/pill/compound geometry; filled and outline visualization; perspective and orthographic cameras; independent expected picking hits for all four shape kinds |
 | Particles | Existing baked/native mesh and alpha-sprite effects, plus moving point/box/sphere emitters, local/World simulation, textured alpha/additive sprites, velocity alignment, and custom particle meshes |
 
-The [shared feature checks](feature-checks.ts) require every component in the compiled production registry to appear in effective scene state. Adding a component deliberately requires revisiting coverage. They also check independently expected animation values, camera projection, picking and imported Blender pose weights. Native runs retain `bundle/features.json`; browser reports retain these checks and deformation image differences in `profile.json`. The native profiler checks extremal and interior Blender vertices against the final mesh bounds, including the skinned result; conservative enclosure is not an exact skinned-surface comparison.
+The [shared feature checks](support/feature-checks.ts) require every component in the compiled production registry to appear in effective scene state. Adding a component deliberately requires revisiting coverage. They also check independently expected animation values, camera projection, picking and imported Blender pose weights. Native runs retain `bundle/features.json`; browser reports retain these checks and deformation image differences in `profile.json`. The native profiler checks extremal and interior Blender vertices against the final mesh bounds, including the skinned result; conservative enclosure is not an exact skinned-surface comparison.
 
 ## Run
 
@@ -112,7 +112,7 @@ Filter sampled stacks to `profile_window` to exclude startup/import. Keep the me
 
 ## Evidence and limits
 
-Native results include CSV frame/stage timing, allocation counts where enabled, captures, environment, original Blender probes and source/build/fixture identity. Browser results include state, captures, profile windows and failure artifacts under `target/integration-artifacts/stress`; `node tools/analyze_stress.mjs <profile.json>` summarizes them.
+Native results include CSV frame/stage timing, allocation counts where enabled, captures, environment, original Blender probes and source/build/fixture identity. Browser results include state, captures, profile windows and failure artifacts under `target/integration-artifacts/stress`; `node tools/performance/analyze-stress.mjs <profile.json>` summarizes them.
 
 Warmed allocation counts cover Rust allocation/reallocation requests inside the measured windows, not loading, growth, JavaScript or graphics-driver memory. Timing results depend on hardware, camera, retained live particles and shared-host load. Preserve these inputs when comparing regressions. The [small action-sampling correctness test](../blender/action_sampling_check.py) remains in the normal Blender suite; it does not generate or run the stress scene.
 

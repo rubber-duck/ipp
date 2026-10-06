@@ -1,4 +1,0 @@
-{
-  "extends": "../../tsconfig.json",
-  "include": ["asset-rejection.test.ts", "../integration/scenarios/asset-rejection.ts"]
-}

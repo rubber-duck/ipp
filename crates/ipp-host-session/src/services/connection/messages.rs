@@ -6,9 +6,9 @@
 //! Every other message stays encoded until the Host receives it, because it is
 //! small or needs Host state to interpret.
 
-use crate::command_batches::BatchPageArrival;
+use super::command_batches::BatchPageArrival;
 use ipp_core::{Command, FieldValue};
-use ipp_protocol::{Request, RequestBody, RequestDecodeError};
+use ipp_protocol::world::{Request, RequestBody, RequestDecodeError};
 
 /// One complete connection message, with a batch page already decoded.
 pub struct HostConnectionMessage(pub(crate) HostConnectionMessageBody);
@@ -47,11 +47,11 @@ impl HostConnectionMessage {
     pub fn decode(bytes: Vec<u8>) -> Self {
         let page = bytes.len() >= 8
             && bytes.len() <= ipp_protocol::MAX_MESSAGE_BYTES
-            && !bytes.starts_with(&ipp_protocol::MAGIC)
+            && !bytes.starts_with(&ipp_protocol::contract::MAGIC)
             && !bytes.starts_with(ipp_protocol::host::HOST_REQUEST_MAGIC)
             && !bytes.starts_with(ipp_protocol::asset_source::REQUEST_MAGIC)
             && !bytes.starts_with(ipp_protocol::dataset::REQUEST_MAGIC)
-            && ipp_protocol::is_batch_page(&bytes);
+            && ipp_protocol::world::is_batch_page(&bytes);
         let arrival = page
             .then(|| match decode_world(&bytes, None, &mut Vec::new()) {
                 DecodedWorldRequest::BatchPage(arrival) => Some(arrival),
@@ -90,7 +90,7 @@ pub(crate) fn decode_world(
     expected_session: Option<u64>,
     operations: &mut Vec<Command>,
 ) -> DecodedWorldRequest {
-    match ipp_protocol::decode_world_request(bytes, expected_session, operations) {
+    match ipp_protocol::world::decode_world_request(bytes, expected_session, operations) {
         Ok(Request {
             session,
             request_id,
@@ -104,7 +104,7 @@ pub(crate) fn decode_world(
             aliases: page
                 .operations
                 .iter()
-                .filter(|command| crate::attachment_receipts::defines_alias(command))
+                .filter(|command| crate::session::attachment_receipts::defines_alias(command))
                 .count(),
             operations: Ok(page.operations),
         }),

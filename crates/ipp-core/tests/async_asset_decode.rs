@@ -6,9 +6,9 @@ use ipp_core::{
     expressions::{ExpressionDeclaration, ExpressionNode, PreparedExpression},
     services::{
         asset_management::{
-            drawing::DrawingAsset,
-            font::FontAsset,
-            shader::{ShaderBackendSource, ShaderDefinition},
+            formats::drawing::DrawingAsset,
+            formats::font::FontAsset,
+            formats::shader::{ShaderBackendSource, ShaderDefinition},
         },
         io::{BufferIoReader, IoReadOptions, IoReader, StreamIoReader},
     },
@@ -504,7 +504,7 @@ impl ipp_core::services::asset_management::export::AssetOutputObserver for Expor
 }
 
 fn cpu_payload(format: Format, bytes: &[u8]) -> Option<(std::rc::Rc<dyn std::any::Any>, Vec<u8>)> {
-    use ipp_core::services::asset_management::writer::AssetEncoder;
+    use ipp_core::services::asset_management::AssetEncoder;
     macro_rules! payload {
         ($asset:ty) => {{
             let data = <$asset>::decode(bytes).unwrap();
@@ -535,8 +535,10 @@ fn cpu_payload(format: Format, bytes: &[u8]) -> Option<(std::rc::Rc<dyn std::any
         }
         Format::Expression => {
             let data =
-                ipp_core::services::asset_management::expression::ExpressionAsset::decode(bytes)
-                    .unwrap();
+                ipp_core::services::asset_management::formats::expression::ExpressionAsset::decode(
+                    bytes,
+                )
+                .unwrap();
             let encoded = data.declaration().encode().unwrap();
             (std::rc::Rc::new(data), encoded)
         }

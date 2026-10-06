@@ -1,14 +1,11 @@
 //! World discovery metadata and creation policy.
 
+use crate::world::entities::EntityPersistentId;
 use crate::{WorldCapacityHints, WorldId, systems::SystemId};
 
 /// Durable World identity, assigned by the Host and retained through file round trips.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct WorldPersistentId(pub u128);
-
-/// Durable entity identity within one persisted World, independent of slot reuse.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
-pub struct EntityPersistentId(pub u64);
 
 /// World-owned metadata. The symbolic ID is unique among published Worlds on a Host.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

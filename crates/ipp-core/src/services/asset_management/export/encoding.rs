@@ -1,7 +1,7 @@
 //! Versioned semantic encoding from the actual retained CPU type.
 
 use super::{AssetExportFormat, AssetOutput};
-use crate::services::asset_management::{
+use crate::services::asset_management::formats::{
     expression::ExpressionAsset,
     mesh::MeshAsset,
     shader::ShaderDefinition,
@@ -298,9 +298,11 @@ pub async fn write_texture_header(
     output: &mut AssetOutput,
     texture: crate::TextureHeader,
 ) -> Result<(), String> {
-    let bytes =
-        crate::services::asset_management::texture::pixel_bytes(texture.width, texture.height)
-            .map_err(|error| error.to_string())?;
+    let bytes = crate::services::asset_management::formats::texture::pixel_bytes(
+        texture.width,
+        texture.height,
+    )
+    .map_err(|error| error.to_string())?;
     if bytes != texture.pixel_bytes {
         return Err("Texture export header length mismatch".into());
     }

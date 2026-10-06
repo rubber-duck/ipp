@@ -17,6 +17,8 @@ impl SkinningSystem {
     pub const ID: SystemId = SystemId("ipp.skinning");
 }
 
+crate::system_parameter!(SkinningSystem);
+
 /// Reusable factory; it retains no mutable world state.
 #[derive(Default)]
 pub struct SkinningSystemFactory;

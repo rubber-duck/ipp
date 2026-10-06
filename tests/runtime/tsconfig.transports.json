@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "pages/worker-startup.ts",
+    "worker-startup.test.ts",
+    "pages/task-scheduler.ts",
+    "../assets/pages/bulk-read-worker.ts",
+    "../assets/bulk-read-worker.test.ts",
+    "task-scheduler.test.ts",
+    "../assets/pages/generated-buffers.ts",
+    "../assets/generated-buffers.test.ts",
+    "../assets/native-http.test.ts",
+    "scenarios/lifecycle-targets.ts",
+    "drivers/browser-lifecycle-targets.ts",
+    "../../packages/ipp-client/tests/lifecycle-watches.test.ts",
+    "scenarios/multiplex.ts",
+    "scenarios/selected-world.ts",
+    "scenarios/world-persistence.ts",
+    "scenarios/lifecycle-subscriptions.ts",
+    "drivers/browser-host-transport.ts",
+    "../assets/scenarios/asset-exports.ts",
+    "../assets/drivers/browser-asset-exports.ts",
+    "../assets/asset-exports.test.ts"
+  ]
+}

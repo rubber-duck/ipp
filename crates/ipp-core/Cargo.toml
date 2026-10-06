@@ -9,7 +9,7 @@ publish.workspace = true
 [dependencies]
 ipp-schema-derive.workspace = true
 # Complete UAX #29 segmentation for preserved source text; see
-# world/systems/surface/text.rs.
+# src/text.rs.
 unicode-segmentation.workspace = true
 
 [dev-dependencies]

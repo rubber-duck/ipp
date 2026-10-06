@@ -1,12 +1,6 @@
-//! Shared component primitives and re-exports of subsystem-owned definitions.
-//! Effective instances live in the World's stable typed storage.
-//!
-//! Component index: `Scalar` and `Transform` here; camera, geometry,
-//! hierarchy, look-at, render materials and debug shapes in their system
-//! modules; `Surface` in the surface system, Canvas content in the Canvas
-//! system and GUI controls in the GUI system; skeleton/skin, mesh poses and
-//! particles behind their capabilities. Each subsystem module owns its
-//! definitions: this module only re-exports them.
+//! Umbrella-owned component primitives: `Scalar` and `Transform`.
+//! Effective instances live in the World's stable typed storage. Every other
+//! component is defined by its owning System and re-exported by the catalogue.
 
 use ipp_schema_derive::SchemaComponent;
 

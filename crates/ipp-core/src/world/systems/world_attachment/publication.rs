@@ -1,4 +1,5 @@
 use super::WorldAttachmentSystem;
+use crate::host::attachments::topology::AttachmentAnchor;
 use crate::{AttachmentPlacement, PublishedWorldAttachment, WorldContext, systems};
 
 impl WorldAttachmentSystem {
@@ -43,7 +44,7 @@ impl WorldAttachmentSystem {
                         };
                         placement.matrix()
                     } else {
-                        crate::host::attachment::IDENTITY
+                        crate::host::references::IDENTITY
                     };
                     (None, placement)
                 }
@@ -59,7 +60,7 @@ impl WorldAttachmentSystem {
                 })
                 .and_then(|cache| systems::surface::SurfaceCachePolicy::new(cache).ok());
             output.push(PublishedWorldAttachment {
-                token: world.topology.tokens[&crate::host::topology::AttachmentAnchor {
+                token: world.topology.tokens[&AttachmentAnchor {
                     world: world.world.id,
                     entity,
                 }]

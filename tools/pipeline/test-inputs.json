@@ -1,17 +1,17 @@
 {
-  "dist/tests/render/gallery-chart-changes.test.js": {
+  "dist/tests/gallery/gallery-chart-changes.test.js": {
     "builds": ["typescript", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]
   },
-  "dist/tests/render/gallery-chart-input.test.js": {
+  "dist/tests/gallery/gallery-chart-input.test.js": {
     "builds": ["typescript", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]
   },
-  "dist/tests/render/gallery-charts.test.js": {
+  "dist/tests/gallery/gallery-charts.test.js": {
     "builds": ["typescript", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]
   },
-  "dist/tests/integration/scaling.test.js": {
+  "dist/tests/runtime/scaling.native.test.js": {
     "builds": [
       "typescript",
       "scaling-host"
@@ -21,7 +21,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/scaling.test.js": {
+  "dist/tests/runtime/scaling.browser.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -32,7 +32,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/custom-materials.test.js": {
+  "dist/tests/rendering/custom-materials.test.js": {
     "builds": [
       "typescript",
       "gallery",
@@ -161,7 +161,7 @@
       "rust"
     ]
   },
-  "dist/tests/integration/file-access.test.js": {
+  "dist/tests/assets/file-access.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -171,7 +171,7 @@
       "npm"
     ]
   },
-  "dist/tests/integration/integration.test.js": {
+  "dist/tests/runtime/transport.native.test.js": {
     "builds": [
       "typescript"
     ],
@@ -180,7 +180,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/browser.test.js": {
+  "dist/tests/runtime/transport.browser.test.js": {
     "builds": [
       "typescript",
       "browser:headless",
@@ -192,7 +192,7 @@
       "browser"
     ]
   },
-  "dist/tests/browser/lifecycle.test.js": {
+  "dist/tests/runtime/lifecycle.browser.test.js": {
     "builds": [
       "typescript",
       "browser:headless",
@@ -204,7 +204,7 @@
       "browser"
     ]
   },
-  "dist/tests/integration/world-persistence.test.js": {
+  "dist/tests/runtime/world-persistence.native.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -214,7 +214,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/world-persistence.test.js": {
+  "dist/tests/runtime/world-persistence.browser.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -225,7 +225,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/world-persistence.test.js": {
+  "dist/tests/rendering/world-persistence.test.js": {
     "builds": [
       "typescript",
       "browser:render-instrumentation"
@@ -236,7 +236,7 @@
       "browser"
     ]
   },
-  "dist/tests/integration/world-host.test.js": {
+  "dist/tests/runtime/world-host.native.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -246,7 +246,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/world-host.test.js": {
+  "dist/tests/runtime/world-host.browser.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -257,7 +257,7 @@
       "browser"
     ]
   },
-  "dist/tests/integration/lifecycle-subscriptions.test.js": {
+  "dist/tests/runtime/lifecycle-subscriptions.native.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -267,7 +267,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/lifecycle-subscriptions.test.js": {
+  "dist/tests/runtime/lifecycle-subscriptions.browser.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -278,7 +278,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/animation.test.js": {
+  "dist/tests/rendering/animation.test.js": {
     "builds": [
       "typescript",
       "browser:headless",
@@ -290,7 +290,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-animation.test.js": {
+  "dist/tests/gallery/gallery-animation.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -301,7 +301,7 @@
       "browser"
     ]
   },
-  "dist/tests/integration/hierarchy.test.js": {
+  "dist/tests/runtime/hierarchy.test.js": {
     "builds": [
       "typescript",
       "world-hosts"
@@ -311,7 +311,7 @@
       "npm"
     ]
   },
-  "dist/tests/render/hierarchy.test.js": {
+  "dist/tests/rendering/hierarchy.test.js": {
     "builds": [
       "typescript",
       "browser:render"
@@ -322,7 +322,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/camera.test.js": {
+  "dist/tests/rendering/camera.test.js": {
     "builds": [
       "typescript",
       "browser:render",
@@ -334,7 +334,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-picking.test.js": {
+  "dist/tests/gallery/gallery-picking.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -345,7 +345,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-navigation.test.js": {
+  "dist/tests/gallery/gallery-navigation.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -356,7 +356,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-dragging.test.js": {
+  "dist/tests/gallery/gallery-dragging.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -367,7 +367,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/debug-geometry.test.js": {
+  "dist/tests/rendering/debug-geometry.test.js": {
     "builds": [
       "typescript",
       "browser:render-instrumentation"
@@ -378,7 +378,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/geometry.test.js": {
+  "dist/tests/rendering/geometry.test.js": {
     "builds": [
       "typescript",
       "browser:render"
@@ -389,11 +389,11 @@
       "browser"
     ]
   },
-  "dist/tests/react/native.test.js": {
+  "dist/tests/react/react.native.test.js": {
     "builds": ["typescript", "react", "world-hosts"],
     "requirements": ["node", "npm"]
   },
-  "dist/tests/react/react.test.js": {
+  "dist/tests/react/react.browser.test.js": {
     "builds": [
       "typescript",
       "react-fixtures",
@@ -414,7 +414,7 @@
       "npm"
     ]
   },
-  "dist/tests/react/gui-root.test.js": {
+  "dist/tests/react/gui-authoring/gui-root.test.js": {
     "builds": [
       "typescript",
       "browser:render"
@@ -443,7 +443,52 @@
       "npm"
     ]
   },
-  "dist/packages/ipp-react/tests/gui-kit.test.js": {
+  "dist/packages/ipp-react/tests/gui-kit-core.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-containers.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-feedback.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-overlays.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-selection.test.js": {
+    "builds": [
+      "typescript"
+    ],
+    "requirements": [
+      "node",
+      "npm"
+    ]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-values.test.js": {
     "builds": [
       "typescript"
     ],
@@ -488,7 +533,7 @@
       "npm"
     ]
   },
-  "dist/tests/render/render.test.js": {
+  "dist/tests/rendering/render.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures",
@@ -501,7 +546,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/fixture.test.js": {
+  "dist/tests/rendering/fixtures.test.js": {
     "builds": [
       "typescript"
     ],
@@ -510,7 +555,7 @@
       "npm"
     ]
   },
-  "dist/tests/render/viewer.test.js": {
+  "dist/tests/gallery/viewer.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -521,7 +566,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/ready-geometry.test.js": {
+  "dist/tests/rendering/ready-geometry.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -532,7 +577,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-particles.test.js": {
+  "dist/tests/gallery/gallery-particles.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -543,7 +588,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-gui-camera.test.js": {
+  "dist/tests/gallery/gallery-gui-camera.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -554,7 +599,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/gallery-platformer.test.js": {
+  "dist/tests/gallery/gallery-platformer.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -565,7 +610,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/lighting.test.js": {
+  "dist/tests/rendering/lighting.test.js": {
     "builds": [
       "typescript",
       "shapes",
@@ -578,7 +623,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/particles-blender.test.js": {
+  "dist/tests/blender/particles-blender.test.js": {
     "builds": [
       "typescript",
       "blender-viewer",
@@ -593,7 +638,7 @@
       "certificates"
     ]
   },
-  "dist/tests/render/particles.test.js": {
+  "dist/tests/rendering/particles.test.js": {
     "builds": [
       "typescript",
       "browser:render-instrumentation"
@@ -604,7 +649,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/mesh-poses.test.js": {
+  "dist/tests/rendering/mesh-poses.test.js": {
     "builds": [
       "typescript",
       "mesh-pose-fixtures",
@@ -616,7 +661,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/skinning.test.js": {
+  "dist/tests/rendering/skinning.test.js": {
     "builds": [
       "typescript",
       "skinning-fixtures",
@@ -628,7 +673,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/texture.test.js": {
+  "dist/tests/rendering/texture.test.js": {
     "builds": [
       "typescript",
       "textures",
@@ -641,7 +686,7 @@
       "browser"
     ]
   },
-  "dist/tests/render/shapes.test.js": {
+  "dist/tests/rendering/shapes.test.js": {
     "builds": [
       "typescript",
       "shapes",
@@ -712,7 +757,7 @@
     "builds": ["browser:headless"],
     "requirements": ["node", "npm"]
   },
-  "dist/tests/integration/gui.test.js": {
+  "dist/tests/gui/gui.native.test.js": {
     "builds": [
       "typescript",
       "native",
@@ -725,7 +770,7 @@
       "gles"
     ]
   },
-  "dist/tests/integration/gui-react-root.test.js": {
+  "dist/tests/gui/gui-react-root.test.js": {
     "builds": [
       "typescript",
       "native"
@@ -735,7 +780,7 @@
       "npm"
     ]
   },
-  "dist/tests/browser/gui.test.js": {
+  "dist/tests/gui/gui.browser.test.js": {
     "builds": [
       "typescript",
       "react-fixtures",

@@ -4,13 +4,13 @@ pub const PARTICLE_SURFACE_TYPE: crate::services::asset_management::AssetTypeId 
     crate::services::asset_management::AssetTypeId(16);
 
 mod cache;
-mod components;
+mod component;
 mod simulation;
 mod system;
 
 pub(crate) use cache::particle_cache_loader;
 pub use cache::{PARTICLE_CACHE_TYPE, ParticleCache, ParticleCacheFrame, ParticleCacheSample};
-pub use components::{ParticleEmitter, ParticleMesh, ParticlePlayback, ParticleSprite};
+pub use component::{ParticleEmitter, ParticleMesh, ParticlePlayback, ParticleSprite};
 pub use simulation::{Particle, ParticleRuntimeState};
 pub(in crate::world) use system::state as particle_state;
 pub use system::{ParticleSystem, ParticleSystemFactory};

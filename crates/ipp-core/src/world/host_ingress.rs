@@ -1,7 +1,9 @@
 //! Reborrow current local storage without aliasing the mutable runtime access.
 
-use super::*;
 use crate::systems::{SystemCommandContext, SystemWorldView};
+use crate::world::World;
+use crate::world::outputs::WorldOutputs;
+use crate::{EntityId, ErrorReason};
 
 #[cfg(test)]
 #[path = "host_ingress_tests.rs"]
@@ -50,11 +52,7 @@ impl SystemWorldView<'_> {
             .is_some()
     }
 
-    pub(crate) fn output_matches(
-        &self,
-        output: crate::OutputRef,
-        outputs: crate::world::composition::WorldOutputs,
-    ) -> bool {
+    pub(crate) fn output_matches(&self, output: crate::OutputRef, outputs: WorldOutputs) -> bool {
         outputs.matches(self.world_ref(), self.authored, output)
     }
 }

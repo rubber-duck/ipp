@@ -1,6 +1,6 @@
 //! Which rows time a part's transition from one interaction key to another.
 
-use super::runtime::GuiMotionKey;
+use super::runtime_state::GuiMotionKey;
 use super::{GuiMotionEasing, GuiMotionPart, GuiThemeMotion};
 use crate::systems::gui::{GuiPartId, GuiPrimitivePart, GuiSkinState};
 

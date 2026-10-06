@@ -31,7 +31,7 @@ Rust owns rendering; the bridge supplies WebGL against a transferred OffscreenCa
 
 The [suite registry](../../tools/pipeline/suites.json) selects real browser scenarios and shared prerequisites. `render` exercises resource lifecycle and gallery controls; `canvas` covers composition/density; `textures` and `shapes` check sampling and generated geometry. Select lighting, custom-materials, animation, particles or deformation suites when those behaviors change.
 
-[Render lifecycle tests](../../tests/render/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/render/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/render/viewer.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
+[Render lifecycle tests](../../tests/rendering/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/rendering/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/gallery/viewer.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
 
 `host.presentation.frame(view, options)` resolves with a completed draw of the selected view (view, sequence, source publication, draw calls, triangles, failed draws and included output sources) without reading pixels; use it as a render-readiness barrier after resources load, with `afterOutputs` to wait for the exact child outputs an action changed. `host.presentation.capture(view, options)` additionally reads back the full drawing buffer as top-left RGBA8, which finishes pending GPU work and copies width × height × 4 bytes, so reserve it for image evidence. Neither advances time. Renderer statistics are separate observations through `renderDiagnostics(host).statistics()` from `@ipp/client/diagnostics` in every build; they are measurements, never readiness signals. Loss simulation and renderer budget overrides live in `@ipp/client/testing` and require an `instrumentation` build. A batch never withholds presentation; a frame or capture completes with an actual later draw of the selected view (after `afterSequence` when given) that includes any requested `afterOutputs` at or after their admitted ticks. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
 
@@ -39,7 +39,7 @@ The `gallery-charts` suite exercises the unified chart gallery through the produ
 
 ## Asset loading and recovery
 
-References commit before acquisition completes. Pending/failed resources preserve authored state; ready draws continue. GL providers decode/upload before reporting graphics readiness, retaining CPU metadata needed for headless consumers. See the [provider implementation](../../crates/ipp-render-gl/src/services/render/assets.rs) and [mesh format](../../crates/ipp-core/src/services/asset_management/MESH_FORMAT.md).
+References commit before acquisition completes. Pending/failed resources preserve authored state; ready draws continue. GL providers decode/upload before reporting graphics readiness, retaining CPU metadata needed for headless consumers. See the [provider implementation](../../crates/ipp-render-gl/src/services/render/assets/loaders.rs) and [mesh format](../../crates/ipp-core/src/services/asset_management/formats/MESH_FORMAT.md).
 
 Browser HTTP uses bounded input chunks and backpressure; mesh decoding buffers complete payloads while RGBA8 texture loading streams rows. Transport streaming is not an end-to-end zero-copy guarantee. [Source delivery](../../packages/ipp-client/src/resource-worker.ts) and the loaders own buffer sizes and accounting.
 
@@ -47,9 +47,9 @@ Final-demand removal cancels unretained acquisition. Context loss preserves reso
 
 ### Textures and built-in sources
 
-The [texture format reference](../../crates/ipp-core/src/services/asset_management/TEXTURE_FORMAT.md) owns pixel encoding and sampling details.
+The [texture format reference](../../crates/ipp-core/src/services/asset_management/formats/TEXTURE_FORMAT.md) owns pixel encoding and sampling details.
 
-The [texture harness](../../tests/render/texture.test.ts) checks orientation, repeat, linear color multiplication and actual context recovery, including a source larger than the command-frame limit. Assets use checked format lengths and device/memory limits; large payloads use data sources instead of command uploads.
+The [texture harness](../../tests/rendering/texture.test.ts) checks orientation, repeat, linear color multiplication and actual context recovery, including a source larger than the command-frame limit. Assets use checked format lengths and device/memory limits; large payloads use data sources instead of command uploads.
 
 ```tsx
 <MeshInstance source="ipp://mesh/cube?width=2&height=2&length=2" />

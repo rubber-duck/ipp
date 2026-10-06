@@ -1,8 +1,8 @@
 //! Camera-independent local geometry at the algorithm/retained-presentation boundary.
 
 use super::PlotSystem;
-use crate::services::asset_management::drawing::FillRule;
-use crate::services::asset_management::quadratic::QuadraticContour;
+use crate::services::asset_management::formats::drawing::FillRule;
+use crate::services::asset_management::formats::quadratic::QuadraticContour;
 use crate::services::data::DataRowId;
 use std::sync::Arc;
 

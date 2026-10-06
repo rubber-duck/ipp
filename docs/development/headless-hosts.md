@@ -50,7 +50,7 @@ Browser workers own their clock, MessagePort and WASM instance. Visible workers 
 
 ## Maintained integration harness
 
-[Shared scenarios](../../tests/integration/scenarios) express operations/outcomes independently of ports, process handles and wire framing. Native and browser environment runners own launch, readiness, bounded waits, artifact capture and cleanup. Add another driver when introducing a transport instead of copying scenarios.
+[Shared scenarios](../../tests/runtime/scenarios) express operations/outcomes independently of ports, process handles and wire framing. Native and browser environment runners own launch, readiness, bounded waits, artifact capture and cleanup. Add another driver when introducing a transport instead of copying scenarios.
 
 World profiles are prepared under `target/world-host-build/{native,wasm}`. Browser distributions under `target/browser-build/` contain generated clients, worker support, the final `runtime.wasm` whose contract generated them and `build-report.json`. [Build configurations](../../tools/pipeline/profiles.json) select instrumentation and the renderer. Runners retain logs, schema/build identity and outcomes under `target/integration-artifacts/`.
 

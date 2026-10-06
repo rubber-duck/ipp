@@ -162,7 +162,7 @@ fn canvas_transform(
     placements: &BTreeMap<EntityId, GuiEntityLayout>,
     entity: EntityId,
 ) -> GuiCanvasTransform {
-    let ancestry = super::super::local::control::ancestry(&world.state, entity);
+    let ancestry = super::super::local::controls::identity::ancestry(&world.state, entity);
     let mut transform = GuiCanvasTransform::IDENTITY;
     for ancestor in ancestry.iter() {
         if let Some(placement) = placements.get(ancestor) {

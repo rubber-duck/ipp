@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import os
 from pathlib import Path
 import platform
 import shutil
@@ -13,9 +12,10 @@ import tempfile
 import tomllib
 import urllib.request
 
+from . import blender_addon
 from .environment import development_python
 from .model import ROOT
-from .processes import blender, node, npm, python_tool, run
+from .processes import blender, node, npm, run
 
 
 def setup(args: list[str]) -> None:
@@ -55,7 +55,7 @@ def setup(args: list[str]) -> None:
             ]
         )
     elif name == "certificates":
-        run(python_tool("tools/blender.py", "certificate", *flags))
+        blender_addon.main(["certificate", *flags])
     elif name == "blender":
         if (platform.system(), platform.machine()) != ("Linux", "x86_64"):
             raise ValueError(
@@ -98,6 +98,6 @@ def setup(args: list[str]) -> None:
                 with tarfile.open(archive) as source:
                     source.extractall(temporary, filter="data")
                 (Path(temporary) / config["directory"]).rename(destination)
-        run(python_tool("tools/blender.py", "prepare"))
+        blender_addon.prepare()
     else:
         raise ValueError(f"Unknown setup profile: {name}")

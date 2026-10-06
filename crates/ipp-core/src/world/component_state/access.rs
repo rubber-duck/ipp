@@ -1,12 +1,14 @@
 //! Read access to staged and retained component values.
 //!
 //! Pure reads used by commit validation, lifecycle observers and systems.
-//! Ownership lives in [`super::super`]; this module only hosts the read path.
+//! Ownership lives in [`world`](crate::world); this module only hosts the read path.
 //! A component's current value is its batch's staged copy while one exists,
 //! the commit's prepared value while a commit installs it, and otherwise the
 //! retained storage.
 
-use super::super::*;
+use crate::components::registry;
+use crate::world::{WorldEntityState, WorldMutationState};
+use crate::{ComponentValue, EntityId, ErrorReason};
 
 impl WorldEntityState {
     fn prepared_value(&self, key: (EntityId, u16)) -> Option<&ComponentValue> {

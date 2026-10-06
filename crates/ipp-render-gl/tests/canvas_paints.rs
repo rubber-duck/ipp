@@ -6,7 +6,7 @@
 mod support;
 
 use ipp_core::components::{CanvasBox, CanvasPaint, CanvasStyle, GuiBehavior, GuiButton};
-use ipp_core::services::asset_management::shader::{
+use ipp_core::services::asset_management::formats::shader::{
     ShaderBackendSource, ShaderDefinition, ShaderParameterKind,
 };
 use ipp_core::{Command, ComponentValue, DynamicValue, EntityId, EntityRef, HostRuntime};

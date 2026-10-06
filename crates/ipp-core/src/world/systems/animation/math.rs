@@ -99,7 +99,7 @@ pub(crate) fn mix(a: &AnimationValue, b: &AnimationValue, u: f64) -> AnimationVa
             AnimationValue::Rotation(slerp(*a, *b, u))
         }
         (AnimationValue::Pose(a), AnimationValue::Pose(b)) => {
-            AnimationValue::Pose(super::pose::mix(a, b, u))
+            AnimationValue::Pose(super::targets::pose::mix(a, b, u))
         }
         _ => b.clone(),
     }
@@ -273,7 +273,9 @@ pub(crate) fn additive(
             AnimationValue::Pose(base),
             AnimationValue::Pose(sample),
             AnimationValue::Pose(reference),
-        ) => AnimationValue::Pose(super::pose::additive(base, sample, reference, weight)?),
+        ) => AnimationValue::Pose(super::targets::pose::additive(
+            base, sample, reference, weight,
+        )?),
         _ => return Err(ErrorReason::InvalidValue),
     })
 }

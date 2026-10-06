@@ -3,7 +3,7 @@
 use super::{
     GeometryShape, GeometryShapeTransform, TransformedGeometryShape, update::GeometryReadAccess,
 };
-use crate::{EntityId, ErrorReason, components::Transform, systems::camera};
+use crate::{EntityId, ErrorReason, components::Transform, math};
 
 impl GeometryReadAccess<'_> {
     pub(super) fn particle_enclosure(
@@ -33,7 +33,7 @@ impl GeometryReadAccess<'_> {
                 .find_source(self.world.id, crate::MESH_TYPE, &mesh.source, mesh.variant)
                 .ok_or(ErrorReason::GeometryUnavailable)?;
             self.assets
-                .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(key)
+                .get_typed::<crate::services::asset_management::formats::mesh_metadata::MeshMetadata>(key)
                 .ok_or(ErrorReason::GeometryUnavailable)?
                 .bounds()
         };
@@ -49,7 +49,7 @@ impl GeometryReadAccess<'_> {
             if size <= 0.0 {
                 continue;
             }
-            let local = camera::model_matrix(&Transform {
+            let local = math::model_matrix(&Transform {
                 x: particle.position[0],
                 y: particle.position[1],
                 z: particle.position[2],
@@ -62,7 +62,7 @@ impl GeometryReadAccess<'_> {
                 sz: size,
             })?;
             let model = if state.space == 0 {
-                camera::multiply(parent, local)
+                math::multiply(parent, local)
             } else {
                 local
             };

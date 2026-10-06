@@ -283,7 +283,7 @@ impl<'a> RenderReadAccess<'a> {
     pub fn mesh_metadata(
         &self,
         key: MeshKey,
-    ) -> Option<&'a crate::services::asset_management::mesh_metadata::MeshMetadata> {
+    ) -> Option<&'a crate::services::asset_management::formats::mesh_metadata::MeshMetadata> {
         self.assets
             .get(resolve_asset_key(
                 self.assets,
@@ -516,7 +516,7 @@ impl crate::WorldContext<'_> {
     pub fn mesh_metadata(
         &self,
         key: MeshKey,
-    ) -> Option<&crate::services::asset_management::mesh_metadata::MeshMetadata> {
+    ) -> Option<&crate::services::asset_management::formats::mesh_metadata::MeshMetadata> {
         self.render_read()?.mesh_metadata(key)
     }
 

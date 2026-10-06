@@ -356,8 +356,8 @@ fn world_save_preserves_unavailable_resource_references_without_fetching_assets(
 #[test]
 fn typed_rig_writers_preserve_source_payloads_and_reject_small_budgets() {
     use ipp_core::services::asset_management::{
-        skeleton::{PoseAsset, SkeletonAsset},
-        writer::AssetEncoder,
+        AssetEncoder,
+        formats::skeleton::{PoseAsset, SkeletonAsset},
     };
     let transform: [f32; 10] = [1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
     let header = |magic: &[u8]| {
@@ -398,7 +398,8 @@ fn typed_rig_writers_preserve_source_payloads_and_reject_small_budgets() {
         );
     }
     let asset =
-        ipp_core::services::asset_management::skin_binding::SkinAsset::decode(&skin).unwrap();
+        ipp_core::services::asset_management::formats::skin_binding::SkinAsset::decode(&skin)
+            .unwrap();
     assert_eq!(asset.encode_asset(1024).unwrap(), skin);
 }
 

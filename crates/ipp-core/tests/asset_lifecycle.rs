@@ -856,7 +856,7 @@ fn private_preparation_reclaimed_before_the_release_barrier_preserves_identity()
 
 #[test]
 fn headless_shader_sources_are_retained_without_claiming_gpu_readiness() {
-    use shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition};
+    use formats::shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition};
     let mut host = crate::support::task_scheduler::host();
     let world = host.create_world(Default::default(), &[]).unwrap();
     let source = AssetSource {

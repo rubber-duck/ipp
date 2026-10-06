@@ -188,3 +188,7 @@ impl<'a> QueryWalk<'a, '_> {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "traversal_tests.rs"]
+mod tests;

@@ -2,12 +2,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use super::*;
+use crate::commands::metadata_bytes;
 use crate::services::world_serialization::{
     WorldCaptureReferences, WorldPersistenceLimits, WorldSerializedEntity,
     WorldSerializedEntityLink, WorldSerializedReference, WorldSerializedReferenceValue,
     WorldSnapshot,
 };
+use crate::world::context::SystemInstanceAccess;
+use crate::world::mutation::EntityAliases;
+use crate::world::{EntityLink, EntityPersistentId, WorldContext};
+use crate::{Command, ComponentValue, EntityId, EntityRef};
 
 impl WorldContext<'_> {
     /// Capture stored components and links as they are, for every live entity.
@@ -438,7 +442,7 @@ impl WorldContext<'_> {
             let mut context = crate::systems::SystemLoadContext {
                 world: crate::systems::SystemRuntimeAccess {
                     world: self.world,
-                    instances: super::access::SystemInstanceAccess {
+                    instances: SystemInstanceAccess {
                         before,
                         current: Some(instance.id),
                         after,

@@ -1,6 +1,6 @@
 # Mesh Pose Interpolation
 
-[Rendering](../architecture/rendering.md#material-contract) · [Animation](animation.md) · [Mesh format](../../crates/ipp-core/src/services/asset_management/MESH_FORMAT.md)
+[Rendering](../architecture/rendering.md#material-contract) · [Animation](animation.md) · [Mesh format](../../crates/ipp-core/src/services/asset_management/formats/MESH_FORMAT.md)
 
 Optional `mesh-poses` adds per-instance `MeshPose` target/weight; `MeshInstance` remains the base. Endpoints are ordinary immutable IPPM assets; no new format/type or skeletal dependency.
 

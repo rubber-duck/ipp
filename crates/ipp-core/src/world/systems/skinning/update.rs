@@ -30,7 +30,7 @@ impl SkinningSystem {
                 let Some(instance) = context.world.components.mesh_instance(index) else {
                     return Ok(None);
                 };
-                let Some((_, mesh)) = context.asset_acquisition.source_data::<crate::services::asset_management::mesh_metadata::MeshMetadata>(
+                let Some((_, mesh)) = context.asset_acquisition.source_data::<crate::services::asset_management::formats::mesh_metadata::MeshMetadata>(
                     context.world.id,
                     crate::MESH_TYPE,
                     &instance.source,
@@ -46,7 +46,7 @@ impl SkinningSystem {
                     crate::systems::hierarchy::evaluated_affine(context.world, entity)?;
                 let skeleton_transform =
                     crate::systems::hierarchy::evaluated_affine(context.world, skin.skeleton)?;
-                let relative = camera::multiply(
+                let relative = math::multiply(
                     mesh_transform.inverse_matrix().map(|v| v as f32),
                     skeleton_transform.render_matrix()?,
                 );
@@ -58,7 +58,7 @@ impl SkinningSystem {
                         .get(entry.joint)
                         .ok_or(ErrorReason::InvalidAsset)?;
                     let matrix =
-                        camera::multiply(relative, camera::multiply(*joint, entry.inverse_bind));
+                        math::multiply(relative, math::multiply(*joint, entry.inverse_bind));
                     if !matrix.iter().all(|value| value.is_finite()) {
                         return Err(ErrorReason::InvalidValue);
                     }

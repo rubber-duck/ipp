@@ -1,0 +1,32 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "files": [
+    "scenarios/physical-input.ts",
+    "../../packages/ipp-client/tests/physical-input.test.ts",
+    "../../packages/ipp-react/tests/gui-input.test.ts",
+    "../../packages/ipp-react/tests/gui-text-bridge.test.ts",
+    "../../packages/ipp-react/tests/gui-ime.test.ts",
+    "../../packages/ipp-react/tests/gui-clipboard.test.ts",
+    "../../packages/ipp-react/tests/gui-soft-keyboard.test.ts"
+  ],
+  "include": [
+    "../rendering/scenarios/presentation.ts",
+    "scenarios/output-inclusion.ts",
+    "scenarios/gui-local.ts",
+    "scenarios/gui-control-persistence.ts",
+    "scenarios/gui-observations.ts",
+    "../runtime/scenarios/command-batches.ts",
+    "drivers/browser-observer-endpoint.ts",
+    "drivers/browser-observer-delivery.ts",
+    "../../packages/ipp-client/tests/render-diagnostics.test.ts",
+    "../../packages/ipp-client/tests/gui-semantics.test.ts",
+    "../../packages/ipp-client/tests/transport.test.ts",
+    "../../packages/ipp-client/tests/worker-connections.test.ts",
+    "../assets/scenarios/asset-exports.ts",
+    "../assets/drivers/browser-asset-exports.ts",
+    "../assets/asset-exports.test.ts"
+  ]
+}

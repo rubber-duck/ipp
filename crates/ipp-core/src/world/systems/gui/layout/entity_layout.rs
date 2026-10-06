@@ -1,5 +1,6 @@
-use super::entity_evaluation::evaluate;
+use super::update::evaluate;
 use crate::systems::canvas::{CanvasGeometry, logical_extent};
+use crate::systems::gui::local::controls::identity::component_incarnation;
 use crate::systems::{SystemCommitContext, SystemRuntimeAccess};
 use crate::{ComponentValue, EntityId, OutputRef, WorldRef};
 use std::collections::{BTreeMap, BTreeSet};
@@ -317,9 +318,7 @@ impl GuiEntityLayoutState {
             return;
         };
         for (&entity, scroll) in &view.scrolls {
-            if super::super::local::control::component_incarnation(state, entity, scroll.component)
-                == Some(scroll.incarnation)
-            {
+            if component_incarnation(state, entity, scroll.component) == Some(scroll.incarnation) {
                 scroll.write(components, entity);
             }
         }

@@ -3,7 +3,7 @@
 use super::canvas_publications::{canvas, frame_at};
 use super::publications::{apply, assert_color, create, save};
 use ipp_core::components::{CanvasBox, CanvasStyle, CanvasText, FlatSurface, GuiLayout};
-use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use ipp_core::systems::canvas::{CanvasPaintEntry, CanvasPrimitive, CanvasPublication};
 use ipp_core::{
     Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, HostRuntime, OutputRef,

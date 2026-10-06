@@ -21,7 +21,8 @@ impl HostServices for Services {
 
 fn open(host: &mut Host<Services>, id: u64) {
     host.open_connection(id).unwrap();
-    host.receive_connection(id, &ipp_protocol::HELLO).unwrap();
+    host.receive_connection(id, &ipp_protocol::contract::HELLO)
+        .unwrap();
     drop(host.take_connection_response(id).unwrap());
 }
 

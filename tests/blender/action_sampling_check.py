@@ -127,7 +127,7 @@ with tempfile.TemporaryDirectory(prefix="ipp-action-sampling-") as directory:
             nullcontext()
             if shared
             else patch(
-                "ipp_blender.animation.prepare_actions",
+                "ipp_blender.exporter.animation.prepare_actions",
                 return_value=({}, {}, {}),
             )
         )

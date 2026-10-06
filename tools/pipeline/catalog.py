@@ -1,20 +1,13 @@
 """The single build, suite and check catalog used by the CLI and CI."""
 
 from dataclasses import dataclass
-import json
-from pathlib import Path
 import sys
+from typing import Literal
 
 from .model import ROOT, Task, select
 from .processes import blender, node
 from .environment import development_python
-
-
-DATA = Path(__file__).parent
-PROFILES = json.loads((DATA / "profiles.json").read_text())
-SUITES = json.loads((DATA / "suites.json").read_text())
-TEST_INPUTS = json.loads((DATA / "test-inputs.json").read_text())
-GLES_CHECKS = json.loads((DATA / "gles.json").read_text())
+from .registries import GLES_CHECKS, PROFILES, SUITES, TEST_INPUTS
 
 
 @dataclass(frozen=True)
@@ -188,6 +181,135 @@ REGRESSION_GROUPS = {
 
 def operation(*args: str) -> tuple[str, ...]:
     return (sys.executable, "tools/ipp.py", "_operation", *args)
+
+
+@dataclass(frozen=True)
+class ProductScript:
+    """A product one script writes into a staging directory for its destination.
+
+    Node scripts read the staging directory from `IPP_BUILD_OUTPUT`; Python scripts
+    run on the development interpreter and receive it as their last argument; a
+    TypeScript project `script` is compiled into it with `--outDir`.
+    """
+
+    script: str
+    destination: str
+    arguments: tuple[str, ...] = ()
+    runner: Literal["node", "python", "typescript"] = "node"
+
+
+# `build:<name>` steps that only stage and run one script; `builds.build` runs the
+# remaining steps' code.
+PRODUCT_SCRIPTS = {
+    "client": ProductScript(
+        "packages/ipp-client/tsconfig.build.json",
+        "packages/ipp-client/dist",
+        runner="typescript",
+    ),
+    "typescript": ProductScript("tsconfig.json", "dist", runner="typescript"),
+    "headless-client": ProductScript(
+        "tools/products/headless-client.mjs", "target/headless-client"
+    ),
+    "asset-rejection-tests": ProductScript(
+        "tests/assets/tsconfig.asset-rejection-native.json",
+        "target/asset-rejection-tests",
+        runner="typescript",
+    ),
+    "react": ProductScript(
+        "packages/ipp-react/tools/build.mjs", "packages/ipp-react/dist"
+    ),
+    "asset-rejection-worker-tests": ProductScript(
+        "tests/assets/tsconfig.asset-rejection-worker.json",
+        "target/asset-rejection-worker-tests",
+        runner="typescript",
+    ),
+    "react-gui-authoring": ProductScript(
+        "tests/react/gui-authoring/build.mjs", "target/react-gui-authoring"
+    ),
+    "react-attached": ProductScript(
+        "tests/react/attached-world/build.mjs", "target/react-attached"
+    ),
+    "dataset-fixtures": ProductScript(
+        "tools/products/dataset-fixtures.mjs", "target/datasets"
+    ),
+    "plots-fixtures": ProductScript(
+        "tools/products/plots-fixtures.mjs", "target/plots"
+    ),
+    "transport-fixtures": ProductScript(
+        "tools/products/transport-fixtures.mjs", "target/multiplex-tests"
+    ),
+    "composed-query-fixtures": ProductScript(
+        "tools/products/composed-query-fixtures.mjs", "target/composed-queries"
+    ),
+    "gui-motion-fixtures": ProductScript(
+        "tests/gui/motion/build.mjs", "target/gui-motion"
+    ),
+    "gui-composites-fixtures": ProductScript(
+        "tests/gui/composites/build.mjs", "target/gui-composites"
+    ),
+    "gui-default-skin-fixtures": ProductScript(
+        "tests/gui/default-skin/build.mjs", "target/gui-default-skin"
+    ),
+    "gui-stress-fixtures": ProductScript(
+        "tools/products/gui-stress-fixtures.mjs", "target/gui-stress"
+    ),
+    "worker-profiling-fixture": ProductScript(
+        "tools/performance/performance.mjs", "target/worker-profiling", ("robot",)
+    ),
+    "render-fixtures": ProductScript(
+        "tools/products/render-fixtures.mjs", "target/render-fixtures"
+    ),
+    "gallery-assets": ProductScript(
+        "tools/products/gallery.mjs", "target/gallery-assets", ("assets",)
+    ),
+    "gallery": ProductScript(
+        "tools/products/gallery.mjs", "target/gallery-build", ("application",)
+    ),
+    "gallery-site": ProductScript(
+        "tools/products/gallery.mjs", "target/gallery-site", ("site",)
+    ),
+    "gallery-fixtures": ProductScript(
+        "tools/products/gallery.mjs", "target/gallery-fixtures", ("fixtures",)
+    ),
+    "react-fixtures": ProductScript(
+        "tools/products/react-fixtures.mjs", "target/react-build"
+    ),
+    "canvas-fixtures": ProductScript(
+        "tools/products/canvas-fixtures.mjs", "target/canvas-build"
+    ),
+    "textures": ProductScript("tools/products/textures.mjs", "target/texture-build"),
+    "shapes": ProductScript("tools/products/shapes.mjs", "target/shapes-build"),
+    "font-assets": ProductScript(
+        "tools/assets/font_assets.py", "target/font-assets", runner="python"
+    ),
+    "surface-assets": ProductScript(
+        "tools/assets/surface_assets.py", "target/surface-assets", runner="python"
+    ),
+    "surface-fixtures": ProductScript(
+        "tools/products/surface-fixtures.mjs", "target/surface-build"
+    ),
+    "surface-gui-fixtures": ProductScript(
+        "tools/products/surface-gui-fixtures.mjs", "target/surface-gui-build"
+    ),
+    "shared-host": ProductScript("tools/shared-host/build.mjs", "target/shared-host"),
+    "mesh-pose-fixtures": ProductScript(
+        "tools/products/mesh-pose-fixtures.mjs", "target/mesh-pose-build"
+    ),
+    "blender-viewer": ProductScript(
+        "tools/products/blender-viewer.mjs", "target/blender-viewer"
+    ),
+    "blender-viewer-instrumentation": ProductScript(
+        "tools/products/blender-viewer.mjs",
+        "target/blender-viewer-instrumentation",
+        ("render-instrumentation",),
+    ),
+    "blender-fixtures": ProductScript(
+        "tools/products/blender-fixtures.mjs", "target/blender-test"
+    ),
+    "blender-headless-fixtures": ProductScript(
+        "tools/products/blender-headless-fixtures.mjs", "target/blender-headless"
+    ),
+}
 
 
 def catalog(egl_directory: str | None = None) -> dict[str, Task]:
@@ -482,8 +604,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "check:distribution-sizes",
             "Measure current browser distributions without size ceilings",
             (
-                sys.executable,
-                "tools/measure_artifacts.py",
+                *operation("measure"),
                 *(
                     value
                     for profile in PROFILES["browser"]

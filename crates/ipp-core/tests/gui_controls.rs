@@ -913,7 +913,7 @@ fn checkbox_unchecked_asset_requires_an_explicit_variant_not_a_ready_base_asset(
     let (mut host, world, root) = fixture();
     host.register_stream_resource_provider("gui-icon").unwrap();
     let asset = ipp_core::services::asset_management::AssetSource {
-        kind: ipp_core::services::asset_management::drawing::DRAWING_TYPE,
+        kind: ipp_core::services::asset_management::formats::drawing::DRAWING_TYPE,
         uri: "gui-icon:///mark.ippd".into(),
         variant: 0,
     };
@@ -1548,7 +1548,7 @@ fn asset_skin(source: &str) -> ComponentValue {
     parts
         .push(GuiPaintPart {
             asset: Some(ipp_core::services::asset_management::AssetSource {
-                kind: ipp_core::services::asset_management::drawing::DRAWING_TYPE,
+                kind: ipp_core::services::asset_management::formats::drawing::DRAWING_TYPE,
                 uri: source.into(),
                 variant: 0,
             }),

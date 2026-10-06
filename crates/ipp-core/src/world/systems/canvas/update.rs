@@ -1,12 +1,13 @@
 use super::system_state::{CanvasGeometry, CanvasWalkState, interaction_counts};
 use super::walk::{CanvasWalk, CanvasWalkInputs, Placement};
 use super::*;
+use crate::host::attachments::topology::AttachmentAnchor;
 use crate::services::asset_management::{
-    AssetKey, AssetManagementService, AssetTypeId, drawing::DRAWING_TYPE, font::FONT_TYPE,
-    font::FontAsset,
+    AssetKey, AssetManagementService, AssetTypeId, formats::drawing::DRAWING_TYPE,
+    formats::font::FONT_TYPE, formats::font::FontAsset,
 };
 use crate::systems::SystemRuntimeAccess;
-use crate::systems::surface::{
+use crate::text::{
     TextFont, TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, measure_text,
 };
 use crate::world::WorldSimulationState;
@@ -771,7 +772,7 @@ pub(super) fn paint_instance(
         shader: ready_resource(
             world,
             assets,
-            crate::services::asset_management::shader::SHADER_TYPE,
+            crate::services::asset_management::formats::shader::SHADER_TYPE,
             &component.source,
             component.variant,
         ),
@@ -830,7 +831,7 @@ pub(super) fn attachment_slot(
         token: context
             .topology
             .tokens
-            .get(&crate::host::topology::AttachmentAnchor {
+            .get(&AttachmentAnchor {
                 world: world.id,
                 entity,
             })?

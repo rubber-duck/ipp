@@ -3,8 +3,8 @@
 mod custom_material;
 pub use custom_material::CustomMaterial;
 
-mod components;
-pub use components::{BaseColorTexture, MeshInstance, UnlitMaterial, UnlitTexture};
+mod component;
+pub use component::{BaseColorTexture, MeshInstance, UnlitMaterial, UnlitTexture};
 
 mod lighting;
 pub use lighting::{Light, PbrMaterial};
@@ -14,8 +14,6 @@ mod mesh_pose;
 pub use mesh_pose::MeshPose;
 
 pub(in crate::world) use mesh_pose::mesh_pose;
-
-mod settings;
 
 pub mod render_state;
 

@@ -10,7 +10,7 @@ use ipp_core::components::rows::Rows;
 use ipp_core::components::{
     FlatSurface, GuiBehavior, GuiCheckbox, GuiLayout, GuiScrollView, GuiSlider, GuiTextInput,
 };
-use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use ipp_core::systems::canvas::{
     CanvasBox, CanvasDrawing, CanvasPart, CanvasPrimitive, CanvasShapeGlow, CanvasStyle, CanvasText,
 };

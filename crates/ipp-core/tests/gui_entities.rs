@@ -839,7 +839,7 @@ fn padding_text_and_surface_hits_share_content_mapping_without_shifting_outer_cl
     let (root, root_entity) = canvas(&mut host, parent, None);
     let (selected_child, _) = canvas(&mut host, child, None);
     let source = ipp_core::services::asset_management::AssetSource {
-        kind: ipp_core::services::asset_management::font::FONT_TYPE,
+        kind: ipp_core::services::asset_management::formats::font::FONT_TYPE,
         uri: std::sync::Arc::<str>::from(format!("producer://{}/17/24", parent.0)),
         variant: 0,
     };
@@ -1034,7 +1034,7 @@ fn counters_identify_full_dirty_reflow_and_retain_text_runs() {
         }),
     );
     let source = ipp_core::services::asset_management::AssetSource {
-        kind: ipp_core::services::asset_management::font::FONT_TYPE,
+        kind: ipp_core::services::asset_management::formats::font::FONT_TYPE,
         uri: std::sync::Arc::<str>::from(format!("producer://{}/17/25", world.0)),
         variant: 0,
     };

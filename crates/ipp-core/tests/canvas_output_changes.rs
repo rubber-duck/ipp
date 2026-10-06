@@ -8,7 +8,7 @@ use support::task_scheduler::HostTaskTestDriver;
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{FlatSurface, GuiBehavior, GuiLayout, GuiScrollView, SurfaceCache};
 use ipp_core::services::asset_management::{
-    AssetSource, AssetUpload, AssetUploadIdentity, font::FONT_TYPE,
+    AssetSource, AssetUpload, AssetUploadIdentity, formats::font::FONT_TYPE,
 };
 use ipp_core::services::world_serialization::WorldLoadOptions;
 use ipp_core::systems::animation::*;

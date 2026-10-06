@@ -1,28 +1,21 @@
-//! Headless two-dimensional Surface geometry, concrete providers, cache policy and text metrics.
+//! Headless two-dimensional Surface geometry, concrete providers and cache policy.
 
 mod cache_policy;
 mod component;
-mod curved_components;
+mod curved_component;
 mod curved_geometry;
 mod flat_surface;
 mod geometry;
 mod providers;
 mod system;
-pub mod text;
 
 pub use cache_policy::{
     SURFACE_CACHE_BAND_HYSTERESIS, SURFACE_CACHE_MAX_BANDS, SURFACE_CACHE_MAX_DIRECT_DISTANCE,
     SURFACE_CACHE_MAX_REFRESH_HZ, SURFACE_CACHE_MAX_RESOLUTION_SCALE, SurfaceCachePolicy,
 };
 pub use component::{FlatSurface, SurfaceCache};
-pub use curved_components::{CylinderSurface, SphereSurface};
+pub use curved_component::{CylinderSurface, SphereSurface};
 pub use system::{SurfaceSystem, SurfaceSystemFactory};
-pub use text::{
-    SEGMENTATION_SCOPE, TextCacheKey, TextCaret, TextFont, TextGlyph, TextLayout, TextLine,
-    TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, TextRequestError, TextUnits,
-    UNICODE_VERSION, grapheme_boundaries, is_grapheme_boundary, measure_text, utf8_to_utf16_offset,
-    utf16_to_utf8_offset,
-};
 
 pub use geometry::{Surface, SurfaceDomain, SurfaceGeometry, SurfaceIntersection, SurfaceSample};
 pub(crate) use providers::provider;

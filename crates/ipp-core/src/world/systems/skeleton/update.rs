@@ -181,10 +181,10 @@ impl SkeletonSystem {
                     .get_typed::<SkeletonAsset>(pose.source)
                     .ok_or(ErrorReason::InvalidAsset)?;
                 for (index, joint) in skeleton.joints().iter().enumerate() {
-                    let local = camera::model_matrix(&pose.local[index])?;
+                    let local = math::model_matrix(&pose.local[index])?;
                     let global = joint
                         .parent
-                        .map_or(local, |parent| camera::multiply(pose.global[parent], local));
+                        .map_or(local, |parent| math::multiply(pose.global[parent], local));
                     if !global.iter().all(|value| value.is_finite()) {
                         return Err(ErrorReason::InvalidValue);
                     }

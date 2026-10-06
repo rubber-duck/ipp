@@ -3,7 +3,7 @@
 use ipp_core::components::{Camera, CustomMaterial, MeshInstance, Transform, UnlitMaterial};
 use ipp_core::services::asset_management::{
     AssetSource,
-    shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind},
+    formats::shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind},
 };
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, OutputKind, OutputRef,
@@ -277,7 +277,7 @@ fn selected_roots<D: RenderDevice>(
     replacement: &mut impl FnMut() -> Result<D>,
     output: &Path,
 ) -> Result<()> {
-    use ipp_core::services::asset_management::{AssetLoadStatus, shader::ShaderRecipe};
+    use ipp_core::services::asset_management::{AssetLoadStatus, formats::shader::ShaderRecipe};
     use ipp_core::{
         components::BoundingGeometry,
         systems::geometry::{GeometryDefinition, GeometryShape},

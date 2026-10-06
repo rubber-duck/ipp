@@ -1,7 +1,7 @@
 //! Owned material, palette, particle and light inputs for immutable submissions.
 
 use super::{DebugRenderItem, Light, RenderItem, RenderSystem};
-use crate::services::asset_management::{AssetKey, shader::SHADER_TYPE};
+use crate::services::asset_management::{AssetKey, formats::shader::SHADER_TYPE};
 use crate::{ComponentValue, DynamicValue, EntityId, ErrorReason, WorldContext};
 use std::collections::BTreeMap;
 

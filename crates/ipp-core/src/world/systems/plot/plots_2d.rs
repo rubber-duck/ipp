@@ -16,8 +16,8 @@ use crate::{
     DynamicPropertyKind, ErrorReason,
     components::rows::Rows,
     services::asset_management::{
-        drawing::FillRule,
-        quadratic::{QuadraticContour, QuadraticSegment},
+        formats::drawing::FillRule,
+        formats::quadratic::{QuadraticContour, QuadraticSegment},
     },
     systems::gui::presentation::looks::{GuiSkinTokenValue, gui_skin_tokens},
 };

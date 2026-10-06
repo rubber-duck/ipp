@@ -5,7 +5,7 @@ use ipp_core::services::{
     asset_management::{AssetSource, export::AssetExportFormat},
     io::MemoryIoSource,
 };
-use ipp_protocol::asset_export::AssetReadAccess;
+use ipp_protocol::host::asset_export::AssetReadAccess;
 
 const PREFIX: &str = "fixture-export:";
 const SOURCE: &str = "fixture-export:texture";

@@ -31,4 +31,10 @@ pub use ticket::{GuiInputCommand, GuiPreparedEffect};
 pub const GUI_INPUT_MAX_POINTERS: usize = 32;
 
 #[cfg(test)]
-mod foundation_tests;
+mod routing_test_support;
+
+#[cfg(test)]
+mod service_tests;
+
+#[cfg(test)]
+mod test_support;

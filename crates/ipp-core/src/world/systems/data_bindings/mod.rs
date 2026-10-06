@@ -37,7 +37,7 @@
 //! No computed output can be used as another projection's input. Definitions and
 //! source data are shared; input resolution, scratch and output storage are local.
 
-mod components;
+mod component;
 mod interpolation;
 mod interpolation_step;
 pub use interpolation_step::{
@@ -45,20 +45,20 @@ pub use interpolation_step::{
     DataBindingInterpolationRequest,
 };
 mod presentation;
-mod query;
+mod queries;
 pub use presentation::DataBindingPresentationConsumer;
-mod runtime;
+mod runtime_state;
 mod system;
 mod update;
 mod windows;
 
-pub use components::{BufferDataSourceBinding, StreamingDataSourceBinding};
-pub use query::{
+pub use component::{BufferDataSourceBinding, StreamingDataSourceBinding};
+pub use queries::{
     DATA_BINDING_QUERY_MAX_BYTES, DATA_BINDING_QUERY_MAX_ROWS, DataBindingColumnView,
     DataBindingOutputColumn, DataBindingPreparedView, DataBindingView, DataBindingViewQuery,
     DataBindingViewResult,
 };
-pub use runtime::{DataBindingAvailability, DataBindingRuntime, DataBindingUnavailable};
+pub use runtime_state::{DataBindingAvailability, DataBindingRuntime, DataBindingUnavailable};
 pub use system::{DataBindingSystem, DataBindingSystemFactory};
 pub use windows::{decode_data_windows, encode_data_windows};
 

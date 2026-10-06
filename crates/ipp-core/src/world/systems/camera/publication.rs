@@ -38,7 +38,7 @@ impl CameraViewRay {
             return Err(ErrorReason::InvalidViewport);
         }
 
-        let aspect = super::camera_math::projection_aspect(extent)?;
+        let aspect = super::projection::projection_aspect(extent)?;
         let horizontal = f64::from(point[0]) * 2.0 - 1.0;
         let vertical = 1.0 - f64::from(point[1]) * 2.0;
         let (origin, direction) = if camera.projection == 0 {

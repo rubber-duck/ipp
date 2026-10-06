@@ -3,6 +3,8 @@
 mod component;
 pub use component::{LookAt, LookAtRuntimeState};
 
+mod entity_references;
+
 mod math;
 
 mod system;

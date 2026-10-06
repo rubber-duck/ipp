@@ -32,7 +32,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         include_str!("../src/services/render/shaders/surface_bitmap.vert"),
         include_str!("../src/services/render/shaders/surface_bitmap.frag"),
     )?;
-    use ipp_core::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
+    use ipp_core::services::asset_management::formats::quadratic::{
+        QuadraticContour, QuadraticSegment,
+    };
 
     let quadratic = |control, to| QuadraticSegment::Quadratic {
         control,

@@ -4,5 +4,5 @@ fn main() -> std::io::Result<()> {
     use std::io::Write;
     std::io::stdout()
         .lock()
-        .write_all(&ipp_protocol::export_layout_fixture())
+        .write_all(&ipp_protocol::contract::export_layout_fixture())
 }

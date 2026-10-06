@@ -3,7 +3,8 @@
 mod component;
 pub use component::ParentJoint;
 
-use crate::systems::{self, camera::CameraAffineTransform, geometry::GeometryShapeTransform};
+use crate::math::CameraAffineTransform;
+use crate::systems::{self, geometry::GeometryShapeTransform};
 use crate::world::{WorldEntityState, WorldSimulationState};
 use crate::{EntityId, ErrorReason, components::Transform};
 use std::collections::BTreeSet;

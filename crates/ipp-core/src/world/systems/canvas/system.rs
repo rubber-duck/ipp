@@ -1,4 +1,5 @@
 use super::{CanvasPaintEntry, CanvasPublication, system_state::CanvasSystemState};
+use crate::host::attachments::topology::AttachmentAnchor;
 use crate::services::asset_management::{AssetLifecycleEvent, AssetLifecycleKind};
 use crate::systems::{
     System, SystemAssetContext, SystemCapabilities, SystemCapability, SystemCommitContext,
@@ -257,13 +258,10 @@ impl System for CanvasSystem {
         let CanvasPaintEntry::Attachment(slot) = entry.as_ref() else {
             return unavailable;
         };
-        let token = world
-            .topology
-            .tokens
-            .get(&crate::host::topology::AttachmentAnchor {
-                world: world.id(),
-                entity: anchor,
-            });
+        let token = world.topology.tokens.get(&AttachmentAnchor {
+            world: world.id(),
+            entity: anchor,
+        });
         if token != Some(&slot.token) {
             return unavailable;
         }

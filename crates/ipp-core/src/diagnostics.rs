@@ -108,6 +108,16 @@ pub fn emit(level: Level, arguments: fmt::Arguments<'_>) {
     }
 }
 
+/// Filter before constructing arguments; a disabled level evaluates no argument.
+#[macro_export]
+macro_rules! diagnostic {
+    ($level:ident, $($args:tt)*) => {{
+        if $crate::diagnostics::enabled($crate::diagnostics::Level::$level) {
+            $crate::diagnostics::emit($crate::diagnostics::Level::$level, format_args!($($args)*));
+        }
+    }};
+}
+
 /// Install a process panic hook that writes the panic message and source
 /// location to the panicking thread's sink at error level, then runs the
 /// previous hook. Hosts install it with their sink. The line needs no symbols,

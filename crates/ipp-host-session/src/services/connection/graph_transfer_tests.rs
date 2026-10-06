@@ -46,7 +46,11 @@ fn graph(host: &mut Host<TestHostServices>, children: usize) -> Vec<u8> {
         .unwrap();
 
     runtime
-        .save_world(root, ipp_protocol::schema_hash(), Default::default())
+        .save_world(
+            root,
+            ipp_protocol::contract::schema_hash(),
+            Default::default(),
+        )
         .unwrap()
 }
 

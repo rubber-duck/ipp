@@ -6,9 +6,10 @@
 //! Immutable backing is charged once across recipient leases; reliable delivery
 //! storage remains in the existing physical-output accounts until destruction.
 
-use crate::attachment_receipts::{ReplyReservation, SharedReplyBudget, SharedReplyReservation};
+use crate::ReliableResponse;
+use crate::reliable_output::outbox::SessionOutbox;
+use crate::reliable_output::{ReplyReservation, SharedReplyBudget, SharedReplyReservation};
 use crate::services::task_scheduler::{HostScheduler, TaskHandle};
-use crate::{ReliableResponse, outbox::SessionOutbox};
 use ipp_core::services::io::{IoCancellation, IoReader, IoReaderStorage, IoStorageId};
 use ipp_core::services::reliable_output::{OutputCharge, OutputStatus, ReliableOutputLease};
 use ipp_protocol::bulk_read::{self, BulkReadDescriptor, BulkReadReference, BulkReadResponse};

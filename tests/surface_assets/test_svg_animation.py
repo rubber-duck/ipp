@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tools.convert_surface_asset import ConversionError, convert_svg
-from tools.convert_svg_animation import convert_svg_animation
+from tools.assets.convert_surface_asset import ConversionError, convert_svg
+from tools.assets.convert_svg_animation import convert_svg_animation
 
 
 class SvgAnimationConverterTests(unittest.TestCase):

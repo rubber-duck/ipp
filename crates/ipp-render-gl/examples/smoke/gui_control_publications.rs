@@ -6,7 +6,7 @@ use ipp_core::components::rows::Rows;
 use ipp_core::components::{
     CanvasBox, CanvasStyle, GuiBehavior, GuiButton, GuiCheckbox, GuiLayout, GuiSlider, GuiTextInput,
 };
-use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use ipp_core::systems::canvas::{
     CanvasGlyph, CanvasPaintEntry, CanvasPart, CanvasPrimitive, CanvasPublication, CanvasSystem,
 };

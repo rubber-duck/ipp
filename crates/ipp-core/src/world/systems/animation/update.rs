@@ -1,7 +1,7 @@
 //! Phase-scoped animation evaluation and sampled component updates.
 
-use super::controller_commands::directional_start;
-pub(super) use super::controller_commands::{description_bytes, validate_control};
+use super::controller::directional_start;
+pub(super) use super::controller::{description_bytes, validate_control};
 use super::system_state::AnimationTransitionSource;
 use super::*;
 use crate::{
@@ -66,9 +66,9 @@ impl AnimationAccess<'_, '_> {
     pub(super) fn apply_component_update(
         &mut self,
         key: (EntityId, u16),
-        output: Option<super::numeric_output::AnimationNumericOutput>,
+        output: Option<super::targets::AnimationNumericOutput>,
         value: Option<ComponentValue>,
-        properties: &super::component_values::PropertyScratch,
+        properties: &super::targets::PropertyScratch,
     ) -> Result<(), ErrorReason> {
         #[cfg(feature = "instrumentation")]
         let _measurement =
@@ -107,7 +107,7 @@ impl AnimationAccess<'_, '_> {
         match value {
             Some(value)
                 if output.is_some()
-                    && !super::numeric_output::AnimationNumericOutput::patch_only(key.1) =>
+                    && !super::targets::AnimationNumericOutput::patch_only(key.1) =>
             {
                 output
                     .unwrap()
@@ -330,7 +330,7 @@ impl AnimationAccess<'_, '_> {
                                         &self.context.world.components,
                                     )?
                                 } else {
-                                    super::transition::AnimationTransitionProgram::bind_frozen(
+                                    super::controller::AnimationTransitionProgram::bind_frozen(
                                         bindings,
                                         controller,
                                         values,
@@ -345,7 +345,7 @@ impl AnimationAccess<'_, '_> {
                                     } else {
                                         Some(source.as_mut())
                                     };
-                                super::transition::AnimationTransitionProgram::bind(
+                                super::controller::AnimationTransitionProgram::bind(
                                     source,
                                     controller,
                                     &self.context.world.components,
@@ -632,7 +632,7 @@ impl AnimationAccess<'_, '_> {
         &mut self,
         controller: &mut AnimationController,
     ) -> (
-        super::component_values::AnimationComponentValues,
+        super::targets::AnimationComponentValues,
         Result<(), ErrorReason>,
     ) {
         #[cfg(feature = "instrumentation")]
@@ -641,7 +641,7 @@ impl AnimationAccess<'_, '_> {
         let _measurement =
             crate::profiling::Stage::fixed(crate::profiling::FixedStage::AnimationSampleAndStage);
 
-        let mut values = super::component_values::AnimationComponentValues::new(
+        let mut values = super::targets::AnimationComponentValues::new(
             std::mem::take(&mut self.system.state.component_scratch),
             std::mem::take(&mut self.system.state.property_scratch),
         );
@@ -653,9 +653,9 @@ impl AnimationAccess<'_, '_> {
             for (index, driver) in controller.drivers.iter().enumerate() {
                 if matches!(
                     driver.runtime_target(),
-                    super::driver::AnimationRuntimeTarget::JointLocal { .. }
+                    super::targets::AnimationRuntimeTarget::JointLocal { .. }
                 ) {
-                    super::pose::sample_joints(
+                    super::targets::pose::sample_joints(
                         driver.as_ref(),
                         driver.bound_pose_track(),
                         driver.duration(),
@@ -728,9 +728,9 @@ impl AnimationAccess<'_, '_> {
     /// Stage the sample of a driver of a field without a delta.
     fn stage_absolute(
         &mut self,
-        driver: &dyn super::driver::AnimationDriverBinding,
+        driver: &dyn super::targets::AnimationDriverBinding,
         time: f64,
-        values: &mut super::component_values::AnimationComponentValues,
+        values: &mut super::targets::AnimationComponentValues,
     ) -> Result<(), ErrorReason> {
         let description = driver.description();
         let component = description.property.component_target();

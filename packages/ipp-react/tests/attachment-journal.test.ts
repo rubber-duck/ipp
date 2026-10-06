@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { BatchOutcome, Command, ClientClosure } from "@ipp/client";
-import { ReactWorldCommits } from "../src/commits.js";
-import { ReactWorldContainer } from "../src/reconciler.js";
-import { ReactAttachmentGroup } from "../src/attachment-state.js";
-import { ReactWorldTree } from "../src/tree.js";
-import type { ReactWorldClient } from "../src/contract.js";
-import { attachmentIdentity } from "../src/attachment-identity.js";
+import { ReactWorldCommits } from "../src/reconciler/commits.js";
+import { ReactWorldContainer } from "../src/reconciler/host-config.js";
+import { ReactAttachmentGroup } from "../src/composition/attachment-state.js";
+import { ReactWorldTree } from "../src/reconciler/tree.js";
+import type { ReactWorldClient } from "../src/reconciler/world-client.js";
+import { attachmentIdentity } from "../src/composition/attachment-identity.js";
 import {
   AttachedWorldSlot,
   describeAttachedWorld,
   type ReactCompositionHost,
-} from "../src/attached-world.js";
+} from "../src/composition/attached-world.js";
 
 test("attachment identities preserve primitive types and canonical field order", () => {
   assert.notEqual(attachmentIdentity(123n), attachmentIdentity("123n"));

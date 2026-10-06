@@ -1,6 +1,7 @@
-use super::control::{GuiControl, component_incarnation, eligibility, entity_control};
+use super::controls::identity::{GuiControl, component_incarnation, eligibility, entity_control};
 use super::*;
 use crate::services::gui_input::{GuiInputError, GuiPointerLease, GuiPointerLeaseId};
+use crate::systems::gui::system_state::GuiLocalState;
 use crate::world::{WorldEntityState, WorldSimulationState};
 
 /// Transient feedback only: no implicit value, activation or logical-focus action.
@@ -89,7 +90,7 @@ pub struct GuiInteractionEffect {
     pub changed: bool,
 }
 
-pub(super) struct GuiPointerFeedback {
+pub(in crate::world::systems::gui) struct GuiPointerFeedback {
     target: GuiEntityTarget,
     lease: GuiPointerLease,
     state: GuiInteractionFlags,
@@ -220,7 +221,7 @@ impl GuiLocalState {
         })
     }
 
-    pub(super) fn invalidate_interactions(&self, state: &WorldEntityState) {
+    pub(in crate::world::systems::gui) fn invalidate_interactions(&self, state: &WorldEntityState) {
         for record in &self.pointers {
             if component_incarnation(state, record.target.entity, record.target.component)
                 != Some(record.target.incarnation)
@@ -235,7 +236,7 @@ impl GuiLocalState {
         world: &WorldSimulationState,
         state: &WorldEntityState,
     ) {
-        let tree = super::group::GuiGroupTree {
+        let tree = super::composites::group::GuiGroupTree {
             world,
             state,
         };

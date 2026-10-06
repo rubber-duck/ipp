@@ -7,6 +7,52 @@ mod keyboard;
 pub(crate) mod keyboard_panels;
 mod overlay;
 mod routing;
+mod value_controls;
+
+#[cfg(test)]
+mod camera_routing_tests;
+
+#[cfg(test)]
+mod color_input_tests;
+
+#[cfg(test)]
+mod context_request_tests;
+
+#[cfg(test)]
+mod focus_tests;
+
+#[cfg(test)]
+mod group_tests;
+
+#[cfg(test)]
+mod keyboard_traversal_tests;
+
+#[cfg(test)]
+mod number_input_tests;
+
+#[cfg(test)]
+mod overlay_tests;
+
+#[cfg(test)]
+mod pointer_routing_tests;
+
+#[cfg(test)]
+mod range_input_tests;
+
+#[cfg(test)]
+mod routing_tests;
+
+#[cfg(test)]
+mod scroll_chain_tests;
+
+#[cfg(test)]
+mod scroll_routing_tests;
+
+#[cfg(test)]
+mod slider_input_tests;
+
+#[cfg(test)]
+mod surface_routing_tests;
 
 use super::{GuiDeliveryPermit, GuiInputError};
 use crate::systems::gui::local::GuiEntityTarget;

@@ -3,7 +3,7 @@
 use super::*;
 use crate::{
     components::LookAt, components::registry::ComponentStorage,
-    world::component_binding::ComponentBinding,
+    world::direct_bindings::component_binding::ComponentBinding,
 };
 
 #[derive(Default)]

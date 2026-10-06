@@ -4,6 +4,9 @@ mod command;
 mod output;
 mod publisher;
 
+#[cfg(test)]
+mod observation_tests;
+
 pub use command::{
     GuiObservationCommand, GuiObservationPrepareError, GuiObservationPrepareFailure,
 };

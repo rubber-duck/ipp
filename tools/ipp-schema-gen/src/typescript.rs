@@ -5,6 +5,24 @@ use crate::export_reader::ROWS_KIND;
 use crate::model::{Export, RowsLayout};
 use crate::typescript_names::{identifier, js_string};
 
+/// Maintained client source appended after the generated contract, in output order:
+/// the templates and the re-export of the maintained surface configuration module.
+/// Generated identifiers avoid every binding these and [`GUI_PAINT_TEMPLATE`] declare.
+pub(super) const TEMPLATES: [&str; 9] = [
+    include_str!("templates/codec.template.ts"),
+    include_str!("templates/dataset.template.ts"),
+    include_str!("templates/data-authoring.template.ts"),
+    include_str!("templates/animation.template.ts"),
+    include_str!("templates/geometry.template.ts"),
+    include_str!("templates/gui.template.ts"),
+    "\nexport * from \"./surface-config.js\";\n",
+    include_str!("templates/skeleton.template.ts"),
+    include_str!("templates/skinning.template.ts"),
+];
+
+/// GUI paint helpers, appended after the generated paint keys and skin looks.
+pub(super) const GUI_PAINT_TEMPLATE: &str = include_str!("templates/gui-paint.template.ts");
+
 pub(super) fn render(export: Export) -> Result<String, String> {
     let Export {
         expected,
@@ -109,15 +127,9 @@ function freezeContract<T>(value: T): T {\n\
     )
     .unwrap();
     codec_limits::render(&mut out, &wire, &row_limits)?;
-    out.push_str(include_str!("codec.template.ts"));
-    out.push_str(include_str!("dataset.template.ts"));
-    out.push_str(include_str!("data-authoring.template.ts"));
-    out.push_str(include_str!("animation.template.ts"));
-    out.push_str(include_str!("geometry.template.ts"));
-    out.push_str(include_str!("gui.template.ts"));
-    out.push_str("\nexport * from \"./surface-config.js\";\n");
-    out.push_str(include_str!("skeleton.template.ts"));
-    out.push_str(include_str!("skinning.template.ts"));
+    for template in TEMPLATES {
+        out.push_str(template);
+    }
 
     for c in &components {
         for f in &c.fields {

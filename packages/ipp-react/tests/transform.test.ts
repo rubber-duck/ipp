@@ -1,4 +1,4 @@
-/** Rotation math checks; real core/transport/rendering coverage is tests/render. */
+/** Rotation math checks; real core/transport/rendering coverage is tests/rendering. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Transform, type TransformProps } from "../src/components.js";

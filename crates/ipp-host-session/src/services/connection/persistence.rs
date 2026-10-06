@@ -11,7 +11,7 @@ use ipp_protocol::host::{
 use std::{collections::BTreeMap, ops::Bound, time::Duration};
 
 const STAGING_BYTES: usize = 256 << 20;
-const TRANSFER_INACTIVITY: Duration = Duration::from_secs(30);
+pub(super) const TRANSFER_INACTIVITY: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
 pub(super) struct HostPersistenceService {
@@ -25,7 +25,7 @@ pub(super) struct HostWorldTransfer {
     pub(super) origin: Option<u64>,
     reservation: usize,
     state: HostWorldTransferState,
-    progress: Duration,
+    pub(super) progress: Duration,
 }
 
 enum HostWorldTransferState {
@@ -137,9 +137,9 @@ impl<P: HostServices> Host<P> {
                     .ok_or("Persistence scratch overflow")?;
                 self.maintain_bulk_pressure(scratch);
                 self.connections.persistence.charge(scratch)?;
-                let result = self
-                    .runtime
-                    .save_world(world, ipp_protocol::schema_hash(), limits);
+                let result =
+                    self.runtime
+                        .save_world(world, ipp_protocol::contract::schema_hash(), limits);
                 self.connections.persistence.reserved -= scratch;
                 let bytes = std::sync::Arc::new(result.map_err(|error| error.to_string())?);
                 self.maintain_bulk_pressure(bytes.capacity());
@@ -257,7 +257,8 @@ impl<P: HostServices> Host<P> {
                     let limits = self.connections.persistence.limits;
                     let scratch = limits.max_bytes * 2;
                     self.connections.persistence.charge(scratch)?;
-                    let result = inspect_world_graph(bytes, ipp_protocol::schema_hash(), limits);
+                    let result =
+                        inspect_world_graph(bytes, ipp_protocol::contract::schema_hash(), limits);
                     self.connections.persistence.reserved -= scratch;
                     let mut inspected = match result {
                         Ok(value) => value,
@@ -381,7 +382,7 @@ impl<P: HostServices> Host<P> {
                 )?;
                 let result = self.runtime.load_world(
                     bytes,
-                    ipp_protocol::schema_hash(),
+                    ipp_protocol::contract::schema_hash(),
                     WorldLoadOptions {
                         symbolic_id,
                         capacity_hints,
@@ -514,45 +515,5 @@ impl<P: HostServices> Host<P> {
             }
         }
         self.connections.persistence.release(Some(transfer));
-    }
-
-    /// Supply elapsed monotonic Host time independently of simulation advancement.
-    /// Paused simulations still expire stalled transfers and congested connections.
-    pub fn maintain_connections(&mut self, now: Duration) {
-        self.connections.now = self.connections.now.max(now);
-        self.maintain_bulk_pressure(0);
-        self.expire_command_batches();
-        self.expire_dataset_transfers();
-        self.expire_queued_presentations();
-        self.presentation.expire(self.connections.now);
-        for (id, error) in self.publish_presentation_responses() {
-            if let Some(connection) = self.connections.states.get_mut(&id) {
-                connection.failure = Some(error);
-            }
-        }
-        let expired: Vec<_> = self
-            .connections
-            .states
-            .iter()
-            .filter_map(|(&id, connection)| {
-                connection
-                    .transfer
-                    .as_ref()
-                    .is_some_and(|transfer| {
-                        self.connections.now.saturating_sub(transfer.progress)
-                            >= TRANSFER_INACTIVITY
-                    })
-                    .then_some(id)
-            })
-            .collect();
-        for id in expired {
-            let mut connection = self
-                .connections
-                .states
-                .remove(&id)
-                .expect("expired connection");
-            self.cancel_world_transfer(&mut connection);
-            self.connections.states.insert(id, connection);
-        }
     }
 }

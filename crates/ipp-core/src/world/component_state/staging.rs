@@ -1,7 +1,7 @@
 //! Staging of affected components before command application.
 //!
 //! Hydration, dirty tracking and commit preparation. Ownership lives in
-//! [`super::super`]; this module only hosts the staging phase.
+//! [`world`](crate::world); this module only hosts the staging phase.
 //!
 //! A batch works on one transient staged copy of each component it touches:
 //! the component is hydrated from retained storage once, and later operations
@@ -11,7 +11,10 @@
 //! readers use the staged copy. Writes validate before they take effect, so an
 //! invalid operation leaves the staged copy unchanged.
 
-use super::super::*;
+use crate::components::registry;
+use crate::world::WorldMutationState;
+use crate::world::mutation::EntityAliases;
+use crate::{Command, EntityId, ErrorReason};
 
 impl WorldMutationState {
     /// Hydrate the staged copy of a present component once per batch, from a

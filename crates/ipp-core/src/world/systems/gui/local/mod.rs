@@ -17,10 +17,10 @@
 //!
 //! Focus, pointer feedback, groups' active items, overlays' invokers, hint
 //! delays, held step repeats and native text composition, including a
-//! numeric text input's edit ([`number`]), are GUI System state; focus and
+//! numeric text input's edit ([`controls::number`]), are GUI System state; focus and
 //! pointer feedback name a focus part of a control with several, such as a
 //! range slider's thumb or a colour control's field or rail
-//! ([`control::focus_parts`]), and pointer feedback a
+//! ([`controls::identity::focus_parts`]), and pointer feedback a
 //! numeric input's step part. The first three
 //! read through the `GuiFocus`, `GuiPointers` and `GuiActiveItems` System
 //! queries, and none is persisted. Momentary effects use
@@ -28,51 +28,42 @@
 //! Groups keep their selection in their items' `selected` fields.
 
 mod actions;
-pub(crate) mod color;
 mod command;
 mod component;
-pub(in crate::world::systems) mod control;
+pub(in crate::world::systems) mod composites;
+pub(crate) mod controls;
 mod eligibility;
-pub(in crate::world::systems) mod group;
-mod hint;
 mod interaction;
-pub(crate) mod number;
-mod overlay;
+mod queries;
 mod scroll;
-mod scroll_chain;
-mod scroll_component;
-pub(crate) mod slider;
-mod system_queries;
-mod system_state;
-mod text;
-pub(crate) mod text_edit;
 mod types;
 
 pub use command::GuiLocalCommand;
+pub(in crate::world::systems::gui) use component::CONTROL_COMPONENTS;
 pub use component::{
     GUI_GROUP_BOTH, GUI_GROUP_HORIZONTAL, GUI_GROUP_SELECT_FOLLOW, GUI_GROUP_SELECT_NONE,
     GUI_GROUP_SELECT_SINGLE, GUI_GROUP_VERTICAL, GUI_SLIDER_DIAL, GuiBehavior, GuiButton,
     GuiCheckbox, GuiColor, GuiGroup, GuiSlider, GuiTextInput, MAX_GUI_NUMBER_PRECISION,
     MAX_GUI_TEXT_BYTES,
 };
+pub use composites::GuiOverlayCommand;
+pub use controls::{
+    GuiNativeTextState, GuiNumberStep, GuiTextComposition, GuiTextEdit, GuiTextFence,
+    format_number, parse_number,
+};
+pub(in crate::world::systems::gui) use eligibility::refresh_eligibility;
+pub(in crate::world::systems::gui) use interaction::GuiPointerFeedback;
 pub(in crate::world::systems) use interaction::{GUI_MAX_FOCUS_PARTS, GuiPartInteraction};
 pub use interaction::{
     GuiInteractionEffect, GuiInteractionFlags, GuiInteractionPart, GuiInteractionUpdate,
 };
-pub use number::{GuiNumberStep, format_number, parse_number};
-pub use overlay::GuiOverlayCommand;
-pub use scroll_chain::GuiScrollChain;
-pub use scroll_component::{GuiScrollView, GuiVirtualItem, GuiVirtualList};
-pub use system_queries::{GuiActiveItemRecord, GuiFocusRecord, GuiPointerRecord};
-pub(in crate::world::systems::gui) use system_state::GuiLocalState;
-pub use text::{GuiNativeTextState, GuiTextComposition, GuiTextEdit, GuiTextFence};
+pub use queries::{GuiActiveItemRecord, GuiFocusRecord, GuiPointerRecord};
+pub use scroll::{GuiScrollChain, GuiScrollView, GuiVirtualItem, GuiVirtualList};
 pub use types::{
     GuiControlKind, GuiEntityTarget, GuiLocalAction, GuiLocalActionError, GuiLocalEffect,
     GuiLocalEffectKind, GuiLocalEffectSource,
 };
 
-#[cfg(test)]
-mod input_test_support;
 #[cfg(test)]
 mod interaction_tests;
 #[cfg(test)]
@@ -80,16 +71,8 @@ mod lifetime_tests;
 #[cfg(test)]
 mod local_tests;
 #[cfg(test)]
-mod observation_tests;
-#[cfg(test)]
 mod receiver_tests;
 #[cfg(test)]
-mod scroll_tests;
-#[cfg(test)]
-mod slider_tests;
-#[cfg(test)]
-mod submit_tests;
-#[cfg(test)]
-mod text_tests;
+pub(in crate::world::systems::gui) mod test_support;
 #[cfg(test)]
 mod validation_tests;

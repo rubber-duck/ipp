@@ -352,7 +352,7 @@ impl AnimationSystem {
                                 super::system_state::AnimationTransitionSource::Frozen {
                                     values,
                                     ..
-                                } if super::transition::frozen_values_invalidated(
+                                } if super::controller::frozen_values_invalidated(
                                     values,
                                     context.staged,
                                     &context.world_data.components,
@@ -400,7 +400,7 @@ impl AnimationSystem {
 
 fn target_retained(
     context: &SystemCommitContext<'_>,
-    identity: &super::driver::AnimationTargetIdentity,
+    identity: &super::targets::AnimationTargetIdentity,
 ) -> bool {
     context
         .staged
@@ -415,8 +415,8 @@ fn target_retained(
 fn stage_withdrawal(
     restorations: &mut BTreeMap<(EntityId, u16), ComponentValue>,
     context: &SystemCommitContext<'_>,
-    identity: &super::driver::AnimationTargetIdentity,
-    applied: &super::contribution::AnimationApplied,
+    identity: &super::targets::AnimationTargetIdentity,
+    applied: &super::controller::contribution::AnimationApplied,
 ) {
     let Some(property) = identity.property.property() else {
         return;
@@ -442,8 +442,8 @@ fn stage_withdrawal(
 /// leaves the value as it is.
 fn withdraw_from(
     value: &mut ComponentValue,
-    identity: &super::driver::AnimationTargetIdentity,
-    applied: &super::contribution::AnimationApplied,
+    identity: &super::targets::AnimationTargetIdentity,
+    applied: &super::controller::contribution::AnimationApplied,
 ) -> Result<(), ErrorReason> {
     let property = identity
         .property

@@ -1,8 +1,12 @@
-//! Retention assertions exercise real lifecycle allocations, in every build.
+//! Component-page storage: retention assertions exercise real lifecycle
+//! allocations, in every build, and pages are allocated only on demand.
 
-use super::*;
-use crate::components::{CustomMaterial, dynamic_properties::clone_count};
-use crate::{DynamicProperties, DynamicValue};
+use crate::components::{CustomMaterial, Scalar, Transform, dynamic_properties::clone_count};
+use crate::world::systems;
+use crate::{
+    Batch, Command, ComponentValue, DynamicProperties, DynamicValue, EntityId, EntityMetadata,
+    EntityRef, ErrorReason, FieldValue, FieldWrite, WorldLimits,
+};
 
 /// Rendered meshes and materials with the evaluators they require.
 const RENDER_SYSTEMS: &[crate::systems::SystemId] = &[
@@ -414,40 +418,170 @@ fn typed_scene_slots_survive_growth_failed_preparation_and_neighbor_reuse() {
     );
 }
 
-use crate::{FieldValue, FieldWrite, components::Transform};
+#[test]
+fn failed_component_reservation_keeps_prior_deletion_fences_complete() {
+    let mut host = crate::HostRuntime::new();
+    let id = host
+        .create_world(
+            WorldLimits::default(),
+            &[
+                crate::systems::constraints::ConstraintSystem::ID,
+                crate::systems::hierarchy::HierarchySystem::ID,
+            ],
+        )
+        .unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    world
+        .enqueue(Batch {
+            id: 1,
+            operations: vec![
+                Command::Create {
+                    alias: 1,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+                Command::InsertComponent {
+                    entity: EntityRef::Alias(1),
+                    component: ComponentValue::SCALAR,
+                    fields: Vec::new(),
+                    adopt: false,
+                },
+                Command::Create {
+                    alias: 2,
+                    metadata: Default::default(),
+                    adopt: false,
+                },
+            ],
+        })
+        .unwrap();
+    assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
+    let first = world.entities()[0].id;
+    let second = world.entities()[1].id;
+    crate::components::storage::fail_next_reservation();
+    world
+        .enqueue(Batch {
+            id: 2,
+            operations: vec![
+                Command::Delete {
+                    entity: EntityRef::Handle(first),
+                },
+                Command::InsertComponent {
+                    entity: EntityRef::Handle(second),
+                    component: ComponentValue::TRANSFORM,
+                    fields: Vec::new(),
+                    adopt: false,
+                },
+            ],
+        })
+        .unwrap();
+    let report = world.step(0.0).unwrap();
+    assert_eq!(
+        report.outcomes[0].result.as_ref().unwrap_err().reason,
+        ErrorReason::Capacity
+    );
+    assert!(world.entities().iter().all(|entity| entity.id != first));
+    assert!(
+        world
+            .world
+            .components
+            .scalar(first.index() as usize)
+            .is_none()
+    );
+    assert!(
+        world
+            .world
+            .components
+            .transform(second.index() as usize)
+            .is_none()
+    );
+    assert_eq!(world.entities()[0].id, second);
+    assert!(world.entities()[0].components.is_empty());
+}
 
 #[test]
-fn recycled_command_buffers_bound_retained_capacity_and_release_payloads() {
+fn empty_worlds_do_not_allocate_component_pages_until_their_first_value() {
     let mut host = crate::HostRuntime::new();
-    let id = host.create_world(WorldLimits::default(), &[]).unwrap();
-    let mut world = host.world_mut(id).unwrap();
-    let mut bounded = Vec::with_capacity(256);
-    bounded.push(Command::Create {
-        alias: 1,
-        metadata: EntityMetadata::default(),
-        adopt: false,
-    });
-    let pointer = bounded.as_ptr();
-    world.recycle_command_buffer(bounded);
-    let reused = world.take_command_buffer();
-    assert!(reused.is_empty());
-    assert_eq!(reused.capacity(), 256);
-    assert_eq!(reused.as_ptr(), pointer);
-    world.recycle_command_buffer(reused);
-
-    // An unusually large direct-core batch must not enlarge the reusable pool.
-    world.recycle_command_buffer(Vec::with_capacity(100_000));
-    let reused = world.take_command_buffer();
-    assert_eq!(reused.as_ptr(), pointer);
-    assert_eq!(world.take_command_buffer().capacity(), 0);
-
-    // Hosts that decode pages elsewhere only return buffers; the pool stays bounded.
-    for _ in 0..16 {
-        world.recycle_command_buffer(Vec::with_capacity(crate::RECYCLED_COMMAND_BUFFER_COMMANDS));
+    let worlds: Vec<_> = (0..64)
+        .map(|_| {
+            // The constraints System admits the Scalar inserted below.
+            host.create_world(
+                WorldLimits::default(),
+                &[crate::systems::constraints::ConstraintSystem::ID],
+            )
+            .unwrap()
+        })
+        .collect();
+    for id in &worlds {
+        let mut world = host.world_mut(*id).unwrap();
+        world
+            .enqueue(Batch {
+                id: 1,
+                operations: vec![Command::Create {
+                    alias: 1,
+                    metadata: Default::default(),
+                    adopt: false,
+                }],
+            })
+            .unwrap();
+        assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
+        assert_eq!(
+            world
+                .world
+                .components
+                .allocated_pages(ComponentValue::SCALAR),
+            0
+        );
+        assert_eq!(
+            world
+                .world
+                .components
+                .allocated_pages(ComponentValue::TRANSFORM),
+            0
+        );
     }
-    let mut kept = 0;
-    while world.take_command_buffer().capacity() > 0 {
-        kept += 1;
-    }
-    assert_eq!(kept, 2);
+    let mut world = host.world_mut(worlds[0]).unwrap();
+    let entity = world.entities()[0].id;
+    world
+        .enqueue(Batch {
+            id: 2,
+            operations: vec![Command::InsertComponent {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::SCALAR,
+                fields: Vec::new(),
+                adopt: false,
+            }],
+        })
+        .unwrap();
+    assert!(world.step(0.0).unwrap().outcomes[0].result.is_ok());
+    assert_eq!(world.entities()[0].components.len(), 1);
+    assert_eq!(
+        world
+            .world
+            .components
+            .allocated_pages(ComponentValue::SCALAR),
+        1
+    );
+    assert_eq!(
+        world
+            .world
+            .components
+            .allocated_pages(ComponentValue::TRANSFORM),
+        0
+    );
+    let original = world
+        .world
+        .components
+        .scalar(entity.index() as usize)
+        .unwrap() as *const _;
+    world
+        .world
+        .components
+        .try_reserve_component(ComponentValue::SCALAR, 4096)
+        .unwrap();
+    let after = world
+        .world
+        .components
+        .scalar(entity.index() as usize)
+        .unwrap() as *const _;
+    assert_eq!(original, after);
 }

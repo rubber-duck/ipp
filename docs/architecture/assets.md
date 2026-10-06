@@ -38,7 +38,7 @@ Requests and registrations carry producer/resource/session scope. Cancellation a
 
 Immutable shader recipes specify compilation features and required passes; component values never create program variants. Renderer-owned providers compile/link programs and upload meshes before graphics readiness. Built-in/custom programs share this lifecycle; headless Hosts may retain authored recipes without claiming GPU readiness.
 
-Hosts register narrow device/compiler dependencies and progress loaders with the correct context outside World evaluation. Loaders never borrow Worlds or locate services through World state. Retain only handles/layout metadata and CPU data required by actual consumers; release temporary decode/compile inputs. [Graphics loaders](../../crates/ipp-render-gl/src/services/render) own representation details.
+Hosts register narrow device/compiler dependencies and progress loaders with the correct context outside World evaluation. Loaders never borrow Worlds or locate services through World state. Retain only handles/layout metadata and CPU data required by actual consumers; release temporary decode/compile inputs. [Graphics loaders](../../crates/ipp-render-gl/src/services/render/assets) own representation details.
 
 ## Client-authored sources
 
@@ -54,7 +54,7 @@ Authored/generated immutable [bounding and picking definitions](rendering.md#bou
 
 ## Surface resources
 
-Surfaces consume immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Curve textures keep contour coordinates exact, using the narrowest [fixed-point texel format](../../crates/ipp-render-gl/src/services/render/surface_path.rs) that represents them. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
+Surfaces consume immutable font and drawing assets with shared quadratic contour data. Fonts preserve glyph identities and headless layout metrics; drawings preserve ordered painted paths and fill rules. Conversion owns source-format interpretation and approximation, while the renderer owns acceleration structures, curve textures and device-specific packing. Curve textures keep contour coordinates exact, using the narrowest [fixed-point texel format](../../crates/ipp-render-gl/src/services/render/assets/paths.rs) that represents them. Bitmap resources preserve colour and coverage alpha independently, with explicit colour conversion under the rendering contract.
 
 [GUI text and skins](gui.md#text-and-skins) consume these same resources and ordinary animation clips. GUI adds no separate loading or asset-identity system; font measurement remains headless, and skin values stay independent of immutable resource content.
 

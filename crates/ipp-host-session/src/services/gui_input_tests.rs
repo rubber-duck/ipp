@@ -2,7 +2,7 @@ use super::*;
 use ipp_core::components::{GuiButton, GuiLayout};
 use ipp_core::services::gui_input::router::GuiPhysicalInput;
 use ipp_core::{EntityPlacementRef, WorldRef};
-use ipp_protocol::gui_input::{GuiPhysicalRequest, GuiPhysicalResponse};
+use ipp_protocol::host::gui_input::{GuiPhysicalRequest, GuiPhysicalResponse};
 
 fn ordinary() -> (crate::Host<Platform>, PresentationView, WorldRef) {
     let (mut host, _, _, _) = connected_surface();

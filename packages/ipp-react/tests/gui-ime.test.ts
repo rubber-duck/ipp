@@ -8,8 +8,8 @@ import {
   mapCompositionUpdate,
   shouldSkipBeforeInput,
   utf8ByteLength,
-} from "../src/gui/ime.js";
-import type { BrowserGuiInputCommand } from "../src/gui/input.js";
+} from "../src/gui/platform/ime.js";
+import type { BrowserGuiInputCommand } from "../src/gui/platform/input.js";
 
 test("utf8 caret collapses at the encoded end", () => {
   assert.equal(utf8ByteLength("k"), 1);

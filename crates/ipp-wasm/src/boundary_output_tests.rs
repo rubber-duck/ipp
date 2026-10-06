@@ -2,7 +2,7 @@ use super::*;
 
 fn hello(boundary: &mut WasmHostBoundary, connection: u64) {
     assert!(boundary.connection_open(connection));
-    let bytes = ipp_protocol::HELLO;
+    let bytes = ipp_protocol::contract::HELLO;
     assert!(!boundary.reserve(bytes.len()).is_null());
     boundary.input_mut().copy_from_slice(&bytes);
     assert!(boundary.receive(connection, bytes.len()));
@@ -48,7 +48,7 @@ fn copied_wasm_output_keeps_credit_through_mutations_until_exact_completion() {
     assert_eq!(boundary.connection_pending(1), 1);
     drop(bytes);
     assert!(boundary.delivery_complete(1, delivery));
-    assert!(available(&boundary, 1) >= retained + ipp_protocol::HELLO.len());
+    assert!(available(&boundary, 1) >= retained + ipp_protocol::contract::HELLO.len());
     assert_eq!(boundary.connection_pending(1), 0);
 }
 
@@ -137,7 +137,7 @@ fn reply_copies_use_the_reply_reserve_when_ordinary_output_is_full() {
     let delivery = boundary.output_delivery_id();
     assert_eq!(
         boundary.output(),
-        ipp_protocol::accept_hello(&ipp_protocol::HELLO, 1).unwrap()
+        ipp_protocol::contract::accept_hello(&ipp_protocol::contract::HELLO, 1).unwrap()
     );
     assert!(boundary.output_copied(1, delivery));
     assert!(boundary.delivery_complete(1, delivery));

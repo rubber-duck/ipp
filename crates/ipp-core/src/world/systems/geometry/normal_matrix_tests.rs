@@ -1,9 +1,9 @@
 use super::GeometryShapeTransform;
-use crate::{components::Transform, systems::camera};
+use crate::{components::Transform, math};
 
 #[test]
 fn normals_stay_perpendicular_under_nonuniform_scale_and_rotation() {
-    let model = camera::model_matrix(&Transform {
+    let model = math::model_matrix(&Transform {
         sx: 1.6,
         sy: 0.65,
         sz: 1.1,

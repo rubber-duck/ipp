@@ -4,7 +4,9 @@ use ipp_core::{
     components::{CustomMaterial, MeshInstance, Transform, UnlitMaterial},
     services::asset_management::{
         AssetSource,
-        shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind},
+        formats::shader::{
+            SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind,
+        },
     },
     *,
 };

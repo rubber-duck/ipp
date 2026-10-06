@@ -147,6 +147,7 @@ impl ConstraintSystem {
     ) {
         use super::dependency_graph::{DriverDependencies, DriverKey, PropertyIdentity};
         use super::system_state::{PreparedConstraint, ScalarNumericBinding};
+        use crate::world::direct_bindings::component_binding::ComponentBinding;
         let components = &world.components;
         self.state.numeric.clear();
         self.state.order.clear();
@@ -211,9 +212,9 @@ impl ConstraintSystem {
             // accesses borrow the same World's storage in its sequential phase.
             self.state.numeric.push(unsafe {
                 ScalarNumericBinding {
-                    source: crate::world::component_binding::ComponentBinding::new(source),
-                    target: crate::world::component_binding::ComponentBinding::new(target),
-                    driver: crate::world::component_binding::ComponentBinding::new(driver),
+                    source: ComponentBinding::new(source),
+                    target: ComponentBinding::new(target),
+                    driver: ComponentBinding::new(driver),
                 }
             });
         }

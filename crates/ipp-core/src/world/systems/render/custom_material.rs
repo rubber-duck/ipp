@@ -118,7 +118,7 @@ impl ComponentLifecycle for CustomMaterial {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
-        crate::services::asset_management::service::validate_source(&self.source)?;
+        crate::services::asset_management::validate_source(&self.source)?;
         if self.alpha_mode > 2
             || !self.alpha_cutoff.is_finite()
             || !(0.0..=1.0).contains(&self.alpha_cutoff)
@@ -140,7 +140,7 @@ impl ComponentLifecycle for CustomMaterial {
 
     fn asset_references() -> &'static [crate::components::schema::ComponentAssetReference] {
         &[crate::components::schema::ComponentAssetReference {
-            kind: crate::services::asset_management::shader::SHADER_TYPE.0,
+            kind: crate::services::asset_management::formats::shader::SHADER_TYPE.0,
             source_offset: std::mem::offset_of!(Self, source) as u32,
             variant_offset: std::mem::offset_of!(Self, variant) as u32,
         }]
@@ -149,13 +149,13 @@ impl ComponentLifecycle for CustomMaterial {
     fn resource_demand(
         &self,
         demand: &mut std::collections::BTreeSet<
-            crate::services::asset_management::service::AssetDemandSelection,
+            crate::services::asset_management::AssetDemandSelection,
         >,
     ) {
         if !self.source.is_empty() {
             demand.insert(
-                crate::services::asset_management::service::AssetDemandSelection::new(
-                    crate::services::asset_management::shader::SHADER_TYPE,
+                crate::services::asset_management::AssetDemandSelection::new(
+                    crate::services::asset_management::formats::shader::SHADER_TYPE,
                     &self.source,
                     self.variant,
                 ),

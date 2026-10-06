@@ -3,5 +3,5 @@
   "compilerOptions": {
     "noEmit": true
   },
-  "include": ["chart-data.ts", "chart-data-scenario.ts"]
+  "include": ["chart-data.ts", "../data/scenarios/chart-data-workload.ts"]
 }

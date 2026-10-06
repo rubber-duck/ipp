@@ -29,7 +29,7 @@ fn native_output_reserves_simultaneous_payload_and_framing_before_copy() {
         composition: None,
         masked: false,
     };
-    let size = ipp_protocol::gui_input::native_state_size(&state).unwrap();
+    let size = ipp_protocol::host::gui_input::native_state_size(&state).unwrap();
     for (available, accepted) in [(512 + size, false), (512 + 2 * size, true)] {
         let budget = SharedReplyBudget(ReliableOutputAccount::new(OutputLimits {
             bytes: available + crate::reliable_output::RESPONSE_METADATA_BYTES,

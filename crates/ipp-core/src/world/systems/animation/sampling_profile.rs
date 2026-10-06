@@ -47,7 +47,7 @@ impl WorldContext<'_> {
             for driver in &controller.drivers {
                 if matches!(
                     driver.runtime_target(),
-                    super::driver::AnimationRuntimeTarget::JointLocal { .. }
+                    super::targets::AnimationRuntimeTarget::JointLocal { .. }
                 ) {
                     continue;
                 }
@@ -80,7 +80,7 @@ impl WorldContext<'_> {
                 }
                 if matches!(
                     driver.runtime_target(),
-                    super::driver::AnimationRuntimeTarget::JointLocal { .. }
+                    super::targets::AnimationRuntimeTarget::JointLocal { .. }
                 ) {
                     continue;
                 }

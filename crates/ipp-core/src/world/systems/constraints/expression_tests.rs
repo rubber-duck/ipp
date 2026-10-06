@@ -4,7 +4,7 @@ use super::*;
 use crate::components::{RowsFixture, RowsFixtureItem, rows::Rows};
 use crate::expressions::{ExpressionDeclaration, ExpressionInput, ExpressionNode};
 use crate::services::asset_management::{
-    AssetUpload, AssetUploadIdentity, expression::EXPRESSION_TYPE,
+    AssetUpload, AssetUploadIdentity, formats::expression::EXPRESSION_TYPE,
 };
 use crate::{
     Batch, Command, DynamicPropertyKind, DynamicValue, EntityRef, FieldValue, FieldWrite,

@@ -12,7 +12,7 @@ Use ordinary Rust types, derives and an explicit registry. Share validation and 
 
 Implement compare-and-set as a generic field operation and field subscriptions as an extension of the lifecycle watch, sharing its membership, per-connection output accounting, Host drain and client code rather than adding a sibling facility. Compare observed fields after every System's finish pass so observations see final stored values, and keep unchanged fields free of allocation. Measure observer cost with thousands of watched controls.
 
-Component ownership lives in [`ipp_core::components`](../../crates/ipp-core/src/components/mod.rs): `schema`, `registry`, and `dynamic_properties` are the canonical paths, alongside lifecycle, primitives, and storage; crate-root re-exports cover value types only. World-side component-state behavior lives in [`world/component_state`](../../crates/ipp-core/src/world/component_state/mod.rs), split by phase (`access`, `staging`, `mutation`, `observations`), with `component_binding` and `component_query` as private world-root helpers.
+Component ownership lives in [`ipp_core::components`](../../crates/ipp-core/src/components/mod.rs): `schema`, `registry`, and `dynamic_properties` are the canonical paths, alongside lifecycle, primitives, and storage; crate-root re-exports cover value types only. World-side component-state behavior lives in [`world/component_state`](../../crates/ipp-core/src/world/component_state/mod.rs), split by phase (`access`, `staging`, `mutation`, `observations`), with `component_binding` and `component_query` in the World's private [`world/direct_bindings`](../../crates/ipp-core/src/world/direct_bindings/mod.rs) module.
 
 ## Target contracts and generation
 

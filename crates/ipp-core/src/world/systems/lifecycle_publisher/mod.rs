@@ -179,8 +179,8 @@ mod target_index;
 mod targets;
 mod value_observation;
 
-mod diagnostics;
-pub use diagnostics::{LifecycleTargetWork, LifecycleWatchTraffic};
+mod statistics;
+pub use statistics::{LifecycleTargetWork, LifecycleWatchTraffic};
 
 pub use membership::{
     LifecycleMembershipCommand, LifecycleMembershipPrepareError, LifecycleMembershipPrepareFailure,

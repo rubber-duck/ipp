@@ -55,7 +55,7 @@ The gallery build generates its Platformer World and immutable assets under igno
 
 ## Validation and inspection
 
-The maintained browser harness uses the actual DOM, generated client, worker, resources and renderer. It waits for acknowledged work and completed frames, then checks state and pixels. `window.ippWorldCanvas` exposes the live canvas and `window.ippGalleryScene` exposes the shared scene actions and inspection; [observation helpers](../../tests/render/viewer-observation.ts) belong to the tests.
+The maintained browser harness uses the actual DOM, generated client, worker, resources and renderer. It waits for acknowledged work and completed frames, then checks state and pixels. `window.ippWorldCanvas` exposes the live canvas and `window.ippGalleryScene` exposes the shared scene actions and inspection; [observation helpers](../../tests/gallery/support/viewer-observation.ts) belong to the tests.
 
 Run `python tools/ipp.py test render` for gallery rendering and interaction, `python tools/ipp.py test animation` for playback, `python tools/ipp.py test gallery-platformer` for the saved course and gait controls, `python tools/ipp.py test gallery-particles` for the fountain, or `python tools/ipp.py test gallery-gui` for GUI control, overlay, re-theming, layer, scrolling and lifecycle behavior. The [suite registry](../../tools/pipeline/suites.json) and [render harness guide](../../docs/development/rendering.md) own exact coverage and environment setup.
 

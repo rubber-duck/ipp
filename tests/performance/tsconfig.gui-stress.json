@@ -10,5 +10,5 @@
       "@ipp/gui-stress-contract": ["../../target/gui-stress-contract/generated.d.ts"]
     }
   },
-  "include": ["gui-stress-fixture.tsx", "gui-stress.ts", "gui-stress.test.ts", "gui-profile-capture.test.ts", "gpu-memory.test.ts"]
+  "include": ["pages/gui-stress.tsx", "gui-stress.ts", "gui-stress.test.ts", "../profiling/gui-profile-capture.test.ts", "gpu-memory.test.ts"]
 }

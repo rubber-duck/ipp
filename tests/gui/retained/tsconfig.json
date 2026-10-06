@@ -1,0 +1,13 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": { "noEmit": true },
+  "include": [
+    "pages/retained-gui.tsx",
+    "support/retained-gui-environment.ts",
+    "../../harness/images.ts",
+    "retained-gui.native.test.ts",
+    "scenarios/retained-gui.ts",
+    "retained-gui.browser.test.ts",
+    "../../performance/retained-gui.ts"
+  ]
+}

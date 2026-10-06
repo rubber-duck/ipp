@@ -1,8 +1,8 @@
 //! Short-lived authoritative reads for an owning System's command validation.
 
+use super::attachments::topology::HostTopology;
 use super::publication::{HostPublications, RetainedPublication};
 use super::reference_resolution::ReferenceWorlds;
-use super::topology::HostTopology;
 use super::*;
 use crate::services::asset_management::{AssetKey, AssetManagementService, AssetProvider};
 use crate::systems::SystemWorldView;
@@ -16,7 +16,7 @@ mod tests;
 /// The owning System validates before its first mutation and drops this view before writing.
 pub struct HostIngressView<'a> {
     pub(crate) local: SystemWorldView<'a>,
-    pub(crate) local_outputs: crate::world::composition::WorldOutputs,
+    pub(crate) local_outputs: crate::world::outputs::WorldOutputs,
     pub(crate) declared: &'a BTreeSet<WorldRef>,
     pub(crate) foreign: Option<&'a ReferenceWorlds<'a>>,
     pub(crate) topology: &'a HostTopology,

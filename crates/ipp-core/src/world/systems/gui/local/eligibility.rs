@@ -10,7 +10,7 @@
 //! like any other: each entity is visited once, so a cycle ends the walk
 //! instead of repeating it.
 
-use super::control::control_components;
+use super::controls::identity::control_components;
 use crate::EntityId;
 use crate::components::registry::ComponentStorage;
 use crate::world::WorldEntityState;

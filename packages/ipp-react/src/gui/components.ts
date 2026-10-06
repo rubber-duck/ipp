@@ -1,6 +1,6 @@
 import { createElement, type ReactNode } from "react";
 import type { DynamicPropertyInput } from "@ipp/client";
-import type { AssetReference } from "../assets.js";
+import type { AssetReference } from "../assets/declarations.js";
 import {
   componentContract,
   type ComponentFields,

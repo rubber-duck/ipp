@@ -129,7 +129,7 @@ impl super::AssetManagementService {
     }
 }
 
-impl AssetSourceIdentity for super::service::AssetDemandSelection {
+impl AssetSourceIdentity for super::AssetDemandSelection {
     fn identity(&self) -> AssetSourceLookup<'_> {
         AssetSourceLookup {
             kind: self.kind,
@@ -139,13 +139,13 @@ impl AssetSourceIdentity for super::service::AssetDemandSelection {
     }
 }
 
-impl<'a> Borrow<dyn AssetSourceIdentity + 'a> for super::service::AssetDemandSelection {
+impl<'a> Borrow<dyn AssetSourceIdentity + 'a> for super::AssetDemandSelection {
     fn borrow(&self) -> &(dyn AssetSourceIdentity + 'a) {
         self
     }
 }
 
-impl super::service::AssetDemandSelection {
+impl super::AssetDemandSelection {
     /// Mark a retained selection without copying source text for an existing key.
     pub(crate) fn mark_selected(
         selections: &mut std::collections::BTreeMap<Self, bool>,

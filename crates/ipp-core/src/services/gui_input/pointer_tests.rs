@@ -1,4 +1,7 @@
-use super::*;
+use crate::services::gui_input::test_support::*;
+use crate::services::gui_input::{
+    GuiDeliveryTerminal, GuiInputError, GuiInputLimits, GuiInputService,
+};
 
 #[test]
 fn inert_cancelled_pointer_paths_and_slots_are_charged_through_last_drop() {

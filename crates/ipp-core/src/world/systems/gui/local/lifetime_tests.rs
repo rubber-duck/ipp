@@ -1,6 +1,8 @@
 //! Control lifetimes follow their entity and control component incarnation.
 
-use super::local_tests::*;
+use super::test_support::{
+    GuiTestValue, action, apply, create, fixture, frame, outcomes, read, snapshot,
+};
 use super::*;
 use crate::{Command, ComponentValue, EntityRef, ErrorReason, HostRuntime};
 

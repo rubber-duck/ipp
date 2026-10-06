@@ -14,6 +14,9 @@ mod stream_source;
 mod upload;
 mod writer;
 
+#[cfg(test)]
+mod read_window_tests;
+
 pub use buffer_reader::{BufferIoReader, IoImmutableBacking, MappedIoReader};
 pub use cancellation::{IoCancellation, IoCancellationWaiter, IoCancelledFuture};
 pub use listing::{IoListing, IoListingBackend, IoNextFuture, MemoryIoListing};

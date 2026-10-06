@@ -12,7 +12,7 @@ use ipp_core::{
         ExpressionNode as N, ExpressionResult as R,
     },
     services::{
-        asset_management::{AssetSource, expression::EXPRESSION_TYPE},
+        asset_management::{AssetSource, formats::expression::EXPRESSION_TYPE},
         data::*,
     },
     systems::{SystemId, data_bindings::*},

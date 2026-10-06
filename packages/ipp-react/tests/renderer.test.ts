@@ -11,7 +11,12 @@ import "./gui-clipboard.test.js";
 import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
 import "./gui-declaration.test.js";
-import "./gui-kit.test.js";
+import "./gui-kit-core.test.js";
+import "./gui-kit-containers.test.js";
+import "./gui-kit-feedback.test.js";
+import "./gui-kit-overlays.test.js";
+import "./gui-kit-selection.test.js";
+import "./gui-kit-values.test.js";
 import "./control-refs.test.js";
 import "./canvas-world.test.js";
 import "./commit-scope.test.js";
@@ -34,7 +39,7 @@ import type {
   Client,
   EntityRef,
 } from "@ipp/client";
-import { CanvasWorldSession } from "../src/canvas-world-session.js";
+import { CanvasWorldSession } from "../src/canvas/world-session.js";
 import {
   ReactWorldBatchRejectedError,
   ReactWorldDuplicateEntityError,
@@ -58,8 +63,8 @@ import {
   animationMutation,
   animationSignature,
   describeAnimation,
-} from "../src/animation_tree.js";
-import { AnimationMailbox } from "../src/animation.js";
+} from "../src/animation/description.js";
+import { AnimationMailbox } from "../src/animation/declarations.js";
 
 test("animation transitions apply only to changed driver descriptions", () => {
   const drivers = [{ source: "memory:first", track: 0, target: 1n }];
@@ -491,7 +496,7 @@ test("canvas render slots keep explicit queue boundaries and replace later pendi
     client: client as unknown as Client,
     host: {
       sessions: new Map([[client.session, client]]),
-    } as unknown as import("../src/canvas-presentation.js").CanvasHost,
+    } as unknown as import("../src/canvas/presentation.js").CanvasHost,
     onError: () => {},
   });
   const root = session.createRoot();

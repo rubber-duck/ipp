@@ -1,0 +1,4 @@
+{
+  "extends": "../../tsconfig.json",
+  "include": ["asset-rejection.browser.test.ts", "scenarios/asset-rejection.ts"]
+}

@@ -1,5 +1,5 @@
 /** Maintained support modules copied beside every target-generated client. */
-import { copyFileSync, mkdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, readdirSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { resolve } from "node:path";
 import { build } from "esbuild";
@@ -35,7 +35,71 @@ export const CLIENT_SUPPORT_MODULES = [
   "world-persistence-client.ts",
 ];
 
+/**
+ * Modules built only into the browser host. The host build also compiles the
+ * `logging`, `presentation` and `resource-urls` support modules.
+ */
+const BROWSER_HOST_ONLY_MODULES = [
+  "wasm-worker.ts",
+  "worker-connections.ts",
+  "resource-worker.ts",
+  "source-availability.ts",
+  "render-worker.ts",
+  "profile-worker.ts",
+  "render-testing.ts",
+];
+
+/**
+ * Modules reached only through the package's own entry points; neither copied
+ * beside a generated client nor built into the browser host.
+ */
+const PACKAGE_ONLY_MODULES = [
+  "browser.ts",
+  "diagnostics.ts",
+  "index.ts",
+  "native-presentation.ts",
+  "surface-mapping.ts",
+  "testing.ts",
+];
+
 const source = resolve(import.meta.dirname, "../src");
+
+/**
+ * Refuse to assemble unless every `src` module is in exactly one set, so adding,
+ * renaming or removing a module decides whether generated clients and the
+ * browser host ship it.
+ */
+function checkModuleSets() {
+  const sets = {
+    CLIENT_SUPPORT_MODULES,
+    BROWSER_HOST_ONLY_MODULES,
+    PACKAGE_ONLY_MODULES,
+  };
+
+  const owners = new Map(
+    readdirSync(source)
+      .filter((name) => name.endsWith(".ts"))
+      .map((name) => [name, []]),
+  );
+
+  const problems = [];
+  for (const [set, names] of Object.entries(sets))
+    for (const name of names)
+      if (owners.has(name)) owners.get(name).push(set);
+      else problems.push(`${set} lists ${name}, which is not in src/`);
+
+  for (const [name, listedIn] of owners)
+    if (listedIn.length === 0) problems.push(`src/${name} is in no module set`);
+    else if (listedIn.length > 1)
+      problems.push(`src/${name} is in ${listedIn.join(" and ")}`);
+
+  if (problems.length > 0)
+    throw new Error(
+      `packages/ipp-client/tools/assemble.mjs: every src module must be in exactly one of ${Object.keys(sets).join(", ")}:\n  ${problems.join("\n  ")}`,
+    );
+}
+
+checkModuleSets();
 
 /** Assemble the target-independent half of a generated client package. */
 export function assembleClientSupport(destination) {
@@ -101,7 +165,7 @@ export async function assembleBrowserHost(
       entryPoints: [
         resolve(
           source,
-          "../../../crates/ipp-render-gl/src/services/render/webgl.ts",
+          "../../../crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts",
         ),
       ],
       outfile: resolve(destination, "webgl.js"),

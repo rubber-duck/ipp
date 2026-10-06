@@ -8,9 +8,9 @@ import { pathToFileURL } from "node:url";
 import type { WorldPersistenceHostClient } from "@ipp/client";
 import type { BlenderClient } from "../../integrations/blender/client/adapter.js";
 import { importBlenderScene } from "../../integrations/blender/client/disk-import.js";
-import { runNativeEnvironment } from "../integration/environment.js";
-import { addStressFeatures, readyStressFeatures } from "./features.js";
-import { checkStressFeatures } from "./feature-checks.js";
+import { runNativeEnvironment } from "../harness/native.js";
+import { addStressFeatures, readyStressFeatures } from "./support/features.js";
+import { checkStressFeatures } from "./support/feature-checks.js";
 
 const [input, output, native] = process.argv
   .slice(2)

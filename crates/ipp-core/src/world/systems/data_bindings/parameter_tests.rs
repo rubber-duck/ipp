@@ -7,7 +7,7 @@ use crate::{
     components::schema::FieldValue,
     expressions::*,
     services::{
-        asset_management::{AssetSource, expression::EXPRESSION_TYPE},
+        asset_management::{AssetSource, formats::expression::EXPRESSION_TYPE},
         data::*,
     },
     systems::{System, SystemId, SystemNumericContext},

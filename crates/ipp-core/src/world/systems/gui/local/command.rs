@@ -57,7 +57,7 @@ pub(super) enum GuiLocalOperation {
     },
     Select,
     ActiveItem,
-    Number(super::number::GuiNumberOperation),
+    Number(super::controls::number::GuiNumberOperation),
 }
 
 impl GuiLocalCommand {
@@ -189,7 +189,7 @@ impl GuiLocalCommand {
         }
         Self::new(
             input,
-            GuiLocalOperation::Number(super::number::GuiNumberOperation::Step {
+            GuiLocalOperation::Number(super::controls::number::GuiNumberOperation::Step {
                 steps,
                 fine,
                 part: None,
@@ -202,7 +202,7 @@ impl GuiLocalCommand {
     pub fn number_part(input: GuiInputCommand, part: GuiNumberStep) -> Result<Self, GuiInputError> {
         Self::new(
             input,
-            GuiLocalOperation::Number(super::number::GuiNumberOperation::Step {
+            GuiLocalOperation::Number(super::controls::number::GuiNumberOperation::Step {
                 steps: part.steps(),
                 fine: false,
                 part: Some(part),
@@ -214,7 +214,7 @@ impl GuiLocalCommand {
     pub fn number_commit(input: GuiInputCommand) -> Result<Self, GuiInputError> {
         Self::new(
             input,
-            GuiLocalOperation::Number(super::number::GuiNumberOperation::Commit {
+            GuiLocalOperation::Number(super::controls::number::GuiNumberOperation::Commit {
                 submit: false,
             }),
         )
@@ -224,7 +224,7 @@ impl GuiLocalCommand {
     pub fn number_discard(input: GuiInputCommand) -> Result<Self, GuiInputError> {
         Self::new(
             input,
-            GuiLocalOperation::Number(super::number::GuiNumberOperation::Discard),
+            GuiLocalOperation::Number(super::controls::number::GuiNumberOperation::Discard),
         )
     }
 

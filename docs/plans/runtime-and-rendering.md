@@ -12,7 +12,7 @@ Extend the maintained native WebSocket and worker/WASM drivers with gated I/O, p
 
 ## Evaluation strategy
 
-Extend the [System lifecycle and dependency interfaces](../../crates/ipp-core/src/world/systems) under the [semantic schedule](../architecture/runtime.md#frame-order). Select dependency-checked immutable System compositions and preserve their local evaluation order. Keep instance results in components and subsystem bookkeeping in Systems; publish completed derived output with shared unchanged chunks. Test release barriers, frozen-branch safety and invalidation independently of update order.
+Extend the [System lifecycle and dependency interfaces](../../crates/ipp-core/src/world/systems/composition) under the [semantic schedule](../architecture/runtime.md#frame-order). Select dependency-checked immutable System compositions and preserve their local evaluation order. Keep instance results in components and subsystem bookkeeping in Systems; publish completed derived output with shared unchanged chunks. Test release barriers, frozen-branch safety and invalidation independently of update order.
 
 Use maintained animation, hierarchy, skinning and mesh-pose fixtures before optimizing sampling or storage. Compare evaluated results with independent baked references. Extend bounds and picking together while keeping conservative enclosure distinct from interaction fitting. Additional pose-changing operations require the accepted dependency model; physics or iterative solving needs architecture review.
 

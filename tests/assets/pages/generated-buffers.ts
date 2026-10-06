@@ -1,0 +1,304 @@
+import type { Client, WorldPersistenceHostClient } from "@ipp/client";
+import { SharedBufferProducer } from "../../../packages/ipp-client/src/buffer-source.js";
+import { createWorkerHost } from "../../../packages/ipp-client/src/worker.js";
+import { presentationOf } from "../../../packages/ipp-client/src/presentation.js";
+import {
+  aliasId,
+  createEntity,
+  insertComponent,
+  successfulBatch,
+} from "../../fixtures/commands.js";
+import { selectSystems, SCENE } from "../../fixtures/system-selections.js";
+import {
+  RootPresentation,
+  capturedImage,
+  captureSummary,
+} from "../../harness/page/presentation.js";
+import type { HostLifecycleContract } from "../../runtime/drivers/browser-host-transport.js";
+import { check } from "../../harness/page/checks.js";
+
+export async function generatedBuffers(urls: {
+  generated: string;
+  wasm: string;
+  workerScript: string;
+}) {
+  check(
+    globalThis.crossOriginIsolated,
+    "Shared source fixture requires cross-origin isolation",
+  );
+  const contract = (await import(urls.generated)) as HostLifecycleContract & {
+    MAX_MESSAGE_BYTES: number;
+  };
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 64;
+  document.body.append(canvas);
+  const owner = createWorkerHost(
+    urls.workerScript,
+    urls.wasm,
+    contract.MAX_MESSAGE_BYTES,
+    { canvas: canvas.transferControlToOffscreen(), logLevel: "off" },
+  );
+  let host: WorldPersistenceHostClient<Client> | undefined;
+  const width = 512,
+    height = 257,
+    length = 16 + width * height * 4;
+  const palettes = [
+    [
+      [255, 0, 0, 255],
+      [0, 255, 0, 255],
+      [0, 0, 255, 255],
+      [255, 255, 0, 255],
+    ],
+    [
+      [0, 255, 255, 255],
+      [255, 0, 255, 255],
+      [255, 255, 255, 255],
+      [0, 0, 0, 255],
+    ],
+  ];
+  const write = (
+    bytes: Uint8Array<ArrayBufferLike>,
+    palette = palettes[0]!,
+  ) => {
+    bytes.set([73, 80, 80, 84]);
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    view.setUint32(4, 3, true);
+    view.setUint32(8, width, true);
+    view.setUint32(12, height, true);
+    for (let y = 0; y < height; y++)
+      for (let x = 0; x < width; x++)
+        bytes.set(
+          palette[(y < height / 2 ? 0 : 2) + (x < width / 2 ? 0 : 1)]!,
+          16 + (y * width + x) * 4,
+        );
+  };
+  try {
+    host = await contract.IppHostClient.connectTransport(owner.connect());
+    const world = await host.createWorld({
+      selectedSystems: selectSystems(SCENE),
+      temporary: true,
+    });
+    const client = await host.openWorld(world.reference);
+    const original = new ArrayBuffer(length);
+    write(new Uint8Array(original));
+    const array = await owner.publishBuffer(original);
+    check(
+      original.byteLength === 0,
+      "ArrayBuffer ownership was not transferred",
+    );
+    const producer = new SharedBufferProducer(length);
+    const publication = producer.publish((bytes) => write(bytes, palettes[1]!));
+    const shared = await owner.publishBuffer(publication);
+    let writeDenied = false;
+    try {
+      producer.publish((bytes) => write(bytes, palettes[1]!));
+    } catch {
+      writeDenied = true;
+    }
+    check(writeDenied, "Producer rewrote an active shared publication");
+    const textures = successfulBatch(
+      await client.batch([
+        createEntity(1, "array"),
+        insertComponent(
+          client,
+          "UnlitTexture",
+          { kind: "alias", alias: 1 },
+          { source: array.source },
+        ),
+        createEntity(2, "shared"),
+        insertComponent(
+          client,
+          "UnlitTexture",
+          { kind: "alias", alias: 2 },
+          { source: shared.source },
+        ),
+      ]),
+    );
+    const deadline = performance.now() + 10_000;
+    let resources;
+    for (;;) {
+      const state = await client.inspect();
+      resources = state.resources.filter(
+        (resource) =>
+          resource.source === array.source || resource.source === shared.source,
+      );
+      const failed = resources.find((resource) => resource.status === "failed");
+      check(
+        !failed,
+        `Generated source failed: ${JSON.stringify(failed, (_, value) => (typeof value === "bigint" ? String(value) : value))}`,
+      );
+      if (
+        resources.length === 2 &&
+        resources.every((resource) => resource.status === "loaded")
+      )
+        break;
+      check(
+        performance.now() < deadline,
+        "Generated source did not become ready",
+      );
+      await client.waitForFrame(state.tick);
+    }
+    check(
+      resources.every(
+        (resource) => resource.representation.sourceBytes === BigInt(length),
+      ),
+      "Reader consumption did not match the exact generated source length",
+    );
+    const statistics = await presentationOf(host)!.statistics();
+    const ingress = statistics.ingress;
+    check(
+      ingress?.sourceBytes === 2 * length,
+      "Generated bytes did not cross the boundary exactly once",
+    );
+    check(
+      ingress.sourceJsPeakBufferedBytes === 0,
+      "Generated buffer views allocated transport staging",
+    );
+    check(
+      typeof ingress.sourceRuntimePeakBufferedBytes === "number" &&
+        ingress.sourceRuntimePeakBufferedBytes <= 2 * (65536 + 65536) + 32,
+      "Reader-owned generated input exceeded two lookahead/prefetch allocations",
+    );
+    check(
+      ingress.sourceBackingBytes === 2 * length,
+      "Original external backing was not accounted separately",
+    );
+    // This independent quad has explicit UVs, so capture checks prove the two
+    // generated payloads reached their own rendered regions with correct content.
+    const mesh = new ArrayBuffer(16 + 4 * 32 + 6 * 2);
+    new Uint8Array(mesh, 0, 4).set([73, 80, 80, 77]);
+    const meshView = new DataView(mesh);
+    [2, 4, 6].forEach((value, index) =>
+      meshView.setUint32(4 + index * 4, value, true),
+    );
+    const vertices = [
+      [-0.8, -0.8, 0, 1, 1, 1, 0, 1],
+      [0.8, -0.8, 0, 1, 1, 1, 1, 1],
+      [0.8, 0.8, 0, 1, 1, 1, 1, 0],
+      [-0.8, 0.8, 0, 1, 1, 1, 0, 0],
+    ];
+    vertices
+      .flat()
+      .forEach((value, index) =>
+        meshView.setFloat32(16 + index * 4, value, true),
+      );
+    [0, 1, 2, 0, 2, 3].forEach((value, index) =>
+      meshView.setUint16(144 + index * 2, value, true),
+    );
+    const quad = await owner.publishBuffer(mesh);
+    const camera = { kind: "alias", alias: 99 } as const;
+    const commands = [
+      createEntity(camera.alias, "camera"),
+      insertComponent(client, "Transform", camera, { z: 5, qw: 1 }),
+      insertComponent(client, "Camera", camera, {
+        projection: 1,
+        ortho_height: 2,
+        near: 0.1,
+        far: 100,
+        fov_y: Math.PI / 4,
+        focus_distance: 5,
+      }),
+    ];
+    for (const alias of [1, 2]) {
+      const entity = { kind: "handle", id: aliasId(textures, alias) } as const;
+      commands.push(
+        insertComponent(client, "Transform", entity, {
+          x: alias === 1 ? -1 : 1,
+          qw: 1,
+        }),
+        insertComponent(client, "MeshInstance", entity, {
+          source: quad.source,
+        }),
+        insertComponent(client, "UnlitMaterial", entity),
+      );
+    }
+    const scene = await client.batch(commands);
+    successfulBatch(scene);
+    const presentation = await RootPresentation.camera(
+      host,
+      world.reference,
+      aliasId(scene, camera.alias),
+      { width: 128, height: 64 },
+    );
+    let capture;
+    try {
+      const frame = await presentation.capture();
+      const image = capturedImage(frame);
+      const rgba = new Uint8Array(image.pixels);
+      const patches = [];
+      for (let source = 0; source < 2; source++)
+        for (let quadrant = 0; quadrant < 4; quadrant++) {
+          const x = (source === 0 ? 19 : 83) + (quadrant % 2) * 26;
+          const y = quadrant < 2 ? 19 : 45;
+          const pixels = [];
+          for (let dy = -2; dy <= 2; dy++)
+            for (let dx = -2; dx <= 2; dx++) {
+              const offset = ((y + dy) * image.width + x + dx) * 4;
+              pixels.push(Array.from(rgba.subarray(offset, offset + 4)));
+            }
+          patches.push({ source, quadrant, x, y, pixels });
+        }
+      const output = document.createElement("canvas");
+      output.width = image.width;
+      output.height = image.height;
+      output
+        .getContext("2d")!
+        .putImageData(
+          new ImageData(
+            new Uint8ClampedArray(image.pixels),
+            image.width,
+            image.height,
+          ),
+          0,
+          0,
+        );
+      capture = {
+        frame: captureSummary(frame),
+        sourceTick: String(presentation.sourceTick(frame)),
+        patches,
+        dataUrl: output.toDataURL("image/png"),
+      };
+    } finally {
+      await presentation.close();
+      await quad.release();
+    }
+    await array.release();
+    await shared.release();
+    check(producer.released, "Shared producer ownership was not released");
+    producer.publish((bytes) => write(bytes, palettes[1]!));
+    let staleDenied = false;
+    try {
+      await owner.publishBuffer(publication);
+    } catch {
+      staleDenied = true;
+    }
+    check(
+      staleDenied,
+      "A stale publication descriptor mounted replacement shared bytes",
+    );
+    const after = await presentationOf(host)!.statistics();
+    check(
+      after.ingress?.sourceBackingBytes === 0,
+      "Released source storage stayed retained",
+    );
+    return {
+      capture,
+      length,
+      consumed: resources.map((resource) =>
+        String(resource.representation.sourceBytes),
+      ),
+      crossingBytes: ingress.sourceBytes,
+      peakStagingBytes: ingress.sourcePeakBufferedBytes,
+      peakJsStagingBytes: ingress.sourceJsPeakBufferedBytes,
+      peakReaderStorageBytes: ingress.sourceRuntimePeakBufferedBytes,
+      originalBackingBytes: ingress.sourceBackingBytes,
+      releasedBackingBytes: after.ingress.sourceBackingBytes,
+      externalSharedPath: "single copy into reader storage",
+    };
+  } finally {
+    await host?.close();
+    await owner.close();
+    canvas.remove();
+  }
+}

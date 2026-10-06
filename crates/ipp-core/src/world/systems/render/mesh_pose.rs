@@ -4,7 +4,9 @@ use super::RenderReadAccess;
 use crate::{
     ComponentValue, EntityId, ErrorReason, MeshKey,
     components::schema::ComponentLifecycle,
-    services::asset_management::{AssetManagementService, service::AssetDemandSelection},
+    services::asset_management::{
+        AssetDemandSelection, AssetManagementService, formats::mesh_metadata::MeshMetadata,
+    },
     systems::asset_dependencies::{AssetSourceKeyCache, cached_source_key, source_key_from_fields},
     world::{WorldMutationState, WorldSimulationState},
 };
@@ -35,7 +37,7 @@ impl ComponentLifecycle for MeshPose {
 
     fn validate_field(&self, offset: u32) -> Result<(), ErrorReason> {
         if offset == std::mem::offset_of!(Self, source) as u32 {
-            crate::services::asset_management::service::validate_source(&self.source)?;
+            crate::services::asset_management::validate_source(&self.source)?;
         }
 
         if offset == std::mem::offset_of!(Self, weight) as u32
@@ -48,7 +50,7 @@ impl ComponentLifecycle for MeshPose {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
-        crate::services::asset_management::service::validate_source(&self.source)?;
+        crate::services::asset_management::validate_source(&self.source)?;
         if !self.weight.is_finite() || !(0.0..=1.0).contains(&self.weight) {
             return Err(ErrorReason::InvalidValue);
         }
@@ -112,10 +114,10 @@ pub(in crate::world) fn mesh_pose(
     )
     .ok_or(ErrorReason::GeometryUnavailable)?;
     let base = assets
-        .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(base_key)
+        .get_typed::<MeshMetadata>(base_key)
         .ok_or(ErrorReason::GeometryUnavailable)?;
     let target = assets
-        .get_typed::<crate::services::asset_management::mesh_metadata::MeshMetadata>(target_key)
+        .get_typed::<MeshMetadata>(target_key)
         .ok_or(ErrorReason::GeometryUnavailable)?;
     compatible_pose(base, target)?;
     Ok(Some((
@@ -127,10 +129,7 @@ pub(in crate::world) fn mesh_pose(
     )))
 }
 
-fn compatible_pose(
-    base: &crate::services::asset_management::mesh_metadata::MeshMetadata,
-    target: &crate::services::asset_management::mesh_metadata::MeshMetadata,
-) -> Result<(), ErrorReason> {
+fn compatible_pose(base: &MeshMetadata, target: &MeshMetadata) -> Result<(), ErrorReason> {
     if base.vertex_count() != target.vertex_count() || base.topology() != target.topology() {
         return Err(ErrorReason::InvalidAsset);
     }
@@ -180,7 +179,7 @@ impl RenderReadAccess<'_> {
                         .get(key)?
                         .data()?
                         .metadata()
-                        .downcast_ref::<crate::services::asset_management::mesh_metadata::MeshMetadata>()
+                        .downcast_ref::<MeshMetadata>()
                 };
                 if let (Some(base), Some(target)) = (
                     data(&base.source, base.variant),

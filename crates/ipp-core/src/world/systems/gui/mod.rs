@@ -17,20 +17,21 @@
 //! [GUI architecture](../../../../../../docs/architecture/gui.md) owns the
 //! design.
 
+mod gui_preferences;
 pub mod layout;
 pub mod local;
 pub mod motion;
 pub mod observations;
-mod preferences;
 pub mod presentation;
 mod system;
+mod system_state;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub use gui_preferences::{GuiPreferences, GuiPreferencesUpdate};
 pub use layout::{GuiLayoutSystem, GuiLayoutSystemFactory, MAX_LAYOUT_DEPTH};
 pub use local::MAX_GUI_TEXT_BYTES;
-pub(crate) use local::slider::slider_rail;
-pub use preferences::{GuiPreferences, GuiPreferencesUpdate};
+pub(crate) use local::controls::slider::slider_rail;
 pub use presentation::{
     GUI_BASE_PARTS, GuiPartId, GuiPartProperty, GuiPartStyle, GuiPartVariant, GuiPrimitivePart,
     GuiSkinLook, GuiSkinState, gui_skin_looks,

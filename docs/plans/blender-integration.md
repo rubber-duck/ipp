@@ -28,7 +28,7 @@ Extend supported native recipes or sequential baked-cache export through ordinar
 
 ## Maintained integration harness
 
-Extend the `blender` and `particles-blender` [suites](../../tools/pipeline/suites.json) with isolated real Blender/addon and Chromium participants. Reuse local generated geometry/texture/rig fixtures, [shared scenarios](../../tests/integration/scenarios), [browser drivers](../../tests/browser/environment.ts) and [frame assertions](../../tests/render/image-assertions.ts).
+Extend the `blender` and `particles-blender` [suites](../../tools/pipeline/suites.json) with isolated real Blender/addon and Chromium participants. Reuse local generated geometry/texture/rig fixtures, [shared scenarios](../../tests/runtime/scenarios), [browser drivers](../../tests/harness/browser.ts) and [frame assertions](../../tests/harness/page/images.ts).
 
 | Evidence | Observable result |
 | --- | --- |

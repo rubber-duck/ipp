@@ -1,7 +1,6 @@
 //! Source references backed by the generic resource manager. Hosts own I/O.
 
 use super::{catalog::AssetSlot, resource::AssetLoaderConstructor};
-use crate::ErrorReason;
 use crate::components::schema::same_text;
 use crate::services::asset_management::*;
 use crate::services::io::IoService;
@@ -54,52 +53,6 @@ pub struct AssetResourceSnapshot {
     pub variant: u32,
     /// AssetProvider-owned availability.
     pub status: AssetResourceStatus,
-}
-
-pub(crate) fn validate_source(source: &str) -> Result<(), ErrorReason> {
-    super::validate_reference(None, source)
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) struct AssetDemandSelection {
-    pub(crate) kind: AssetResourceKind,
-    pub(crate) source: Arc<str>,
-    pub(crate) variant: u32,
-}
-
-impl AssetDemandSelection {
-    pub(crate) fn new(kind: AssetResourceKind, source: &Arc<str>, variant: u32) -> Self {
-        Self {
-            kind,
-            source: source.clone(),
-            variant,
-        }
-    }
-
-    pub(crate) fn insert_into(
-        demand: &mut BTreeSet<Self>,
-        kind: AssetTypeId,
-        source: &Arc<str>,
-        variant: u32,
-    ) {
-        let query = super::source_lookup::AssetSourceLookup {
-            kind,
-            uri: [source, "", "", ""],
-            variant,
-        };
-        if demand.contains(&query as &dyn super::source_lookup::AssetSourceIdentity) {
-            return;
-        }
-        demand.insert(Self::new(kind, source, variant));
-    }
-
-    pub(crate) fn descriptor(&self) -> AssetSource {
-        AssetSource {
-            kind: self.kind,
-            uri: self.source.clone(),
-            variant: self.variant,
-        }
-    }
 }
 
 /// Host-owned acquisition, provider streams and per-world resource subscriptions.
@@ -193,7 +146,7 @@ impl AssetManagementService {
         manager
             .register_loader(
                 crate::MESH_TYPE,
-                crate::services::asset_management::mesh::cpu_mesh_loader,
+                crate::services::asset_management::formats::mesh::cpu_mesh_loader,
             )
             .expect("compiled factory");
         manager
@@ -205,28 +158,31 @@ impl AssetManagementService {
         manager
             .register_loader(
                 crate::TEXTURE_TYPE,
-                crate::services::asset_management::texture::cpu_texture_loader,
+                crate::services::asset_management::formats::texture::cpu_texture_loader,
             )
             .expect("compiled factory");
         manager
-            .register_loader(super::font::FONT_TYPE, super::font::cpu_font_loader)
+            .register_loader(
+                super::formats::font::FONT_TYPE,
+                super::formats::font::cpu_font_loader,
+            )
             .expect("surface font loader");
         manager
             .register_loader(
-                super::expression::EXPRESSION_TYPE,
-                super::expression::expression_asset_loader,
+                super::formats::expression::EXPRESSION_TYPE,
+                super::formats::expression::expression_asset_loader,
             )
             .expect("expression definition loader");
         manager
             .register_loader(
-                super::drawing::DRAWING_TYPE,
-                super::drawing::cpu_drawing_loader,
+                super::formats::drawing::DRAWING_TYPE,
+                super::formats::drawing::cpu_drawing_loader,
             )
             .expect("surface drawing loader");
         manager
             .register_loader(
-                super::shader::SHADER_TYPE,
-                super::shader::shader_asset_loader,
+                super::formats::shader::SHADER_TYPE,
+                super::formats::shader::shader_asset_loader,
             )
             .expect("unique shader loader");
         manager
@@ -238,19 +194,19 @@ impl AssetManagementService {
         manager
             .register_loader(
                 crate::SKELETON_TYPE,
-                crate::services::asset_management::skeleton::skeleton_asset_loader,
+                crate::services::asset_management::formats::skeleton::skeleton_asset_loader,
             )
             .expect("compiled factory");
         manager
             .register_loader(
                 crate::POSE_TYPE,
-                crate::services::asset_management::skeleton::pose_asset_loader,
+                crate::services::asset_management::formats::skeleton::pose_asset_loader,
             )
             .expect("compiled factory");
         manager
             .register_loader(
                 crate::SKIN_TYPE,
-                crate::services::asset_management::skin_binding::skin_asset_loader,
+                crate::services::asset_management::formats::skin_binding::skin_asset_loader,
             )
             .expect("compiled factory");
         manager

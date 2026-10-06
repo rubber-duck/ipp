@@ -1,7 +1,7 @@
 //! Lifecycle observations derived from staged component changes.
 //!
 //! Effect recording and per-operation component lifecycle classification.
-//! Ownership lives in [`super::super`]; this module only hosts observation.
+//! Ownership lives in [`world`](crate::world); this module only hosts observation.
 //!
 //! Each operation compares a component's value with the value observed after
 //! the previous operation. When an operation only wrote the staged copy in
@@ -9,7 +9,10 @@
 //! are logged and replayed onto the observed value only if a later operation of
 //! the same batch needs a whole-value comparison.
 
-use super::super::*;
+use crate::components::registry;
+use crate::world::WorldMutationState;
+use crate::world::systems;
+use crate::{ComponentValue, EntityId, FieldWrite};
 
 /// One in-place write on a component's staged copy. Replays reproduce it on an
 /// identical observed value.
@@ -169,5 +172,29 @@ impl WorldMutationState {
         }
 
         Some((incarnation, changed))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::diagnostics::{Level, configure};
+
+    #[test]
+    fn filtered_effect_recording_allocates_no_journal_storage() {
+        fn sink(_level: Level, _line: std::fmt::Arguments<'_>) {}
+
+        let mut state = WorldMutationState::default();
+        for level in [Level::Off, Level::Error, Level::Warn, Level::Info] {
+            configure(level, Some(sink));
+            state.record_entity_effect("entity.create", EntityId::from_bits(1));
+            state.record_entity_effect("entity.delete", EntityId::from_bits(1));
+            assert!(state.entity_effects.is_empty());
+            assert_eq!(state.entity_effects.capacity(), 0);
+        }
+        configure(Level::Debug, Some(sink));
+        state.record_entity_effect("entity.create", EntityId::from_bits(1));
+        assert_eq!(state.entity_effects.len(), 1);
+        configure(Level::Off, None);
     }
 }

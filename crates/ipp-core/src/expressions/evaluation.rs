@@ -1,3 +1,5 @@
+//! Allocation-free evaluation of a prepared plan into consumer-owned scratch.
+
 use super::operations::{apply_binary, apply_clamp, apply_unary};
 use super::*;
 
@@ -119,3 +121,7 @@ impl PreparedExpression {
         Ok(&results[self.output])
     }
 }
+
+#[cfg(test)]
+#[path = "evaluation_tests.rs"]
+mod tests;

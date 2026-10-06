@@ -373,11 +373,11 @@ impl DynamicProperties {
 
     pub(crate) fn resource_demand(
         &self,
-        demand: &mut BTreeSet<crate::services::asset_management::service::AssetDemandSelection>,
+        demand: &mut BTreeSet<crate::services::asset_management::AssetDemandSelection>,
     ) {
         for asset in self.assets.values().filter(|t| !t.uri.is_empty()) {
             demand.insert(
-                crate::services::asset_management::service::AssetDemandSelection::new(
+                crate::services::asset_management::AssetDemandSelection::new(
                     asset.kind,
                     &asset.uri,
                     asset.variant,

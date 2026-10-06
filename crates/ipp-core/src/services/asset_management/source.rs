@@ -1,5 +1,8 @@
+use super::service::AssetResourceKind;
 use super::{AssetSource, AssetTypeId};
 use crate::ErrorReason;
+use std::collections::BTreeSet;
+use std::sync::Arc;
 
 pub(crate) fn validate_reference(
     expected_kind: Option<AssetTypeId>,
@@ -49,6 +52,52 @@ pub(crate) fn validate_reference(
 impl AssetSource {
     pub(crate) fn validate(&self) -> Result<(), ErrorReason> {
         validate_reference(Some(self.kind), &self.uri)
+    }
+}
+
+pub(crate) fn validate_source(source: &str) -> Result<(), ErrorReason> {
+    validate_reference(None, source)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct AssetDemandSelection {
+    pub(crate) kind: AssetResourceKind,
+    pub(crate) source: Arc<str>,
+    pub(crate) variant: u32,
+}
+
+impl AssetDemandSelection {
+    pub(crate) fn new(kind: AssetResourceKind, source: &Arc<str>, variant: u32) -> Self {
+        Self {
+            kind,
+            source: source.clone(),
+            variant,
+        }
+    }
+
+    pub(crate) fn insert_into(
+        demand: &mut BTreeSet<Self>,
+        kind: AssetTypeId,
+        source: &Arc<str>,
+        variant: u32,
+    ) {
+        let query = super::source_lookup::AssetSourceLookup {
+            kind,
+            uri: [source, "", "", ""],
+            variant,
+        };
+        if demand.contains(&query as &dyn super::source_lookup::AssetSourceIdentity) {
+            return;
+        }
+        demand.insert(Self::new(kind, source, variant));
+    }
+
+    pub(crate) fn descriptor(&self) -> AssetSource {
+        AssetSource {
+            kind: self.kind,
+            uri: self.source.clone(),
+            variant: self.variant,
+        }
     }
 }
 

@@ -194,7 +194,3 @@ impl Drop for IoReadWindow<'_> {
         self.backend.release();
     }
 }
-
-#[cfg(test)]
-#[path = "read_window_tests.rs"]
-mod tests;

@@ -106,15 +106,3 @@ pub struct ExpressionScratch {
     identity: Arc<()>,
     results: Vec<ExpressionResult>,
 }
-
-#[cfg(test)]
-mod evaluation_tests;
-
-#[cfg(test)]
-mod preparation_tests;
-
-#[cfg(test)]
-mod operations_tests;
-
-#[cfg(test)]
-mod codec_tests;

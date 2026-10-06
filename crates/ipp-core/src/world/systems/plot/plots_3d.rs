@@ -11,8 +11,8 @@
 use super::*;
 use crate::ErrorReason;
 use crate::components::rows::Rows;
-use crate::services::asset_management::drawing::FillRule;
-use crate::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
+use crate::services::asset_management::formats::drawing::FillRule;
+use crate::services::asset_management::formats::quadratic::{QuadraticContour, QuadraticSegment};
 use std::collections::{BTreeMap, BTreeSet};
 use std::f64::consts::TAU;
 use std::sync::Arc;

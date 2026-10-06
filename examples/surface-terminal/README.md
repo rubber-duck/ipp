@@ -8,7 +8,7 @@ Canvas content uses logical units with a top-left origin, +X right and +Y down. 
 
 A Surface presents directly unless its anchor entity also declares `<SurfaceCache>`, which opts it into [distance-based texture caching](../../docs/architecture/rendering.md#optional-surface-texture-caching). The [cache policy](../../crates/ipp-core/src/world/systems/surface/cache_policy.rs) documents the distance bands, limits and defaults.
 
-Editable SVG sources live in [authoring/svg](authoring/svg) under [CC0](authoring/svg/CC0.txt). Fonts and their notices are maintained in [shared fonts](../../assets/fonts/README.md). The build downloads the pinned fonts automatically, converts the shared runtime font under `target/font-assets`, and writes this example's drawings and bitmap under `target/surface-assets`. [The format reference](../../crates/ipp-core/src/services/asset_management/SURFACE_FORMATS.md) defines the converter subset and approximation limits.
+Editable SVG sources live in [authoring/svg](authoring/svg) under [CC0](authoring/svg/CC0.txt). Fonts and their notices are maintained in [shared fonts](../../assets/fonts/README.md). The build downloads the pinned fonts automatically, converts the shared runtime font under `target/font-assets`, and writes this example's drawings and bitmap under `target/surface-assets`. [The format reference](../../crates/ipp-core/src/services/asset_management/formats/SURFACE_FORMATS.md) defines the converter subset and approximation limits.
 
 ## Workload measurements
 

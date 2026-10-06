@@ -1,0 +1,27 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@ipp/client": [
+        "../../../packages/ipp-client/src/index.ts"
+      ],
+      "@ipp/gui-authoring-contract": [
+        "../../../target/react-gui-contract/generated.d.ts"
+      ]
+    }
+  },
+  "include": [
+    "pages/gui-authoring.tsx",
+    "gui-root.test.ts",
+    "pages/gui-paint.tsx",
+    "scenarios/gui-layers.tsx",
+    "scenarios/gui-projected-surfaces.tsx",
+    "gui-paint.test.ts",
+    "../../../packages/ipp-react/tests/gui-declaration.test.ts",
+    "../../../packages/ipp-react/tests/control-refs.test.ts",
+    "../../../packages/ipp-react/tests/gui-callbacks.test.ts",
+    "scenarios/gui-projected-advanced.tsx",
+    "scenarios/gui-layer-transitions.tsx"
+  ]
+}

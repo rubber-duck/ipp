@@ -42,7 +42,7 @@ impl HostServices for Services {
 
 fn open(host: &mut Host<Services>, connection: u64) {
     host.open_connection(connection).unwrap();
-    host.receive_connection(connection, &ipp_protocol::HELLO)
+    host.receive_connection(connection, &ipp_protocol::contract::HELLO)
         .unwrap();
     host.take_connection_response(connection).unwrap();
 }

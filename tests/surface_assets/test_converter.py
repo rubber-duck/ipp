@@ -8,8 +8,12 @@ from pathlib import Path
 
 from fontTools.ttLib import TTFont
 
-from tools.convert_surface_asset import ConversionError, convert_font, convert_svg
-from tools.font_sources import font_source
+from tools.assets.convert_surface_asset import (
+    ConversionError,
+    convert_font,
+    convert_svg,
+)
+from tools.assets.font_sources import font_source
 
 ROOT = Path(__file__).parents[2]
 SVG_SOURCES = ROOT / "examples" / "surface-terminal" / "authoring" / "svg"

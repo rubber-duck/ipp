@@ -1,5 +1,4 @@
 /** Host control wire primitives. World authoring keeps its target-generated codec. */
-import { HOST_MESSAGE_BYTES } from "./host-contract.js";
 import type { CanvasState, WorldReference } from "./types.js";
 export interface WorldCapacityHints {
   entities: number;
@@ -75,8 +74,13 @@ const decoder = new TextDecoder("utf-8", { fatal: true });
  * `ipp-protocol` (`host.rs` bounds Host requests and responses by
  * `MAX_MESSAGE_BYTES`) rather than in a target contract; World save and
  * load chunks stay within it. World messages use the generated codec's
- * contract-derived budget. `tools/mirrored_limits.py` compares the Host field
+ * contract-derived budget. `tools/checks/mirrored_limits.py` compares the Host field
  * bound below with its `ipp-protocol` constant. */
+
+/** Largest complete message on any connection, Host-wide and before a
+ * contract is known. `tools/checks/mirrored_limits.py` compares it with
+ * `ipp_protocol::MAX_MESSAGE_BYTES`. */
+export const HOST_MESSAGE_BYTES = 1_048_576;
 
 export class HostWireWriter {
   private parts: Uint8Array[] = [];

@@ -12,8 +12,8 @@ import {
   CanvasPresentation,
   canvasViewport,
   type CanvasHost,
-} from "../src/canvas-presentation.js";
-import { CanvasLifetime, CanvasCleanupError } from "../src/canvas-lifetime.js";
+} from "../src/canvas/presentation.js";
+import { CanvasLifetime, CanvasCleanupError } from "../src/canvas/lifetime.js";
 
 function gate() {
   let resolve!: () => void;

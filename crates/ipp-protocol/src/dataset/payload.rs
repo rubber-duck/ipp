@@ -1,6 +1,6 @@
 use super::*;
 use crate::codec::{ProtocolError, Reader, Writer};
-use crate::wire::*;
+use crate::contract::wire_manifest::*;
 use ipp_core::components::{DynamicPropertyKind, DynamicValue};
 use ipp_core::services::data::{DataColumn, DataDelta, DataRowId, DataSchema, DataSourceKind};
 

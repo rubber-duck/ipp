@@ -10,15 +10,15 @@ import type {
   RenderWorldClient,
   WorldPersistenceHostClient,
 } from "@ipp/client";
-import { runNativeEnvironment } from "../integration/environment.js";
-import { successfulBatch } from "../integration/camera-fixtures.js";
+import { runNativeEnvironment } from "../harness/native.js";
+import { successfulBatch } from "../fixtures/commands.js";
 import { createCubeMesh } from "../../examples/world-gallery/assets/cube-mesh.js";
-import { AnimationFixture } from "../integration/animation-fixtures.js";
+import { AnimationFixture } from "../fixtures/animation.js";
 import {
   CONSTRAINTS,
   RENDER,
   selectSystems,
-} from "../integration/system-selections.js";
+} from "../fixtures/system-selections.js";
 
 const [outputArg, nativeArg] = process.argv.slice(2);
 assert.ok(

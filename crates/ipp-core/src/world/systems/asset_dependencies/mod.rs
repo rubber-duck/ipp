@@ -3,7 +3,7 @@
 use crate::world::{WorldEntityState, WorldSimulationState, systems::SystemRuntimeAccess};
 use crate::{
     EntityId, ErrorReason,
-    services::asset_management::service::{AssetDemandSelection, AssetManagementService},
+    services::asset_management::{AssetDemandSelection, AssetManagementService},
 };
 use std::collections::BTreeSet;
 

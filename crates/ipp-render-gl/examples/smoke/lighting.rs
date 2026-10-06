@@ -640,7 +640,9 @@ pub fn run_custom<D: RenderDevice>(
         DynamicValue, FieldValue, FieldWrite,
         services::asset_management::{
             AssetUpload, AssetUploadIdentity,
-            shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind},
+            formats::shader::{
+                SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderParameterKind,
+            },
         },
     };
     use std::collections::BTreeMap;
@@ -705,7 +707,7 @@ pub fn run_custom<D: RenderDevice>(
         })],
     )?;
     let definition = ShaderDefinition {
-        recipe: ipp_core::services::asset_management::shader::ShaderRecipe {
+        recipe: ipp_core::services::asset_management::formats::shader::ShaderRecipe {
             features: 16,
             ..Default::default()
         },

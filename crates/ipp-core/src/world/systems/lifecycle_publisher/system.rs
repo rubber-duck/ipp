@@ -269,7 +269,7 @@ impl System for LifecyclePublisherSystem {
 }
 
 #[cfg(test)]
-#[path = "lifecycle_publisher_tests.rs"]
+#[path = "system_tests.rs"]
 mod tests;
 
 #[cfg(test)]

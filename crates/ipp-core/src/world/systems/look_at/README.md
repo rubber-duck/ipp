@@ -6,4 +6,4 @@ Targets may be grouping objects. Joint-local declarations and writes to Skeleton
 
 A declaration cannot depend on another enabled LookAt output through its target or either relevant ancestry chain; targeting its own descendant is invalid. Invalid dependencies suppress affected placement until corrected. See the [hierarchy guide](../hierarchy/README.md) and [runtime contract](../../../../../../docs/architecture/runtime.md#object-hierarchy).
 
-Source entrypoints: [component](component.rs), [evaluation](system.rs), [dependency diagnosis](system_state.rs) and [aim mathematics](math.rs). The maintained `hierarchy` suite covers this pass together with propagation.
+Source entrypoints: [component](component.rs), [evaluation](system.rs), [dependency diagnosis](system_state.rs), [target reference cleanup](entity_references.rs) and [aim mathematics](math.rs). The maintained `hierarchy` suite covers this pass together with propagation.

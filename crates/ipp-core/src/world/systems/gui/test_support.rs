@@ -1,9 +1,9 @@
 //! Font fixture and control reads shared by ordinary GUI lane tests.
 
-use super::local::control::{ancestry, eligibility, entity_control};
+use super::local::controls::identity::{ancestry, eligibility, entity_control};
 use super::local::{GuiControlKind, GuiEntityTarget, GuiInteractionFlags};
 use crate::EntityId;
-use crate::services::asset_management::font::FontAsset;
+use crate::services::asset_management::formats::font::FontAsset;
 use std::sync::Arc;
 
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
@@ -187,7 +187,7 @@ pub(crate) fn read_control(
     let painted = gui.map_or(GuiInteractionFlags::default(), |gui| {
         gui.local.interaction_flags(control.target)
     });
-    let count = super::local::control::focus_parts(simulation, control);
+    let count = super::local::controls::identity::focus_parts(simulation, control);
     let parts = gui
         .filter(|_| count > 1)
         .map(|gui| {

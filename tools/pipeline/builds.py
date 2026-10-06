@@ -9,7 +9,7 @@ import tempfile
 from typing import Iterator
 
 from .artifacts import digest, source_identity, write_json
-from .catalog import PROFILES
+from .catalog import PRODUCT_SCRIPTS, PROFILES, ProductScript
 from .model import ROOT
 from .processes import blender, node, run
 from .environment import development_python
@@ -266,9 +266,55 @@ def skinning() -> None:
             run([str(executable), kind, uri], output=directory / name)
 
 
-def node_product(script: str, destination: str, *args: str) -> None:
-    with product(ROOT / destination) as directory:
-        run([node(), script, *args], env={"IPP_BUILD_OUTPUT": str(directory)})
+def script_product(entry: ProductScript) -> None:
+    with product(ROOT / entry.destination) as directory:
+        if entry.runner == "python":
+            run([development_python(), entry.script, *entry.arguments, str(directory)])
+        elif entry.runner == "typescript":
+            run(
+                [
+                    node(),
+                    "node_modules/typescript/bin/tsc",
+                    "--project",
+                    entry.script,
+                    *entry.arguments,
+                    "--outDir",
+                    str(directory),
+                ]
+            )
+        else:
+            run(
+                [node(), entry.script, *entry.arguments],
+                env={"IPP_BUILD_OUTPUT": str(directory)},
+            )
+
+
+def gallery_gui_assets() -> None:
+    with product(ROOT / "target/gallery-gui-assets") as directory:
+        authoring = ROOT / "examples/world-gallery/worlds/gui/authoring"
+        run(
+            [
+                blender(),
+                "--background",
+                "--factory-startup",
+                "--python-exit-code",
+                "17",
+                str(authoring / "projector.blend"),
+                "--python",
+                str(authoring / "build_projector.py"),
+                "--",
+                "--export-only",
+                "--output-directory",
+                str(directory / "projector"),
+            ]
+        )
+        run(
+            [
+                development_python(),
+                "tools/assets/gallery_gui_assets.py",
+                str(directory),
+            ]
+        )
 
 
 def gallery_platformer_assets(*, native: bool = False) -> None:
@@ -295,7 +341,7 @@ def gallery_platformer_assets(*, native: bool = False) -> None:
             run(
                 [
                     node(),
-                    "tools/import_blender_scene.mjs",
+                    "tools/assets/import-blender-scene.mjs",
                     exported,
                     str(directory),
                     "--namespace",
@@ -316,57 +362,18 @@ def gallery_platformer_assets(*, native: bool = False) -> None:
 
 
 def build(name: str) -> None:
-    if name.startswith("browser:"):
+    """Prepare one `build:<name>` product; script products come from the catalog."""
+    if name in PRODUCT_SCRIPTS:
+        script_product(PRODUCT_SCRIPTS[name])
+    elif name.startswith("browser:"):
         browser(name.removeprefix("browser:"))
     elif name == "native":
         baseline_native()
-    elif name == "dataset-fixtures":
-        node_product("tools/build_datasets.mjs", "target/datasets")
-    elif name == "plots-fixtures":
-        node_product("tools/build_plots.mjs", "target/plots")
-    elif name == "headless-client":
-        node_product("tools/build_headless_client.mjs", "target/headless-client")
     elif name in ("gles-host", "gles-host-instrumentation"):
         with product(ROOT / "target" / name) as directory:
             gles_host(directory, name == "gles-host-instrumentation")
-    elif name == "font-assets":
-        with product(ROOT / "target/font-assets") as directory:
-            run([development_python(), "tools/build_font_assets.py", str(directory)])
-    elif name == "surface-assets":
-        with product(ROOT / "target/surface-assets") as directory:
-            run([development_python(), "tools/build_surface_assets.py", str(directory)])
-    elif name == "gallery-assets":
-        with product(ROOT / "target/gallery-assets") as directory:
-            run(
-                [node(), "tools/build_gallery.mjs", "assets"],
-                env={"IPP_BUILD_OUTPUT": str(directory)},
-            )
     elif name == "gallery-gui-assets":
-        with product(ROOT / "target/gallery-gui-assets") as directory:
-            authoring = ROOT / "examples/world-gallery/worlds/gui/authoring"
-            run(
-                [
-                    blender(),
-                    "--background",
-                    "--factory-startup",
-                    "--python-exit-code",
-                    "17",
-                    str(authoring / "projector.blend"),
-                    "--python",
-                    str(authoring / "build_projector.py"),
-                    "--",
-                    "--export-only",
-                    "--output-directory",
-                    str(directory / "projector"),
-                ]
-            )
-            run(
-                [
-                    development_python(),
-                    "tools/build_gallery_gui_assets.py",
-                    str(directory),
-                ]
-            )
+        gallery_gui_assets()
     elif name in ("gallery-platformer-assets", "gallery-platformer-native-assets"):
         gallery_platformer_assets(native=name == "gallery-platformer-native-assets")
     elif name in ("world-hosts", "scaling-host"):
@@ -375,135 +382,18 @@ def build(name: str) -> None:
         builtin_exporter()
     elif name == "skinning-fixtures":
         skinning()
-    elif name == "render-fixtures":
-        node_product("tools/build_render_fixtures.mjs", "target/render-fixtures")
-    elif name == "client":
-        with product(ROOT / "packages/ipp-client/dist") as directory:
-            run(
-                [
-                    node(),
-                    "node_modules/typescript/bin/tsc",
-                    "--project",
-                    "packages/ipp-client/tsconfig.build.json",
-                    "--outDir",
-                    str(directory),
-                ]
-            )
-    elif name == "gui-motion-fixtures":
-        node_product("tests/integration/gui-motion/build.mjs", "target/gui-motion")
-    elif name == "gui-composites-fixtures":
-        node_product(
-            "tests/integration/gui-composites/build.mjs", "target/gui-composites"
-        )
-    elif name == "gui-default-skin-fixtures":
-        node_product(
-            "tests/integration/gui-default-skin/build.mjs", "target/gui-default-skin"
-        )
-    elif name == "transport-fixtures":
-        run(
-            [
-                node(),
-                "node_modules/typescript/bin/tsc",
-                "--project",
-                "tests/integration/tsconfig.transports.json",
-            ]
-        )
-        node_product("tools/build_transports.mjs", "target/multiplex-tests")
-    elif name == "composed-query-fixtures":
-        node_product("tools/build_composed_queries.mjs", "target/composed-queries")
-    elif name in (
-        "typescript",
-        "asset-rejection-tests",
-        "asset-rejection-worker-tests",
-    ):
-        configuration, destination = {
-            "typescript": ("tsconfig.json", "dist"),
-            "asset-rejection-tests": (
-                "tests/integration/tsconfig.asset-rejection.json",
-                "target/asset-rejection-tests",
-            ),
-            "asset-rejection-worker-tests": (
-                "tests/browser/tsconfig.asset-rejection.json",
-                "target/asset-rejection-worker-tests",
-            ),
-        }[name]
-        with product(ROOT / destination) as directory:
-            run(
-                [
-                    node(),
-                    "node_modules/typescript/bin/tsc",
-                    "--project",
-                    configuration,
-                    "--outDir",
-                    str(directory),
-                ]
-            )
-    elif name == "react":
-        node_product("packages/ipp-react/tools/build.mjs", "packages/ipp-react/dist")
-    elif name == "react-attached":
-        node_product("tests/react/build-attached-world.mjs", "target/react-attached")
-    elif name == "react-gui-authoring":
-        node_product(
-            "tests/react/build-gui-authoring.mjs", "target/react-gui-authoring"
-        )
-    elif name == "gui-stress-fixtures":
-        node_product("tools/build_gui_stress.mjs", "target/gui-stress")
-    elif name == "worker-profiling-fixture":
-        node_product("tools/build/performance.mjs", "target/worker-profiling", "robot")
-    elif name == "shared-host":
-        node_product("tools/shared-host/build.mjs", "target/shared-host")
     elif name == "blender-addon":
         from .processes import python_tool
 
-        run(python_tool("tools/blender.py", "package"))
+        run(python_tool("tools/ipp.py", "_operation", "blender-addon", "package"))
     elif name == "lifecycle-probes":
         target(
             "bundle",
-            "tests/browser/lifecycle-probes.ts",
+            "tests/runtime/pages/lifecycle-probes.ts",
             "target/browser-build/lifecycle-probes.js",
         )
-    elif name == "blender-fixtures":
-        node_product("tools/build_blender_fixtures.mjs", "target/blender-test")
-    elif name == "blender-viewer-instrumentation":
-        node_product(
-            "tools/build_blender_viewer.mjs",
-            "target/blender-viewer-instrumentation",
-            "render-instrumentation",
-        )
-    elif name == "gallery-site":
-        node_product("tools/build_gallery.mjs", "target/gallery-site", "site")
-    elif name in ("gallery", "gallery-fixtures"):
-        node_product(
-            "tools/build_gallery.mjs",
-            "target/gallery-build" if name == "gallery" else "target/gallery-fixtures",
-            "application" if name == "gallery" else "fixtures",
-        )
     else:
-        scripts = {
-            "react-fixtures": "react",
-            "canvas-fixtures": "canvas",
-            "textures": "textures",
-            "shapes": "shapes",
-            "surface-fixtures": "surfaces",
-            "surface-gui-fixtures": "surface_gui",
-            "mesh-pose-fixtures": "mesh_poses",
-            "blender-viewer": "blender_viewer",
-            "blender-headless-fixtures": "blender_headless",
-        }
-        if name not in scripts:
-            raise ValueError(f"Unknown build operation: {name}")
-        destinations = {
-            "react-fixtures": "react-build",
-            "canvas-fixtures": "canvas-build",
-            "textures": "texture-build",
-            "shapes": "shapes-build",
-            "surface-fixtures": "surface-build",
-            "surface-gui-fixtures": "surface-gui-build",
-            "mesh-pose-fixtures": "mesh-pose-build",
-            "blender-viewer": "blender-viewer",
-            "blender-headless-fixtures": "blender-headless",
-        }
-        node_product(f"tools/build_{scripts[name]}.mjs", f"target/{destinations[name]}")
+        raise ValueError(f"Unknown build operation: {name}")
 
 
 def verify_browser_identities() -> None:

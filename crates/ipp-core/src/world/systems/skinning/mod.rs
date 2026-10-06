@@ -3,10 +3,7 @@
 mod component;
 pub use component::{Skin, SkinRuntimeState};
 
-use crate::{
-    EntityId, ErrorReason, WorldContext,
-    systems::{camera, skeleton},
-};
+use crate::{EntityId, ErrorReason, WorldContext, math, systems::skeleton};
 
 mod system_state;
 pub use system_state::SkinningSystemState;

@@ -12,9 +12,7 @@ import threading
 
 from .artifacts import source_identity
 from .catalog import (
-    PROFILES,
     REGRESSION_GROUPS,
-    SUITES,
     catalog,
     operation,
     regression_group_ids,
@@ -31,6 +29,7 @@ from .environment import (
 )
 from .model import ROOT, Plan, Task, select
 from .processes import node
+from .registries import PROFILES, SUITES
 from .runner import retry_ids, run_plan
 from .selection import affected, changed_files
 
@@ -483,7 +482,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
                     *([args.url] if args.url else []),
                 )
             else:
-                command = (sys.executable, "tools/blender.py", "serve", *args.args)
+                command = operation("blender-addon", "serve", *args.args)
             if (
                 args.url
                 and args.name != "headless-client"
@@ -510,7 +509,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
             "Import Blender disk export",
             (
                 node(),
-                "tools/import_blender_scene.mjs",
+                "tools/assets/import-blender-scene.mjs",
                 args.input,
                 args.output,
                 "--namespace",
@@ -551,7 +550,7 @@ def make_plan(args: argparse.Namespace) -> Plan:
         tasks[id_] = Task(
             id_,
             "Measure artifacts and selected distributions",
-            (sys.executable, "tools/measure_artifacts.py", *args.paths, *options),
+            operation("measure", *args.paths, *options),
             tuple(
                 f"build:browser:{name}" for name in dict.fromkeys(args.profile or [])
             ),

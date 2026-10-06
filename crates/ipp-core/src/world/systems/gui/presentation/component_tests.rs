@@ -1,6 +1,6 @@
 use super::*;
 use crate::components::rows::SchemaRow;
-use crate::services::asset_management::drawing::DRAWING_TYPE;
+use crate::services::asset_management::formats::drawing::DRAWING_TYPE;
 use crate::systems::gui::{GuiPartVariant, GuiSkinState};
 
 fn row(identity: GuiPartId) -> GuiPaintPart {

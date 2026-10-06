@@ -9,14 +9,14 @@ use super::{GuiSkin, GuiTheme};
 use crate::EntityId;
 use crate::services::asset_management::{
     AssetKey, AssetSource,
-    drawing::{DRAWING_TYPE, DrawingAsset},
+    formats::drawing::{DRAWING_TYPE, DrawingAsset},
 };
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::canvas::*;
 use crate::systems::gui::layout::scroll_bars::GUI_SCROLL_BAR_EMS;
-use crate::systems::gui::local::color::{GuiColorLayout, hsv_to_linear};
-use crate::systems::gui::local::control::{GuiControl, GuiEligibility};
-use crate::systems::gui::local::slider::{GuiSliderDial, slider_dial};
+use crate::systems::gui::local::controls::color::{GuiColorLayout, hsv_to_linear};
+use crate::systems::gui::local::controls::identity::{GuiControl, GuiEligibility};
+use crate::systems::gui::local::controls::slider::{GuiSliderDial, slider_dial};
 use crate::systems::gui::local::{GuiColor, GuiControlKind, GuiInteractionFlags};
 use crate::systems::gui::motion::focus_part_channel;
 use crate::world::WorldSimulationState;
@@ -451,7 +451,7 @@ pub(in crate::world::systems) fn control_paint(
             // direction is at its bound.
             if let Some(input) = number {
                 let stepping = input.step_enabled();
-                let rects = super::super::local::number::number_step_rects(size);
+                let rects = super::super::local::controls::number::number_step_rects(size);
                 for (index, (cell, mark, cell_id, mark_id)) in [
                     (
                         GuiPrimitivePart::Decrement,

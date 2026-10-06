@@ -14,6 +14,6 @@ Decoded CPU availability and graphics readiness are independent. Consumers can u
 
 Start with [service and demand](service.rs), [provider loading/recovery](resource.rs) and the [release barrier](lifecycle.rs). Renderer-owned loaders provide GPU representations through the same lifecycle.
 
-[Expression definitions](expression.rs) retain an immutable declaration and a shared CPU plan using the existing [IPPE format](../../expressions/EXPRESSION_FORMAT.md). Consumers own bindings, parameters and scratch, and invalidate plan access through the ordinary asset lifecycle. Resident payload accounting counts distinct shared text once within the asset; independently cloned plans may keep their allocations alive after provider unload and belong to their consumers' accounting.
+[Expression definitions](formats/expression.rs) retain an immutable declaration and a shared CPU plan using the existing [IPPE format](../../expressions/EXPRESSION_FORMAT.md). Consumers own bindings, parameters and scratch, and invalidate plan access through the ordinary asset lifecycle. Resident payload accounting counts distinct shared text once within the asset; independently cloned plans may keep their allocations alive after provider unload and belong to their consumers' accounting.
 
-The [mesh](MESH_FORMAT.md), [texture](TEXTURE_FORMAT.md) and [skeletal](SKELETAL_FORMATS.md) format references describe the binary payloads beside their decoders.
+The [mesh](formats/MESH_FORMAT.md), [texture](formats/TEXTURE_FORMAT.md) and [skeletal](formats/SKELETAL_FORMATS.md) format references describe the binary payloads beside their decoders.

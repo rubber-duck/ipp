@@ -48,11 +48,68 @@ Keep READMEs focused on purpose, intent, subsystem boundaries and stable high-le
 ## Rust file organization
 
 - Keep standalone production modules in `name.rs`. When a module has production submodules, use `name/mod.rs` with its children in that directory. In `src/`, do not create a directory solely for one test or test-support file.
-- Keep `mod.rs` focused on module declarations, re-exports and shared boundary types. Put substantial system, service, evaluation and algorithm implementations in named files; use the established `system.rs`, `system_state.rs` and `update.rs` roles consistently within system modules.
-- Name files for the domain data or operation they contain. Prefer explicit names such as `render_state.rs` for rendering settings and `component_inputs.rs` for staged component inputs. `component.rs` and `components.rs` contain one or several actual ECS component definitions beside their evaluator.
+- Keep `mod.rs` focused on module declarations, re-exports and shared boundary types. Put substantial system, service, evaluation and algorithm implementations in named files.
+- Name files for the domain data or operation they contain, such as `component_inputs.rs` for staged component inputs. A file that fills a role in the table below takes that role's filename in every System, Service and module, so the same concept is found in the same place.
+- At the `ipp-core` crate root, besides `host`, `services`, `world` and the cross-cutting `diagnostics` and `profiling` modules, only pure libraries (`math`, `text`, `expressions`) and boundary vocabularies (`commands`, `components`) are top-level modules. Everything else belongs to the subsystem that owns it; code shared by several Systems belongs to its owner or a pure library, not to the first System that used it.
 - Put substantial unit-test suites in descriptive `*_tests.rs` files beside the code they exercise. Small focused tests may remain inline. Group tests by the implementation or invariant they verify; generic World storage tests belong with World storage, not a rendering module.
 - Preserve private test access when extracting or flattening files. A local `#[path = "name_tests.rs"] mod tests;` is appropriate for an adjacent test file belonging to a standalone module; apply the same approach to adjacent test support. Production module paths must follow their directories rather than importing implementation from another subsystem through `#[path]`.
 - Keep crate-level `tests/` for tests using the crate's external API and source-local tests for private invariants. Shared integration-test helpers may use `tests/support/mod.rs` so Cargo does not discover them as separate test targets. Preserve test coverage, conditional compilation and subsystem ownership during moves; do not widen implementation visibility merely to relocate tests. Update affected imports, source links and module documentation in the same change.
+
+| Role | Filename |
+| --- | --- |
+| Module declarations, re-exports and shared boundary types | `mod.rs` only |
+| ECS component definitions beside their evaluator | `component.rs`, singular regardless of count; further component files take their domain name, such as `lighting.rs` or `curved_component.rs` |
+| System implementation, owned state and evaluation | `system.rs`, `system_state.rs` and `update.rs` |
+| A Service's implementation beside its `pub(super)` fields | `service.rs` |
+| A platform's `HostServices` implementation | `host_services.rs` |
+| Per-entity evaluated runtime state | Inside `component.rs`; a separate file is `runtime_state.rs` |
+| World-level System settings | The settings type's name, such as `render_state.rs` for `RenderState` or `gui_preferences.rs` for `GuiPreferences` |
+| Publication to the Host; observer streams | `publication.rs`; `output.rs` |
+| Work counters | `statistics.rs`; `diagnostics` is reserved for the crate-root module of the [logging policy](docs/architecture/runtime.md#diagnostic-logging) |
+| Read queries; a large `impl WorldContext` surface | `queries.rs`; `world_api.rs` |
+| Local math | `math.rs` |
+| World persistence | `persistence.rs`, with `codec.rs` for its encoding |
+| Asset formats | `format.rs` or the format's domain name |
+| Protocol lanes | `<lane>/mod.rs` holds the lane's magics, envelope types and bounds; `requests.rs` and `responses.rs` hold its codecs; a crate-root `codec.rs` holds byte primitives only |
+| Host-crate request handling | Host terms such as `connection`, `session`, `ingress`, `requests`, `replies`, `outbox` and `reservation` may name files; they are not World terms |
+| Test support | `test_support.rs`; a second helper set beside it takes a domain prefix, such as `routing_test_support.rs` |
+| Instrumentation-only test controls | `<subject>_testing.rs` |
+| Tests | `<file>_tests.rs` beside its file through `#[path]`; topic suites are declared from `mod.rs` |
+
+`tools/check_repo.py` rejects `components.rs` under `src/world/systems/` and `diagnostics.rs` below a crate's `src/` root; review the remaining roles.
+
+## TypeScript file organization
+
+| Role | Name |
+| --- | --- |
+| Package entry points | At the package's `src/` root, `index.ts` and `@ipp/react`'s `exports` subpath modules, such as `web.tsx` or `gui-kit.ts`, only re-export; `@ipp/client` stays flat, so its subpath modules `testing.ts` and `diagnostics.ts` carry their implementation. Subdirectories have no `index.ts` barrels: import the defining module |
+| Domain | One file `<domain>.ts`; a domain with several files is a `<domain>/` directory whose files take the role names `declarations.ts(x)` for authored elements, `description.ts` for their World description and `registry.ts` for root-owned runtime state |
+| Type-only module | `types.ts` or `<domain>-types.ts`, without functions or values |
+| Authoring field catalog | `fields.ts`; "contract" is reserved for generated schema contracts |
+| `@ipp/client` modules | Flat in `packages/ipp-client/src/`: generated clients copy its support modules beside them, and `packages/ipp-client/tools/assemble.mjs` assigns every module to exactly one set |
+| Test entry | `<topic>.test.ts`; `<topic>.native.test.ts` and `<topic>.browser.test.ts` when each process arrangement needs its own entry |
+| Scenario | `scenarios/<topic>.ts`: operations and assertions only, without process launch, `connectWorker`, URLs or ports |
+| Driver | `drivers/<arrangement>-<topic>.ts` |
+| Browser page bundle | `pages/<topic>.ts(x)` |
+| Inputs and data | `fixtures/` |
+| Independent expected results | `<topic>-oracle.ts` |
+| Suite-local helpers | A `support/` directory, or `<topic>-support.ts` in a flat test directory; never `helpers`, `utils` or `harness` as file names |
+| Case | kebab-case file and directory names |
+
+Under `tests/`, `harness/` holds the shared native and browser environments and drivers, `fixtures/` the shared inputs, and each subsystem directory its test entries at the root with `scenarios/`, `drivers/`, `pages/` and `support/` only when used.
+
+## Python and build script organization
+
+| Role | Location and name |
+| --- | --- |
+| Files at the `tools/` root | Documented entry points and pins only: `ipp.py`, `check_repo.py`, `check_workspace.py` and `coordination-versions.json` |
+| Pipeline modules | Nouns under `tools/pipeline/`; a module that imports `pipeline.*` lives there |
+| Repository checks | `check_<area>.py` at the `tools/` root, with their libraries under `tools/checks/` |
+| Asset converters, source catalogs, builds and their guides | `tools/assets/`: converters are `convert_<format>.py`, asset builds are `<product>.py`, and source catalogs, importers and converter guides take their domain name, such as `font_sources.py`, `import-blender-scene.mjs` or `SVG_ANIMATION.md` |
+| Node product builds | `tools/products/<catalog-id>.mjs` in kebab-case, named for the catalog id it builds; one script may serve a product family, and the catalog entry declares its output directory |
+| Shared Node build library and pipeline operations | `tools/build/` |
+| Profiling and stress scripts | `tools/performance/` |
+| Tests | `test_*.py` and `*.test.mjs` |
 
 ## Working rules
 

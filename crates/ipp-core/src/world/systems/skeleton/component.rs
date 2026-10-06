@@ -3,7 +3,7 @@ use crate::{
     components::Transform,
     components::rows::{Rows, SchemaRow, row_address, row_region_relative},
     components::schema::{ComponentLifecycle, same_text},
-    services::asset_management::service::{AssetDemandSelection, validate_source},
+    services::asset_management::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;

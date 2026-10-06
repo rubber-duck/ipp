@@ -1,5 +1,9 @@
 use super::*;
 
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;
+
 impl<P: HostServices> Host<P> {
     /// Adapter-owned optional profiling control at a quiescent Host boundary.
     /// A trusted adapter supplies a private owner ID; transport requests use
@@ -7,8 +11,8 @@ impl<P: HostServices> Host<P> {
     pub fn profile_control(
         &mut self,
         connection: u64,
-        request: ipp_protocol::profiling::ProfileRequest,
-    ) -> ipp_protocol::profiling::ProfileResponse {
+        request: ipp_protocol::host::profiling::ProfileRequest,
+    ) -> ipp_protocol::host::profiling::ProfileResponse {
         #[cfg(feature = "instrumentation")]
         {
             self.profiling.request(
@@ -22,8 +26,8 @@ impl<P: HostServices> Host<P> {
         #[cfg(not(feature = "instrumentation"))]
         {
             let _ = (connection, request);
-            ipp_protocol::profiling::ProfileResponse::status(
-                ipp_protocol::profiling::ProfileStatus::Unavailable,
+            ipp_protocol::host::profiling::ProfileResponse::status(
+                ipp_protocol::host::profiling::ProfileStatus::Unavailable,
             )
         }
     }
@@ -166,7 +170,7 @@ impl<P: HostServices> Host<P> {
                 presentation_failures.insert(
                     world.id(),
                     HostPresentationFailure {
-                        scope: ipp_protocol::RuntimeFailureScope::Context,
+                        scope: ipp_protocol::world::RuntimeFailureScope::Context,
                         message: failure.message,
                     },
                 );
@@ -190,7 +194,7 @@ impl<P: HostServices> Host<P> {
                             presentation_failures.insert(
                                 world,
                                 HostPresentationFailure {
-                                    scope: ipp_protocol::RuntimeFailureScope::Resource,
+                                    scope: ipp_protocol::world::RuntimeFailureScope::Resource,
                                     message,
                                 },
                             );
@@ -213,7 +217,7 @@ impl<P: HostServices> Host<P> {
                             .or_else(|| {
                                 frame.publication_errors.get(&world).map(|error| {
                                     (
-                                        ipp_protocol::RuntimeFailureScope::World,
+                                        ipp_protocol::world::RuntimeFailureScope::World,
                                         session.world.fault().is_some(),
                                         error.clone(),
                                     )
@@ -232,7 +236,7 @@ impl<P: HostServices> Host<P> {
                         let mut session = self.session_mut(id).expect("live session");
                         session.fail_view_queries(*error).and_then(|()| {
                             session.record_runtime_failure(
-                                ipp_protocol::RuntimeFailureScope::World,
+                                ipp_protocol::world::RuntimeFailureScope::World,
                                 session.world.fault().is_some(),
                                 error.to_string(),
                             )
@@ -348,57 +352,6 @@ impl<P: HostServices> Host<P> {
     /// Platform services share the Host lifetime.
     pub fn services_mut(&mut self) -> &mut P {
         &mut self.services
-    }
-}
-
-/// Camera outputs and the evaluators they require, for session tests.
-#[cfg(test)]
-pub(crate) const TEST_CAMERA_SYSTEMS: &[ipp_core::systems::SystemId] = &[
-    ipp_core::systems::animation::AnimationSystem::ID,
-    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
-    ipp_core::systems::hierarchy::HierarchySystem::ID,
-    ipp_core::systems::look_at::LookAtSystem::ID,
-    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
-    ipp_core::systems::geometry::GeometrySystem::ID,
-    ipp_core::systems::camera::CameraSystem::ID,
-];
-
-/// Rendered meshes and materials with the evaluators they require, for session tests.
-#[cfg(test)]
-pub(crate) const TEST_RENDER_SYSTEMS: &[ipp_core::systems::SystemId] = &[
-    ipp_core::systems::animation::AnimationSystem::ID,
-    ipp_core::systems::asset_dependencies::AssetDependencySystem::ID,
-    ipp_core::systems::hierarchy::HierarchySystem::ID,
-    ipp_core::systems::look_at::LookAtSystem::ID,
-    ipp_core::systems::hierarchy::FinalPropagationSystem::ID,
-    ipp_core::systems::geometry::GeometrySystem::ID,
-    ipp_core::systems::render::RenderSystem::ID,
-];
-
-#[cfg(test)]
-impl<P: HostServices> Host<P> {
-    pub(crate) fn test_session(&mut self) -> WorldSessionContext<'_, P> {
-        assert_eq!(self.sessions.len(), 1);
-        let id = *self.sessions.keys().next().unwrap();
-        self.session_mut(id).unwrap()
-    }
-
-    pub(crate) fn test_limits(&mut self, limits: ipp_core::WorldLimits) {
-        assert_eq!(self.test_session().world().tick(), 0);
-        assert!(self.test_session().world().entities().is_empty());
-        let id = *self.sessions.keys().next().unwrap();
-        let world = self.session_world(id).unwrap();
-        let selected = self
-            .runtime
-            .world_manifest(world)
-            .unwrap()
-            .systems()
-            .to_vec();
-        self.close_session(id);
-        self.open_session_with_limits(id, limits, &selected)
-            .unwrap();
-        self.test_session().receive(&ipp_protocol::HELLO).unwrap();
-        self.test_session().take_response().unwrap();
     }
 }
 

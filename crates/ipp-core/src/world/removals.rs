@@ -5,7 +5,10 @@
 //! skipped. Lifecycle and finish callbacks cannot enqueue cascades; callers receive
 //! InvalidValue outside evaluation, so cleanup cannot create an unbounded drain.
 
-use super::*;
+use crate::world::mutation::EntityAliases;
+use crate::world::systems;
+use crate::world::{WorldContext, WorldSimulationState};
+use crate::{Command, EntityId, EntityRef, ErrorReason};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) enum DeferredRemoval {

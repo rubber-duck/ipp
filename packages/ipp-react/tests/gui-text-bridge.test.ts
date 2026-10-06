@@ -10,7 +10,7 @@ import {
   utf16UnitsToUtf8Bytes,
   utf8BytesToUtf16Units,
   viewportToBridgeOffset,
-} from "../src/gui/text-bridge.js";
+} from "../src/gui/platform/text-bridge.js";
 
 const FENCE = {
   target: {

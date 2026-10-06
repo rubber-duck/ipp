@@ -54,9 +54,9 @@ Activate a camera separately; await assets/completed frame after acknowledgement
 
 `encodeSkeletonAsset`, `encodePoseAsset`, `encodeSkinAsset`, `encodeSkinnedMesh` produce owned bytes. Publish with `client.createAsset()` using target-exported `WIRE.ASSET_*`, then reference the returned immutable source URI. HTTP uses the same factories; no GPU handles cross ingress.
 
-The [skeletal format reference](../../crates/ipp-core/src/services/asset_management/SKELETAL_FORMATS.md) owns binary layouts, joint streams and payload validation.
+The [skeletal format reference](../../crates/ipp-core/src/services/asset_management/formats/SKELETAL_FORMATS.md) owns binary layouts, joint streams and payload validation.
 
-Joint streams add 20 decoded/upload bytes per vertex when supplied; rigid meshes allocate neither stream. Graphics loaders release vertex streams after upload and retain [mesh metadata](../../crates/ipp-core/src/services/asset_management/mesh_metadata.rs) needed by CPU consumers. Active skins select the shader; palettes copy per draw for independent instances. Recovery retains CPU rigs and rebuilds demanded GPU data from their immutable sources.
+Joint streams add 20 decoded/upload bytes per vertex when supplied; rigid meshes allocate neither stream. Graphics loaders release vertex streams after upload and retain [mesh metadata](../../crates/ipp-core/src/services/asset_management/formats/mesh_metadata.rs) needed by CPU consumers. Active skins select the shader; palettes copy per draw for independent instances. Recovery retains CPU rigs and rebuilds demanded GPU data from their immutable sources.
 
 ## Validation
 
@@ -75,7 +75,7 @@ Use [native context setup](../../crates/ipp-render-gl/README.md#native-host-bind
 
 ## Gallery beam
 
-The [gallery beam fixture](../../examples/world-gallery/worlds/lighting/animation-assets.ts) supplies a closed solid mesh with normals and blended weights for PBR/shadow evidence. [Fixture checks](../../tests/render/fixture.test.ts) verify its geometry, and [gallery tests](../../tests/render/gallery-animation.test.ts) capture deformation and independent playback/cleanup. The analytic flat strip remains a separate fixture.
+The [gallery beam fixture](../../examples/world-gallery/worlds/lighting/animation-assets.ts) supplies a closed solid mesh with normals and blended weights for PBR/shadow evidence. [Fixture checks](../../tests/rendering/fixtures.test.ts) verify its geometry, and [gallery tests](../../tests/gallery/gallery-animation.test.ts) capture deformation and independent playback/cleanup. The analytic flat strip remains a separate fixture.
 
 ## Lighting integration
 

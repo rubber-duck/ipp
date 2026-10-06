@@ -11,7 +11,7 @@ def register(tasks: dict[str, Task]) -> None:
     tasks["build:gallery-trace-fixture"] = Task(
         "build:gallery-trace-fixture",
         "Bundle the maintained gallery trace runner and instrumented application",
-        (node(), "tools/build_gallery_trace.mjs"),
+        (node(), "tools/products/gallery-trace-fixture.mjs"),
         (
             "build:gallery-fixtures",
             "build:browser:render-instrumentation",

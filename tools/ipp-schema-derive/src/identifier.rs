@@ -22,3 +22,15 @@ pub(super) fn snake_case(name: &Ident) -> Ident {
 pub(super) fn upper_snake_case(name: &Ident) -> Ident {
     Ident::new(&snake_case(name).to_string().to_uppercase(), name.span())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::snake_case;
+    use quote::format_ident;
+
+    #[test]
+    fn storage_names_preserve_word_and_acronym_boundaries() {
+        assert_eq!(snake_case(&format_ident!("UnlitTexture")), "unlit_texture");
+        assert_eq!(snake_case(&format_ident!("HTTPServer")), "http_server");
+    }
+}

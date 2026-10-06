@@ -1,8 +1,6 @@
 //! Parent-first local evaluation and child-first immutable output assembly.
 
-use super::publication::{
-    RetainedPublication, WorldOutputBuilder, WorldPublication, WorldPublicationId,
-};
+use super::publication::{RetainedPublication, WorldOutputBuilder, WorldPublication};
 use super::*;
 use std::collections::BTreeSet;
 
@@ -22,127 +20,6 @@ pub struct HostFrameReport {
 }
 
 impl HostRuntime {
-    /// Resolve an exact live World lifetime without selecting presentation.
-    pub fn world_ref(&self, world: WorldId) -> Option<WorldRef> {
-        self.worlds.get(&world).map(World::runtime_ref)
-    }
-
-    /// Validate a transported lifetime without selecting a replacement World.
-    pub fn resolve_world_ref(&self, world: WorldId, incarnation: u64) -> Option<WorldRef> {
-        self.world_ref(world)
-            .filter(|world| world.incarnation() == incarnation)
-    }
-
-    /// Validate a transported output selection without rebinding: the World
-    /// must still supply its canvas, or the Camera component lifetime must match.
-    pub fn resolve_output_ref(
-        &self,
-        world: WorldRef,
-        target: crate::OutputTarget,
-    ) -> Result<OutputRef, ErrorReason> {
-        if self.world_ref(world.id) != Some(world) {
-            return Err(ErrorReason::InvalidEntity);
-        }
-        self.worlds
-            .get(&world.id)
-            .ok_or(ErrorReason::InvalidEntity)?
-            .bind_output_target(target)
-    }
-
-    /// Explicitly bind or rebind the current Camera output of an entity; a
-    /// World's canvas names no entity and is selected with [`OutputRef::canvas`].
-    pub fn bind_output(
-        &self,
-        world: WorldRef,
-        entity: crate::EntityId,
-        kind: OutputKind,
-    ) -> Result<OutputRef, ErrorReason> {
-        if self.world_ref(world.id) != Some(world) {
-            return Err(ErrorReason::InvalidEntity);
-        }
-        self.worlds
-            .get(&world.id)
-            .ok_or(ErrorReason::InvalidEntity)?
-            .bind_output(entity, kind)
-    }
-
-    /// Explicit selection never follows an authoring session or replacement incarnation.
-    pub fn set_root_output(
-        &mut self,
-        output: OutputRef,
-        viewport: WorldViewport,
-    ) -> Result<(), ErrorReason> {
-        viewport.validate()?;
-        if !self
-            .worlds
-            .get(&output.world.id)
-            .is_some_and(|world| world.output_valid(output))
-        {
-            return Err(ErrorReason::InvalidEntity);
-        }
-        if self.topology.incoming.contains_key(&output.world.id) {
-            return Err(ErrorReason::InvalidValue);
-        }
-        let serial = self
-            .topology
-            .next_root_binding
-            .checked_add(1)
-            .ok_or(ErrorReason::Capacity)?;
-        self.topology.roots.insert(
-            output.world.id,
-            RootOutputBinding {
-                output,
-                viewport,
-                generation: RootBindingGeneration {
-                    host: self.topology.identity,
-                    serial,
-                },
-            },
-        );
-        self.topology.next_root_binding = serial;
-        Ok(())
-    }
-
-    /// Observe the exact root binding independently of output readiness.
-    pub fn root_output_binding(
-        &self,
-        world: WorldRef,
-    ) -> Result<Option<RootOutputBinding>, ErrorReason> {
-        if self.world_ref(world.id()) != Some(world) {
-            return Err(ErrorReason::InvalidEntity);
-        }
-        Ok(self.topology.roots.get(&world.id()).copied())
-    }
-
-    /// Withdraw root presentation without destroying the World.
-    pub fn clear_root_output(&mut self, world: WorldId) {
-        self.topology.roots.remove(&world);
-    }
-
-    /// Observe an available explicitly selected root view.
-    pub fn root_output(
-        &self,
-        world: WorldId,
-    ) -> Option<(OutputRef, WorldViewport, WorldPublicationId)> {
-        let binding = self.topology.roots.get(&world)?;
-        let publication = self.latest_publication(world)?;
-        self.output(publication, binding.output)?;
-        Some((binding.output, binding.viewport, publication))
-    }
-
-    /// Read historical output while its producer is valid; this does not authorize presentation.
-    /// Only root selection and completed attachment traversal establish presentation paths.
-    pub fn output(
-        &self,
-        publication: WorldPublicationId,
-        selection: OutputRef,
-    ) -> Option<&super::WorldDerivedChunk> {
-        self.worlds
-            .get(&selection.world.id)
-            .filter(|world| world.output_valid(selection))?;
-        self.publication(publication)?.output(selection)
-    }
-
     /// Advance each eligible World once; no client-facing time operation is introduced.
     pub fn frame(&mut self, delta: f64) -> Result<HostFrameReport, ErrorReason> {
         #[cfg(feature = "instrumentation")]
@@ -153,7 +30,7 @@ impl HostRuntime {
         }
         let next_frame = self.frame.checked_add(1).ok_or(ErrorReason::Capacity)?;
         #[cfg(feature = "instrumentation")]
-        let _trace_frame = crate::profiling_trace::frame();
+        let _trace_frame = crate::profiling::trace::frame();
         self.data
             .advance_time(delta)
             .map_err(|_| ErrorReason::InvalidValue)?;
@@ -189,7 +66,7 @@ impl HostRuntime {
             let mut context = contexts.remove(&world).unwrap_or(WorldFrameContext {
                 frame: self.frame,
                 delta,
-                placement: attachment::IDENTITY,
+                placement: references::IDENTITY,
                 viewport: self
                     .topology
                     .roots

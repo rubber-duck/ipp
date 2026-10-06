@@ -1,6 +1,6 @@
 //! Embed GLSL sources without comments or blank lines.
 //!
-//! The shader files under `src/services/render` keep their documentation; the
+//! The shader files under `src/services/render/shaders` keep their documentation; the
 //! renderer embeds copies written here to `OUT_DIR`, which WebAssembly builds
 //! would otherwise carry as data. Each line loses `//` and `/* */` comments and
 //! surrounding whitespace, and empty lines are dropped, so preprocessor
@@ -11,7 +11,7 @@
 use std::path::{Path, PathBuf};
 
 /// Directories holding embedded shaders, relative to the manifest.
-const SHADER_DIRECTORIES: [&str; 2] = ["src/services/render", "src/services/render/shaders"];
+const SHADER_DIRECTORIES: [&str; 1] = ["src/services/render/shaders"];
 
 fn main() {
     let manifest =

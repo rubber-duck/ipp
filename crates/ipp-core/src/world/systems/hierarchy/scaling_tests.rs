@@ -1,7 +1,7 @@
 //! Release timing and graph-work assertions over the real core mutation paths.
 use crate::components::LookAt;
 use crate::systems::look_at::LOOK_AT_CHECKS;
-use crate::world::entity_links::VISITS;
+use crate::world::entities::links::VISITS;
 use crate::{
     Batch, Command, ComponentValue, EntityId, EntityPlacementRef, EntityRef, ErrorReason,
     HostRuntime,

@@ -1,11 +1,17 @@
 //! Command application against staged component state.
 //!
-//! Entity identity work lives in [`super::super::entity_state`]; this module
-//! only hosts per-command component mutation. Ownership lives in
-//! [`super::super`].
+//! Entity identity work lives in [`entities`](crate::world::entities); this
+//! module only hosts per-command component mutation. Ownership lives in
+//! [`world`](crate::world).
 
-use super::super::*;
+use std::collections::BTreeSet;
+
 use super::observations::ComponentStagedWrite;
+use crate::components::registry;
+use crate::world::mutation::EntityAliases;
+use crate::world::world_state::{ComponentStateInstance, WorldComponentState};
+use crate::world::{WorldLimits, WorldMutationState};
+use crate::{Command, ComponentValue, EntityId, EntityRef, ErrorReason, FieldValue, FieldWrite};
 
 impl WorldMutationState {
     pub(in crate::world) fn apply(

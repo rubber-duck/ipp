@@ -10,13 +10,13 @@ import {
   type LifecycleWatchClosure,
   type LifecycleWatchEvent,
 } from "@ipp/client";
-import { ReactControlRefs } from "../src/control_refs.js";
-import type { ReactWorldClient } from "../src/contract.js";
+import { ReactControlRefs } from "../src/gui/control-ref-registry.js";
+import type { ReactWorldClient } from "../src/reconciler/world-client.js";
 import type {
   GuiControlHandle,
   GuiControlRef,
 } from "../src/gui/control-ref.js";
-import type { ReactWorldDescription } from "../src/tree.js";
+import type { ReactWorldDescription } from "../src/reconciler/tree.js";
 
 function deferred<Value>() {
   let resolve!: (value: Value) => void;

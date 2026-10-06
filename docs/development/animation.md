@@ -178,7 +178,7 @@ Snapshots (format version 8) retain descriptions/status/time, each controller's 
 | Staged component values | No byte limit; each touched component is copied once at commit |
 | Retained drivers/descriptions/contributions | No estimated-byte ceiling; typed residency accounted without quotas |
 
-[clip.rs](../../crates/ipp-core/src/world/systems/animation/clip.rs) owns encoding/validation; the [wire registry](../../crates/ipp-protocol/src/wire.rs) exports the selected format contract. Dynamic-property animation also has real frame coverage in `python tools/ipp.py test custom-materials`.
+[clip/format.rs](../../crates/ipp-core/src/world/systems/animation/clip/format.rs) owns encoding/validation; the [wire registry](../../crates/ipp-protocol/src/contract/wire_manifest.rs) exports the selected format contract. Dynamic-property animation also has real frame coverage in `python tools/ipp.py test custom-materials`.
 
 - `python tools/ipp.py test animation skinning`: real native WebSocket, worker/WASM and WebGL state/frame evidence, including animation without skeletons.
 - `python tools/ipp.py test client contracts`: codecs, target layouts and reproducible contract generation.

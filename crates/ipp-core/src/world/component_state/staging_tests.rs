@@ -6,8 +6,10 @@ use crate::systems::lifecycle_publisher::{
     ComponentLifecycleKind, LifecycleFilter, LifecycleObservation, LifecyclePublisherCommand,
     LifecyclePublisherOutput, LifecyclePublisherSystem,
 };
-use crate::world::*;
-use crate::{DynamicProperties, DynamicValue, HostRuntime, WorldId};
+use crate::{
+    Batch, BatchOutcome, Command, ComponentValue, DynamicProperties, DynamicValue, EntityId,
+    EntityMetadata, EntityRef, FieldValue, FieldWrite, HostRuntime, WorldId, WorldLimits,
+};
 use std::mem::offset_of;
 
 /// Rendered meshes and materials with the evaluators they require.

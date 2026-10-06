@@ -1,3 +1,6 @@
+//! Logical expression declarations: typed inputs, operators and nodes, and the preparation,
+//! input and evaluation result types.
+
 use crate::{DynamicPropertyKind, DynamicValue};
 
 /// Named typed input resolved once by the consuming System, then supplied by slot.

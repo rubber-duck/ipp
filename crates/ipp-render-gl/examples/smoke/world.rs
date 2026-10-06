@@ -631,7 +631,7 @@ pub(crate) fn resident_programs(
         .iter()
         .filter(|resource| {
             let kind = resource.source().kind;
-            (kind == ipp_core::services::asset_management::shader::SHADER_TYPE
+            (kind == ipp_core::services::asset_management::formats::shader::SHADER_TYPE
                 || resource.source().uri.starts_with("ipp-render://program/"))
                 && resource.graphics_ready() == Some(true)
         })

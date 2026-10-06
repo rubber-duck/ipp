@@ -5,7 +5,7 @@ use super::publications::{apply, camera, create, mesh, save};
 use ipp_core::components::{
     BoundingGeometry, CanvasBox, CanvasStyle, CanvasText, FlatSurface, Transform,
 };
-use ipp_core::services::asset_management::{AssetSource, font::FONT_TYPE};
+use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use ipp_core::{
     Batch, Command, ComponentValue, EntityId, EntityRef, HostRuntime, OutputRef, WorldAttachment,
     WorldId, WorldViewport,

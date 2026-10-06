@@ -8,7 +8,7 @@
  * Entities that are not controls paint only their Background part's base row,
  * so their tables are one row. A kit component's tables live in its section
  * below; the rules they follow are the skin lab's design language
- * (`tests/skin-lab/README.md`).
+ * (`tests/gui/skin-lab/README.md`).
  */
 import type {
   GuiKitColor,

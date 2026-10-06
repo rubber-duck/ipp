@@ -11,19 +11,19 @@
 //! The pass also scrolls a newly focused control into view (`reveal`).
 
 mod component;
-mod entity_evaluation;
 mod entity_layout;
 mod geometry;
 mod overlay_placement;
 mod reveal;
+pub(crate) mod scroll_bars;
+mod scroll_layout;
+pub(super) mod system;
+mod update;
+pub(crate) mod virtual_list;
+
 pub use component::{GuiLayout, GuiOverlay};
 pub(in crate::world::systems) use entity_layout::GuiEntityLayoutView;
 pub use entity_layout::{GuiEntityLayout, GuiEntityLayoutDiagnostic};
 pub use entity_layout::{GuiEntityLayoutStatistics, GuiEntityLayoutWork};
-pub(crate) mod scroll_bars;
-mod scroll_layout;
-pub(super) mod system;
-pub(crate) mod virtual_list;
-
-pub use entity_evaluation::MAX_LAYOUT_DEPTH;
 pub use system::{GuiLayoutSystem, GuiLayoutSystemFactory};
+pub use update::MAX_LAYOUT_DEPTH;

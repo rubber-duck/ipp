@@ -3,29 +3,21 @@
 /// Queued uploads, upload outcomes and the world's retained resource dependencies.
 #[derive(Default)]
 pub struct AssetDependencySystemState {
-    pub(super) evaluation_meshes: std::collections::BTreeMap<
-        crate::services::asset_management::service::AssetDemandSelection,
-        bool,
-    >,
+    pub(super) evaluation_meshes:
+        std::collections::BTreeMap<crate::services::asset_management::AssetDemandSelection, bool>,
     pub(super) evaluation_meshes_initialized: bool,
     pub(super) animation_demand_revision: Option<u64>,
-    pub(super) changed_sources: std::collections::BTreeSet<
-        crate::services::asset_management::service::AssetDemandSelection,
-    >,
-    pub(super) animation_sources: std::collections::BTreeSet<
-        crate::services::asset_management::service::AssetDemandSelection,
-    >,
+    pub(super) changed_sources:
+        std::collections::BTreeSet<crate::services::asset_management::AssetDemandSelection>,
+    pub(super) animation_sources:
+        std::collections::BTreeSet<crate::services::asset_management::AssetDemandSelection>,
     pub(in crate::world) prepared_changes: Vec<crate::AssetResourceSnapshot>,
     pub(in crate::world) component_sources: std::collections::BTreeMap<
         (crate::EntityId, u16),
-        std::collections::BTreeSet<
-            crate::services::asset_management::service::AssetDemandSelection,
-        >,
+        std::collections::BTreeSet<crate::services::asset_management::AssetDemandSelection>,
     >,
-    pub(in crate::world) source_users: std::collections::BTreeMap<
-        crate::services::asset_management::service::AssetDemandSelection,
-        usize,
-    >,
+    pub(in crate::world) source_users:
+        std::collections::BTreeMap<crate::services::asset_management::AssetDemandSelection, usize>,
     pub(in crate::world) asset_queue:
         std::collections::VecDeque<crate::services::asset_management::AssetUpload>,
     pub(in crate::world) asset_pending: Vec<PendingAssetUpload>,

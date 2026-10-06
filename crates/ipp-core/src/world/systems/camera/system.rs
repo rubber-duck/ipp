@@ -24,6 +24,8 @@ impl CameraSystem {
     pub const ID: SystemId = SystemId("ipp.camera");
 }
 
+crate::system_parameter!(CameraSystem);
+
 /// Reusable factory; it retains no mutable world state.
 #[derive(Default)]
 pub struct CameraSystemFactory;

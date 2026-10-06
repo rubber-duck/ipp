@@ -12,7 +12,7 @@ uniform mat4 u_mvp;
 uniform vec4 u_viewport;
 
 // Exterior margin already present in generated geometry. Equal to
-// GUI_BOX_ANTIALIAS_PAD in gui_batch.rs; a Rust unit test compares them.
+// GUI_BOX_ANTIALIAS_PAD in retained/box_records.rs; a Rust unit test compares them.
 const float GUI_BOX_ANTIALIAS_PAD = 0.002;
 // Projected pixels of coverage geometry every edge keeps beyond its contour.
 const float ANTIALIAS_PIXELS = 1.5;

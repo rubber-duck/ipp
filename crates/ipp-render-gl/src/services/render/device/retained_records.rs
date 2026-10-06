@@ -11,7 +11,7 @@
 
 use std::mem::{offset_of, size_of};
 
-use super::super::gui_records::{GuiGlyphRecord, GuiRecordKind, GuiShapeRecord};
+use super::super::retained::records::{GuiGlyphRecord, GuiRecordKind, GuiShapeRecord};
 
 /// One `f32` vector attribute of a retained record.
 #[repr(C)]
@@ -215,35 +215,35 @@ mod tests {
     fn shader_constants_match_generated_geometry() {
         assert_eq!(
             shader_constant(SHAPE_VERTEX, "GUI_BOX_ANTIALIAS_PAD"),
-            crate::gui_batch::GUI_BOX_ANTIALIAS_PAD
+            crate::services::render::retained::box_records::GUI_BOX_ANTIALIAS_PAD
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_PAINT_STROKE"),
-            crate::gui_batch::GUI_PAINT_STROKE
+            crate::services::render::retained::box_records::GUI_PAINT_STROKE
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_PAINT_ARC"),
-            crate::gui_batch::GUI_PAINT_ARC
+            crate::services::render::retained::box_records::GUI_PAINT_ARC
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_PAINT_CHECKER"),
-            crate::gui_batch::GUI_PAINT_CHECKER
+            crate::services::render::retained::box_records::GUI_PAINT_CHECKER
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_FILL_HUE"),
-            crate::gui_batch::GUI_FILL_HUE
+            crate::services::render::retained::box_records::GUI_FILL_HUE
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_FILL_SATURATION_VALUE"),
-            crate::gui_batch::GUI_FILL_SATURATION_VALUE
+            crate::services::render::retained::box_records::GUI_FILL_SATURATION_VALUE
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_FILL_PAINT"),
-            crate::gui_batch::GUI_FILL_PAINT
+            crate::services::render::retained::box_records::GUI_FILL_PAINT
         );
         assert_eq!(
             shader_constant(SHAPE_FRAGMENT, "GUI_PAINT_BLOCK_STRIDE"),
-            crate::gui_batch::GUI_PAINT_BLOCK_STRIDE
+            crate::services::render::retained::box_records::GUI_PAINT_BLOCK_STRIDE
         );
         // A whole ring's half sweep is exactly this value, which the shader's
         // whole-ring test compares against.

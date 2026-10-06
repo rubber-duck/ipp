@@ -52,7 +52,7 @@ fn physical_output_credit_survives_channel_handoff_until_socket_completion() {
         released: Arc::new(AtomicBool::new(true)),
     });
     host.host
-        .receive_connection(1, &ipp_protocol::HELLO)
+        .receive_connection(1, &ipp_protocol::contract::HELLO)
         .unwrap();
     host.flush();
     let bytes = receiver.try_recv().unwrap();
@@ -206,7 +206,9 @@ impl Peers {
         use ipp_protocol::host::*;
         let connection = index as u64 + 1;
         self.sockets[index]
-            .send(Message::Binary(ipp_protocol::HELLO.to_vec().into()))
+            .send(Message::Binary(
+                ipp_protocol::contract::HELLO.to_vec().into(),
+            ))
             .unwrap();
         let _ = self.read(index);
         let body = world.map_or_else(
@@ -385,7 +387,7 @@ fn gui_send(peers: &mut Peers, index: usize, session: u64, request: u64, tag: u8
     bytes.push(tag);
     bytes.extend((payload.len() as u32).to_le_bytes());
     bytes.extend(payload);
-    ipp_protocol::decode_request(&bytes, session).unwrap();
+    ipp_protocol::world::decode_request(&bytes, session).unwrap();
     peers.sockets[index]
         .send(Message::Binary(bytes.into()))
         .unwrap();
@@ -486,7 +488,7 @@ fn gui_os_stalled_receiver_retains_socket_credit_while_issuer_and_observer_progr
     writeln!(
         evidence,
         "hello={:?} addresses={:?}",
-        ipp_protocol::HELLO,
+        ipp_protocol::contract::HELLO,
         peers.addresses
     )
     .unwrap();
@@ -512,7 +514,7 @@ fn gui_os_stalled_receiver_retains_socket_credit_while_issuer_and_observer_progr
         bytes.extend(ComponentValue::GUI_TEXT_INPUT.to_le_bytes());
         bytes.extend(incarnation.to_le_bytes());
         bytes.push(7);
-        ipp_protocol::decode_request(&bytes, issuer).unwrap();
+        ipp_protocol::world::decode_request(&bytes, issuer).unwrap();
         peers.sockets[0]
             .send(Message::Binary(bytes.into()))
             .unwrap();

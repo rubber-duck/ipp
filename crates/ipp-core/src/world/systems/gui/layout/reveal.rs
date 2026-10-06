@@ -38,7 +38,8 @@ pub(super) struct GuiReveal {
 impl GuiReveal {
     /// The reveal of `target`, when a ScrollView or VirtualList contains it.
     pub fn new(world: &WorldSimulationState, target: EntityId) -> Option<Self> {
-        let ancestry = crate::systems::gui::local::control::ancestry(&world.state, target);
+        let ancestry =
+            crate::systems::gui::local::controls::identity::ancestry(&world.state, target);
         let reveal = Self {
             target,
             ancestry,

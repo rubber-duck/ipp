@@ -24,7 +24,7 @@ The texture argument is optional. For a supplied ANGLE distribution, use its lib
 For shapes and spotlight shadows, build the maintained corpus and supply its directory as the final argument:
 
 ```sh
-node tools/build_shapes.mjs
+node tools/products/shapes.mjs
 LIBGL_ALWAYS_SOFTWARE=1 \
   cargo run -p ipp-render-gl --example egl_smoke --locked -- \
   /usr/lib/x86_64-linux-gnu target/shapes-build/cube.mesh \

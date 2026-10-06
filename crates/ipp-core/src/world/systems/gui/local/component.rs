@@ -115,7 +115,7 @@ pub const GUI_SLIDER_DIAL: u32 = 2;
 /// bounds. The fill runs between `origin` and the value, so an origin inside
 /// the range makes a bipolar slider. A dial paints the range over a
 /// 270-degree arc and changes its value by relative vertical drags; see
-/// [the slider geometry](super::slider).
+/// [the slider geometry](super::controls::slider).
 ///
 /// A `range` holds a second ordered value, `upper`, with a thumb of its own:
 /// `value` is the lower value and `min <= value <= upper <= max` holds for
@@ -280,7 +280,7 @@ impl ComponentLifecycle for GuiSlider {
 /// `alpha_rail`, an alpha rail over a checker, each a focus part in that
 /// order with its own arrows, drags, pointer feedback and focus ring, and a
 /// swatch of the colour, all from these fields in the same frame; see [the
-/// colour geometry](super::color). Without the alpha rail the control edits
+/// colour geometry](super::controls::color). Without the alpha rail the control edits
 /// an opaque colour: it keeps `alpha` as written and paints its swatch
 /// opaque.
 #[repr(C)]
@@ -362,7 +362,7 @@ impl ComponentLifecycle for GuiColor {
 /// Down step the number by `step`, or `fine_step` with Shift, and with
 /// `step_parts` its decrement and increment parts at the field's ends step it
 /// on press and repeat while held. A numeric input ignores `text` and
-/// `placeholder`; see [the number rules](super::number).
+/// `placeholder`; see [the number rules](super::controls::number).
 #[repr(C)]
 #[derive(Clone, Debug, PartialEq, SchemaComponent)]
 pub struct GuiTextInput {
@@ -501,7 +501,7 @@ pub const MAX_GUI_TEXT_BYTES: usize = 65_536;
 pub(in crate::world::systems::gui) const CONTROL_REQUIREMENTS: [u16; 2] =
     [ComponentValue::GUI_BEHAVIOR, ComponentValue::CANVAS_BOUNDS];
 
-pub(super) const CONTROL_COMPONENTS: [u16; 7] = [
+pub(in crate::world::systems::gui) const CONTROL_COMPONENTS: [u16; 7] = [
     ComponentValue::GUI_BUTTON,
     ComponentValue::GUI_CHECKBOX,
     ComponentValue::GUI_SLIDER,

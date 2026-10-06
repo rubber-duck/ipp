@@ -1,4 +1,5 @@
 use crate::systems::canvas::{CanvasClip, CanvasHit, CanvasTarget};
+use crate::systems::gui::local::controls::slider::slider_dial;
 use crate::systems::gui::local::{GuiControlKind, GuiEntityTarget};
 use crate::{EntityId, OutputRef};
 use std::collections::BTreeMap;
@@ -138,10 +139,7 @@ impl GuiSliderGeometry {
             thumb_rect,
             range,
             dial_travel: if slider.is_dial() {
-                Some(
-                    super::super::local::slider::slider_dial([0.0, 0.0, size[0], size[1]])?
-                        .travel(),
-                )
+                Some(slider_dial([0.0, 0.0, size[0], size[1]])?.travel())
             } else {
                 None
             },
@@ -213,7 +211,7 @@ pub struct GuiGroupItem {
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuiControlObservation {
     /// The exact measured single-line layout used by label, caret and pointer selection.
-    pub text: Option<(Arc<crate::systems::surface::TextLayout>, [f32; 2])>,
+    pub text: Option<(Arc<crate::text::TextLayout>, [f32; 2])>,
     pub(crate) scroll_bars: [Option<super::super::layout::scroll_bars::GuiScrollBar>; 2],
     /// Innermost authored focus-scope ancestor in this completed logical tree.
     pub focus_scope: Option<crate::EntityId>,
@@ -232,7 +230,7 @@ pub struct GuiControlObservation {
     pub number: Option<GuiNumberGeometry>,
     /// A colour control's local surfaces, before the hit's position/scale
     /// transform, as its paint placed them.
-    pub(crate) color: Option<crate::systems::gui::local::color::GuiColorLayout>,
+    pub(crate) color: Option<crate::systems::gui::local::controls::color::GuiColorLayout>,
 }
 
 impl GuiControlObservation {

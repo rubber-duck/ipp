@@ -1,0 +1,356 @@
+import { invoke } from "../../harness/page-calls.js";
+import { writeDataUrl, bigintJson } from "../../harness/evidence.js";
+import assert from "node:assert/strict";
+import { writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import test from "node:test";
+import type { CDPSession, ConsoleMessage, Page } from "playwright";
+import {
+  assertLoopbackClosed,
+  type BrowserBuildConfiguration,
+  runBrowserEnvironment,
+} from "../../harness/browser.js";
+import { requireVisible } from "../../harness/page/images.js";
+import type {
+  CanvasCaptureReport,
+  CanvasLayoutObservation,
+  CanvasObservation,
+  TransferObservation,
+} from "./pages/canvas.js";
+
+const workspace = resolve(process.cwd());
+const render = browserBuild("render-instrumentation");
+const fixtureModule = "/target/canvas-build/fixture.js";
+
+test("canvas follows CSS size and display density without replacing its runtime", {
+  timeout: 60_000,
+}, async (context) => {
+  const errors: string[] = [];
+  const result = await runBrowserEnvironment(
+    "DPI-aware declarative canvas",
+    {
+      workspace,
+      build: render,
+      deviceScaleFactor: 2,
+      operationTimeoutMs: 12_000,
+      closeTimeoutMs: 5_000,
+      evidenceParent: resolve(
+        workspace,
+        "target/integration-artifacts/render-canvas",
+      ),
+    },
+    context.signal,
+    async (scenario) => {
+      scenario.page.on("pageerror", (error) => errors.push(error.message));
+      scenario.page.on("console", (message) =>
+        recordConsoleError(message, errors),
+      );
+      const moduleUrl = `${scenario.urls.origin}${fixtureModule}`;
+      let failure: unknown;
+      let transfers: TransferObservation | undefined;
+      let metrics: CDPSession | undefined;
+      try {
+        await invoke(scenario.page, moduleUrl, "mountCanvasApplication", [
+          {
+            generatedModuleUrl: scenario.urls.generated,
+            workerScriptUrl: scenario.urls.workerScript,
+            wasmUrl: scenario.urls.wasm,
+            timeoutMs: 10_000,
+          },
+          false,
+        ]);
+        const canvases = await invoke<readonly CanvasObservation[]>(
+          scenario.page,
+          moduleUrl,
+          "waitForCanvasApplication",
+        );
+        const initialScene = requireCanvas(canvases, "left");
+        assert.deepEqual(initialScene.entityIds, [
+          "__fixture-camera",
+          "canvas-owned-left",
+          "canvas-producer-left",
+        ]);
+
+        const initial = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          "dpi-initial",
+          640,
+          480,
+        );
+        assertRenderedCube(initial, "DPR 2 initial canvas");
+        const initialLayout = await layout(scenario.page, moduleUrl);
+        assertLayout(initialLayout, 320, 240, 2, 640, 480);
+        assertIdentity(initialLayout, initialScene);
+        const initialTransfers = initialLayout.transfers;
+
+        await invoke(scenario.page, moduleUrl, "setCanvasCssSize", [
+          "left",
+          400,
+          200,
+        ]);
+        const responsive = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          "dpi-responsive",
+          800,
+          400,
+        );
+        assertRenderedCube(responsive, "canvasProps CSS resize");
+        const responsiveLayout = await layout(scenario.page, moduleUrl);
+        assertLayout(responsiveLayout, 400, 200, 2, 800, 400);
+        assertIdentity(responsiveLayout, initialScene);
+        assert.deepEqual(responsiveLayout.transfers, initialTransfers);
+
+        metrics = await scenario.page.context().newCDPSession(scenario.page);
+        await setDeviceScaleFactor(scenario.page, metrics, 1);
+        const dprChanged = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          "dpi-dynamic-1x",
+          400,
+          200,
+        );
+        assertRenderedCube(dprChanged, "dynamic DPR 1 canvas");
+        const dprLayout = await layout(scenario.page, moduleUrl);
+        assertLayout(dprLayout, 400, 200, 1, 400, 200);
+        assertIdentity(dprLayout, initialScene);
+        assert.deepEqual(dprLayout.transfers, initialTransfers);
+
+        // Layout and density changes are valid while GPU work is suspended.
+        await invoke(scenario.page, moduleUrl, "setCanvasContextLost", [
+          "left",
+          true,
+        ]);
+        await setDeviceScaleFactor(scenario.page, metrics, 2);
+        await invoke(scenario.page, moduleUrl, "setCanvasCssSize", [
+          "left",
+          1_200,
+          600,
+        ]);
+        const duringLoss = await layout(scenario.page, moduleUrl);
+        assertIdentity(duringLoss, initialScene, [
+          "Presentation failed: unavailable",
+        ]);
+        assert.deepEqual(duringLoss.transfers, initialTransfers);
+        await invoke(scenario.page, moduleUrl, "setCanvasContextLost", [
+          "left",
+          false,
+        ]);
+        // The drawing buffer follows full density unless the device limits
+        // are smaller, which then bound it proportionally.
+        const limits = (await layout(scenario.page, moduleUrl)).viewportLimits;
+        assert.ok(limits, "the worker reports device viewport limits");
+        const bounded = boundedSize(2_400, 1_200, limits);
+        const capped = await capture(
+          scenario.page,
+          moduleUrl,
+          scenario.evidence.directory,
+          "dpi-device-bounded",
+          bounded.width,
+          bounded.height,
+        );
+        assertRenderedCube(
+          capped,
+          "device-bounded canvas after context recovery",
+        );
+        assert.ok(capped.contextGeneration > dprChanged.contextGeneration);
+        const cappedLayout = await layout(scenario.page, moduleUrl);
+        assertLayout(
+          cappedLayout,
+          1_200,
+          600,
+          2,
+          bounded.width,
+          bounded.height,
+        );
+        assertIdentity(cappedLayout, initialScene, [
+          "Presentation failed: unavailable",
+        ]);
+        assert.deepEqual(cappedLayout.transfers, initialTransfers);
+        transfers = cappedLayout.transfers;
+      } catch (error) {
+        failure = error;
+        throw error;
+      } finally {
+        try {
+          await metrics?.detach();
+          await invoke(scenario.page, moduleUrl, "closeCanvasApplication");
+          await waitForWorkerCount(scenario.page, 0);
+        } catch (cleanupError) {
+          if (failure !== undefined) {
+            throw new AggregateError(
+              [failure, cleanupError],
+              "DPI scenario and cleanup failed",
+            );
+          }
+          throw cleanupError;
+        }
+      }
+      assert.ok(transfers);
+      return { transfers, workers: scenario.page.workers().length };
+    },
+  );
+  assert.equal(result.value.workers, 0);
+  assert.equal(result.value.transfers.duplicateTransfers, 0);
+  assert.equal(result.value.transfers.dimensionWritesAfterTransfer, 0);
+  assert.equal(
+    result.value.transfers.calls,
+    result.value.transfers.distinctCanvases,
+  );
+  assert.deepEqual(errors, []);
+  await assertLoopbackClosed(result.origin);
+});
+
+function browserBuild(
+  name: "render-instrumentation",
+): BrowserBuildConfiguration {
+  const directory = resolve(workspace, "target/browser-build", name);
+  return {
+    name,
+    generatedModule: resolve(directory, "generated.js"),
+    runtimeWasm: resolve(directory, "runtime.wasm"),
+    contractArtifact: resolve(directory, "contract.bin"),
+  };
+}
+
+/** Independent expectation of the canvas density bound. */
+function boundedSize(
+  width: number,
+  height: number,
+  limits: { readonly maxWidth: number; readonly maxHeight: number },
+): { width: number; height: number } {
+  const scale = Math.min(1, limits.maxWidth / width, limits.maxHeight / height);
+  return {
+    width: Math.min(limits.maxWidth, Math.round(width * scale)),
+    height: Math.min(limits.maxHeight, Math.round(height * scale)),
+  };
+}
+
+async function layout(
+  page: Page,
+  moduleUrl: string,
+): Promise<CanvasLayoutObservation> {
+  return await invoke(page, moduleUrl, "observeCanvasLayout", ["left"]);
+}
+
+function assertLayout(
+  layout: CanvasLayoutObservation,
+  cssWidth: number,
+  cssHeight: number,
+  devicePixelRatio: number,
+  attributeWidth: number,
+  attributeHeight: number,
+): void {
+  assert.equal(layout.cssWidth, cssWidth);
+  assert.equal(layout.cssHeight, cssHeight);
+  assert.equal(layout.devicePixelRatio, devicePixelRatio);
+  assert.equal(layout.attributeWidth, attributeWidth);
+  assert.equal(layout.attributeHeight, attributeHeight);
+}
+
+function assertIdentity(
+  current: CanvasLayoutObservation,
+  initial: CanvasObservation,
+  allowedErrors: readonly string[] = [],
+): void {
+  assert.equal(current.observation.session, initial.session);
+  assert.deepEqual(current.observation.entityIds, initial.entityIds);
+  assert.deepEqual(
+    current.observation.runtimeEntityIds,
+    initial.runtimeEntityIds,
+  );
+  assert.equal(current.observation.ownedExists, true);
+  for (const error of current.observation.errors)
+    assert.ok(allowedErrors.includes(error), error);
+}
+
+function requireCanvas(
+  observations: readonly CanvasObservation[],
+  id: "left" | "right",
+): CanvasObservation {
+  const observation = observations.find((candidate) => candidate.id === id);
+  assert.ok(observation, `missing ${id} canvas observation`);
+  return observation;
+}
+
+async function capture(
+  page: Page,
+  moduleUrl: string,
+  directory: string,
+  label: string,
+  width: number,
+  height: number,
+): Promise<CanvasCaptureReport> {
+  const report = await invoke<CanvasCaptureReport>(
+    page,
+    moduleUrl,
+    "captureCanvas",
+    ["left", label, width, height],
+  );
+  const dataUrl = await invoke<string>(
+    page,
+    moduleUrl,
+    "canvasCaptureDataUrl",
+    [label],
+  );
+  await Promise.all([
+    // Retain the real GPU readback. A Playwright element screenshot restores its
+    // context's initial DPR and would undo the live CDP density change under test.
+    writeDataUrl(join(directory, `${label}-capture.png`), dataUrl),
+    writeFile(
+      join(directory, `${label}-frame.json`),
+      `${JSON.stringify(report, bigintJson, 2)}\n`,
+    ),
+  ]);
+  return report;
+}
+
+function assertRenderedCube(report: CanvasCaptureReport, label: string): void {
+  requireVisible(report.summary, label);
+  assert.equal(report.drawCalls, 1);
+  assert.equal(report.triangles, 12);
+}
+
+async function setDeviceScaleFactor(
+  page: Page,
+  session: CDPSession,
+  factor: number,
+): Promise<void> {
+  const viewport = page.viewportSize();
+  assert.ok(viewport, "DPR emulation requires a fixed browser viewport");
+  // CDP changes DPR without notifying resize/media listeners when viewport
+  // metrics stay identical. Simulate a display move with a viewport resize;
+  // the fixture's fixed CSS canvas size stays unchanged.
+  await session.send("Emulation.setDeviceMetricsOverride", {
+    width: factor === 1 ? viewport.width - 1 : viewport.width,
+    height: viewport.height,
+    deviceScaleFactor: factor,
+    mobile: false,
+  });
+  await page.waitForFunction(
+    (expected) => window.devicePixelRatio === expected,
+    factor,
+  );
+}
+
+async function waitForWorkerCount(page: Page, expected: number): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (page.workers().length !== expected) {
+    if (Date.now() >= deadline) {
+      assert.equal(
+        page.workers().length,
+        expected,
+        "owned workers did not stop",
+      );
+    }
+    await new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 20));
+  }
+}
+
+function recordConsoleError(message: ConsoleMessage, errors: string[]): void {
+  if (message.type() === "error") errors.push(message.text());
+}

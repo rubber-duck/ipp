@@ -14,7 +14,7 @@ use ipp_core::components::{
     GuiTextInput,
 };
 use ipp_core::services::asset_management::AssetSource;
-use ipp_core::services::asset_management::drawing::DRAWING_TYPE;
+use ipp_core::services::asset_management::formats::drawing::DRAWING_TYPE;
 use ipp_core::services::gui_input::{
     GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal, GuiInputContext, GuiInputService,
     GuiInputSession, GuiPointerLease,
@@ -1166,7 +1166,7 @@ fn label_skin_assets_are_rejected_so_the_measured_font_never_swaps() {
     // font or otherwise, to the Label part.
     let label = GuiPartId::base(GuiPrimitivePart::Label);
     for kind in [
-        ipp_core::services::asset_management::font::FONT_TYPE,
+        ipp_core::services::asset_management::formats::font::FONT_TYPE,
         DRAWING_TYPE,
     ] {
         let parts = rows([GuiPaintPart {
@@ -3289,7 +3289,7 @@ fn a_skinned_entity_background_asset_paints_like_a_control_background_asset() {
 
 // Default looks: what a control paints with no theme, and how themes and
 // overrides compose with it. Colours and lengths are the design language's
-// (tests/skin-lab/README.md), restated here independently of the runtime's
+// (tests/gui/skin-lab/README.md), restated here independently of the runtime's
 // tables, at the looks' 16-unit em.
 
 /// Linear RGBA of an sRGB `0xrrggbb` sample.

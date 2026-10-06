@@ -14,6 +14,7 @@ use crate::components::GuiOverlay;
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::gui::layout::GuiEntityLayoutView;
 use crate::systems::gui::layout::scroll_bars::GuiScrollBar;
+use crate::systems::gui::local::controls;
 use crate::systems::gui::presentation::{GuiControlObservation, GuiOverlayObservation};
 use crate::{ComponentValue, EntityId, WorldRef};
 use std::sync::Arc;
@@ -357,7 +358,7 @@ impl CanvasSystem {
             && let Some(lifetime) = incarnation(world, entity, ComponentValue::GUI_OVERLAY)
             && placed.available
             && placed.opacity > 0.0
-            && crate::systems::gui::local::control::eligibility(world, entity).visible
+            && controls::identity::eligibility(world, entity).visible
         {
             let bounds = placed.bounds([0.0, 0.0, size[0], size[1]]);
             walk.overlays.push(GuiOverlayObservation {
@@ -433,16 +434,15 @@ impl CanvasSystem {
                 ],
             ));
         }
-        let control = gui.and_then(|_| {
-            crate::systems::gui::local::control::entity_control(world, &world.state, entity)
-        });
+        let control =
+            gui.and_then(|_| controls::identity::entity_control(world, &world.state, entity));
         let paint = paint_target(world, entity);
         if let Some(gui) = gui
             && let Some(mapping) = mapping
             && let Some(control) = control
         {
             let target = control.target.canvas_target();
-            let eligibility = crate::systems::gui::local::control::eligibility(world, entity);
+            let eligibility = controls::identity::eligibility(world, entity);
             let font_size = layout
                 .and_then(|view| view.control_labels.get(&entity))
                 .map_or(
@@ -589,8 +589,8 @@ impl CanvasSystem {
                     enabled: eligibility.enabled,
                     visible: eligibility.visible,
                     available: eligibility.available,
-                    focusable: crate::systems::gui::local::control::focusable(world, entity),
-                    focus_parts: crate::systems::gui::local::control::focus_parts(world, control),
+                    focusable: controls::identity::focusable(world, entity),
+                    focus_parts: controls::identity::focus_parts(world, control),
                     ancestry,
                 },
                 hit: hit.clone(),
@@ -610,17 +610,13 @@ impl CanvasSystem {
                     })
                     .map(
                         |input| crate::systems::gui::presentation::GuiNumberGeometry {
-                            steps: input.step_parts.then(|| {
-                                crate::systems::gui::local::number::number_step_rects(mapping.size)
-                            }),
+                            steps: input
+                                .step_parts
+                                .then(|| controls::number::number_step_rects(mapping.size)),
                         },
                     ),
                 color: color.map(|color| {
-                    crate::systems::gui::local::color::GuiColorLayout::new(
-                        mapping.size,
-                        font_size,
-                        color.alpha_rail,
-                    )
+                    controls::color::GuiColorLayout::new(mapping.size, font_size, color.alpha_rail)
                 }),
             });
             observation = Some(control.clone());

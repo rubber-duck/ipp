@@ -1,5 +1,5 @@
-use super::{components::request, runtime::DataBindingUnavailable, *};
-use crate::world::component_query::ComponentQuery;
+use super::{component::request, runtime_state::DataBindingUnavailable, *};
+use crate::world::direct_bindings::component_query::ComponentQuery;
 use crate::{
     ComponentValue as C, ErrorReason,
     components::registry::{self, ComponentStorage},

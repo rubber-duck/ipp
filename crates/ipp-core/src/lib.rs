@@ -2,44 +2,30 @@
 //! Hosts own transports and supply simulation time. Optional capabilities beyond
 //! the selected scalar, declaration and unlit scene capabilities remain omitted.
 
-pub mod diagnostics;
-
-/// Filter before constructing arguments; a disabled level evaluates no argument.
-#[macro_export]
-macro_rules! diagnostic {
-    ($level:ident, $($args:tt)*) => {{
-        if $crate::diagnostics::enabled($crate::diagnostics::Level::$level) {
-            $crate::diagnostics::emit($crate::diagnostics::Level::$level, format_args!($($args)*));
-        }
-    }};
-}
-
 extern crate self as ipp_core;
 
 pub mod commands;
-
-mod batch_symbol_reports;
-pub use batch_symbol_reports::BatchSymbolReports;
-
 pub mod components;
+pub mod diagnostics;
+pub mod expressions;
+mod host;
+pub mod math;
+/// Opt-in stage timing and allocation counters; never enabled by default.
+#[cfg(feature = "instrumentation")]
+pub mod profiling;
+pub mod services;
+pub mod text;
+mod world;
+
+pub use commands::*;
+
 pub use components::{
     ComponentValue, DynamicProperties, DynamicPropertyDescriptor, DynamicPropertyKind, DynamicValue,
 };
 
-pub mod identity;
-
-pub mod expressions;
-
-pub mod services;
-
-mod world;
-
 pub use world::systems;
-
-pub use commands::*;
-pub use identity::EntityId;
 pub use world::{
-    EntityLink, EntityOrder, EntityPersistentId, EntityPlacement, EntityPlacementRef,
+    EntityId, EntityLink, EntityOrder, EntityPersistentId, EntityPlacement, EntityPlacementRef,
     EntitySnapshot, RECYCLED_COMMAND_BUFFER_COMMANDS, World, WorldCapacityHints,
     WorldCapacityHintsPatch, WorldConstructionError, WorldContext, WorldCreateOptions,
     WorldDescriptor, WorldLimits, WorldMetadata, WorldPersistentId, WorldSelector,
@@ -52,11 +38,14 @@ pub use systems::canvas::canvas_state::{
 pub use systems::render::render_state::{RenderState, RenderStateChange, RenderStatePatch};
 
 pub use systems::surface::{
-    CylinderSurface, FlatSurface, SEGMENTATION_SCOPE, SphereSurface, Surface, SurfaceCache,
-    SurfaceCachePolicy, SurfaceDomain, SurfaceGeometry, SurfaceIntersection, SurfaceSample,
-    TextCacheKey, TextCaret, TextFont, TextGlyph, TextLayout, TextLine, TextLinePolicy,
-    TextMaxWidth, TextMeasureRequest, TextOutcome, TextRequestError, TextUnits, UNICODE_VERSION,
-    grapheme_boundaries, is_grapheme_boundary, measure_text, utf8_to_utf16_offset,
+    CylinderSurface, FlatSurface, SphereSurface, Surface, SurfaceCache, SurfaceCachePolicy,
+    SurfaceDomain, SurfaceGeometry, SurfaceIntersection, SurfaceSample,
+};
+
+pub use text::{
+    SEGMENTATION_SCOPE, TextCacheKey, TextCaret, TextFont, TextGlyph, TextLayout, TextLine,
+    TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, TextRequestError, TextUnits,
+    UNICODE_VERSION, grapheme_boundaries, is_grapheme_boundary, measure_text, utf8_to_utf16_offset,
     utf16_to_utf8_offset,
 };
 
@@ -72,13 +61,13 @@ pub use systems::geometry::queries::{
     GeometryPickQuery, WorldPlane,
 };
 
-pub use services::asset_management::mesh::{
+pub use systems::render::{DebugRenderItem, RenderDiagnostic, RenderItem};
+
+pub use services::asset_management::formats::mesh::{
     MAX_MESH_VERTICES, MESH_TYPE, MeshAsset, MeshKey, MeshUpload,
 };
 
-pub use world::{DebugRenderItem, RenderDiagnostic, RenderItem};
-
-pub use services::asset_management::texture::{
+pub use services::asset_management::formats::texture::{
     TEXTURE_TYPE, TextureAsset, TextureDecoder, TextureHeader, TextureKey, TextureUpload,
 };
 
@@ -86,13 +75,12 @@ pub use services::asset_management::service::{
     AssetAcquisitionRequest, AssetResourceKind, AssetResourceSnapshot, AssetResourceStatus,
 };
 
-pub use services::asset_management::skeleton::{
+pub use services::asset_management::formats::skeleton::{
     MAX_JOINTS, POSE_TYPE, PoseAsset, SKELETON_TYPE, SkeletonAsset,
 };
 
-pub use services::asset_management::skin_binding::{SKIN_TYPE, SkinAsset};
+pub use services::asset_management::formats::skin_binding::{SKIN_TYPE, SkinAsset};
 
-mod host;
 pub use host::{
     AttachmentPlacement, HostRuntime, OutputKind, OutputRef, OutputTarget, WorldAttachment,
     WorldAttachmentMode, WorldFrameContext, WorldId, WorldRef, WorldViewport,
@@ -106,12 +94,6 @@ pub use host::{OutputReferenceToken, WorldReferenceToken};
 pub use host::{PublishedSceneContribution, PublishedSceneHit};
 pub use host::{ViewDescriptor, ViewPickHit, ViewQueryTarget};
 pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachmentToken};
-
-/// Opt-in stage timing and allocation counters; never enabled by default.
-#[cfg(feature = "instrumentation")]
-pub mod profiling;
-#[cfg(feature = "instrumentation")]
-pub mod profiling_trace;
 
 #[cfg(test)]
 #[allow(dead_code)]

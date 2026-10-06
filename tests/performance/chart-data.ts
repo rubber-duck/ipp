@@ -10,13 +10,13 @@ import { pathToFileURL } from "node:url";
 import type { Client, HostClientBase } from "@ipp/client";
 import { nativePresentationTransport } from "@ipp/client/testing";
 import { renderDiagnostics } from "@ipp/client/diagnostics";
-import { encodePng } from "../../tools/shared-host/png.js";
+import { encodePng } from "../harness/images.js";
 import { image } from "../../tools/shared-host/presentation.js";
 import {
   openWorkload,
   workloads,
   type ChartContract,
-} from "./chart-data-scenario.js";
+} from "../data/scenarios/chart-data-workload.js";
 
 interface Configuration {
   preset: "smoke" | "full";

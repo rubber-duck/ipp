@@ -1,6 +1,6 @@
 //! Separate controller objects exclusively owned by AnimationSystem.
 
-use super::{driver::AnimationDriverBinding, *};
+use super::{targets::AnimationDriverBinding, *};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[cfg(test)]
@@ -13,7 +13,7 @@ thread_local! {
 pub struct AnimationController {
     pub(in crate::world) snapshot: AnimationControllerSnapshot,
     pub(in crate::world) drivers: Vec<Box<dyn AnimationDriverBinding>>,
-    pub(super) structural_drivers: Vec<super::structural::AnimationStructuralDriver>,
+    pub(super) structural_drivers: Vec<super::targets::AnimationStructuralDriver>,
     pub(super) driver_targets: BTreeMap<(EntityId, u16), Vec<usize>>,
     pub(in crate::world) incarnations: Vec<(u64, AnimationTrackTarget)>,
     pub(in crate::world) sought: bool,
@@ -22,21 +22,18 @@ pub struct AnimationController {
     pub(super) ready: bool,
     pub(super) numeric_targets: Vec<(EntityId, u16)>,
     pub(super) discrete_drivers: Vec<usize>,
-    pub(super) numeric_outputs: Vec<(
-        (EntityId, u16),
-        super::numeric_output::AnimationNumericOutput,
-    )>,
+    pub(super) numeric_outputs: Vec<((EntityId, u16), super::targets::AnimationNumericOutput)>,
     pub(in crate::world) failure: Option<ErrorReason>,
     pub(super) transition: Option<Box<AnimationTransitionRuntime>>,
     /// What this controller has added to its fields.
-    pub(in crate::world) contributions: super::contribution::AnimationContributions,
+    pub(in crate::world) contributions: super::controller::contribution::AnimationContributions,
 }
 
 #[derive(Debug)]
 pub(super) struct AnimationTransitionRuntime {
     pub(super) source: AnimationTransitionSource,
     pub(super) start_time: AnimationTransitionStartTime,
-    pub(super) program: Option<super::transition::AnimationTransitionProgram>,
+    pub(super) program: Option<super::controller::AnimationTransitionProgram>,
 }
 
 #[derive(Debug)]
@@ -45,7 +42,7 @@ pub(super) enum AnimationTransitionSource {
     Frozen {
         values: Vec<AnimationRuntimeFrozenTransitionValue>,
         bindings: Box<AnimationController>,
-        prepared: Option<super::transition::AnimationTransitionProgram>,
+        prepared: Option<super::controller::AnimationTransitionProgram>,
         reference_time: f64,
         reference_duration: f64,
     },
@@ -146,7 +143,7 @@ impl AnimationController {
                 })
                 .collect();
             if let Some(output) =
-                super::numeric_output::AnimationNumericOutput::bind(storage, key, &offsets)
+                super::targets::AnimationNumericOutput::bind(storage, key, &offsets)
             {
                 self.numeric_outputs.push((key, output));
                 self.numeric_targets.push(key);
@@ -163,7 +160,7 @@ impl AnimationController {
     pub(super) fn numeric_output(
         &self,
         key: (EntityId, u16),
-    ) -> Option<super::numeric_output::AnimationNumericOutput> {
+    ) -> Option<super::targets::AnimationNumericOutput> {
         self.numeric_outputs
             .binary_search_by_key(&key, |entry| entry.0)
             .ok()
@@ -257,15 +254,15 @@ pub struct AnimationSystemState {
     pub(super) description_demand_clean: bool,
     pub(in crate::world) demand_revision: u64,
     pub(super) affected_controllers: Vec<AnimationControllerId>,
-    pub(super) component_scratch: super::component_values::ComponentScratch,
-    pub(super) property_scratch: super::component_values::PropertyScratch,
+    pub(super) component_scratch: super::targets::ComponentScratch,
+    pub(super) property_scratch: super::targets::PropertyScratch,
     pub(super) controller_ids: Vec<AnimationControllerId>,
     pub(super) ready_controllers: Vec<AnimationControllerId>,
     pub(in crate::world) next_id: u64,
     pub(in crate::world) playback_events: Vec<AnimationPlaybackEvent>,
     pub(in crate::world) controller_outcomes: Vec<AnimationControllerOutcome>,
     pub(in crate::world) animation_sources:
-        BTreeSet<crate::services::asset_management::service::AssetDemandSelection>,
+        BTreeSet<crate::services::asset_management::AssetDemandSelection>,
 }
 
 impl Default for AnimationSystemState {

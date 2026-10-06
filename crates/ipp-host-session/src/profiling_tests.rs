@@ -1,6 +1,6 @@
 use super::*;
 use crate::HostServices;
-use ipp_protocol::profiling::*;
+use ipp_protocol::host::profiling::*;
 
 struct Headless;
 

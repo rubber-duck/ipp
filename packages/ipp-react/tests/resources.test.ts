@@ -1,10 +1,10 @@
-/** Local source equality/diff invariants; actual provider rendering lives in tests/render. */
+/** Local source equality/diff invariants; actual provider rendering lives in tests/rendering. */
 import assert from "node:assert/strict";
 import test from "node:test";
 import { BoundingGeometry } from "../src/components.js";
-import { ReactWorldTree } from "../src/tree.js";
-import { ReactWorldCommits } from "../src/commits.js";
-import type { ReactWorldClient } from "../src/contract.js";
+import { ReactWorldTree } from "../src/reconciler/tree.js";
+import { ReactWorldCommits } from "../src/reconciler/commits.js";
+import type { ReactWorldClient } from "../src/reconciler/world-client.js";
 import type { BatchOutcome, Command, EntityRef, FieldValue } from "@ipp/client";
 
 /** MeshInstance fields as the native contract lays them out. */

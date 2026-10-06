@@ -1,7 +1,7 @@
 use crate::{
     ErrorReason,
     components::schema::{ComponentLifecycle, same_text},
-    services::asset_management::service::{AssetDemandSelection, validate_source},
+    services::asset_management::{AssetDemandSelection, validate_source},
 };
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;

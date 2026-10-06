@@ -24,7 +24,7 @@ fn source_chunks_are_borrowed_bounded_and_separate_from_commands() {
         decode(&bytes, 8),
         Err(ProtocolError::SessionMismatch)
     ));
-    assert!(crate::decode_request(&bytes, 7).is_err());
+    assert!(crate::world::decode_request(&bytes, 7).is_err());
     for length in [0, 4, 12, 20, 21, 29, 37, 40, bytes.len() - 1] {
         assert!(decode(&bytes[..length], 7).is_err());
     }
@@ -42,7 +42,7 @@ fn asset_bytes_have_no_world_command_tag() {
         bytes.push(tag);
         bytes.extend([42; 64]);
         assert!(
-            matches!(crate::decode_request(&bytes, 7), Err(ProtocolError::Unsupported(actual)) if actual == tag)
+            matches!(crate::world::decode_request(&bytes, 7), Err(ProtocolError::Unsupported(actual)) if actual == tag)
         );
     }
 }

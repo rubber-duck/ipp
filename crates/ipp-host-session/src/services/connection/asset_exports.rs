@@ -9,7 +9,7 @@ use ipp_core::services::asset_management::{
     },
 };
 use ipp_core::services::io::{IoCancellation, IoReader, IoSourceRegistrationId};
-use ipp_protocol::asset_export::{
+use ipp_protocol::host::asset_export::{
     AssetExportRequest, AssetExportResponse, AssetReadAccess, AssetReadCapability,
     AssetReadRepresentation,
 };
@@ -281,11 +281,13 @@ impl<P: HostServices> Host<P> {
             ipp_core::SKELETON_TYPE => Some(SkeletonV1),
             ipp_core::POSE_TYPE => Some(PoseV1),
             ipp_core::SKIN_TYPE => Some(SkinV1),
-            ipp_core::services::asset_management::shader::SHADER_TYPE => Some(ShaderV3),
+            ipp_core::services::asset_management::formats::shader::SHADER_TYPE => Some(ShaderV3),
             ipp_core::systems::animation::ANIMATION_TYPE => Some(AnimationV4),
             ipp_core::systems::geometry::GEOMETRY_TYPE => Some(GeometryV1),
             ipp_core::systems::particles::PARTICLE_CACHE_TYPE => Some(ParticleCacheV1),
-            ipp_core::services::asset_management::expression::EXPRESSION_TYPE => Some(ExpressionV1),
+            ipp_core::services::asset_management::formats::expression::EXPRESSION_TYPE => {
+                Some(ExpressionV1)
+            }
             _ => None,
         };
         AssetReadAccess {

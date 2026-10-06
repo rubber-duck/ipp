@@ -1,3 +1,6 @@
+//! Unary, binary and clamp operations on evaluated values; failed checked arithmetic and
+//! nonfinite results are invalid calculations.
+
 use super::*;
 
 fn invalid(reason: &ExpressionInvalid) -> ExpressionResult {
@@ -193,3 +196,7 @@ fn clamp_vector<const N: usize>(
     }
     Some(result)
 }
+
+#[cfg(test)]
+#[path = "operations_tests.rs"]
+mod tests;

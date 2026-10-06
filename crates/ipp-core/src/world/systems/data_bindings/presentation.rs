@@ -1,6 +1,6 @@
 //! Exact component lifetimes fence the one permitted presentation consumer.
 
-use super::{query::binding_identity, system::runtime_mut};
+use super::{queries::binding_identity, system::runtime_mut};
 use crate::{EntityId, ErrorReason};
 
 /// Authority for a single entity-local presentation consumer. It carries no pointers

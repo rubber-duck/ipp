@@ -3,15 +3,15 @@ use crate::EntityId;
 use crate::components::schema::same_text;
 use crate::services::asset_management::{
     AssetKey,
-    font::{FONT_TYPE, FontAsset},
+    formats::font::{FONT_TYPE, FontAsset},
 };
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::canvas::{CanvasGeometry, CanvasGlyph};
 use crate::systems::gui::GuiSystem;
 use crate::systems::gui::local::GuiEntityTarget;
-use crate::systems::gui::local::control::entity_control;
+use crate::systems::gui::local::controls::identity::entity_control;
 use crate::systems::gui::local::{GUI_SLIDER_DIAL, GuiControlKind};
-use crate::systems::surface::{
+use crate::text::{
     TextFont, TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, measure_text,
 };
 use std::sync::Arc;
@@ -56,7 +56,7 @@ pub(in crate::world::systems) struct GuiControlLabel {
     font: Option<AssetKey>,
     pub font_size: f32,
     pub geometry: Option<CanvasGeometry>,
-    pub layout: Option<Arc<crate::systems::surface::TextLayout>>,
+    pub layout: Option<Arc<crate::text::TextLayout>>,
     pub intrinsic: [f32; 2],
     /// A control's presentation, which sets its intrinsic size: a slider's
     /// `axis` field, 1 for a colour control with its alpha rail; 0 for other
@@ -119,7 +119,7 @@ impl GuiControlLabel {
             // Between a numeric input's step parts, the line is centred.
             GuiControlKind::TextInput if self.steps => {
                 let [decrement, increment] =
-                    super::super::local::number::number_step_rects(self.size);
+                    super::super::local::controls::number::number_step_rects(self.size);
                 let start = decrement[0] + decrement[2];
                 [start + (increment[0] - start - line[0]) * 0.5, centred]
             }
@@ -297,7 +297,7 @@ pub(in crate::world::systems::gui) fn measure_control(
         return Some((previous.clone(), false));
     }
     let layout = font.and_then(|key| {
-        let source_boundaries = masked.then(|| crate::systems::surface::grapheme_boundaries(&text));
+        let source_boundaries = masked.then(|| crate::text::grapheme_boundaries(&text));
         let mask = source_boundaries
             .as_ref()
             .map(|boundaries| "•".repeat(boundaries.len().saturating_sub(1)));
@@ -369,7 +369,7 @@ pub(in crate::world::systems::gui) fn measure_control(
             size
         }
         GuiControlKind::Color => {
-            crate::systems::gui::local::color::intrinsic_size(font_size, axis == 1)
+            crate::systems::gui::local::controls::color::intrinsic_size(font_size, axis == 1)
         }
         GuiControlKind::ScrollView | GuiControlKind::VirtualList => [0.0; 2],
         // Step parts add a square of the control's height at each end.

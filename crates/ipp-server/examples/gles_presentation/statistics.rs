@@ -15,7 +15,7 @@ use ipp_render_gl::{GlesRenderDevice, RenderService, RenderStatistics};
 pub(super) struct StatisticsTotals {
     uploaded_bytes: u32,
     gui: [u32; 7],
-    layout: ipp_host_session::services::gui_layout_statistics::HostGuiLayoutStatistics,
+    layout: ipp_host_session::statistics::HostGuiLayoutStatistics,
     surface_cache: [u32; 5],
 }
 

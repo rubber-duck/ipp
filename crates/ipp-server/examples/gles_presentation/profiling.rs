@@ -1,5 +1,5 @@
 //! Adapter-owned mapping from retained renderer samples to the Host capture envelope.
-use ipp_protocol::profiling::*;
+use ipp_protocol::host::profiling::*;
 use ipp_render_gl::{
     RenderDevice, RenderGpuAvailability as Availability, RenderGpuCapability as Capability,
     RenderGpuSampling as Sampling, RenderGpuScope as Scope, RenderService,

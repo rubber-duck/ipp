@@ -1,5 +1,5 @@
 use super::*;
-use crate::{components::CustomMaterial, systems::*};
+use crate::{Batch, ComponentValue, components::CustomMaterial, systems::*};
 use std::sync::{Arc, Mutex};
 
 /// Rendered meshes and materials with the evaluators they require.

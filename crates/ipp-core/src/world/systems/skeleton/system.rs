@@ -17,6 +17,8 @@ impl SkeletonSystem {
     pub const ID: SystemId = SystemId("ipp.skeleton");
 }
 
+crate::system_parameter!(SkeletonSystem);
+
 /// Reusable factory; it retains no mutable world state.
 #[derive(Default)]
 pub struct SkeletonSystemFactory;

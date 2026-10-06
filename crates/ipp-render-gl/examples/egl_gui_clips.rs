@@ -387,7 +387,9 @@ fn unit_square(
     ),
     Box<dyn std::error::Error>,
 > {
-    use ipp_core::services::asset_management::quadratic::{QuadraticContour, QuadraticSegment};
+    use ipp_core::services::asset_management::formats::quadratic::{
+        QuadraticContour, QuadraticSegment,
+    };
     use ipp_render_gl::RenderDevice;
 
     let line = |to| QuadraticSegment::Line {

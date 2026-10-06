@@ -17,8 +17,8 @@
  * every frame. Under reduced motion the property holds its rest.
  */
 import { useMemo } from "react";
-import { Animation } from "../animation.js";
-import { AnimationAsset, assetRef } from "../assets.js";
+import { Animation } from "../animation/declarations.js";
+import { AnimationAsset, assetRef } from "../assets/declarations.js";
 import { useGuiKit, type GuiKitRow } from "./kit.js";
 
 /** The slot of an entity's own row. */

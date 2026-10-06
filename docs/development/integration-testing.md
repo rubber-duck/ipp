@@ -50,7 +50,7 @@ Inject failures at real boundaries: gate fixture responses/transport, disconnect
 
 ## Scenario families
 
-A scenario family that grows with its features runs as independently timed parts: each part has its own environment, fixtures and budget, so no part depends on state another left and a slow part fails alone. Parts share one maintained harness, and a new part adds a scenario module and its cases without touching the others. Timing assertions read the clock the runtime counts, for Host-clock delays the World time of the ticks involved, never wall time or sleeps. The [GUI composites family](../../tests/integration/gui-composites/README.md) shows the harness, the budget rule and how a part is added.
+A scenario family that grows with its features runs as independently timed parts: each part has its own environment, fixtures and budget, so no part depends on state another left and a slow part fails alone. Parts share one maintained harness, and a new part adds a page module and its cases without touching the others. Timing assertions read the clock the runtime counts, for Host-clock delays the World time of the ticks involved, never wall time or sleeps. The [GUI composites family](../../tests/gui/composites/README.md) shows the harness, the budget rule and how a part is added.
 
 ## Evidence and evolution
 

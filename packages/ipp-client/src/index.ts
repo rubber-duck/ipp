@@ -47,7 +47,6 @@ export type { WorkerHost, WorkerEndpoint } from "./worker.js";
 export { browserRuntime } from "./browser.js";
 
 export {
-  HOST_MESSAGE_BYTES,
   HostContractMismatchError,
   acceptHostAnnouncement,
   contractIdentity,
@@ -61,7 +60,10 @@ export {
 export type { ContractIdentity, HostAnnouncement } from "./host-contract.js";
 export { webSocketTransport } from "./transport.js";
 export { HostClientBase } from "./host-client.js";
-export { WorldSelectionRequiredError } from "./host-protocol.js";
+export {
+  HOST_MESSAGE_BYTES,
+  WorldSelectionRequiredError,
+} from "./host-protocol.js";
 export { HostPhysicalInput, GuiPhysicalContext } from "./host-input.js";
 export type {
   GuiPhysicalInput,
@@ -106,7 +108,7 @@ export * from "./dynamic-properties.js";
 
 export { clientAssetSource } from "./asset-sources.js";
 
-export * from "./surface-types.js";
+export * from "./surface-mapping.js";
 export * from "./surface-config.js";
 export * from "./gui-types.js";
 export {

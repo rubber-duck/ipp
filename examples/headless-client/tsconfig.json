@@ -1,5 +1,5 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": { "noEmit": true },
-  "include": ["main.ts", "../../tests/integration/headless-client.test.ts"]
+  "include": ["main.ts", "../../tests/runtime/headless-client.test.ts"]
 }

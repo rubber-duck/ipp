@@ -20,7 +20,7 @@ The real robot uses the maintained gallery, generated client, worker transport, 
 
 The maintained browser profiling entry now runs the Platformer gallery workload because Platformer replaced the robot gallery page. The retired robot sources and assets have been removed. The robot measurements and commands recorded below are historical evidence from the original workload and are not directly comparable with new Platformer profiles.
 
-The private Skeleton layout change changes the generated target contract. The saved robot World was regenerated from the checked-in Blender disk export using `tools/import_blender_scene.mjs --namespace clunker --world clunker.ipp --clips-only`. Its 69 entities, 10 exported clips, manifest, catalog and content-addressed assets are unchanged. The target contract and capture metadata are regenerated through the runtime, with no patched headers or compatibility bypass.
+The private Skeleton layout change changes the generated target contract. The saved robot World was regenerated from the checked-in Blender disk export using `tools/assets/import-blender-scene.mjs --namespace clunker --world clunker.ipp --clips-only`. Its 69 entities, 10 exported clips, manifest, catalog and content-addressed assets are unchanged. The target contract and capture metadata are regenerated through the runtime, with no patched headers or compatibility bypass.
 
 ## Native results
 
@@ -99,7 +99,7 @@ cargo build -p ipp-protocol --example profile_allocations --example profile_upda
 taskset -c 22 target/release/examples/profile_allocations
 IPP_PROFILE_MODES=3,4,4,3 taskset -c 22 target/release/examples/profile_updates
 IPP_PERFORMANCE_EXPERIMENT=1 node tools/build_browser.mjs render-expanded headless
-node tools/build_gallery.mjs
+node tools/products/gallery.mjs
 LD_LIBRARY_PATH=/home/dev/.local/opt/ipp-browser-support/sysroot/usr/lib64 IPP_PROFILE_MODES=3,4,4,3 node tools/profile_robot.mjs
 LD_LIBRARY_PATH=/home/dev/.local/opt/ipp-browser-support/sysroot/usr/lib64 IPP_PROFILE_MODES=3,4,4,3 IPP_PROFILE_PLAYING=1 node tools/profile_robot.mjs
 ```

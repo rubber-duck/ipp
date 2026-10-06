@@ -1,5 +1,5 @@
 use crate::codec::{ProtocolError, Reader, Writer};
-use crate::wire::{OUTPUT_TARGET_CAMERA, OUTPUT_TARGET_CANVAS};
+use crate::contract::wire_manifest::{OUTPUT_TARGET_CAMERA, OUTPUT_TARGET_CANVAS};
 
 /// Untrusted wire identity, resolved only by the receiving Host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

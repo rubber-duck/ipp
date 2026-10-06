@@ -1,5 +1,5 @@
 use super::system::state;
-use crate::{RenderItem, components::Transform, systems::camera, world::WorldSimulationState};
+use crate::{RenderItem, components::Transform, math, world::WorldSimulationState};
 
 /// Evaluated particle presentation data; renderer chooses its upload layout.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,11 +50,11 @@ pub(in crate::world) fn prepare_particles(
             sy: size,
             sz: size,
         };
-        let Ok(local) = camera::model_matrix(&transform) else {
+        let Ok(local) = math::model_matrix(&transform) else {
             continue;
         };
         let model = if state.space == 0 {
-            camera::multiply(base.model, local)
+            math::multiply(base.model, local)
         } else {
             local
         };

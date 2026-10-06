@@ -115,7 +115,7 @@ fn apply(host: &mut HostRuntime, world: WorldId, batch: Batch) -> Vec<(u32, ipp_
 
 fn root(host: &mut HostRuntime) -> RootBinding {
     let world = host
-        .create_world(Default::default(), crate::host::TEST_CAMERA_SYSTEMS)
+        .create_world(Default::default(), crate::test_support::TEST_CAMERA_SYSTEMS)
         .unwrap();
     let reference = host.world_ref(world).unwrap();
     let entity = apply(
@@ -821,7 +821,8 @@ fn connected_surface() -> (crate::Host<Platform>, PresentationView, u64, WorldId
     let peer = root(host.runtime_mut());
     host.tick_worlds(0.0).unwrap();
     host.open_connection(7).unwrap();
-    host.receive_connection(7, &ipp_protocol::HELLO).unwrap();
+    host.receive_connection(7, &ipp_protocol::contract::HELLO)
+        .unwrap();
     host.take_connection_response(7).unwrap();
     control(
         &mut host,
@@ -1337,7 +1338,8 @@ fn terminal_wire(host: &mut crate::Host<Platform>, connection: u64, expected: &[
 
 fn peer_connection(host: &mut crate::Host<Platform>) {
     host.open_connection(8).unwrap();
-    host.receive_connection(8, &ipp_protocol::HELLO).unwrap();
+    host.receive_connection(8, &ipp_protocol::contract::HELLO)
+        .unwrap();
     drop(host.take_connection_response(8).unwrap());
 }
 
@@ -1445,7 +1447,7 @@ fn connection_cancel_wire_correlations_and_completion_leases() {
         let bytes: Vec<_> = charges.iter().map(|charge| charge.bytes).collect();
         let transcript = format!(
             "{{\"identity\":{identity},\"schemaHash\":\"{}\",\"view\":{fields:?},\"frame\":{original:?},\"cancel\":{cancel:?},\"complete\":{cancelled_wire:?},\"unavailable\":{unavailable_wire:?},\"captureReservation\":[{reserved_capture_bytes},{remaining_capture_bytes}],\"replyEntries\":{entries:?},\"replyBytes\":{bytes:?}}}\n",
-            ipp_protocol::schema_hash()
+            ipp_protocol::contract::schema_hash()
         );
         std::fs::write(directory.join("transcript.json"), transcript).unwrap();
     }

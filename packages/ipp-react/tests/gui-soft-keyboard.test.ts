@@ -6,7 +6,7 @@ import {
   resolveVirtualKeyboard,
   shouldShowSoftKeyboard,
   type SoftKeyboardRequest,
-} from "../src/gui/soft-keyboard.js";
+} from "../src/gui/platform/soft-keyboard.js";
 
 function request(
   trigger: SoftKeyboardRequest["trigger"],

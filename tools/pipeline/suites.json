@@ -3,45 +3,45 @@
     "description": "Stationary Canvas and volumetric charts, smooth camera focus, source row interaction and faithful streaming through worker WASM/WebGL",
     "sourceRoots": [
       "examples/world-gallery/worlds/charts/",
-      "tests/integration/scenarios/gallery-charts.ts",
-      "tests/integration/scenarios/gallery-chart-streaming.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-charts.test.ts"
+      "tests/gallery/scenarios/gallery-charts.ts",
+      "tests/gallery/scenarios/gallery-chart-streaming.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/gallery-charts.test.ts"
     ],
-    "files": ["dist/tests/render/gallery-charts.test.js"]
+    "files": ["dist/tests/gallery/gallery-charts.test.js"]
   },
   "gallery-chart-input": {
     "description": "Bounded chart gesture and hover work, newest focus and release behavior through real browser input and generated worker transport",
     "sourceRoots": [
       "examples/world-gallery/worlds/charts/",
-      "tests/integration/scenarios/gallery-charts.ts",
-      "tests/integration/scenarios/gallery-chart-streaming.ts",
-      "tests/render/gallery-chart-input.test.ts",
-      "tests/render/gallery-chart-observer.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/viewer-browser-helper.ts"
+      "tests/gallery/scenarios/gallery-charts.ts",
+      "tests/gallery/scenarios/gallery-chart-streaming.ts",
+      "tests/gallery/gallery-chart-input.test.ts",
+      "tests/gallery/support/gallery-chart-observer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/pages/viewer.ts"
     ],
-    "files": ["dist/tests/render/gallery-chart-input.test.js"]
+    "files": ["dist/tests/gallery/gallery-chart-input.test.js"]
   },
   "gallery-chart-changes": {
     "description": "Regenerated hover, interaction-gated axes, growing numeric ranges and interpolated value picking through real browser input",
     "sourceRoots": [
       "examples/world-gallery/worlds/charts/",
-      "tests/integration/scenarios/gallery-charts.ts",
-      "tests/integration/scenarios/gallery-chart-changes.ts",
-      "tests/render/gallery-chart-changes.test.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/viewer-browser-helper.ts"
+      "tests/gallery/scenarios/gallery-charts.ts",
+      "tests/gallery/scenarios/gallery-chart-changes.ts",
+      "tests/gallery/gallery-chart-changes.test.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/pages/viewer.ts"
     ],
-    "files": ["dist/tests/render/gallery-chart-changes.test.js"]
+    "files": ["dist/tests/gallery/gallery-chart-changes.test.js"]
   },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
     "sourceRoots": [
       "examples/headless-client/",
-      "tests/integration/headless-client.test.ts",
-      "tools/build_headless_client.mjs"
+      "tests/runtime/headless-client.test.ts",
+      "tools/products/headless-client.mjs"
     ],
     "commands": [
       {
@@ -56,21 +56,24 @@
     "description": "Completed Camera/Canvas/spatial queries and physical Surface projection",
     "sourceRoots": [
       "crates/ipp-core/src/services/gui_input/query/",
-      "crates/ipp-core/src/host/view_queries.rs",
+      "crates/ipp-core/src/host/queries/view.rs",
       "crates/ipp-core/src/host/ingress.rs",
       "crates/ipp-core/src/world/systems/camera/",
+      "crates/ipp-core/src/math.rs",
+      "crates/ipp-core/src/math_tests.rs",
       "crates/ipp-core/tests/composed_queries.rs",
-      "crates/ipp-host-session/src/camera_tests.rs",
-      "crates/ipp-host-session/src/view_queries.rs",
-      "crates/ipp-host-session/src/command_batches.rs",
-      "crates/ipp-host-session/src/publication.rs",
+      "crates/ipp-host-session/src/session/view_queries_tests.rs",
+      "crates/ipp-host-session/src/session/view_queries.rs",
+      "crates/ipp-host-session/src/services/connection/command_batches.rs",
+      "crates/ipp-host-session/src/session/requests.rs",
+      "crates/ipp-host-session/src/session/replies.rs",
       "crates/ipp-protocol/src/",
       "crates/ipp-protocol/tests/composed-query-client.mjs",
       "packages/ipp-client/src/",
-      "tools/ipp-schema-gen/src/codec.template.ts",
-      "tools/build_composed_queries.mjs",
-      "tests/integration/composed-queries.test.ts",
-      "tests/integration/tsconfig.composed-queries.json",
+      "tools/ipp-schema-gen/src/templates/codec.template.ts",
+      "tools/products/composed-query-fixtures.mjs",
+      "tests/runtime/composed-queries.test.ts",
+      "tests/runtime/tsconfig.composed-queries.json",
       "examples/world-gallery/shared/camera-controls.ts"
     ],
     "commands": [
@@ -81,7 +84,7 @@
       },
       {
         "name": "navigation",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--lib", "--locked", "camera"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--lib", "--locked", "--", "camera", "view_queries"],
         "builds": [], "requirements": ["rust"]
       },
       {
@@ -119,7 +122,7 @@
       "crates/ipp-render-gl/build.rs",
       "crates/ipp-core/src/world/systems/render/",
       "crates/ipp-core/tests/debug_geometry.rs",
-      "crates/ipp-core/src/host/scene.rs",
+      "crates/ipp-core/src/host/queries/scene.rs",
       "crates/ipp-core/tests/attachment_placement.rs"
     ],
     "commands": [
@@ -322,7 +325,7 @@
           "-p",
           "ipp-render-gl",
           "--lib",
-          "canvas_scene::tests",
+          "canvas::scene::tests",
           "--locked"
         ],
         "builds": [],
@@ -337,7 +340,9 @@
     "sourceRoots": [
       "examples/world-gallery/",
       "tools/build/",
-      "tools/build_gallery_gui_assets.py"
+      "tools/assets/gallery_gui_assets.py",
+      "tools/performance/performance.mjs",
+      "tools/performance/chart-data.mjs"
     ],
     "commands": [
       {
@@ -361,8 +366,8 @@
   "scaling": {
     "description": "Release timings and operation counts for 1k/4k/16k core mutation, restoration and ordinary GUI layout",
     "files": [
-      "dist/tests/integration/scaling.test.js",
-      "dist/tests/browser/scaling.test.js"
+      "dist/tests/runtime/scaling.native.test.js",
+      "dist/tests/runtime/scaling.browser.test.js"
     ],
     "commands": [
       {
@@ -408,10 +413,10 @@
   "custom-materials": {
     "description": "Backend shader bodies, named properties, animation, fallbacks and completed WebGL frames",
     "files": [
-      "dist/tests/render/custom-materials.test.js"
+      "dist/tests/rendering/custom-materials.test.js"
     ],
     "sourceRoots": [
-      "tests/render/custom-materials-fixture.ts"
+      "tests/rendering/pages/custom-materials.ts"
     ]
   },
   "blender": {
@@ -520,36 +525,50 @@
     "sourceRoots": [
       "integrations/blender/",
       "tests/blender/",
+      "tests/fixtures/blender/",
       "examples/blender-viewer/",
-      "tests/render/blender-fixture.tsx",
-      "tests/render/blender.test.ts",
-      "tests/render/blender-stream.test.ts",
-      "tests/render/blender-disk-fixture.ts",
-      "tests/render/blender-disk.test.ts",
-      "tests/render/tsconfig.blender-viewer.json",
-      "tools/build_blender_fixtures.mjs",
-      "tools/build_blender_viewer.mjs"
+      "tools/products/blender-fixtures.mjs",
+      "tools/products/blender-viewer.mjs",
+      "tools/pipeline/blender_addon.py"
     ]
   },
   "blender-headless": {
     "description": "Blender ordered links, correction and graph persistence over native WebSocket and worker WASM",
-    "sourceRoots": ["integrations/blender/client/", "tests/render/blender-headless-driver.ts", "tests/render/blender-headless-scenario.ts", "tests/render/blender-headless.test.ts", "tests/render/tsconfig.blender-headless.json", "tools/build_blender_headless.mjs"],
-    "commands": [{
-      "name": "transports",
-      "command": ["@node", "--test", "target/blender-headless/blender-headless.test.js"],
-      "builds": ["world-hosts", "browser:render", "blender-headless-fixtures"],
-      "requirements": ["node", "npm", "browser"]
-    }]
+    "sourceRoots": [
+      "integrations/blender/client/",
+      "tests/blender/drivers/browser-blender-headless.ts",
+      "tests/blender/scenarios/blender-headless.ts",
+      "tests/blender/blender-headless.test.ts",
+      "tests/blender/tsconfig.blender-headless.json",
+      "tools/products/blender-headless-fixtures.mjs"
+    ],
+    "commands": [
+      {
+        "name": "transports",
+        "command": ["@node", "--test", "target/blender-headless/blender-headless.test.js"],
+        "builds": ["world-hosts", "browser:render", "blender-headless-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
   },
   "blender-disk-headless": {
     "description": "Real Blender export and disk importer through target-generated worker WASM without viewer presentation",
-    "sourceRoots": ["integrations/blender/", "tests/render/blender-disk-headless.test.ts", "tests/render/tsconfig.blender-headless.json", "tools/import_blender_scene.mjs", "tools/build_blender_headless.mjs"],
-    "commands": [{
-      "name": "disk",
-      "command": ["@node", "--test", "target/blender-headless/blender-disk-headless.test.js"],
-      "builds": ["browser:render", "blender-headless-fixtures"],
-      "requirements": ["node", "npm", "browser", "blender"]
-    }]
+    "sourceRoots": [
+      "integrations/blender/",
+      "tests/blender/blender-disk-headless.test.ts",
+      "tests/fixtures/blender/",
+      "tests/blender/tsconfig.blender-headless.json",
+      "tools/assets/import-blender-scene.mjs",
+      "tools/products/blender-headless-fixtures.mjs"
+    ],
+    "commands": [
+      {
+        "name": "disk",
+        "command": ["@node", "--test", "target/blender-headless/blender-disk-headless.test.js"],
+        "builds": ["browser:render", "blender-headless-fixtures"],
+        "requirements": ["node", "npm", "browser", "blender"]
+      }
+    ]
   },
   "runner": {
     "description": "Suite routing and shared build dependency invariants",
@@ -607,17 +626,43 @@
   },
   "host-profiling": {
     "description": "Semantic capture ownership, World lifetimes and fixed/allocation records through real native GLES and worker generated clients",
-    "sourceRoots": ["tests/integration/profile-scenario.ts", "tests/performance/gui-profile-capture.test.ts", "packages/ipp-client/src/profiling.ts", "crates/ipp-host-session/src/profiling.rs"],
+    "sourceRoots": [
+      "tests/profiling/scenarios/host-profiling.ts",
+      "tests/profiling/gui-profile-capture.test.ts",
+      "packages/ipp-client/src/profiling.ts",
+      "crates/ipp-host-session/src/profiling.rs"
+    ],
     "commands": [
-      { "name": "browser", "command": ["@node", "--test", "--test-name-pattern", "through browser", "target/gui-stress/gui-profile-capture.test.js"], "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "browser:render-instrumentation"], "requirements": ["node", "npm", "browser"] },
-      { "name": "native-gles", "command": ["@node", "--test", "--test-name-pattern", "through native-gles", "target/gui-stress/gui-profile-capture.test.js"], "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "gles-host-instrumentation"], "requirements": ["node", "npm", "browser", "gles"] }
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "--test-name-pattern", "through browser", "target/gui-stress/gui-profile-capture.test.js"],
+        "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "browser:render-instrumentation"],
+        "partitionExcludes": ["target/browser-build/render", "target/gles-host", "target/gles-host-instrumentation", "target/performance-build/gui-native"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "native-gles",
+        "command": ["@node", "--test", "--test-name-pattern", "through native-gles", "target/gui-stress/gui-profile-capture.test.js"],
+        "builds": ["gui-stress-fixtures", "font-assets", "surface-assets", "gles-host-instrumentation"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host", "target/performance-build/gui-native"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
     ]
   },
   "platformer-profile": {
     "description": "Bounded legacy worker semantic readback and heap growth with actual platformer pixels",
-    "sourceRoots": ["tests/performance/robot.ts", "packages/ipp-client/src/profile-worker.ts", "crates/ipp-wasm/src/profiling.rs"],
+    "sourceRoots": [
+      "tests/profiling/platformer-profile.test.ts",
+      "packages/ipp-client/src/profile-worker.ts",
+      "crates/ipp-wasm/src/profiling.rs"
+    ],
     "commands": [
-      { "name": "worker", "command": ["@node", "--test", "target/worker-profiling/robot.mjs"], "builds": ["worker-profiling-fixture"], "requirements": ["node", "npm", "browser"] }
+      {
+        "name": "worker",
+        "command": ["@node", "--test", "target/worker-profiling/robot.mjs"],
+        "builds": ["worker-profiling-fixture"],
+        "requirements": ["node", "npm", "browser"]
+      }
     ]
   },
   "client": {
@@ -655,8 +700,8 @@
       "crates/ipp-core/src/lib.rs",
       "tools/ipp-schema-derive/src/",
       "tools/ipp-schema-gen/",
-      "crates/ipp-protocol/src/fixture.rs",
-      "tools/check_contracts.py"
+      "crates/ipp-protocol/src/contract/layout_fixture.rs",
+      "tools/pipeline/contracts.py"
     ],
     "commands": [
       {
@@ -688,13 +733,13 @@
   "filesystem": {
     "description": "Explicit read-only native filesystem routing",
     "files": [
-      "dist/tests/integration/file-access.test.js"
+      "dist/tests/assets/file-access.test.js"
     ]
   },
   "native": {
     "description": "Native WebSocket runtime, diagnostics and lifecycle",
     "files": [
-      "dist/tests/integration/integration.test.js"
+      "dist/tests/runtime/transport.native.test.js"
     ]
   },
   "browser": {
@@ -704,16 +749,16 @@
       "tools/build/verify-browser.mjs"
     ],
     "files": [
-      "dist/tests/browser/browser.test.js",
-      "dist/tests/browser/lifecycle.test.js"
+      "dist/tests/runtime/transport.browser.test.js",
+      "dist/tests/runtime/lifecycle.browser.test.js"
     ]
   },
   "snapshots": {
     "description": "Reference-only Worlds and controller state through native/browser transports and WebGL",
     "files": [
-      "dist/tests/integration/world-persistence.test.js",
-      "dist/tests/browser/world-persistence.test.js",
-      "dist/tests/render/world-persistence.test.js"
+      "dist/tests/runtime/world-persistence.native.test.js",
+      "dist/tests/runtime/world-persistence.browser.test.js",
+      "dist/tests/rendering/world-persistence.test.js"
     ],
     "commands": [
       {
@@ -757,27 +802,27 @@
   "multiplex": {
     "description": "Independent World sessions and exact runtime references through native WebSocket and production browser worker transports",
     "sourceRoots": [
-      "tests/integration/scenarios/multiplex.ts",
-      "tests/integration/scenarios/attachment-receipts.ts",
-      "tests/integration/scenarios/command-batches.ts",
-      "tests/integration/scenarios/graph-transfers.ts",
-      "tests/integration/scenarios/host-lifecycle.ts",
-      "tests/integration/host-transport-driver.ts",
-      "tests/integration/multiplex.test.ts",
-      "tests/integration/worker-startup.ts",
-      "tests/integration/worker-startup.test.ts",
-      "tests/integration/task-scheduler.ts",
-      "tests/integration/task-scheduler.test.ts",
+      "tests/runtime/scenarios/multiplex.ts",
+      "tests/runtime/scenarios/attachment-receipts.ts",
+      "tests/runtime/scenarios/command-batches.ts",
+      "tests/runtime/scenarios/graph-transfers.ts",
+      "tests/runtime/scenarios/host-lifecycle.ts",
+      "tests/runtime/drivers/browser-host-transport.ts",
+      "tests/runtime/multiplex.test.ts",
+      "tests/runtime/pages/worker-startup.ts",
+      "tests/runtime/worker-startup.test.ts",
+      "tests/runtime/pages/task-scheduler.ts",
+      "tests/runtime/task-scheduler.test.ts",
       "crates/ipp-host-session/src/services/task_scheduler/",
-      "tools/build_transports.mjs",
+      "tools/products/transport-fixtures.mjs",
       "crates/ipp-host-session/src/services/bulk_read.rs",
       "crates/ipp-host-session/src/services/connection/bulk_reads.rs",
       "crates/ipp-host-session/src/services/connection/bulk_reads_tests.rs",
       "crates/ipp-protocol/src/bulk_read.rs",
       "packages/ipp-client/src/bulk-reads.ts",
-      "tests/integration/scenarios/bulk-reads.ts",
-      "tests/integration/bulk-read-worker.ts",
-      "tests/integration/bulk-read-worker.test.ts",
+      "tests/assets/scenarios/bulk-reads.ts",
+      "tests/assets/pages/bulk-read-worker.ts",
+      "tests/assets/bulk-read-worker.test.ts",
       "crates/ipp-host-session/src/services/connection/bulk_read_testing.rs"
     ],
     "commands": [
@@ -860,14 +905,14 @@
     "sourceRoots": [
       "crates/ipp-host-session/src/services/presentation_tests.rs",
       "crates/ipp-protocol/tests/presentation-cancellation.mjs",
-      "tests/integration/scenarios/presentation.ts",
-      "tests/integration/scenarios/output-inclusion.ts",
-      "tests/integration/output-inclusion.test.ts",
-      "tests/integration/presentation.test.ts",
-      "tests/integration/presentation-transport.ts",
-      "tests/integration/tsconfig.presentation.json",
+      "tests/rendering/scenarios/presentation.ts",
+      "tests/gui/scenarios/output-inclusion.ts",
+      "tests/gui/output-inclusion.test.ts",
+      "tests/rendering/presentation.test.ts",
+      "tests/rendering/drivers/browser-presentation.ts",
+      "tests/gui/tsconfig.presentation.json",
       "packages/ipp-client/tests/render-diagnostics.test.ts",
-      "tools/build_transports.mjs"
+      "tools/products/transport-fixtures.mjs"
     ],
     "commands": [
       {
@@ -959,7 +1004,14 @@
   },
   "output-inclusion": {
     "description": "Exact post-admission output inclusion through native GLES and development/production worker WebGL",
-    "sourceRoots": ["tests/integration/scenarios/output-inclusion.ts", "tests/integration/output-inclusion.test.ts", "tests/integration/presentation-transport.ts", "crates/ipp-host-session/src/services/presentation.rs", "crates/ipp-render-gl/src/services/render/", "packages/ipp-client/src/host-presentation.ts"],
+    "sourceRoots": [
+      "tests/gui/scenarios/output-inclusion.ts",
+      "tests/gui/output-inclusion.test.ts",
+      "tests/rendering/drivers/browser-presentation.ts",
+      "crates/ipp-host-session/src/services/presentation.rs",
+      "crates/ipp-render-gl/src/services/render/",
+      "packages/ipp-client/src/host-presentation.ts"
+    ],
     "commands": [
       {
         "name": "lint",
@@ -993,9 +1045,9 @@
   "gui-motion": {
     "description": "Skin transitions through generated native/worker clients: the built-in looks' timing under physical input over Host time, a theme's own transitions in causally witnessed nested Canvas captures, and the React kit's one reduced-motion setting snapping them and stilling its spinner",
     "sourceRoots": [
-      "tests/integration/gui-motion/",
+      "tests/gui/motion/",
       "crates/ipp-core/src/world/systems/gui/motion/",
-      "crates/ipp-core/src/world/systems/gui/preferences.rs",
+      "crates/ipp-core/src/world/systems/gui/gui_preferences.rs",
       "crates/ipp-core/src/world/systems/animation/gui_motion.rs",
       "packages/ipp-react/src/gui-kit/kit.tsx",
       "packages/ipp-react/src/gui-kit/row-motion.tsx"
@@ -1003,21 +1055,21 @@
     "commands": [
       {
         "name": "development",
-        "command": ["@node", "--test", "--test-name-pattern", "development", "target/gui-motion/environment.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern", "development", "target/gui-motion/motion.test.js"],
         "builds": ["browser:render", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "production",
-        "command": ["@node", "--test", "--test-name-pattern", "production", "target/gui-motion/environment.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern", "production", "target/gui-motion/motion.test.js"],
         "builds": ["browser:render", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
-        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-motion/environment.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-motion/motion.test.js"],
         "builds": ["gles-host", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
@@ -1027,25 +1079,20 @@
   "gui-default-skin": {
     "description": "Unthemed controls in the runtime's default look: every skin-lab specimen in every state through real input, custom paints on panels with a property write and a broken paint, and overlays over text painted before them in draw order, captured on worker/WASM/WebGL and native GLES and checked by image regions",
     "sourceRoots": [
-      "tests/integration/gui-default-skin/",
-      "tests/skin-lab/",
+      "tests/gui/default-skin/",
+      "tests/gui/skin-lab/",
       "crates/ipp-core/src/world/systems/canvas/",
-      "crates/ipp-render-gl/src/services/render/canvas_paint.rs",
-      "crates/ipp-render-gl/src/services/render/gui_batch.rs",
-      "crates/ipp-render-gl/src/services/render/gui_draw_order.rs",
-      "crates/ipp-render-gl/src/services/render/gui_records.rs",
-      "crates/ipp-render-gl/src/services/render/gui_storage.rs",
-      "crates/ipp-render-gl/src/services/render/glyph_atlas.rs",
+      "crates/ipp-render-gl/src/services/render/canvas/paint.rs",
+      "crates/ipp-render-gl/src/services/render/retained/",
       "crates/ipp-render-gl/src/services/render/device/",
-      "crates/ipp-render-gl/src/services/render/webgl.ts",
       "crates/ipp-render-gl/src/services/render/shaders/surface_gui.vert",
       "crates/ipp-render-gl/src/services/render/shaders/surface_glyph.vert",
       "crates/ipp-render-gl/src/services/render/shaders/surface_glyph.frag",
       "crates/ipp-render-gl/src/services/render/shaders/surface_gui.frag",
       "crates/ipp-core/src/world/systems/gui/presentation/",
       "crates/ipp-core/src/world/systems/gui/layout/",
-      "crates/ipp-core/src/world/systems/gui/local/slider.rs",
-      "crates/ipp-core/src/world/systems/gui/local/scroll_component.rs"
+      "crates/ipp-core/src/world/systems/gui/local/controls/slider.rs",
+      "crates/ipp-core/src/world/systems/gui/local/scroll/component.rs"
     ],
     "commands": [
       {
@@ -1071,35 +1118,33 @@
       "crates/ipp-protocol/tests/gui-semantics-wasm-client.mjs"
     ],
     "sourceRoots": [
-      "crates/ipp-host-session/src/gui_observations.rs",
-      "crates/ipp-host-session/src/reliable_output.rs",
+      "crates/ipp-host-session/src/session/gui_observations.rs",
+      "crates/ipp-host-session/src/reliable_output/",
       "crates/ipp-host-session/src/services/connection/gui_output_pressure_tests.rs",
       "crates/ipp-server/src/websocket.rs",
       "crates/ipp-server/src/websocket_congestion_tests.rs",
       "crates/ipp-wasm/src/boundary.rs",
       "crates/ipp-wasm/src/boundary_output_tests.rs",
       "crates/ipp-wasm/src/connection_output.rs",
-      "crates/ipp-host-session/src/reliable_output_tests.rs",
       "packages/ipp-client/src/worker-connections.ts",
       "packages/ipp-client/src/worker.ts",
       "packages/ipp-client/src/transport.ts",
       "packages/ipp-client/src/wasm-worker.ts",
       "packages/ipp-client/tests/worker-connections.test.ts",
       "packages/ipp-client/tests/transport.test.ts",
-      "crates/ipp-host-session/src/outbox.rs",
-      "crates/ipp-protocol/src/gui.rs",
+      "crates/ipp-protocol/src/world/gui.rs",
       "crates/ipp-protocol/tests/gui-semantics-codec.mjs",
-      "tools/ipp-schema-gen/src/gui.template.ts",
+      "tools/ipp-schema-gen/src/templates/gui.template.ts",
       "packages/ipp-client/src/gui-types.ts",
-      "tests/integration/gui-local.test.ts",
-      "tests/integration/gui-control-persistence.test.ts",
-      "tests/integration/gui-local-transport.ts",
-      "tests/integration/gui-observer-endpoint.ts",
-      "tests/integration/worker-observer-delivery.ts",
-      "tests/integration/scenarios/gui-local.ts",
-      "tests/integration/scenarios/gui-control-persistence.ts",
-      "tests/integration/scenarios/gui-observations.ts",
-      "tools/build_transports.mjs"
+      "tests/gui/gui-local.test.ts",
+      "tests/gui/gui-control-persistence.test.ts",
+      "tests/gui/drivers/browser-gui-local.ts",
+      "tests/gui/drivers/browser-observer-endpoint.ts",
+      "tests/gui/drivers/browser-observer-delivery.ts",
+      "tests/gui/scenarios/gui-local.ts",
+      "tests/gui/scenarios/gui-control-persistence.ts",
+      "tests/gui/scenarios/gui-observations.ts",
+      "tools/products/transport-fixtures.mjs"
     ],
     "commands": [
       {
@@ -1122,7 +1167,7 @@
       },
       {
         "name": "wasm-output",
-        "command": ["cargo", "test", "-p", "ipp-wasm", "--lib", "--locked", "--", "boundary::output_tests::", "wasm_host_tests::"],
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--lib", "--locked", "--", "boundary::output_tests::", "boundary::tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -1200,24 +1245,24 @@
   "worlds": {
     "description": "Shared native and browser world/resource scenarios",
     "files": [
-      "dist/tests/integration/world-host.test.js",
-      "dist/tests/browser/world-host.test.js"
+      "dist/tests/runtime/world-host.native.test.js",
+      "dist/tests/runtime/world-host.browser.test.js"
     ]
   },
   "lifecycle": {
     "description": "Lifecycle subscriptions, partial effects and session fences through native/browser clients",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/lifecycle_publisher/",
-      "crates/ipp-core/src/world/systems/contexts.rs",
-      "crates/ipp-host-session/src/lifecycle_watch.rs",
-      "crates/ipp-host-session/src/lifecycle_watch_tests.rs",
-      "crates/ipp-protocol/src/lifecycle_watch.rs",
+      "crates/ipp-core/src/world/systems/composition/contexts.rs",
+      "crates/ipp-host-session/src/session/lifecycle_watch.rs",
+      "crates/ipp-host-session/src/session/lifecycle_watch_tests.rs",
+      "crates/ipp-protocol/src/world/lifecycle_watch.rs",
       "packages/ipp-client/src/lifecycle-types.ts",
       "packages/ipp-client/src/lifecycle-watches.ts",
-      "tests/integration/scenarios/lifecycle-targets.ts",
-      "tests/integration/scenarios/lifecycle-subsets.ts",
-      "tests/integration/lifecycle-target-transport.ts",
-      "tests/integration/lifecycle-targets.test.ts",
+      "tests/runtime/scenarios/lifecycle-targets.ts",
+      "tests/runtime/scenarios/lifecycle-subsets.ts",
+      "tests/runtime/drivers/browser-lifecycle-targets.ts",
+      "tests/runtime/lifecycle-targets.test.ts",
       "crates/ipp-core/src/services/asset_management/",
       "crates/ipp-core/src/world/systems/asset_dependencies/",
       "crates/ipp-core/tests/asset_runtime.rs"
@@ -1321,27 +1366,27 @@
       },
       {
         "name": "asset-rejection-native",
-        "command": ["node", "--test", "target/asset-rejection-tests/tests/integration/asset-rejection.test.js"],
+        "command": ["node", "--test", "target/asset-rejection-tests/tests/assets/asset-rejection.native.test.js"],
         "builds": ["asset-rejection-tests", "world-hosts"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "asset-rejection-worker",
-        "command": ["node", "--test", "target/asset-rejection-worker-tests/tests/browser/asset-rejection.test.js"],
+        "command": ["node", "--test", "target/asset-rejection-worker-tests/tests/assets/asset-rejection.browser.test.js"],
         "builds": ["asset-rejection-worker-tests", "world-hosts"],
         "requirements": ["node", "npm", "browser"]
       }
     ],
     "files": [
-      "dist/tests/integration/lifecycle-subscriptions.test.js",
-      "dist/tests/browser/lifecycle-subscriptions.test.js"
+      "dist/tests/runtime/lifecycle-subscriptions.native.test.js",
+      "dist/tests/runtime/lifecycle-subscriptions.browser.test.js"
     ]
   },
   "animation": {
     "description": "Property playback and gallery skeleton poses through transports and completed WebGL frames",
     "sourceRoots": [
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
       "crates/ipp-core/src/world/systems/animation/",
       "crates/ipp-core/tests/animation.rs",
       "crates/ipp-core/tests/animation_transitions.rs",
@@ -1350,15 +1395,18 @@
       "crates/ipp-core/tests/animation_dynamic_property_persistence.rs",
       "crates/ipp-core/tests/animation_row_properties.rs",
       "crates/ipp-core/src/world/mod.rs",
-      "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs",
-      "tests/render/gallery-server.ts"
+      "crates/ipp-core/src/world/world_state.rs",
+      "crates/ipp-core/src/world/construction.rs",
+      "crates/ipp-core/src/world/ingress.rs",
+      "crates/ipp-core/src/world/update.rs",
+      "crates/ipp-core/src/world/mutation/",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/integration/world-host.test.js",
-      "dist/tests/browser/world-host.test.js",
-      "dist/tests/render/animation.test.js",
-      "dist/tests/render/gallery-animation.test.js"
+      "dist/tests/runtime/world-host.native.test.js",
+      "dist/tests/runtime/world-host.browser.test.js",
+      "dist/tests/rendering/animation.test.js",
+      "dist/tests/gallery/gallery-animation.test.js"
     ],
     "commands": [
       {
@@ -1406,42 +1454,63 @@
   "hierarchy": {
     "description": "Hierarchy and terminal LookAt through native lifecycle and WebGL references",
     "files": [
-      "dist/tests/integration/hierarchy.test.js",
-      "dist/tests/render/hierarchy.test.js"
+      "dist/tests/runtime/hierarchy.test.js",
+      "dist/tests/rendering/hierarchy.test.js"
     ]
   },
   "cameras": {
     "description": "Camera/picking scenarios and completed WebGL frame assertions",
     "sourceRoots": [
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/integration/world-host.test.js",
-      "dist/tests/browser/world-host.test.js",
-      "dist/tests/render/camera.test.js",
-      "dist/tests/render/gallery-picking.test.js",
-      "dist/tests/render/gallery-navigation.test.js",
-      "dist/tests/render/gallery-dragging.test.js"
+      "dist/tests/runtime/world-host.native.test.js",
+      "dist/tests/runtime/world-host.browser.test.js",
+      "dist/tests/rendering/camera.test.js",
+      "dist/tests/gallery/gallery-picking.test.js",
+      "dist/tests/gallery/gallery-navigation.test.js",
+      "dist/tests/gallery/gallery-dragging.test.js"
     ]
   },
   "geometry": {
     "description": "Shared primitive, compound and skeletal geometry through real clients and WebGL",
     "files": [
-      "dist/tests/integration/world-host.test.js",
-      "dist/tests/browser/world-host.test.js",
-      "dist/tests/render/camera.test.js",
-      "dist/tests/render/debug-geometry.test.js",
-      "dist/tests/render/geometry.test.js"
+      "dist/tests/runtime/world-host.native.test.js",
+      "dist/tests/runtime/world-host.browser.test.js",
+      "dist/tests/rendering/camera.test.js",
+      "dist/tests/rendering/debug-geometry.test.js",
+      "dist/tests/rendering/geometry.test.js"
     ],
     "sourceRoots": [
-      "tests/render/skinning-fixture.ts"
+      "tests/rendering/pages/skinning.ts"
     ]
   },
   "react-gui-authoring": {
     "description": "Ordinary React GUI entities, exact ACK control refs, generic links/rows and cleanup through native and worker transports",
-    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/control-refs.test.ts", "packages/ipp-react/tests/gui-declaration.test.ts", "packages/ipp-react/tests/gui-callbacks.test.ts", "tests/react/gui-authoring.tsx", "tests/react/gui-callbacks.tsx", "tests/react/gui-scroll.tsx", "tests/react/control-ref-lifetimes.tsx", "tests/react/control-ref-scaling.tsx", "tests/react/control-ref-subsets.tsx", "tests/react/control-ref-cleanup.tsx", "tests/react/gui-root.test.ts", "tests/react/gui-paint.tsx", "tests/react/gui-layers.tsx", "tests/react/gui-overlays.tsx", "tests/react/gui-projected-surfaces.tsx", "tests/react/gui-projected-advanced.tsx", "tests/react/gui-layer-transitions.tsx", "tests/react/projected-oracle.test.ts", "tests/react/gui-paint.test.ts"],
+    "sourceRoots": [
+      "packages/ipp-react/src/",
+      "packages/ipp-react/tests/control-refs.test.ts",
+      "packages/ipp-react/tests/gui-declaration.test.ts",
+      "packages/ipp-react/tests/gui-callbacks.test.ts",
+      "tests/react/gui-authoring/pages/gui-authoring.tsx",
+      "tests/react/gui-authoring/scenarios/gui-callbacks.tsx",
+      "tests/react/gui-authoring/scenarios/gui-scroll.tsx",
+      "tests/react/gui-authoring/scenarios/control-ref-lifetimes.tsx",
+      "tests/react/gui-authoring/scenarios/control-ref-scaling.tsx",
+      "tests/react/gui-authoring/scenarios/control-ref-subsets.tsx",
+      "tests/react/gui-authoring/scenarios/control-ref-cleanup.tsx",
+      "tests/react/gui-authoring/gui-root.test.ts",
+      "tests/react/gui-authoring/pages/gui-paint.tsx",
+      "tests/react/gui-authoring/scenarios/gui-layers.tsx",
+      "tests/react/gui-authoring/scenarios/gui-overlays.tsx",
+      "tests/react/gui-authoring/scenarios/gui-projected-surfaces.tsx",
+      "tests/react/gui-authoring/scenarios/gui-projected-advanced.tsx",
+      "tests/react/gui-authoring/scenarios/gui-layer-transitions.tsx",
+      "tests/react/gui-authoring/projected-oracle.test.ts",
+      "tests/react/gui-authoring/gui-paint.test.ts"
+    ],
     "commands": [
       {
         "name": "projected-oracle",
@@ -1527,7 +1596,11 @@
   },
   "react-attached": {
     "description": "Headless React fixed-World portals, exact receipt cleanup and batch outcome ownership through generated native and worker clients",
-    "sourceRoots": ["packages/ipp-react/src/", "packages/ipp-react/tests/attachment-journal.test.ts", "tests/react/"],
+    "sourceRoots": [
+      "packages/ipp-react/src/",
+      "packages/ipp-react/tests/attachment-journal.test.ts",
+      "tests/react/"
+    ],
     "commands": [
       {
         "name": "renderer",
@@ -1552,14 +1625,21 @@
   "react": {
     "description": "React reconciliation, ownership and public package consumers",
     "files": [
-      "dist/tests/react/native.test.js",
-      "dist/tests/react/react.test.js",
+      "dist/tests/react/react.native.test.js",
+      "dist/tests/react/react.browser.test.js",
       "dist/packages/ipp-react/tests/renderer.test.js"
     ]
   },
   "canvas": {
     "description": "Canvas composition, lifecycle and pixel density",
-    "sourceRoots": ["packages/ipp-react/src/", "tests/render/canvas-fixture.tsx", "tests/render/saved-canvas-fixture.tsx", "crates/ipp-core/src/world/systems/canvas/", "crates/ipp-core/tests/canvas_patches.rs", "crates/ipp-render-gl/tests/canvas_patches.rs"],
+    "sourceRoots": [
+      "packages/ipp-react/src/",
+      "tests/rendering/canvas/pages/canvas.tsx",
+      "tests/rendering/canvas/pages/saved-canvas.tsx",
+      "crates/ipp-core/src/world/systems/canvas/",
+      "crates/ipp-core/tests/canvas_patches.rs",
+      "crates/ipp-render-gl/tests/canvas_patches.rs"
+    ],
     "commands": [
       {
         "name": "lifecycle",
@@ -1603,38 +1683,38 @@
     "description": "Resources, gallery controls and actual WebGL frames",
     "sourceRoots": [
       "crates/ipp-wasm/src/services/",
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/render/render.test.js",
-      "dist/tests/render/fixture.test.js",
-      "dist/tests/render/viewer.test.js",
-      "dist/tests/render/ready-geometry.test.js",
-      "dist/tests/render/gallery-picking.test.js",
-      "dist/tests/render/gallery-navigation.test.js",
-      "dist/tests/render/gallery-particles.test.js",
-      "dist/tests/render/gallery-dragging.test.js",
-      "dist/tests/render/debug-geometry.test.js",
-      "dist/tests/render/geometry.test.js"
+      "dist/tests/rendering/render.test.js",
+      "dist/tests/rendering/fixtures.test.js",
+      "dist/tests/gallery/viewer.test.js",
+      "dist/tests/rendering/ready-geometry.test.js",
+      "dist/tests/gallery/gallery-picking.test.js",
+      "dist/tests/gallery/gallery-navigation.test.js",
+      "dist/tests/gallery/gallery-particles.test.js",
+      "dist/tests/gallery/gallery-dragging.test.js",
+      "dist/tests/rendering/debug-geometry.test.js",
+      "dist/tests/rendering/geometry.test.js"
     ]
   },
   "lighting": {
     "description": "Direct lights, smooth normals, spot shadows and context recovery",
     "sourceRoots": [
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/render/lighting.test.js"
+      "dist/tests/rendering/lighting.test.js"
     ]
   },
   "particles-blender": {
     "description": "Real Blender particle recipe and bake export",
     "files": [
-      "dist/tests/render/particles-blender.test.js"
+      "dist/tests/blender/particles-blender.test.js"
     ],
     "commands": [
       {
@@ -1657,18 +1737,18 @@
     "sourceRoots": [
       "integrations/blender/",
       "tests/blender/",
-      "tests/render/blender-fixture.tsx"
+      "tools/pipeline/blender_addon.py"
     ]
   },
   "gallery-particles": {
     "description": "Interactive particle gallery controls, rendering and cleanup",
     "sourceRoots": [
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/render/gallery-particles.test.js"
+      "dist/tests/gallery/gallery-particles.test.js"
     ]
   },
   "gallery-gui": {
@@ -1679,53 +1759,53 @@
       "packages/ipp-react/src/gui/theme.ts",
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
-      "tests/render/gallery-gui.test.ts",
-      "tests/render/gallery-scanner.test.ts",
-      "tests/render/gallery-scanner-support.ts",
-      "tests/render/gallery-gui-workbench.test.ts",
-      "tests/render/gallery-gui-shield.test.ts",
-      "tests/render/gallery-gui-panel.ts",
-      "tests/render/gallery-gui-support.ts",
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/viewer-observation.ts",
-      "tests/render/gallery-driver.ts",
-      "tools/build_gallery_gui_assets.py",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/gallery-gui.test.ts",
+      "tests/gallery/gallery-scanner.test.ts",
+      "tests/gallery/support/gallery-scanner.ts",
+      "tests/gallery/gallery-gui-workbench.test.ts",
+      "tests/gallery/gallery-gui-shield.test.ts",
+      "tests/gallery/gallery-gui-oracle.ts",
+      "tests/gallery/support/gallery-gui.ts",
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/support/viewer-observation.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tools/assets/gallery_gui_assets.py",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "commands": [
       {
         "name": "scanner",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner logs in", "dist/tests/render/gallery-scanner.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner logs in", "dist/tests/gallery/gallery-scanner.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "workspace",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner protects", "dist/tests/render/gallery-scanner.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner protects", "dist/tests/gallery/gallery-scanner.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "cache",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI panel caches", "dist/tests/render/gallery-gui.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI panel caches", "dist/tests/gallery/gallery-gui.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "exploded",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation layer", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation layer", "dist/tests/gallery/gallery-gui-workbench.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "recovery",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI keeps stage selections", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI keeps stage selections", "dist/tests/gallery/gallery-gui-workbench.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "presentation",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation on all", "dist/tests/render/gallery-gui-workbench.test.js"],
+        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation on all", "dist/tests/gallery/gallery-gui-workbench.test.js"],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
       },
@@ -1734,7 +1814,7 @@
         "command": [
           "@node",
           "--test",
-          "dist/tests/render/gallery-gui-shield.test.js"
+          "dist/tests/gallery/gallery-gui-shield.test.js"
         ],
         "builds": ["typescript", "gallery-fixtures"],
         "requirements": ["node", "npm", "browser"]
@@ -1746,49 +1826,49 @@
     "sourceRoots": [
       "examples/world-gallery/worlds/gui/",
       "packages/ipp-react/src/gui-kit/",
-      "tests/render/gallery-gui-panel.ts",
-      "tests/render/gallery-gui-support.ts",
-      "tests/render/gallery-scanner-support.ts",
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/viewer-observation.ts",
-      "tests/render/gallery-driver.ts",
-      "tools/build_gallery_gui_assets.py",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/gallery-gui-oracle.ts",
+      "tests/gallery/support/gallery-gui.ts",
+      "tests/gallery/support/gallery-scanner.ts",
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/support/viewer-observation.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tools/assets/gallery_gui_assets.py",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/render/gallery-gui-camera.test.js"
+      "dist/tests/gallery/gallery-gui-camera.test.js"
     ]
   },
   "gallery-platformer": {
     "description": "Imported platformer locomotion, smooth turning with a forward gait, following camera, lighting and lifecycle cleanup",
     "sourceRoots": [
-      "tests/render/viewer-browser-helper.ts",
-      "tests/render/gallery-driver.ts",
-      "tests/render/gallery-server.ts"
+      "tests/gallery/pages/viewer.ts",
+      "tests/gallery/drivers/browser-gallery.ts",
+      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
-      "dist/tests/render/gallery-platformer.test.js"
+      "dist/tests/gallery/gallery-platformer.test.js"
     ]
   },
   "particles": {
     "description": "Particle emission, playback, instancing and recovery",
     "files": [
-      "dist/tests/render/particles.test.js"
+      "dist/tests/rendering/particles.test.js"
     ]
   },
   "mesh-poses": {
     "description": "Vertex pose interpolation, animation, normals, skinning, shadows and recovery",
     "files": [
-      "dist/tests/render/mesh-poses.test.js"
+      "dist/tests/rendering/mesh-poses.test.js"
     ],
     "sourceRoots": [
-      "tests/render/mesh-poses-fixture.ts"
+      "tests/rendering/pages/mesh-poses.ts"
     ]
   },
   "skinning": {
     "description": "Skeletal rigs, pose-keyframe players, blended deformation, normals and recovery",
     "files": [
-      "dist/tests/render/skinning.test.js"
+      "dist/tests/rendering/skinning.test.js"
     ],
     "commands": [
       {
@@ -1814,30 +1894,33 @@
       "crates/ipp-core/src/world/systems/skeleton/",
       "crates/ipp-core/tests/skeleton.rs",
       "crates/ipp-core/tests/skeleton_animation.rs",
-      "tests/render/skinning-fixture.ts"
+      "tests/rendering/pages/skinning.ts"
     ]
   },
   "textures": {
     "description": "Streaming textures, optional attributes and context recovery",
     "sourceRoots": [
-      "tests/render/texture-fixture.tsx"
+      "tests/rendering/pages/texture.tsx"
     ],
     "files": [
-      "dist/tests/render/texture.test.js"
+      "dist/tests/rendering/texture.test.js"
     ]
   },
   "shapes": {
     "description": "Built-in geometry, contours and rendered shape assertions",
     "files": [
-      "dist/tests/render/shapes.test.js"
+      "dist/tests/rendering/shapes.test.js"
     ]
   },
   "command-streaming": {
     "description": "Bounded command storage, Host batch isolation and real native/worker streaming scenarios",
     "sourceRoots": [
       "crates/ipp-core/src/world/mod.rs",
-      "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs"
+      "crates/ipp-core/src/world/world_state.rs",
+      "crates/ipp-core/src/world/construction.rs",
+      "crates/ipp-core/src/world/ingress.rs",
+      "crates/ipp-core/src/world/update.rs",
+      "crates/ipp-core/src/world/mutation/"
     ],
     "commands": [
       {
@@ -1871,29 +1954,31 @@
       }
     ],
     "files": [
-      "dist/tests/integration/world-host.test.js",
-      "dist/tests/browser/world-host.test.js"
+      "dist/tests/runtime/world-host.native.test.js",
+      "dist/tests/runtime/world-host.browser.test.js"
     ]
   },
   "surfaces": {
     "description": "Canvas entity lifecycle, quadratic text/drawings, RGBA bitmaps and real native/worker Surface presentation",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-core/src/text.rs",
+      "crates/ipp-core/src/text_tests.rs",
       "crates/ipp-render-gl/src/services/render/",
       "crates/ipp-core/src/services/asset_management/",
       "examples/surface-terminal/",
       "tests/surface_assets/",
       "assets/fonts/",
       "licences/fonts/",
-      "tools/build_surface_assets.py",
-      "tools/build_surfaces.mjs",
-      "tests/render/tsconfig.surfaces.json",
-      "tests/render/surface-fixture.tsx",
-      "tests/render/surface-separators-fixture.ts",
-      "tests/render/surface-separators-scenario.ts",
-      "tests/render/surface.test.ts",
-      "tests/integration/surface-scenario.ts",
-      "tests/integration/surface.test.ts"
+      "tools/assets/",
+      "tools/products/surface-fixtures.mjs",
+      "tests/surfaces/tsconfig.json",
+      "tests/surfaces/pages/surface.tsx",
+      "tests/surfaces/support/surface-separators.ts",
+      "tests/surfaces/scenarios/surface-separators.ts",
+      "tests/surfaces/surface.test.ts",
+      "tests/surfaces/scenarios/surface-lifecycle.ts",
+      "tests/surfaces/surface-lifecycle.test.ts"
     ],
     "commands": [
       {
@@ -1917,7 +2002,7 @@
       },
       {
         "name": "native",
-        "command": ["@node", "--test", "target/surface-build/lifecycle.test.js"],
+        "command": ["@node", "--test", "target/surface-build/surface-lifecycle.test.js"],
         "builds": ["surface-fixtures", "world-hosts"],
         "requirements": ["node", "npm"]
       },
@@ -1932,19 +2017,24 @@
   "gui": {
     "description": "Ordinary GUI entity lifecycle, committed control values, physical input and presentation through real native, GLES and worker clients",
     "files": [
-      "dist/tests/react/gui-root.test.js",
+      "dist/tests/react/gui-authoring/gui-root.test.js",
       "dist/packages/ipp-react/tests/gui-clipboard.test.js",
       "dist/packages/ipp-react/tests/gui-declaration.test.js",
-      "dist/packages/ipp-react/tests/gui-kit.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-core.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-containers.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-feedback.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-overlays.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-selection.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-values.test.js",
       "dist/packages/ipp-react/tests/gui-ime.test.js",
       "dist/packages/ipp-react/tests/gui-input.test.js",
       "dist/packages/ipp-react/tests/gui-soft-keyboard.test.js",
       "dist/packages/ipp-react/tests/gui-text-bridge.test.js",
       "dist/packages/ipp-client/tests/gui-semantics.test.js",
       "crates/ipp-protocol/tests/gui-semantics-client.mjs",
-      "dist/tests/integration/gui.test.js",
-      "dist/tests/integration/gui-react-root.test.js",
-      "dist/tests/browser/gui.test.js"
+      "dist/tests/gui/gui.native.test.js",
+      "dist/tests/gui/gui-react-root.test.js",
+      "dist/tests/gui/gui.browser.test.js"
     ],
     "commands": [
       {
@@ -2035,7 +2125,7 @@
       },
       {
         "name": "input-wire",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked", "wire::tests::"],
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked", "wire_manifest::tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -2169,11 +2259,35 @@
       "packages/ipp-client/src/",
       "packages/ipp-react/src/",
       "tests/react/",
-      "tests/integration/",
-      "tests/browser/",
+      "tests/harness/",
+      "tests/fixtures/commands.ts",
+      "tests/fixtures/cameras.ts",
+      "tests/fixtures/system-selections.ts",
+      "tests/fixtures/gui-actions.ts",
+      "tests/fixtures/animation.ts",
+      "tests/fixtures/assets.ts",
+      "tests/fixtures/mesh-poses.ts",
+      "tests/gui/",
+      "tests/runtime/",
+      "tests/assets/",
+      "tests/data/",
+      "tests/gallery/scenarios/gallery-chart-changes.ts",
+      "tests/gallery/scenarios/gallery-chart-streaming.ts",
+      "tests/gallery/scenarios/gallery-charts.ts",
+      "tests/profiling/scenarios/host-profiling.ts",
+      "tests/rendering/drivers/browser-presentation.ts",
+      "tests/rendering/presentation.test.ts",
+      "tests/rendering/scenarios/cameras-and-picking.ts",
+      "tests/rendering/scenarios/presentation.ts",
+      "tests/rendering/scenarios/render-state.ts",
+      "tests/surfaces/scenarios/surface-lifecycle.ts",
+      "tests/surfaces/surface-lifecycle.test.ts",
       "crates/ipp-core/src/world/mod.rs",
-      "crates/ipp-core/src/world/mutation.rs",
-      "crates/ipp-core/src/world/runtime.rs",
+      "crates/ipp-core/src/world/world_state.rs",
+      "crates/ipp-core/src/world/construction.rs",
+      "crates/ipp-core/src/world/ingress.rs",
+      "crates/ipp-core/src/world/update.rs",
+      "crates/ipp-core/src/world/mutation/",
       "crates/ipp-core/tests/gui_entities.rs",
       "crates/ipp-core/tests/gui_controls.rs",
       "crates/ipp-core/tests/gui_skin_motion.rs",
@@ -2187,7 +2301,7 @@
       "crates/ipp-core/tests/support/",
       "crates/ipp-core/tests/schema_rows.rs",
       "crates/ipp-core/src/components/",
-      "crates/ipp-core/src/commands.rs",
+      "crates/ipp-core/src/commands/",
       "crates/ipp-core/src/world/component_state/",
       "tools/ipp-schema-derive/src/",
       "crates/ipp-protocol/tests/generated-client.mjs"
@@ -2196,36 +2310,18 @@
   "gui-composites": {
     "description": "Real routed input for GUI composite foundations and the React kit's composites, in independently timed parts through native GLES and worker WebGL hosts",
     "sourceRoots": [
-      "tests/integration/gui-composites/",
+      "tests/gui/composites/",
       "crates/ipp-core/src/services/gui_input/router/",
       "crates/ipp-core/src/world/systems/gui/local/",
-      "packages/ipp-react/src/gui/input.ts",
-      "packages/ipp-react/src/gui/text-bridge.ts",
-      "packages/ipp-react/src/gui-kit/toast.tsx",
+      "crates/ipp-core/src/world/systems/gui/system_state.rs",
+      "packages/ipp-react/src/gui/platform/input.ts",
+      "packages/ipp-react/src/gui/platform/keys.ts",
+      "packages/ipp-react/src/gui/platform/text-bridge.ts",
       "packages/ipp-react/src/gui-kit/choice.ts",
-      "packages/ipp-react/src/gui-kit/radio-group.tsx",
-      "packages/ipp-react/src/gui-kit/tabs.tsx",
-      "packages/ipp-react/src/gui-kit/tree-view.tsx",
-      "packages/ipp-react/src/gui-kit/overlay.tsx",
-      "packages/ipp-react/src/gui-kit/menu.tsx",
-      "packages/ipp-react/src/gui-kit/context-menu.tsx",
-      "packages/ipp-react/src/gui-kit/confirmation-dialog.tsx",
-      "packages/ipp-react/src/gui-kit/popover.tsx",
-      "packages/ipp-react/src/gui-kit/tooltip.tsx",
-      "packages/ipp-react/src/gui-kit/option-list.tsx",
-      "packages/ipp-react/src/gui-kit/select-trigger.tsx",
-      "packages/ipp-react/src/gui-kit/dropdown.tsx",
-      "packages/ipp-react/src/gui-kit/searchable-dropdown.tsx",
-      "packages/ipp-react/src/gui-kit/multi-select.tsx",
-      "packages/ipp-react/src/gui-kit/autocomplete.tsx",
-      "packages/ipp-react/src/gui-kit/slider-rail.tsx",
-      "packages/ipp-react/src/gui-kit/scalar-value.ts",
-      "packages/ipp-react/src/gui-kit/range-slider.tsx",
-      "packages/ipp-react/src/gui-kit/knob.tsx",
-      "packages/ipp-react/src/gui-kit/numeric-stepper.tsx",
-      "packages/ipp-react/src/gui-kit/color-value.ts",
-      "packages/ipp-react/src/gui-kit/color-picker.tsx",
-      "packages/ipp-react/src/gui_callbacks.ts"
+      "packages/ipp-react/src/gui-kit/overlays/",
+      "packages/ipp-react/src/gui-kit/selection/",
+      "packages/ipp-react/src/gui-kit/values/",
+      "packages/ipp-react/src/gui/callback-registry.ts"
     ],
     "commands": [
       {
@@ -2416,36 +2512,42 @@
     "description": "Analytic and retained frames with per-label diffs, atlas growth and eviction, bounded uploads, GUI shapes, rear views and recovery",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-core/src/text.rs",
+      "crates/ipp-core/src/text_tests.rs",
       "crates/ipp-render-gl/src/services/render/",
       "crates/ipp-core/src/services/asset_management/",
       "packages/ipp-client/src/",
       "examples/surface-terminal/",
       "assets/fonts/",
       "licences/fonts/",
-      "tests/browser/",
-      "crates/ipp-wasm/src/services/render.rs",
-      "crates/ipp-wasm/src/services/render_statistics.rs",
+      "tests/harness/",
+      "tests/runtime/",
+      "tests/assets/",
+      "tests/gui/gui.browser.test.ts",
+      "tests/gui/pages/mounted-gui.tsx",
+      "tests/gui/pages/mounted-scroll.tsx",
+      "tests/gui/support/mounted-panel.ts",
+      "crates/ipp-wasm/src/services/render/",
       "packages/ipp-client/tools/assemble.mjs",
       "packages/ipp-react/src/",
       "tools/build/verify-browser.mjs",
-      "tools/build_surface_assets.py",
-      "tests/render/retained-gui-environment.ts",
-      "tests/render/retained-gui-images.ts",
-      "tests/render/retained-gui-scenario.ts",
-      "tests/render/retained-gui-fixture.tsx",
-      "tests/render/retained-gui.test.ts",
-      "tests/render/tsconfig.retained-gui.json",
-      "tools/build_surface_gui.mjs",
-      "tests/render/surface-fixture.tsx",
-      "tests/render/surface-separators-fixture.ts",
-      "tests/render/surface-separators-scenario.ts",
+      "tools/assets/surface_assets.py",
+      "tests/gui/retained/support/retained-gui-environment.ts",
+      "tests/gui/retained/scenarios/retained-gui.ts",
+      "tests/gui/retained/pages/retained-gui.tsx",
+      "tests/gui/retained/retained-gui.browser.test.ts",
+      "tests/gui/retained/tsconfig.json",
+      "tools/products/surface-gui-fixtures.mjs",
+      "tests/surfaces/pages/surface.tsx",
+      "tests/surfaces/support/surface-separators.ts",
+      "tests/surfaces/scenarios/surface-separators.ts",
       "tests/performance/retained-gui.ts",
-      "tests/integration/surface-scenario.ts"
+      "tests/surfaces/scenarios/surface-lifecycle.ts"
     ],
     "commands": [
       {
         "name": "browser",
-        "command": ["@node", "--test", "target/surface-gui-build/retained-gui.test.js"],
+        "command": ["@node", "--test", "target/surface-gui-build/retained-gui.browser.test.js"],
         "builds": ["surface-gui-fixtures", "browser:render-instrumentation"],
         "partitionExcludes": ["target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser"]
@@ -2456,17 +2558,17 @@
     "description": "Fixed React GUI stress workload through generated worker client, assets, semantics and completed WebGL frames",
     "sourceRoots": [
       "examples/gui-stress/",
-      "tests/performance/gui-stress-fixture.tsx",
+      "tests/performance/pages/gui-stress.tsx",
       "tests/performance/gui-stress.ts",
-      "tests/performance/gpu-memory.ts",
+      "tests/performance/support/gpu-memory.ts",
       "tests/performance/gpu-memory.test.ts",
       "tests/performance/gui-stress.test.ts",
       "tests/performance/tsconfig.gui-stress.json",
-      "crates/ipp-host-session/src/services/gui_layout_statistics.rs",
-      "crates/ipp-host-session/src/services/gui_layout_statistics_tests.rs",
-      "crates/ipp-wasm/src/services/render_statistics.rs",
+      "crates/ipp-host-session/src/statistics.rs",
+      "crates/ipp-host-session/src/statistics_tests.rs",
+      "crates/ipp-wasm/src/services/render/statistics.rs",
       "crates/ipp-server/examples/gles_presentation/statistics.rs",
-      "tools/build_gui_stress.mjs",
+      "tools/products/gui-stress-fixtures.mjs",
       "tools/pipeline/benchmark.py",
       "packages/ipp-react/src/gui/",
       "packages/ipp-client/src/",
@@ -2476,13 +2578,13 @@
     "commands": [
       {
         "name": "layout-host",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked", "gui_layout_statistics"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--lib", "--locked", "statistics::tests::"],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "layout-wasm-record",
-        "command": ["cargo", "test", "-p", "ipp-wasm", "--features", "render", "--lib", "--locked", "services::render_statistics"],
+        "command": ["cargo", "test", "-p", "ipp-wasm", "--features", "render", "--lib", "--locked", "services::render::statistics"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -2502,22 +2604,45 @@
         "name": "browser",
         "command": ["@node", "--test", "--test-name-pattern=cycles|GPU memory|through browser", "target/gui-stress/gui-stress.test.js"],
         "builds": ["gui-stress-fixtures", "surface-assets", "browser:render"],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation", "target/performance-build/gui-native"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
         "command": ["@node", "--test", "--test-name-pattern=through native-gles", "target/gui-stress/gui-stress.test.js"],
         "builds": ["gui-stress-fixtures", "surface-assets", "gles-host"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation", "target/performance-build/gui-native"],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
   },
   "gpu-profiling": {
     "description": "Real worker/native GPU profiling captures with completed images, query availability and retained lifetime identity",
-    "sourceRoots": ["crates/ipp-render-gl/src/services/render/", "crates/ipp-wasm/src/services/", "crates/ipp-server/examples/gles_presentation/", "packages/ipp-client/src/", "tests/render/gpu-profiling-fixture.ts", "tests/render/gpu-profiling.test.ts", "tools/build_surfaces.mjs", "tests/render/tsconfig.surfaces.json"],
+    "sourceRoots": [
+      "crates/ipp-render-gl/src/services/render/",
+      "crates/ipp-wasm/src/services/",
+      "crates/ipp-server/examples/gles_presentation/",
+      "packages/ipp-client/src/",
+      "tests/profiling/pages/gpu-profiling.ts",
+      "tests/profiling/gpu-profiling.test.ts",
+      "tools/products/surface-fixtures.mjs",
+      "tests/surfaces/tsconfig.json"
+    ],
     "commands": [
-      {"name": "browser", "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:browser:", "target/surface-build/gpu-profiling.test.js"], "builds": ["surface-fixtures", "browser:render-instrumentation"], "partitionExcludes": ["target/gles-host-instrumentation"], "requirements": ["node", "npm", "browser"]},
-      {"name": "native", "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:native:", "target/surface-build/gpu-profiling.test.js"], "builds": ["surface-fixtures", "gles-host-instrumentation"], "partitionExcludes": ["target/browser-build"], "requirements": ["node", "npm", "browser", "gles"]}
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:browser:", "target/surface-build/gpu-profiling.test.js"],
+        "builds": ["surface-fixtures", "browser:render-instrumentation"],
+        "partitionExcludes": ["target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern=^gpu-profiling:native:", "target/surface-build/gpu-profiling.test.js"],
+        "builds": ["surface-fixtures", "gles-host-instrumentation"],
+        "partitionExcludes": ["target/browser-build"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      }
     ]
   },
   "surface-cache": {
@@ -2527,29 +2652,35 @@
       "crates/ipp-render-gl/tests/support/mod.rs",
       "crates/ipp-render-gl/tests/surface_cache.rs",
       "crates/ipp-core/src/world/systems/surface/",
+      "crates/ipp-core/src/text.rs",
+      "crates/ipp-core/src/text_tests.rs",
       "crates/ipp-core/src/world/systems/render/",
       "packages/ipp-client/src/",
-      "tests/browser/",
+      "tests/harness/",
+      "tests/runtime/",
+      "tests/assets/",
+      "tests/gui/gui.browser.test.ts",
+      "tests/gui/pages/mounted-gui.tsx",
+      "tests/gui/pages/mounted-scroll.tsx",
+      "tests/gui/support/mounted-panel.ts",
       "examples/surface-terminal/",
-      "crates/ipp-wasm/src/services/render.rs",
-      "crates/ipp-wasm/src/services/render_statistics.rs",
+      "crates/ipp-wasm/src/services/render/",
       "packages/ipp-client/tools/assemble.mjs",
       "tools/build/verify-browser.mjs",
-      "tests/render/retained-gui-images.ts",
-      "tests/render/retained-gui-scenario.ts",
-      "tests/render/error-check-bridge.ts",
-      "tests/render/surface-cache-bridge.ts",
-      "tests/render/surface-cache-environment.ts",
-      "tests/render/surface-cache-scenario.ts",
-      "tests/render/surface-cache.test.ts",
-      "tests/render/surface-fixture.tsx",
-      "tests/render/surface-separators-fixture.ts",
-      "tests/render/surface-separators-scenario.ts",
-      "tests/render/retained-gui-fixture.tsx",
-      "tools/build_surfaces.mjs",
-      "tools/build_surface_gui.mjs",
-      "tests/render/tsconfig.surfaces.json",
-      "tests/integration/surface-scenario.ts",
+      "tests/gui/retained/scenarios/retained-gui.ts",
+      "tests/surfaces/support/error-check-bridge.ts",
+      "tests/surfaces/support/surface-cache-bridge.ts",
+      "tests/surfaces/support/surface-cache-environment.ts",
+      "tests/surfaces/scenarios/surface-cache.ts",
+      "tests/surfaces/surface-cache.test.ts",
+      "tests/surfaces/pages/surface.tsx",
+      "tests/surfaces/support/surface-separators.ts",
+      "tests/surfaces/scenarios/surface-separators.ts",
+      "tests/gui/retained/pages/retained-gui.tsx",
+      "tools/products/surface-fixtures.mjs",
+      "tools/products/surface-gui-fixtures.mjs",
+      "tests/surfaces/tsconfig.json",
+      "tests/surfaces/scenarios/surface-lifecycle.ts",
       "crates/ipp-render-gl/Cargo.toml"
     ],
     "commands": [
@@ -2561,8 +2692,12 @@
           "-p",
           "ipp-render-gl",
           "--lib",
-          "surface_",
-          "--locked"
+          "--locked",
+          "--",
+          "surface::",
+          "assets::surface_resources",
+          "assets::paths",
+          "surface_"
         ],
         "builds": [],
         "requirements": [
@@ -2636,27 +2771,27 @@
       "crates/ipp-host-session/src/services/connection/datasets.rs",
       "crates/ipp-host-session/src/services/connection/datasets_tests.rs",
       "packages/ipp-client/src/datasets.ts",
-      "tools/ipp-schema-gen/src/dataset.template.ts",
-      "tests/integration/dataset-driver.ts",
-      "tests/integration/dataset-faults.ts",
-      "tests/integration/datasets.test.ts",
-      "tests/integration/scenarios/datasets.ts",
-      "tests/integration/tsconfig.datasets.json",
-      "tools/build_datasets.mjs",
+      "tools/ipp-schema-gen/src/templates/dataset.template.ts",
+      "tests/data/drivers/browser-datasets.ts",
+      "tests/data/drivers/dataset-faults.ts",
+      "tests/data/datasets.test.ts",
+      "tests/data/scenarios/datasets.ts",
+      "tests/data/tsconfig.datasets.json",
+      "tools/products/dataset-fixtures.mjs",
       "crates/ipp-protocol/examples/data_authoring_fixture.rs",
       "tools/ipp-schema-gen/tests/data-authoring-contract.mjs",
-      "tools/check_contracts.py",
-      "crates/ipp-protocol/src/data_authoring.rs",
-      "tools/ipp-schema-gen/src/data-authoring.template.ts",
-      "tests/integration/data-authoring.test.ts",
-      "tests/integration/scenarios/data-authoring.ts",
-      "tests/integration/scenarios/data-interpolation.ts",
-      "tests/render/animation-fixture.ts",
-      "tests/render/animation.test.ts",
+      "tools/pipeline/contracts.py",
+      "crates/ipp-protocol/src/contract/data_authoring.rs",
+      "tools/ipp-schema-gen/src/templates/data-authoring.template.ts",
+      "tests/data/data-authoring.test.ts",
+      "tests/data/scenarios/data-authoring.ts",
+      "tests/data/scenarios/data-interpolation.ts",
+      "tests/rendering/pages/animation.ts",
+      "tests/rendering/animation.test.ts",
       "packages/ipp-react/src/",
-      "tests/integration/react-data.test.ts",
-      "tests/integration/react-data-driver.ts",
-      "tests/integration/scenarios/react-data.ts"
+      "tests/data/react-data.test.ts",
+      "tests/data/drivers/browser-react-data.ts",
+      "tests/data/scenarios/react-data.ts"
     ],
     "commands": [
       {
@@ -2769,6 +2904,7 @@
         "name": "react-native",
         "command": ["@node", "--test", "--test-name-pattern", "native WebSocket", "target/datasets/react-data.test.js"],
         "builds": ["native", "dataset-fixtures"],
+        "partitionExcludes": ["target/browser-build/headless"],
         "requirements": ["rust", "node", "npm"]
       },
       {
@@ -2783,36 +2919,31 @@
     "description": "Retained source-bound 2D/3D and typed React charts, exact row picks and source/parameter edits through native GLES and worker WASM/WebGL",
     "sourceRoots": [
       "crates/ipp-core/src/world/systems/plot/",
-      "crates/ipp-render-gl/src/services/render/generated_paths.rs",
-      "crates/ipp-render-gl/src/services/render/generated_meshes.rs",
-      "crates/ipp-render-gl/src/services/render/scene.rs",
-      "crates/ipp-render-gl/src/services/render/plot_plane_facing.rs",
-      "crates/ipp-render-gl/src/services/render/plot_label_layout.rs",
-      "crates/ipp-render-gl/src/services/render/plot_label_layout_tests.rs",
-      "crates/ipp-render-gl/src/services/render/plot_view_placement.rs",
-      "crates/ipp-render-gl/src/services/render/plot_view_placement_tests.rs",
-      "tests/integration/plot-2d-scene.ts",
-      "tests/integration/plot-3d-scene.ts",
-      "tests/integration/plot-capture.ts",
-      "tests/integration/scenarios/plots-2d.ts",
-      "tests/integration/scenarios/dense-lines.ts",
-      "tests/performance/chart-data-scenario.ts",
-      "tests/integration/scenarios/plots-3d.ts",
-      "tests/integration/scenarios/react-plots.ts",
-      "tests/integration/scenarios/plot-view-placement.ts",
-      "tests/integration/scenarios/plot-axis-support.ts",
-      "tests/integration/scenarios/plot-axis-motion.ts",
-      "tests/integration/scenarios/plot-axis-gating.ts",
-      "tests/integration/scenarios/plot-axis-fixture.ts",
-      "packages/ipp-react/src/plots.ts",
-      "packages/ipp-react/src/plot-legend.tsx",
+      "crates/ipp-render-gl/src/services/render/assets/generated_paths.rs",
+      "crates/ipp-render-gl/src/services/render/assets/generated_meshes.rs",
+      "crates/ipp-render-gl/src/services/render/outputs/scene.rs",
+      "crates/ipp-render-gl/src/services/render/plot/",
+      "tests/data/support/plot-2d-scene.ts",
+      "tests/data/support/plot-3d-scene.ts",
+      "tests/data/support/plot-capture.ts",
+      "tests/data/scenarios/plots-2d.ts",
+      "tests/data/scenarios/dense-lines.ts",
+      "tests/data/scenarios/chart-data-workload.ts",
+      "tests/data/scenarios/plots-3d.ts",
+      "tests/data/scenarios/react-plots.ts",
+      "tests/data/scenarios/plot-view-placement.ts",
+      "tests/data/scenarios/plot-axis-support.ts",
+      "tests/data/scenarios/plot-axis-motion.ts",
+      "tests/data/scenarios/plot-axis-gating.ts",
+      "tests/data/support/plot-axis.ts",
+      "packages/ipp-react/src/plots/",
       "packages/ipp-react/tests/plots.test.ts",
       "examples/chart-showcase/",
-      "tests/integration/plots-runtime.test.ts",
-      "tests/integration/plots-driver.ts",
-      "tests/integration/tsconfig.plots.json",
-      "tools/build_plots.mjs",
-      "tests/integration/scenarios/plot-percentage.ts",
+      "tests/data/plots-runtime.test.ts",
+      "tests/data/drivers/browser-plots.ts",
+      "tests/data/tsconfig.plots.json",
+      "tools/products/plots-fixtures.mjs",
+      "tests/data/scenarios/plot-percentage.ts",
       "crates/ipp-core/tests/plot_interpolation.rs"
     ],
     "commands": [
@@ -3200,12 +3331,12 @@
       "examples/world-gallery/",
       "tools/shared-host/",
       "tools/build/native-blender-import.mjs",
-      "tests/render/native-gallery.test.ts",
-      "tests/render/native-gallery-driver.ts",
-      "tests/render/native-gallery-scene-assertions.ts",
-      "tests/integration/scenarios/gallery-charts.ts",
-      "tests/integration/scenarios/gallery-chart-streaming.ts",
-      "tests/integration/scenarios/gallery-chart-changes.ts"
+      "tests/gallery/native-gallery.test.ts",
+      "tests/gallery/drivers/native-gallery.ts",
+      "tests/gallery/support/native-gallery-scene-assertions.ts",
+      "tests/gallery/scenarios/gallery-charts.ts",
+      "tests/gallery/scenarios/gallery-chart-streaming.ts",
+      "tests/gallery/scenarios/gallery-chart-changes.ts"
     ],
     "commands": [
       {
@@ -3214,7 +3345,7 @@
           "@node",
           "--test",
           "--test-name-pattern=^native (regenerated chart hover|adaptive gallery axes|gallery (automatic value ranges|existing sample edits))",
-          "dist/tests/render/native-gallery.test.js"
+          "dist/tests/gallery/native-gallery.test.js"
         ],
         "builds": [
           "typescript",
@@ -3232,7 +3363,7 @@
           "@node",
           "--test",
           "--test-name-pattern=^native unified charts",
-          "dist/tests/render/native-gallery.test.js"
+          "dist/tests/gallery/native-gallery.test.js"
         ],
         "builds": [
           "typescript",
@@ -3250,7 +3381,7 @@
           "@node",
           "--test",
           "--test-name-pattern=^native gallery streams bounded data windows",
-          "dist/tests/render/native-gallery.test.js"
+          "dist/tests/gallery/native-gallery.test.js"
         ],
         "builds": [
           "typescript",
@@ -3268,7 +3399,7 @@
           "@node",
           "--test",
           "--test-name-pattern=^native gallery reloads streaming charts",
-          "dist/tests/render/native-gallery.test.js"
+          "dist/tests/gallery/native-gallery.test.js"
         ],
         "builds": [
           "typescript",
@@ -3290,7 +3421,7 @@
           "@node",
           "--test",
           "--test-name-pattern=^native gallery (preserves|captures|explains)",
-          "dist/tests/render/native-gallery.test.js"
+          "dist/tests/gallery/native-gallery.test.js"
         ],
         "builds": [
           "typescript",
@@ -3312,9 +3443,9 @@
   "gallery-trace": {
     "description": "Bounded semantic gallery CPU capture through generated worker/native Hosts with real images and explicit clocks",
     "sourceRoots": [
-      "tests/performance/gallery-gui-trace.ts",
-      "tools/profile_trace.mjs",
-      "tools/build_gallery_trace.mjs",
+      "tests/profiling/gallery-gui-trace.ts",
+      "tools/performance/profile-trace.mjs",
+      "tools/products/gallery-trace-fixture.mjs",
       "tools/pipeline/trace.py"
     ],
     "commands": [
@@ -3323,7 +3454,7 @@
         "command": [
           "@node",
           "--test",
-          "tools/tests/profile_trace.test.mjs"
+          "tools/tests/profile-trace.test.mjs"
         ],
         "builds": [],
         "requirements": [
@@ -3384,13 +3515,13 @@
   "async-io": {
     "description": "Native HTTP scheduling and generated-buffer source ownership through real Host/client IO",
     "sourceRoots": [
-      "tests/integration/generated-buffers.ts",
-      "tests/integration/generated-buffers.test.ts",
+      "tests/assets/pages/generated-buffers.ts",
+      "tests/assets/generated-buffers.test.ts",
       "packages/ipp-client/src/buffer-source.ts",
       "packages/ipp-client/src/resource-worker.ts",
       "crates/ipp-core/src/services/io/",
       "crates/ipp-server/src/services/",
-      "tests/integration/native-http.test.ts"
+      "tests/assets/native-http.test.ts"
     ],
     "commands": [
       {
@@ -3433,12 +3564,12 @@
       "crates/ipp-core/src/services/asset_management/export/",
       "crates/ipp-host-session/src/services/connection/asset_exports.rs",
       "crates/ipp-host-session/src/services/connection/asset_export_testing.rs",
-      "crates/ipp-protocol/src/asset_export.rs",
-      "crates/ipp-render-gl/src/services/render/service/asset_export.rs",
+      "crates/ipp-protocol/src/host/asset_export.rs",
+      "crates/ipp-render-gl/src/services/render/assets/export.rs",
       "packages/ipp-client/src/asset-exports.ts",
-      "tests/integration/scenarios/asset-exports.ts",
-      "tests/integration/asset-export-browser.ts",
-      "tests/integration/asset-exports.test.ts"
+      "tests/assets/scenarios/asset-exports.ts",
+      "tests/assets/drivers/browser-asset-exports.ts",
+      "tests/assets/asset-exports.test.ts"
     ],
     "commands": [
       {

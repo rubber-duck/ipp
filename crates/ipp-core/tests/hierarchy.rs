@@ -259,9 +259,9 @@ fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_chan
             entity: EntityRef::Handle(target),
         }],
     );
-    let expected = ipp_core::systems::camera::multiply(
+    let expected = ipp_core::math::multiply(
         world.world_matrix(root).unwrap(),
-        ipp_core::systems::camera::model_matrix(&local).unwrap(),
+        ipp_core::math::model_matrix(&local).unwrap(),
     );
     close(&world.world_matrix(tracker).unwrap(), &expected);
     let replacement = create(
@@ -344,7 +344,7 @@ fn coincident_and_pole_targets_are_finite_and_runtime_fields_are_not_serialized(
     ok(&mut world, vec![aim(tracker, target)]);
     close(
         &world.world_matrix(tracker).unwrap(),
-        &ipp_core::systems::camera::model_matrix(&Transform::default()).unwrap(),
+        &ipp_core::math::model_matrix(&Transform::default()).unwrap(),
     );
     for y in [1.0, -1.0] {
         ok(

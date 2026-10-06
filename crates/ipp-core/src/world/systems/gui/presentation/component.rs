@@ -2,8 +2,8 @@ use super::parts::validate_part_property;
 use super::{GuiPartId, GuiPartProperty, GuiPartStyle, GuiPrimitivePart};
 use crate::components::rows::{Rows, SchemaRow};
 use crate::components::schema::{ComponentAssetReference, ComponentLifecycle};
-use crate::services::asset_management::service::AssetDemandSelection;
-use crate::services::asset_management::{AssetSource, font::FONT_TYPE};
+use crate::services::asset_management::AssetDemandSelection;
+use crate::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use crate::{EntityId, ErrorReason};
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
@@ -119,7 +119,7 @@ fn validate_parts(parts: &Rows<GuiPaintPart>, overrides: bool) -> Result<(), Err
                     | GuiPrimitivePart::Fill
                     | GuiPrimitivePart::Icon
                     | GuiPrimitivePart::FocusRing
-            ) || (source.kind != crate::services::asset_management::drawing::DRAWING_TYPE
+            ) || (source.kind != crate::services::asset_management::formats::drawing::DRAWING_TYPE
                 && source.kind != crate::TEXTURE_TYPE)
         }) {
             return Err(ErrorReason::InvalidValue);

@@ -1,4 +1,5 @@
-//! Mutation-scoped validation of untrusted ingress tokens against authoritative Worlds.
+//! Exact World and output reference resolution, and mutation-scoped validation of
+//! untrusted ingress tokens against authoritative Worlds.
 
 use super::*;
 use crate::{Command, FieldValue, FieldWrite};
@@ -102,6 +103,33 @@ pub(crate) fn referenced_worlds<'a>(
 }
 
 impl HostRuntime {
+    /// Resolve an exact live World lifetime without selecting presentation.
+    pub fn world_ref(&self, world: WorldId) -> Option<WorldRef> {
+        self.worlds.get(&world).map(World::runtime_ref)
+    }
+
+    /// Validate a transported lifetime without selecting a replacement World.
+    pub fn resolve_world_ref(&self, world: WorldId, incarnation: u64) -> Option<WorldRef> {
+        self.world_ref(world)
+            .filter(|world| world.incarnation() == incarnation)
+    }
+
+    /// Validate a transported output selection without rebinding: the World
+    /// must still supply its canvas, or the Camera component lifetime must match.
+    pub fn resolve_output_ref(
+        &self,
+        world: WorldRef,
+        target: crate::OutputTarget,
+    ) -> Result<OutputRef, ErrorReason> {
+        if self.world_ref(world.id) != Some(world) {
+            return Err(ErrorReason::InvalidEntity);
+        }
+        self.worlds
+            .get(&world.id)
+            .ok_or(ErrorReason::InvalidEntity)?
+            .bind_output_target(target)
+    }
+
     /// Borrow a command admission context, validating foreign lifetimes only at application.
     /// The immutable foreign borrows end with this context, before evaluation or publication.
     pub fn world_mut_for_commands(

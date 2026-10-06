@@ -11,8 +11,10 @@ use crate::world::systems::asset_dependencies::source_key_from_fields;
 /// World evaluator for component-owned particle state.
 #[derive(Default)]
 pub struct ParticleSystem {
-    emitters: crate::world::component_query::ComponentQuery<super::ParticleEmitter>,
-    playbacks: crate::world::component_query::ComponentQuery<super::ParticlePlayback>,
+    emitters:
+        crate::world::direct_bindings::component_query::ComponentQuery<super::ParticleEmitter>,
+    playbacks:
+        crate::world::direct_bindings::component_query::ComponentQuery<super::ParticlePlayback>,
 }
 
 impl ParticleSystem {

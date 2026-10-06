@@ -241,13 +241,13 @@ impl<B: GpuQueryBackend> Drop for GpuQueryPool<B> {
     }
 }
 
-#[path = "gpu_query_tests.rs"]
+#[path = "gpu_queries_tests.rs"]
 #[cfg(test)]
 mod tests;
 
 #[cfg(target_arch = "wasm32")]
-impl Default for GpuQueryPool<super::webgl_gpu_queries::WebGlGpuQueries> {
+impl Default for GpuQueryPool<super::webgl::gpu_queries::WebGlGpuQueries> {
     fn default() -> Self {
-        Self::new(super::webgl_gpu_queries::WebGlGpuQueries)
+        Self::new(super::webgl::gpu_queries::WebGlGpuQueries)
     }
 }

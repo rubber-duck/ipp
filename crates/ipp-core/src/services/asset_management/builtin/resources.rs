@@ -147,7 +147,8 @@ pub fn texture(uri: &str) -> Result<Vec<u8>, ErrorReason> {
     }
 
     let [width, height, cells_x, cells_y] = values;
-    let pixel_bytes = crate::services::asset_management::texture::pixel_bytes(width, height)?;
+    let pixel_bytes =
+        crate::services::asset_management::formats::texture::pixel_bytes(width, height)?;
     if !width.is_multiple_of(cells_x) || !height.is_multiple_of(cells_y) {
         return Err(ErrorReason::InvalidAsset);
     }

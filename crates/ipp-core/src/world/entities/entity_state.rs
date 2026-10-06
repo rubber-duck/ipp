@@ -1,0 +1,223 @@
+//! Entity identity, metadata and index operations.
+//!
+//! Creation, deletion, symbolic/class index maintenance and reference
+//! resolution. Component value staging and mutation live in
+//! [`component_state`](crate::world::component_state). Ownership and
+//! orchestration stay in [`world`](crate::world); this module only hosts
+//! entity-level behavior.
+
+use super::EntityPersistentId;
+use crate::world::mutation::EntityAliases;
+use crate::world::systems;
+use crate::world::world_state::WorldEntityRecord;
+use crate::world::{WorldEntityState, WorldMutationState};
+use crate::{
+    ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason, FieldValue, FieldWrite,
+};
+
+impl WorldMutationState {
+    pub(in crate::world) fn incarnation(&mut self) -> Result<u64, ErrorReason> {
+        self.entities_state.next_incarnation = self
+            .entities_state
+            .next_incarnation
+            .checked_add(1)
+            .ok_or(ErrorReason::Capacity)?;
+        Ok(self.entities_state.next_incarnation)
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        reference: &EntityRef,
+        aliases: &EntityAliases,
+    ) -> Result<EntityId, ErrorReason> {
+        let id = aliases.identity(reference, &self.entities_state.symbols)?;
+        if self.entities_state.allocator.contains(id) {
+            Ok(id)
+        } else {
+            Err(ErrorReason::InvalidEntity)
+        }
+    }
+
+    pub(in crate::world) fn field(
+        &self,
+        component: u16,
+        field: FieldWrite,
+        aliases: &EntityAliases,
+    ) -> Result<FieldWrite, ErrorReason> {
+        let value = match field.value {
+            FieldValue::Entity(EntityRef::Handle(id))
+                if id.to_bits() == 0
+                    && ComponentValue::accepts_null_entity(component, field.offset) =>
+            {
+                field.value.clone()
+            }
+            FieldValue::Entity(reference) => {
+                FieldValue::Entity(EntityRef::Handle(self.resolve(&reference, aliases)?))
+            }
+            FieldValue::F32(value) if !value.is_finite() => return Err(ErrorReason::InvalidValue),
+            value => value,
+        };
+        Ok(FieldWrite {
+            offset: field.offset,
+            value,
+        })
+    }
+
+    pub(in crate::world) fn set_metadata(
+        &mut self,
+        id: EntityId,
+        mut metadata: EntityMetadata,
+    ) -> Result<(), ErrorReason> {
+        if let Some(symbol) = &metadata.symbolic_id
+            && self
+                .entities_state
+                .symbols
+                .get(symbol)
+                .is_some_and(|&other| other != id)
+        {
+            return Err(ErrorReason::DuplicateSymbolicId);
+        }
+
+        metadata.classes.sort();
+        metadata.classes.dedup();
+
+        let changed = self.entities_state.entities[&id].metadata != metadata;
+        self.remove_indexes(id);
+        if let Some(symbol) = &metadata.symbolic_id {
+            self.entities_state.symbols.insert(symbol.clone(), id);
+        }
+        for class in &metadata.classes {
+            self.entities_state
+                .classes
+                .entry(class.clone())
+                .or_default()
+                .insert(id);
+        }
+
+        self.entities_state
+            .entities
+            .get_mut(&id)
+            .expect("validated entity")
+            .metadata = metadata;
+        if changed {
+            self.lifecycle_effects.push(
+                systems::lifecycle_publisher::LifecycleObservation::Entity {
+                    entity: id,
+                    kind: systems::lifecycle_publisher::EntityLifecycleKind::MetadataChanged,
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    pub(in crate::world) fn remove_indexes(&mut self, id: EntityId) {
+        let metadata = &self.entities_state.entities[&id].metadata;
+        if let Some(symbol) = &metadata.symbolic_id {
+            self.entities_state.symbols.remove(symbol);
+        }
+        for class in &metadata.classes {
+            if let Some(entities) = self.entities_state.classes.get_mut(class) {
+                entities.remove(&id);
+                if entities.is_empty() {
+                    self.entities_state.classes.remove(class);
+                }
+            }
+        }
+    }
+
+    pub(in crate::world) fn create_entity(
+        &mut self,
+        alias: u32,
+        metadata: &EntityMetadata,
+        adopt: bool,
+        aliases: &mut EntityAliases,
+        created: &mut Vec<(u32, EntityId)>,
+    ) -> Result<(), ErrorReason> {
+        if aliases.contains_created(alias) {
+            return Err(ErrorReason::DuplicateAlias);
+        }
+        if adopt
+            && let Some(symbol) = &metadata.symbolic_id
+            && let Some(&id) = self.entities_state.symbols.get(symbol)
+        {
+            // Adoption binds the alias to the live entity and writes the declared
+            // metadata over it, exactly as SetMetadata would.
+            self.set_metadata(id, metadata.clone())?;
+            aliases.insert_created(alias, id);
+            created.push((alias, id));
+            self.operation_adopted = true;
+            return Ok(());
+        }
+        // A refused creation allocates nothing: check the symbol before the
+        // identity, record and lifecycle effects exist.
+        if metadata
+            .symbolic_id
+            .as_ref()
+            .is_some_and(|symbol| self.entities_state.symbols.contains_key(symbol))
+        {
+            return Err(ErrorReason::DuplicateSymbolicId);
+        }
+        let id = self
+            .entities_state
+            .allocator
+            .allocate()
+            .ok_or(ErrorReason::Capacity)?;
+        let persistent_id = self.entities_state.allocate_persistent_id()?;
+        self.entities_state.entities.insert(
+            id,
+            WorldEntityRecord {
+                persistent_id,
+                ..WorldEntityRecord::default()
+            },
+        );
+        self.links.insert(id, persistent_id);
+        self.operation_created.insert(id);
+        self.lifecycle_effects
+            .push(systems::lifecycle_publisher::LifecycleObservation::Entity {
+                entity: id,
+                kind: systems::lifecycle_publisher::EntityLifecycleKind::Created,
+            });
+        self.record_entity_effect("entity.create", id);
+        aliases.insert_created(alias, id);
+        created.push((alias, id));
+        let observation_count = self.lifecycle_effects.len();
+        let metadata_result = self.set_metadata(id, metadata.clone());
+        self.lifecycle_effects.truncate(observation_count);
+        metadata_result
+    }
+
+    pub(in crate::world) fn delete_entity(&mut self, id: EntityId) {
+        self.links.retire(id);
+        let components: Vec<_> = self.entities_state.entities[&id]
+            .components
+            .keys()
+            .copied()
+            .collect();
+        for component in components {
+            self.touch_component(id, component);
+        }
+        self.remove_indexes(id);
+        self.entities_state.entities.remove(&id);
+        self.entities_state.retired_entities.push(id);
+        self.entities_state.operation_deleted.insert(id);
+        self.lifecycle_effects
+            .push(systems::lifecycle_publisher::LifecycleObservation::Entity {
+                entity: id,
+                kind: systems::lifecycle_publisher::EntityLifecycleKind::Deleted,
+            });
+        self.record_entity_effect("entity.delete", id);
+    }
+}
+
+impl WorldEntityState {
+    pub(in crate::world) fn allocate_persistent_id(
+        &mut self,
+    ) -> Result<EntityPersistentId, ErrorReason> {
+        self.next_persistent_entity_id = self
+            .next_persistent_entity_id
+            .checked_add(1)
+            .ok_or(ErrorReason::Capacity)?;
+        Ok(EntityPersistentId(self.next_persistent_entity_id))
+    }
+}

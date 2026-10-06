@@ -47,24 +47,16 @@
   "include": [
     "examples/**/*.ts",
     "packages/ipp-client/**/*.ts",
-    "tests/integration/**/*.ts",
-    "tests/browser/**/*.ts",
+    "tests/**/*.ts",
+    "tests/**/*.tsx",
     "packages/ipp-react/**/*.ts",
     "packages/ipp-react/**/*.tsx",
     "target/integration-artifacts/client/**/*.ts",
-    "tests/react/**/*.ts",
-    "tests/react/**/*.tsx",
-    "tests/skin-lab/**/*.ts",
-    "tests/skin-lab/**/*.tsx",
     "tools/shared-host/**/*.ts",
     "tools/shared-host/**/*.tsx",
-    "tests/render/**/*.ts",
     "examples/**/*.tsx",
-    "tests/render/**/*.tsx",
     "integrations/blender/client/**/*.ts",
-    "tests/performance/**/*.ts",
-    "tests/performance/**/*.tsx",
-    "crates/ipp-render-gl/src/services/render/webgl.ts"
+    "crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts"
   ],
   "exclude": [
     "dist",

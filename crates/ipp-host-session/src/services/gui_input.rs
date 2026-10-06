@@ -2,8 +2,8 @@
 //! to the Host's existing post-frame routing boundary, not a terminal/effect queue.
 
 use crate::QueuedResponse;
-use crate::attachment_receipts::{ReplyReservation, SharedReplyBudget, SharedReplyReservation};
-use crate::outbox::{ReplySlot, SessionOutbox};
+use crate::reliable_output::outbox::{ReplySlot, SessionOutbox};
+use crate::reliable_output::{ReplyReservation, SharedReplyBudget, SharedReplyReservation};
 use ipp_core::services::gui_input::router::{
     GuiInputRouter, GuiRoutingContext, GuiRoutingDelivery, GuiRoutingDisposition,
 };
@@ -13,9 +13,9 @@ use ipp_core::services::gui_input::{
 use ipp_core::services::reliable_output::OutputClass;
 use ipp_core::systems::gui::local::{GuiLocalEffect, GuiScrollChain};
 use ipp_core::{HostRuntime, ViewQueryTarget};
-use ipp_protocol::gui_input::{GuiPhysicalRequest, GuiPhysicalResponse};
+use ipp_protocol::host::gui_input::{GuiPhysicalRequest, GuiPhysicalResponse};
+use ipp_protocol::host::presentation::{PresentationSurface, PresentationView};
 use ipp_protocol::host::{HostResponse, HostResponseBody};
-use ipp_protocol::presentation::{PresentationSurface, PresentationView};
 use std::{cell::RefCell, collections::LinkedList, rc::Rc};
 
 #[cfg(test)]
@@ -112,7 +112,7 @@ impl GuiDeliveryPermit for Child {
         state: &ipp_core::systems::gui::local::GuiNativeTextState,
     ) -> Result<(), GuiDeliveryError> {
         self.prepare(None)?;
-        let size = ipp_protocol::gui_input::native_state_size(state)
+        let size = ipp_protocol::host::gui_input::native_state_size(state)
             .map_err(|_| GuiDeliveryError::Capacity)?;
         self.reply
             .borrow()
@@ -121,7 +121,7 @@ impl GuiDeliveryPermit for Child {
             .reserve_bytes(512 + 2 * size)
             .map_err(|_| GuiDeliveryError::Capacity)?;
         self.native = Some(
-            ipp_protocol::gui_input::encode_native_state(state)
+            ipp_protocol::host::gui_input::encode_native_state(state)
                 .map_err(|_| GuiDeliveryError::Capacity)?,
         );
         Ok(())
@@ -316,7 +316,7 @@ impl GuiHostInputService {
                     .root_output_binding(world)
                     .ok()
                     .flatten()
-                    .map(ipp_protocol::presentation::RootBinding::from)
+                    .map(ipp_protocol::host::presentation::RootBinding::from)
                     != Some(view.binding)
                 {
                     return Ok(Some(GuiPhysicalResponse::Rejected("StaleContext".into())));
@@ -332,7 +332,9 @@ impl GuiHostInputService {
                     .reserve_retained(
                         std::mem::size_of::<Owner>()
                             + blockers.capacity()
-                                * std::mem::size_of::<ipp_protocol::gui_input::GuiPickingBlocker>()
+                                * std::mem::size_of::<
+                                    ipp_protocol::host::gui_input::GuiPickingBlocker,
+                                >()
                             + blockers.len()
                                 * std::mem::size_of::<
                                     ipp_core::services::gui_input::query::GuiPickingBlocker,
@@ -353,7 +355,7 @@ impl GuiHostInputService {
                     })
                     .collect::<Result<Vec<_>, String>>()?;
                 let credit = Rc::new(RefCell::new(credit));
-                let queue_owner = crate::next_ingress_id()?;
+                let queue_owner = crate::session::ingress::next_ingress_id()?;
                 if queue_owner >= (1 << 63) {
                     return Err("Host ingress identity exhausted".into());
                 }
@@ -481,7 +483,7 @@ impl GuiHostInputService {
                 .resolve(host)
                 .ok()
                 .and_then(|world| host.root_output_binding(world).ok().flatten())
-                .map(ipp_protocol::presentation::RootBinding::from)
+                .map(ipp_protocol::host::presentation::RootBinding::from)
                 != Some(owner.view.binding)
         }) {
             self.release_owner(host);
@@ -570,7 +572,7 @@ impl GuiHostInputService {
             }
             let result = (|| {
                 let size = state
-                    .map(ipp_protocol::gui_input::native_state_size)
+                    .map(ipp_protocol::host::gui_input::native_state_size)
                     .transpose()
                     .map_err(|_| ())?
                     .unwrap_or(0);
@@ -587,7 +589,7 @@ impl GuiHostInputService {
                     body: HostResponseBody::GuiInput(GuiPhysicalResponse::Native {
                         context: owner.id,
                         state: state
-                            .map(ipp_protocol::gui_input::encode_native_state)
+                            .map(ipp_protocol::host::gui_input::encode_native_state)
                             .transpose()
                             .map_err(|_| ())?,
                     }),

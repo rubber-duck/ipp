@@ -1,3 +1,6 @@
+//! Compilation of a validated declaration graph into the flat instruction plan, driven by
+//! explicit continuations rather than the native or WASM call stack.
+
 use super::*;
 
 pub(super) fn compile(

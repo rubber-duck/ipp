@@ -221,7 +221,7 @@ fn main() -> Result<()> {
         GuiSkin, GuiTheme, Transform,
     };
     use ipp_core::services::asset_management::{
-        AssetSource, drawing::DRAWING_TYPE, font::FONT_TYPE,
+        AssetSource, formats::drawing::DRAWING_TYPE, formats::font::FONT_TYPE,
     };
     use ipp_core::systems::gui::GuiPrimitivePart;
     use ipp_core::systems::gui::presentation::GuiPaintPart;

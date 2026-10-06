@@ -8,15 +8,15 @@
 //! settles its delivery ticket; a command's result is its batch outcome.
 
 use super::command::GuiLocalOperation;
-use super::control::{
+use super::composites::group::{GuiGroupTree, selection_write};
+use super::controls::identity::{
     GuiControl, ancestry, component_incarnation, eligibility, entity_control, focus_parts,
     focusable,
 };
-use super::group::{GuiGroupTree, selection_write};
-use super::system_state::live;
 use super::*;
 use crate::services::gui_input::GuiInputError;
 use crate::systems::gui::GuiSystem;
+use crate::systems::gui::system_state::{GuiLocalState, live};
 use crate::systems::{SystemCommandContext, SystemOperationContext, SystemRuntimeAccess};
 use crate::{Command, ComponentValue, EntityId, EntityRef, ErrorReason, FieldValue, FieldWrite};
 use std::sync::Arc;
@@ -150,7 +150,7 @@ impl GuiSystem {
                     .local
                     .native_text(control.target)
                     .ok_or(GuiInputError::Unavailable)?;
-                let caret = super::text_edit::snap_to_boundary(&native.text, *offset);
+                let caret = super::controls::text_edit::snap_to_boundary(&native.text, *offset);
                 let anchor = if *extend {
                     native.selection[0]
                 } else {
@@ -200,7 +200,7 @@ impl GuiSystem {
                     context,
                     command,
                     control,
-                    super::number::GuiNumberOperation::Commit {
+                    super::controls::number::GuiNumberOperation::Commit {
                         submit: true,
                     },
                     tick,
@@ -326,7 +326,7 @@ impl GuiSystem {
                         .components
                         .gui_text_input(entity.index() as usize)
                         .map(|input| {
-                            super::text::GuiNativeText::new(
+                            super::controls::native_text::GuiNativeText::new(
                                 control.target,
                                 owner.clone(),
                                 input,
@@ -344,7 +344,7 @@ impl GuiSystem {
                     .native_text
                     .as_ref()
                     .filter(|native| native.owner.id() != owner.id())
-                    .and_then(super::text::GuiNativeText::pending_number_edit)
+                    .and_then(super::controls::native_text::GuiNativeText::pending_number_edit)
             })
             .flatten();
         if taken.is_some() {
@@ -444,7 +444,7 @@ impl GuiSystem {
         } else {
             input.text.clone()
         };
-        let super::text::GuiPreparedTextEdit {
+        let super::controls::native_text::GuiPreparedTextEdit {
             mut state,
             mut effect,
             changed_text,
@@ -464,9 +464,10 @@ impl GuiSystem {
         {
             match input.committed(&state.text) {
                 Some(committed) => {
-                    let formatted = super::number::format_number(committed, input.precision);
+                    let formatted =
+                        super::controls::number::format_number(committed, input.precision);
                     changed_display |= *state.text != *formatted;
-                    state = super::text::GuiNativeText::state(
+                    state = super::controls::native_text::GuiNativeText::state(
                         control.target,
                         formatted.clone(),
                         state.fence.generation,
@@ -606,8 +607,9 @@ impl GuiLocalState {
                     slider.step
                 };
                 let current = slider.thumb_value(*part);
-                let scalar = super::slider::nudge(slider.min, slider.max, step, current, *steps)
-                    .unwrap_or(current);
+                let scalar =
+                    super::controls::slider::nudge(slider.min, slider.max, step, current, *steps)
+                        .unwrap_or(current);
                 return thumb_writes(slider, *part, scalar)
                     .map(|writes| writes.commands(entity, component));
             }
@@ -645,12 +647,12 @@ impl GuiLocalState {
                     return Err(GuiLocalActionError::UnsupportedAction);
                 };
                 let step = if *fine {
-                    super::color::COLOR_FINE_STEP
+                    super::controls::color::COLOR_FINE_STEP
                 } else {
-                    super::color::COLOR_STEP
+                    super::controls::color::COLOR_STEP
                 };
                 let mut target = color.channels();
-                target[*channel] = super::color::nudge(target[*channel], *steps, step);
+                target[*channel] = super::controls::color::nudge(target[*channel], *steps, step);
                 return color_writes(color, target)
                     .map(|writes| writes.commands(entity, component));
             }

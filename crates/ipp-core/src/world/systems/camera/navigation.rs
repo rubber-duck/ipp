@@ -1,6 +1,34 @@
 use super::Camera;
-use super::{CameraAffineTransform, CameraMotion};
+use crate::math::CameraAffineTransform;
 use crate::{EntityId, ErrorReason, components::Transform};
+
+/// Camera-local navigation applied to the active camera's components.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CameraMotion {
+    /// Orbit about the implied focus pivot, yaw then pitch in radians.
+    Rotate {
+        /// Rotation about camera-local up.
+        yaw: f32,
+        /// Rotation about camera-local right after yaw.
+        pitch: f32,
+    },
+    /// Move the scene with a normalized viewport right/down drag.
+    Pan {
+        /// Horizontal viewport delta, positive right.
+        x: f32,
+        /// Vertical viewport delta, positive down.
+        y: f32,
+        /// Nonzero viewport width in pixels.
+        width: u32,
+        /// Nonzero viewport height in pixels.
+        height: u32,
+    },
+    /// Change perspective focus distance or orthographic extent exponentially.
+    Zoom {
+        /// Natural logarithmic delta; positive values zoom out.
+        amount: f32,
+    },
+}
 
 /// Calculate from the stored camera and transform; the caller writes the result.
 pub(super) fn navigate_in_view(
@@ -56,7 +84,7 @@ pub(super) fn navigate_in_view(
             if !x.is_finite() || !y.is_finite() || width == 0 || height == 0 {
                 return Err(ErrorReason::InvalidValue);
             }
-            let aspect = super::camera_math::projection_aspect(
+            let aspect = super::projection::projection_aspect(
                 view_extent.unwrap_or([f64::from(width), f64::from(height)]),
             )?;
 

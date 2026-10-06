@@ -1,7 +1,7 @@
 //! Render membership and resource compatibility compiled outside frame evaluation.
 
 use super::*;
-use crate::world::component_binding::ComponentBinding;
+use crate::world::direct_bindings::component_binding::ComponentBinding;
 
 pub(super) struct DebugGeometryEntry {
     pub(super) entity: EntityId,

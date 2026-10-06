@@ -83,7 +83,7 @@ python tools/ipp.py setup certificates
 python tools/ipp.py setup certificates --install-trust
 ```
 
-[Certificate tooling](../../tools/blender.py) creates/reuses ignored `target/blender/certificates`. `MKCERT_BIN` selects mkcert; `CAROOT` overrides the default `~/.local/share/ipp/blender-ca`. Never commit private keys. A half-present certificate/key pair fails explicitly; restore it or select a new directory. CI demonstrates its isolated trust-store setup.
+[Certificate tooling](../../tools/pipeline/blender_addon.py) creates/reuses ignored `target/blender/certificates`. `MKCERT_BIN` selects mkcert; `CAROOT` overrides the default `~/.local/share/ipp/blender-ca`. Never commit private keys. A half-present certificate/key pair fails explicitly; restore it or select a new directory. CI demonstrates its isolated trust-store setup.
 
 Interactive onboarding opens the addon's HTTPS page so the user can accept a permitted certificate warning before redirecting to the viewer. This neither installs a CA nor grants trust in other profiles. Policies forbidding exceptions require configured trusted credentials. External browsers need their own trust and a tunnel preserving the certificate name. Certificate bypass flags do not validate onboarding.
 

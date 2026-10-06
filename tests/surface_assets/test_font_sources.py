@@ -8,7 +8,7 @@ import tempfile
 import threading
 import unittest
 
-from tools.font_sources import FontSource, fetch_font
+from tools.assets.font_sources import FontSource, fetch_font
 
 
 @contextmanager

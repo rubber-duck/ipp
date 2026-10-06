@@ -382,7 +382,7 @@ impl super::HostRuntime {
                     .filter(|edge| self.attachment_binding_valid(edge))
                     .map(|edge| {
                         (
-                            super::topology::AttachmentAnchor {
+                            super::attachments::topology::AttachmentAnchor {
                                 world: entry.data.world.id,
                                 entity: edge.anchor,
                             },

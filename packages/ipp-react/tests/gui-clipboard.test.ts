@@ -16,8 +16,8 @@ import {
   writeClipboardText,
   type ClipboardTextReader,
   type ClipboardTextWriter,
-} from "../src/gui/clipboard.js";
-import type { BrowserGuiInputCommand } from "../src/gui/input.js";
+} from "../src/gui/platform/clipboard.js";
+import type { BrowserGuiInputCommand } from "../src/gui/platform/input.js";
 
 function readerFake(text: string, onRead?: () => void): ClipboardTextReader {
   return {

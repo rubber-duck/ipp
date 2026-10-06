@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
-import { runRetainedGui } from "../render/retained-gui-environment.js";
-import { BENCHMARK_SURFACE_CACHE_POLICY } from "../render/retained-gui-scenario.js";
+import { runRetainedGui } from "../gui/retained/support/retained-gui-environment.js";
+import { BENCHMARK_SURFACE_CACHE_POLICY } from "../gui/retained/scenarios/retained-gui.js";
 
 const flags = process.argv.slice(2).filter((value) => value.startsWith("--"));
 const [frames, output] = process.argv

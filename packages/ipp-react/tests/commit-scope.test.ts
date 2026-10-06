@@ -10,7 +10,7 @@ import { createElement, Fragment, memo, useState } from "react";
 import type { BatchOutcome, Command } from "@ipp/client";
 import { Entity, Scalar, Transform, createRoot } from "../src/index.js";
 import type { ReactWorldClient } from "../src/index.js";
-import { commitCounters } from "../src/tree.js";
+import { commitCounters } from "../src/reconciler/tree.js";
 
 const SCALAR = 17;
 const TRANSFORM = 3;

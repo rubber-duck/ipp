@@ -15,16 +15,16 @@ import {
   CanvasGuiInput,
   type CanvasGuiInputOptions,
   DEFAULT_GUI_WHEEL_STEP,
-  keyboardKeyToGuiKey,
   wheelDeltaToLogical,
-} from "../src/gui/input.js";
+} from "../src/gui/platform/input.js";
+import { keyboardKeyToGuiKey } from "../src/gui/platform/keys.js";
 import {
   createGuiUnhandledInputGate,
   openUnhandledInputGate,
   closeUnhandledInputGate,
   trackUnhandledInputGate,
   settleUnhandledInputGateSubmission,
-} from "../src/gui/scene-input.js";
+} from "../src/gui/platform/scene-input.js";
 
 const applied: GuiInputRoutingOutcome = {
   disposition: "routed",

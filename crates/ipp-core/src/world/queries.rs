@@ -1,4 +1,21 @@
-use super::*;
+//! Read-only entity observations at a World boundary.
+
+use crate::world::context::WorldReadContext;
+use crate::world::{WorldContext, WorldEntityState, WorldSimulationState};
+use crate::{ComponentValue, EntityId, EntityLink, EntityMetadata, ErrorReason};
+
+/// Owned, read-only observation of one live entity.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EntitySnapshot {
+    /// World-local identity.
+    pub id: EntityId,
+    /// Current normalized metadata.
+    pub metadata: EntityMetadata,
+    /// Ordered relationship: parent and sibling order.
+    pub link: EntityLink,
+    /// Stored components in registry order.
+    pub components: Vec<ComponentValue>,
+}
 
 /// Read a live entity's metadata, link and stored components.
 pub(in crate::world) fn inspect_entity(
@@ -23,7 +40,7 @@ pub(in crate::world) fn inspect_entity(
     })
 }
 
-impl<'a> crate::world::WorldReadContext<'a> {
+impl<'a> WorldReadContext<'a> {
     /// Read a live entity's metadata, link and stored components.
     pub fn inspect(&self, id: EntityId) -> Option<EntitySnapshot> {
         inspect_entity(self.world, self.state, id)
@@ -99,7 +116,7 @@ impl WorldContext<'_> {
     }
 }
 
-impl crate::WorldContext<'_> {
+impl WorldContext<'_> {
     /// Read a live entity's metadata, link and stored components.
     pub fn inspect(&self, id: EntityId) -> Option<EntitySnapshot> {
         self.read().inspect(id)

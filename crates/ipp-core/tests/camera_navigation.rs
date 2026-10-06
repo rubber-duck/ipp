@@ -10,7 +10,7 @@ use ipp_core::{
     Batch, CameraMotion, Command, ComponentValue, EntityId, EntityMetadata, EntityRef, ErrorReason,
     FieldValue, FieldWrite, WorldLimits, WorldUpdateReport,
     components::{Camera, Transform},
-    systems::camera::model_matrix,
+    math::model_matrix,
 };
 
 fn run(world: &mut ipp_core::WorldContext<'_>, operations: Vec<Command>) -> WorldUpdateReport {

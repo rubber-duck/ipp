@@ -115,7 +115,9 @@ impl System for ConstraintSystem {
         context: &mut crate::systems::SystemAssetContext<'_>,
         event: &crate::services::asset_management::AssetLifecycleEvent,
     ) {
-        use crate::services::asset_management::{AssetLoadStatus, expression::EXPRESSION_TYPE};
+        use crate::services::asset_management::{
+            AssetLoadStatus, formats::expression::EXPRESSION_TYPE,
+        };
         if event.source.kind != EXPRESSION_TYPE {
             return;
         }

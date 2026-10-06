@@ -17,12 +17,12 @@ import {
   createRoot,
   type ReactWorldClient,
 } from "../src/index.js";
-import { AnimationMailbox } from "../src/animation.js";
-import { describeAnimation } from "../src/animation_tree.js";
+import { AnimationMailbox } from "../src/animation/declarations.js";
+import { describeAnimation } from "../src/animation/description.js";
 import {
   orderEntityLinks,
   type ResolvedEntityLink,
-} from "../src/entity_links.js";
+} from "../src/reconciler/entity-links.js";
 
 type Placement = { parent: EntityRef | null; before: EntityRef | null };
 

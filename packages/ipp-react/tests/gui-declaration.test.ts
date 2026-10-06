@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { FieldKind, encodeShaderDefinition } from "@ipp/client";
-import type { ReactWorldClient } from "../src/contract.js";
+import type { ReactWorldClient } from "../src/reconciler/world-client.js";
 import { componentNames } from "../src/components.js";
 import { LayerTransition } from "../src/gui/components.js";
 import { Color, Slider } from "../src/gui/controls.js";
@@ -10,7 +10,10 @@ import {
   PAINT_SHADER_HOST_TYPE,
   describeShader,
 } from "../src/shaders.js";
-import { ReactWorldTree, type ReactWorldElementType } from "../src/tree.js";
+import {
+  ReactWorldTree,
+  type ReactWorldElementType,
+} from "../src/reconciler/tree.js";
 
 function client(): ReactWorldClient {
   return {

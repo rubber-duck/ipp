@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use ipp_core::{HostRuntime, OutputRef, WorldPublicationId, WorldViewport};
 use ipp_host_session::{HostPresentationFailure, HostServices, PresentationDrawSummary};
-use ipp_protocol::presentation::{PresentationError, PresentationSurface};
+use ipp_protocol::host::presentation::{PresentationError, PresentationSurface};
 use ipp_render_gl::{GlesRenderDevice, RenderError, RenderService};
 use ipp_server::services::NativeHostServices;
 
@@ -61,8 +61,8 @@ impl HostServices for GlesHostServices {
         &mut self,
         capture: u64,
         host: u64,
-        options: ipp_protocol::profiling::ProfileRenderOptions,
-    ) -> ipp_protocol::profiling::ProfileGpuCapability {
+        options: ipp_protocol::host::profiling::ProfileRenderOptions,
+    ) -> ipp_protocol::host::profiling::ProfileGpuCapability {
         let state = super::profiling::RenderProfileCapture::start(
             &mut self.renderer,
             capture,
@@ -75,7 +75,10 @@ impl HostServices for GlesHostServices {
     }
 
     #[cfg(feature = "instrumentation")]
-    fn render_profile_stop(&mut self, capture: u64) -> ipp_protocol::profiling::ProfileGpuCapture {
+    fn render_profile_stop(
+        &mut self,
+        capture: u64,
+    ) -> ipp_protocol::host::profiling::ProfileGpuCapture {
         let state = self
             .profile
             .take()
@@ -239,7 +242,7 @@ impl HostServices for GlesHostServices {
             .map_err(presentation_failure)?;
         if summary.invalid_camera {
             return Err(HostPresentationFailure {
-                scope: ipp_protocol::RuntimeFailureScope::Draw,
+                scope: ipp_protocol::world::RuntimeFailureScope::Draw,
                 message: "selected camera is invalid".into(),
             });
         }
@@ -251,7 +254,7 @@ impl HostServices for GlesHostServices {
                 .context
                 .capture_region(viewport.width, viewport.height)
                 .map_err(|error| HostPresentationFailure {
-                    scope: ipp_protocol::RuntimeFailureScope::Context,
+                    scope: ipp_protocol::world::RuntimeFailureScope::Context,
                     message: error.to_string(),
                 })?;
             if pixels.len() != capture.len() {
@@ -453,11 +456,11 @@ impl GlesHostServices {
 fn presentation_failure(error: RenderError) -> HostPresentationFailure {
     HostPresentationFailure {
         scope: match error {
-            RenderError::ContextLost => ipp_protocol::RuntimeFailureScope::Context,
+            RenderError::ContextLost => ipp_protocol::world::RuntimeFailureScope::Context,
             RenderError::MissingMesh | RenderError::MissingTexture => {
-                ipp_protocol::RuntimeFailureScope::Resource
+                ipp_protocol::world::RuntimeFailureScope::Resource
             }
-            _ => ipp_protocol::RuntimeFailureScope::Draw,
+            _ => ipp_protocol::world::RuntimeFailureScope::Draw,
         },
         message: error.to_string(),
     }

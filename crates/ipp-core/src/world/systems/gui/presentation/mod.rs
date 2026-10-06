@@ -29,7 +29,7 @@ pub(in crate::world::systems::gui) mod paint;
 mod part_style;
 pub(in crate::world::systems::gui) mod parts;
 mod publication;
-mod system_state;
+mod retained;
 
 pub use component::{GUI_DEFAULT_FONT_SIZE, GuiFont, GuiPaintPart, GuiSkin, GuiTheme};
 pub(crate) use contract::write_paint_contract;
@@ -42,4 +42,4 @@ pub use publication::{
     GuiGroupItem, GuiNumberGeometry, GuiOverlayObservation, GuiRoutingValue, GuiSemanticActionKind,
     GuiSliderGeometry, GuiSliderRange,
 };
-pub(in crate::world::systems) use system_state::GuiCanvasState;
+pub(in crate::world::systems) use retained::GuiCanvasState;

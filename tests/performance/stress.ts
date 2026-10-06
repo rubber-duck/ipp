@@ -5,13 +5,14 @@ import type { EntitySnapshot } from "@ipp/client";
 import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, resolve, join, relative } from "node:path";
-import { runBrowserEnvironment } from "../browser/environment.js";
-import { galleryEnvironment } from "../render/gallery-driver.js";
-import { invoke, writeDataUrl } from "../render/evidence.js";
+import { runBrowserEnvironment } from "../harness/browser.js";
+import { galleryEnvironment } from "../gallery/drivers/browser-gallery.js";
+import { invoke } from "../harness/page-calls.js";
+import { writeDataUrl } from "../harness/evidence.js";
 import {
   sampleWorkerAllocations,
   sampleWorkerCpu,
-} from "./worker-profiling.js";
+} from "../profiling/support/worker-profiling.js";
 import { verifyHardwareRenderer } from "#ipp-browser-options";
 
 interface Probe {

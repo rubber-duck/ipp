@@ -21,11 +21,6 @@ import { BulkReadClient, type BulkReadDescriptor } from "./bulk-reads.js";
  */
 import type { MessageTransport } from "./transport.js";
 
-/** Largest complete message on any connection, Host-wide and before a
- * contract is known. `tools/mirrored_limits.py` compares it with
- * `ipp_protocol::MAX_MESSAGE_BYTES`. */
-export const HOST_MESSAGE_BYTES = 1_048_576;
-
 const HELLO = Uint8Array.of(0x49, 0x50, 0x50, 0x42); // IPPB
 const CONTRACT_REQUEST = Uint8Array.of(0x49, 0x50, 0x43, 0x51); // IPCQ
 const CONTRACT_REPLY = Uint8Array.of(0x49, 0x50, 0x43, 0x52); // IPCR

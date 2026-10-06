@@ -6,9 +6,9 @@ use crate::components::schema::FieldValue;
 use crate::expressions::{ExpressionScratch, PreparedExpression};
 use crate::services::asset_management::{
     AssetKey, AssetLoadStatus,
-    expression::{EXPRESSION_TYPE, ExpressionAsset},
+    formats::expression::{EXPRESSION_TYPE, ExpressionAsset},
 };
-use crate::world::property_binding::PropertyBinding;
+use crate::world::direct_bindings::property_binding::PropertyBinding;
 
 pub(super) struct ExpressionConstraintBinding {
     pub(super) incarnation: u64,

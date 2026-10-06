@@ -5,7 +5,7 @@
 precision highp float;
 precision highp int;
 
-// Fixed-point curve texels and single-channel bands; see surface_path.rs for the layout.
+// Fixed-point curve texels and single-channel bands; see assets/paths.rs for the layout.
 uniform highp isampler2D u_curves;
 uniform float u_curve_scale;
 uniform int u_curve_width;

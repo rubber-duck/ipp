@@ -1,7 +1,7 @@
 //! Producer-only attachment admission through ordinary component operations.
 
 use crate::components::{registry, schema::ComponentLifecycle};
-use crate::host::topology::AttachmentAnchor;
+use crate::host::attachments::topology::AttachmentAnchor;
 use crate::systems::{
     System, SystemCapabilities, SystemFactory, SystemId, SystemInitContext, SystemInitError,
     SystemOperationContext,

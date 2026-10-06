@@ -10,14 +10,14 @@ import {
   PlotHeightSurface3d,
   PlotPoints3d,
   PlotPie3d,
-} from "../src/plots.js";
+} from "../src/plots/declarations.js";
 import {
   PlotLegend,
   plotColorScaleColor,
   plotLegendPlacement,
   plotLegendSize,
   type PlotColorScale,
-} from "../src/plot-legend.js";
+} from "../src/plots/legend.js";
 
 const props = {
   contract,

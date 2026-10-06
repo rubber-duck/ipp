@@ -130,8 +130,8 @@ impl HostWorldTestDriver for ipp_core::HostRuntime {
 /// Compact CPU metadata retained for these unskinned fixture meshes, separate
 /// from vertex/index streams, including the topology retained for pose matching.
 pub fn unskinned_mesh_metadata_bytes(index_count: usize) -> usize {
-    std::mem::size_of::<ipp_core::services::asset_management::mesh_metadata::MeshMetadata>()
-        + index_count * 2
+    std::mem::size_of::<ipp_core::services::asset_management::formats::mesh_metadata::MeshMetadata>(
+    ) + index_count * 2
 }
 
 /// Minimal immutable font: fallback and A, with independently known advance metrics.

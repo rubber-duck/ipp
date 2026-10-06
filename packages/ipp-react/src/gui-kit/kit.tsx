@@ -25,9 +25,9 @@ import {
   useRef,
   type ReactNode,
 } from "react";
-import type { AssetReference } from "../assets.js";
-import { AttachmentContext } from "../attached-world.js";
-import type { ReactWorldCommits } from "../commits.js";
+import type { AssetReference } from "../assets/declarations.js";
+import { AttachmentContext } from "../composition/attached-world.js";
+import type { ReactWorldCommits } from "../reconciler/commits.js";
 import { Entity } from "../components.js";
 import { Theme } from "../gui/theme.js";
 import { encodeKitThemes, type KitThemeName } from "./themes.js";

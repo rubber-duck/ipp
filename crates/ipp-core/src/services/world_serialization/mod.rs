@@ -2,11 +2,9 @@
 
 pub(crate) mod binary;
 
-pub(crate) mod assets;
-
 mod container;
 mod graph;
-mod graph_validation;
+mod validation;
 
 pub use graph::{
     WorldGraphDescriptor, WorldGraphLoadResult, WorldGraphNode, WorldGraphNodeDescriptor,

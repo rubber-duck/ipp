@@ -120,7 +120,7 @@ Allocation removal also does not eliminate the animation CPU scaling problem: ge
 cargo build -p ipp-protocol --example profile_updates --release --features performance-experiment --locked
 IPP_PROFILE_MODES=0,3,3,0 taskset -c 22 target/release/examples/profile_updates
 IPP_PERFORMANCE_EXPERIMENT=1 node tools/build_browser.mjs render-expanded headless
-node tools/build_gallery.mjs
+node tools/products/gallery.mjs
 LD_LIBRARY_PATH=/home/dev/.local/opt/ipp-browser-support/sysroot/usr/lib64 IPP_PROFILE_MODES=0,3,3,0 node tools/profile_robot.mjs
 LD_LIBRARY_PATH=/home/dev/.local/opt/ipp-browser-support/sysroot/usr/lib64 IPP_PROFILE_MODES=0,3,3,0 IPP_PROFILE_PLAYING=1 node tools/profile_robot.mjs
 LD_LIBRARY_PATH=/home/dev/.local/opt/ipp-browser-support/sysroot/usr/lib64 IPP_PROFILE_MODES=0,3 IPP_PROFILE_JS=1 node tools/profile_robot.mjs

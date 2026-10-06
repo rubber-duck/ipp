@@ -1,8 +1,10 @@
 //! One actual surface selection, bounded completion waiters and immutable CPU transfers.
 
-use crate::{HostPresentationFailure, HostServices};
+use crate::services::connection::HostConnectionIngress;
+use crate::{Host, HostPresentationFailure, HostServices};
 use ipp_core::{HostRuntime, WorldId};
-use ipp_protocol::presentation::*;
+use ipp_protocol::host::presentation::*;
+use ipp_protocol::host::{HostRequest, HostRequestBody, HostResponseBody};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 /// Pending completion waiters plus retained captures one connection may hold.
@@ -613,6 +615,81 @@ impl PresentationCoordinator {
             self.completed
                 .push((connection, request, PresentationResponse::Error(error)));
         }
+    }
+}
+
+impl<P: HostServices> Host<P> {
+    pub(crate) fn expire_queued_presentations(&mut self) {
+        use ipp_protocol::host::presentation::{
+            PresentationError, PresentationRequest, PresentationResponse,
+        };
+        let now = self.connections.now;
+        for connection in self.connections.states.values_mut() {
+            let mut expired = Vec::new();
+            connection.pending.retain(|ingress| {
+                if let HostConnectionIngress::Control {
+                    request:
+                        HostRequest {
+                            request_id,
+                            body:
+                                HostRequestBody::Presentation(PresentationRequest::Frame {
+                                    ..
+                                }),
+                            ..
+                        },
+                    received_at,
+                } = ingress
+                    && frame_deadline(*received_at) <= now
+                {
+                    expired.push(*request_id);
+                    false
+                } else {
+                    true
+                }
+            });
+            for request in expired {
+                if let Err(error) = connection.reply(
+                    request,
+                    HostResponseBody::Presentation(PresentationResponse::Error(
+                        PresentationError::Timeout,
+                    )),
+                ) {
+                    connection.failure = Some(error);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn publish_presentation_responses(&mut self) -> Vec<(u64, String)> {
+        let mut failures = Vec::new();
+        for (id, request, mut response) in self.presentation.take_completed() {
+            if let Some(bytes) = self.presentation.take_capture(id, request) {
+                response = match self.publish_connection_bytes(id, bytes) {
+                    Ok(descriptor) => {
+                        if let ipp_protocol::host::presentation::PresentationResponse::Capture {
+                            read,
+                            ..
+                        } = &mut response
+                        {
+                            *read = descriptor.reference;
+                        }
+                        response
+                    }
+                    Err(_) => ipp_protocol::host::presentation::PresentationResponse::Error(
+                        ipp_protocol::host::presentation::PresentationError::Capacity,
+                    ),
+                };
+            }
+            if let Some(connection) = self.connections.states.get_mut(&id) {
+                connection.presentation_pending -= 1;
+                if let Err(error) =
+                    connection.reply(request, HostResponseBody::Presentation(response))
+                {
+                    failures.push((id, error));
+                }
+            }
+        }
+        failures
     }
 }
 

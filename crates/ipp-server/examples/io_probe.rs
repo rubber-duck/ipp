@@ -12,7 +12,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut io = IoService::new();
     io.register(
         &source,
-        ipp_server::services::http::HttpIoSource::new(tasks.schedulers().io())?,
+        ipp_server::services::io::HttpIoSource::new(tasks.schedulers().io())?,
     )?;
     let (received, peak) = futures_lite::future::block_on(async {
         let mut reader = io

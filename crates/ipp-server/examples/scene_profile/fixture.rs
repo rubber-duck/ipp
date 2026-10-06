@@ -36,7 +36,7 @@ impl Scene {
         )?;
         let world = host.load_world(
             &std::fs::read(bundle.join("benchmark.ipp"))?,
-            ipp_protocol::schema_hash(),
+            ipp_protocol::contract::schema_hash(),
             Default::default(),
             Default::default(),
             Default::default(),

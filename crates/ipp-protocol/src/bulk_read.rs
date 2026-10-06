@@ -168,7 +168,7 @@ pub fn response(
 /// The fixed bootstrap reply carries a descriptor, never contract bytes.
 pub fn contract_descriptor(descriptor: BulkReadDescriptor) -> Result<Vec<u8>, ProtocolError> {
     let mut writer = Writer::new(Vec::with_capacity(28));
-    writer.raw(&crate::CONTRACT_REPLY_MAGIC)?;
+    writer.raw(&crate::contract::CONTRACT_REPLY_MAGIC)?;
     writer.u64(descriptor.reference.connection)?;
     writer.u64(descriptor.reference.read)?;
     writer.u64(

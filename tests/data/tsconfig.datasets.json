@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "datasets.test.ts",
+    "react-data.test.ts",
+    "scenarios/react-data.ts",
+    "drivers/browser-datasets.ts",
+    "scenarios/datasets.ts",
+    "data-authoring.test.ts",
+    "scenarios/data-authoring.ts",
+    "../rendering/animation.test.ts",
+    "../rendering/pages/animation.ts"
+  ]
+}

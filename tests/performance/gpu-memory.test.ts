@@ -9,7 +9,7 @@ import {
   parseDrmFdinfo,
   sampleDrmMemory,
   sampleChromeMemory,
-} from "./gpu-memory.js";
+} from "./support/gpu-memory.js";
 import type { Browser } from "playwright";
 
 const identity = {

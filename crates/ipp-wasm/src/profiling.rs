@@ -1,6 +1,6 @@
 //! Instrumentation-only trusted Host control and bounded immutable readback.
 
-use ipp_protocol::profiling::{ProfileRequest, ProfileResponse, ProfileStatus};
+use ipp_protocol::host::profiling::{ProfileRequest, ProfileResponse, ProfileStatus};
 
 #[global_allocator]
 static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
@@ -24,7 +24,7 @@ pub extern "C" fn ipp_profile_control(
         1 => ProfileRequest::Start {
             counters: counters != 0,
             max_artifact_bytes,
-            gpu: ipp_protocol::profiling::ProfileGpuSampling::Off,
+            gpu: ipp_protocol::host::profiling::ProfileGpuSampling::Off,
             gl_calls: false,
             max_events: 0,
         },

@@ -104,7 +104,7 @@ pub(crate) trait ComponentLifecycle: Clone {
     fn resource_demand(
         &self,
         _demand: &mut std::collections::BTreeSet<
-            crate::services::asset_management::service::AssetDemandSelection,
+            crate::services::asset_management::AssetDemandSelection,
         >,
     ) {
     }

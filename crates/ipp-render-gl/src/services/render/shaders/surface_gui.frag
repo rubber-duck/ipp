@@ -15,7 +15,7 @@ precision highp float;
 // Paints. A paint is its shape's offset plus, for a box with a checker, the
 // checker's, plus its fill type: solid (0), linear (1), radial (2), hue,
 // saturation-value or a custom paint. Equal to the GUI_PAINT_* and GUI_FILL_*
-// constants in gui_batch.rs; a Rust unit test compares them.
+// constants in retained/box_records.rs; a Rust unit test compares them.
 const float GUI_PAINT_STROKE = 16.0;
 const float GUI_PAINT_ARC = 32.0;
 const float GUI_PAINT_CHECKER = 8.0;
@@ -25,7 +25,7 @@ const float GUI_FILL_PAINT = 5.0;
 // A painted primitive packs its parameter block and slot as block * stride + slot.
 const float GUI_PAINT_BLOCK_STRIDE = 16.0;
 const float INV_SQRT2 = 0.70710678;
-// A whole ring's half sweep, exactly as gui_batch.rs writes it; a Rust unit test
+// A whole ring's half sweep, exactly as retained/box_records.rs writes it; a Rust unit test
 // compares them.
 const float PI = 3.14159265;
 const float TAU = 6.28318531;

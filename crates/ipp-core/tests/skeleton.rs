@@ -6,6 +6,7 @@ use support::selection::{RENDER, SKINNING, select};
 
 use ipp_core::{
     components::{JointOverrideRow, MeshInstance, Skeleton, Skin, Transform},
+    math,
     services::asset_management::{self as assets, AssetUpload, AssetUploadIdentity, builtin},
     systems::camera,
     *,
@@ -140,7 +141,7 @@ fn set(entity: EntityId, component: u16, offset: usize, value: FieldValue) -> Co
 fn rest_inverse_binds_mapping_and_independent_poses_have_stable_buffers() {
     let mut fixture_host = crate::support::task_scheduler::host();
     let (mut world, a, b) = fixture(&mut fixture_host);
-    let identity = camera::model_matrix(&Transform::default()).unwrap();
+    let identity = math::model_matrix(&Transform::default()).unwrap();
     assert_eq!(world.skin_palette(a).unwrap(), &[identity, identity]);
     let address = world.skeleton_pose(a).unwrap().as_ptr();
     let palette_address = world.skin_palette(a).unwrap().as_ptr();
@@ -648,7 +649,7 @@ fn generated_bounds_enclose_every_blended_vertex_after_pose_and_nonuniform_scale
         })
         .unwrap();
     let model = GeometryShapeTransform::from_matrix(
-        camera::model_matrix(&Transform {
+        math::model_matrix(&Transform {
             x: 2.0,
             qz: 0.3,
             qw: 0.9539392,

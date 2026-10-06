@@ -21,7 +21,7 @@ For browser-trusted developer certificates, use `python tools/ipp.py setup certi
 
 ## Development and lifetime
 
-`python tools/ipp.py setup blender` verifies and extracts pinned development dependencies under ignored `target/blender`; packaging bundles the wheels and their licenses. These dependencies remain in the addon distribution. [tools/blender.py](../../tools/blender.py) owns preparation, packaging and the background runner.
+`python tools/ipp.py setup blender` verifies and extracts pinned development dependencies under ignored `target/blender`; packaging bundles the wheels and their licenses. These dependencies remain in the addon distribution. [The add-on tooling](../../tools/pipeline/blender_addon.py) owns preparation and packaging and launches the [background runner](run_background.py).
 
 ```sh
 python tools/ipp.py dev blender --args --ready-file target/blender/run/ready.json --port 8118 --viewer-url http://127.0.0.1:5178/ --blend tests/fixtures/blender/fox.blend

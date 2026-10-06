@@ -53,11 +53,11 @@ pub mod canvas_state;
 
 pub use canvas_state::{CanvasEvaluatedExtent, CanvasState, CanvasStateRecord, CanvasStateUpdate};
 mod component;
-mod diagnostics;
 mod layer_transition;
 mod layers;
 mod patch;
 mod publication;
+mod statistics;
 mod system;
 mod system_state;
 #[cfg(test)]
@@ -70,7 +70,6 @@ pub use component::{
     CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasPaint,
     CanvasStyle, CanvasText,
 };
-pub use diagnostics::CanvasWork;
 pub use layer_transition::CanvasLayerTransition;
 pub use publication::{
     CanvasAttachmentSlot, CanvasAxis, CanvasBoxShape, CanvasClip, CanvasGlyph, CanvasHit,
@@ -79,6 +78,7 @@ pub use publication::{
     CanvasPrimitiveStyle, CanvasPublication, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow,
     CanvasTarget,
 };
+pub use statistics::CanvasWork;
 pub use system::{CanvasSystem, CanvasSystemFactory};
 pub(in crate::world::systems) use system_state::CanvasGeometry;
 pub(in crate::world::systems) use update::{logical_extent, prepare_constrained_geometry};

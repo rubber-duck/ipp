@@ -8,9 +8,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from measure_artifacts import artifact, distribution
 from pipeline.cli import make_plan, parser
-from wasm_sizes import analyze_wasm
+from pipeline.measure import artifact, distribution
+from pipeline.wasm_sizes import analyze_wasm
 
 
 HEADER = b"\0asm\1\0\0\0"

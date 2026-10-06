@@ -267,7 +267,7 @@ fn cpu_residency_above_former_quota_does_not_suppress_mesh_upload() {
 
 #[test]
 fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
-    use ipp_core::services::asset_management::{AssetSource, mesh_metadata::MeshMetadata};
+    use ipp_core::services::asset_management::{AssetSource, formats::mesh_metadata::MeshMetadata};
 
     let mut host = support::task_scheduler::host();
     host.register_stream_resource_provider("https").unwrap();
@@ -339,7 +339,7 @@ fn detached_demanded_mesh_publishes_cpu_metadata_and_requeues_gpu_recovery() {
 #[test]
 fn detached_progress_defers_pending_font_and_drawing_gpu_preparation() {
     use ipp_core::services::asset_management::{
-        AssetLoadStatus, drawing::DRAWING_TYPE, font::FONT_TYPE,
+        AssetLoadStatus, formats::drawing::DRAWING_TYPE, formats::font::FONT_TYPE,
     };
 
     let mut host = support::task_scheduler::host();
@@ -625,8 +625,10 @@ fn device_replacement_releases_old_payloads() {
 
 fn metadata_bytes() -> usize {
     let mesh = MeshAsset::decode(&triangle()).unwrap();
-    ipp_core::services::asset_management::mesh_metadata::MeshMetadata::from_owned_mesh(mesh)
-        .resident_bytes()
+    ipp_core::services::asset_management::formats::mesh_metadata::MeshMetadata::from_owned_mesh(
+        mesh,
+    )
+    .resident_bytes()
 }
 
 /// Resource readiness must reach every World through the Host lifecycle boundary.

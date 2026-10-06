@@ -11,7 +11,7 @@
 use super::targets::GlesTarget;
 use super::{GlesRenderDevice, GlesRenderProgram};
 use crate::RenderError;
-use crate::services::render::surface_cache::SURFACE_CACHE_MAX_DIMENSION;
+use crate::services::render::surface::texture_cache::SURFACE_CACHE_MAX_DIMENSION;
 use std::ptr;
 
 const TEXTURE_2D: u32 = 0x0DE1;

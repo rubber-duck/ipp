@@ -10,8 +10,8 @@ import subprocess
 import sys
 from urllib.parse import unquote, urlsplit
 
-from mirrored_limits import mirrored_limit_errors
-from repository_structure import structure_errors
+from checks.mirrored_limits import mirrored_limit_errors
+from checks.repository_structure import structure_errors
 
 
 ROOT = Path(__file__).resolve().parents[1]

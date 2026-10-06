@@ -5,7 +5,7 @@ mod support;
 use ipp_core::components::{CustomMaterial, ExpressionDriver, LinearDriver, Scalar};
 use ipp_core::expressions::*;
 use ipp_core::services::asset_management::{
-    AssetUpload, AssetUploadIdentity, expression::EXPRESSION_TYPE,
+    AssetUpload, AssetUploadIdentity, formats::expression::EXPRESSION_TYPE,
 };
 use ipp_core::systems::animation::*;
 use ipp_core::systems::constraints::*;
@@ -1127,7 +1127,7 @@ fn unload_and_recovery_drop_runtime_access_and_rebuild_without_reauthoring() {
     assert!(
         world
             .asset_resources()
-            .get_typed::<ipp_core::services::asset_management::expression::ExpressionAsset>(key)
+            .get_typed::<ipp_core::services::asset_management::formats::expression::ExpressionAsset>(key)
             .is_none()
     );
     world.step(0.0).unwrap();

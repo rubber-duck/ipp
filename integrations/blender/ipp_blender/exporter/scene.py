@@ -10,7 +10,7 @@ from .types import Unsupported
 
 class Exporter:
     def __init__(self, publish, stream=None):
-        from ..asset_plan import AssetPlan
+        from .asset_plan import AssetPlan
 
         self.plan = (
             AssetPlan(stream.asset_store, stream.asset, stream.checkpoint)
@@ -54,12 +54,12 @@ class Exporter:
             self.stream.checkpoint()
 
     def animation(self, objects, sampled=None):
-        from ..animation import export_actions
+        from .animation import export_actions
 
         return export_actions(self, objects, sampled)
 
     def declare_animation_sources(self, objects):
-        from ..animation import source_key
+        from .animation import source_key
 
         for obj in objects:
             data = obj.animation_data
@@ -186,10 +186,10 @@ class Exporter:
             for name, value in self.mesh_poses.items()
             if all(target in ids for target in value[1])
         }
-        from ..animation import prepare_actions
-        from ..particle_bake import prepare_particles
-        from ..particles import export_particles
-        from ..sampling import SamplingSchedule
+        from .animation import prepare_actions
+        from .particle_bake import prepare_particles
+        from .particles import export_particles
+        from .sampling import SamplingSchedule
 
         particle_objects = [
             obj

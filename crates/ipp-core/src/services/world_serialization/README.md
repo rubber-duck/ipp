@@ -1,6 +1,6 @@
 # World persistence
 
-Persistence captures the serializable authored attachment graph without acquiring or embedding assets. [Host save/load](../../host/persistence.rs) takes one exclusive applied-state cut between whole batches. It restores all Worlds and entities privately, remaps references and restores System contributions before publishing any of the graph. Errors preserve existing Worlds.
+Persistence captures the serializable authored attachment graph without acquiring or embedding assets. [Host save/load](../../host/persistence) takes one exclusive applied-state cut between whole batches. It restores all Worlds and entities privately, remaps references and restores System contributions before publishing any of the graph. Errors preserve existing Worlds.
 
 Saved state includes durable identities, metadata, configured capacity hints, typed stored entity links, components and selected Systems' persistent contributions. Graph-local World identities distinguish independent copies sharing durable metadata. Typed World/output references remap to fresh World-qualified runtime handles, never fabricated native handles. Animation restores controller descriptions, playback position and each controller's applied contributions, rebuilding bindings when resources are available; fields hold the saved values, contributions included. Internal/evaluated buffers are excluded; references to excluded state reject export. Authored nested output selections survive; Host root presentation does not.
 

@@ -73,7 +73,8 @@ impl HostServices for TestHostServices {
 
 fn open(host: &mut Host<TestHostServices>, id: u64) {
     host.open_connection(id).unwrap();
-    host.receive_connection(id, &ipp_protocol::HELLO).unwrap();
+    host.receive_connection(id, &ipp_protocol::contract::HELLO)
+        .unwrap();
     host.take_connection_response(id).unwrap();
 }
 
@@ -190,7 +191,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
     let mut host = Host::<TestHostServices>::new().unwrap();
     host.open_connection(1).unwrap();
     assert!(
-        host.receive_connection(1, &ipp_protocol::CONTRACT_REQUEST)
+        host.receive_connection(1, &ipp_protocol::contract::CONTRACT_REQUEST)
             .unwrap_err()
             .contains("hello magic")
     );
@@ -200,7 +201,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
     let idle = host.connections.states[&2].reply_budget.0.usage().bytes;
     let mut admitted = 0;
     let refusal = loop {
-        match host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST) {
+        match host.receive_connection(2, &ipp_protocol::contract::CONTRACT_REQUEST) {
             Ok(()) => admitted += 1,
             Err(error) => break error,
         }
@@ -219,7 +220,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
             .all(|reply| reply.bytes.len() == 28 && &reply.bytes[..4] == b"IPCR")
     );
     assert!(
-        host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
+        host.receive_connection(2, &ipp_protocol::contract::CONTRACT_REQUEST)
             .is_err()
     );
     drop(replies);
@@ -242,7 +243,7 @@ fn contract_requests_follow_the_hello_and_are_charged_as_replies_until_delivered
         host.take_connection_response(2).unwrap();
     }
     host.progress_resources().unwrap();
-    host.receive_connection(2, &ipp_protocol::CONTRACT_REQUEST)
+    host.receive_connection(2, &ipp_protocol::contract::CONTRACT_REQUEST)
         .unwrap();
 }
 
@@ -278,8 +279,8 @@ fn multiplex_reliable_output_budget_is_per_connection_not_per_session() {
         let id = *host.connections.states[&1].sessions.first().unwrap();
         if let Err(error) = host.session_mut(id).unwrap().queue_response(
             0,
-            ipp_protocol::ResponseBody::RuntimeFailure {
-                scope: ipp_protocol::RuntimeFailureScope::Resource,
+            ipp_protocol::world::ResponseBody::RuntimeFailure {
+                scope: ipp_protocol::world::RuntimeFailureScope::Resource,
                 faulted: false,
                 message: message.clone(),
             },
@@ -393,8 +394,8 @@ fn deferred_progress_is_fair_despite_sibling_replies() {
             .unwrap()
             .queue_response(
                 0,
-                ipp_protocol::ResponseBody::RuntimeFailure {
-                    scope: ipp_protocol::RuntimeFailureScope::Resource,
+                ipp_protocol::world::ResponseBody::RuntimeFailure {
+                    scope: ipp_protocol::world::RuntimeFailureScope::Resource,
                     faulted: false,
                     message: "sibling semantic traffic".into(),
                 },
@@ -443,7 +444,7 @@ fn selected_system_names_resolve_against_registered_factories_and_readiness_is_w
     );
     assert_eq!(
         absent,
-        HostResponseBody::Error(super::service::WORLD_SELECTION_REQUIRED.into())
+        HostResponseBody::Error(super::control_requests::WORLD_SELECTION_REQUIRED.into())
     );
     assert_eq!(host.runtime().world_ids().len(), 0);
 

@@ -1,4 +1,4 @@
-//! Owned asynchronous decoding at the resource loading boundary.
+//! Owned asynchronous decoding and executor-neutral scheduling at the resource loading boundary.
 
 use super::{Asset, AssetLoader, IoReader};
 use std::{
@@ -98,4 +98,15 @@ impl<T: Asset> AssetLoader for AsyncAssetLoader<T> {
             failure.error
         }))
     }
+}
+
+/// Owned load task. Dropping this lease cancels its future without releasing
+/// buffers still owned by an outstanding platform operation.
+pub trait AssetLoadTask {}
+
+/// Host-local scheduling supplied before resource acquisition starts.
+/// The Host executor supplies real readiness wakers and owns cancellation/draining.
+pub trait AssetLoadScheduler {
+    /// Schedule owned acquisition/decoding work; the task never borrows a World.
+    fn spawn(&self, future: Pin<Box<dyn Future<Output = ()> + 'static>>) -> Box<dyn AssetLoadTask>;
 }

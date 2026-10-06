@@ -52,7 +52,7 @@ fn focus_effect(host: &mut GuiTestHost, world: WorldId, focused: bool, changed: 
 
 #[test]
 fn headless_focus_edit_blur_and_duplicates_preserve_the_value_and_exact_dirty_work() {
-    let (mut host, world) = super::super::local_tests::fixture();
+    let (mut host, world) = super::super::test_support::fixture();
     let entity = create(
         &mut host,
         world,
@@ -97,7 +97,7 @@ fn headless_focus_edit_blur_and_duplicates_preserve_the_value_and_exact_dirty_wo
 
 #[test]
 fn delayed_blur_never_clears_another_targets_focus() {
-    let (mut host, world) = super::super::local_tests::fixture();
+    let (mut host, world) = super::super::test_support::fixture();
     let first = create(
         &mut host,
         world,
@@ -134,7 +134,7 @@ fn delayed_blur_never_clears_another_targets_focus() {
 
 #[test]
 fn blur_requires_current_lifetime_and_local_eligibility() {
-    let (mut host, world) = super::super::local_tests::fixture();
+    let (mut host, world) = super::super::test_support::fixture();
     let entity = create(
         &mut host,
         world,
@@ -279,7 +279,7 @@ fn revoked_routed_blur_cannot_clear_logical_focus_but_headless_semantic_blur_can
 #[test]
 fn blur_overflow_preflight_and_no_focus_noop_do_not_wrap_dirty_counters() {
     for focused in [false, true] {
-        let (mut host, world) = super::super::local_tests::fixture();
+        let (mut host, world) = super::super::test_support::fixture();
         let entity = create(
             &mut host,
             world,

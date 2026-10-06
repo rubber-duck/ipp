@@ -8,7 +8,7 @@ use std::{
 
 mod catalog;
 mod source;
-pub(crate) use source::validate_reference;
+pub(crate) use source::{AssetDemandSelection, validate_reference, validate_source};
 mod source_lookup;
 
 mod lifecycle;
@@ -19,16 +19,12 @@ pub use publication::AssetPublicationId;
 
 mod resource;
 
-mod load_scheduler;
-pub use load_scheduler::{AssetLoadScheduler, AssetLoadTask};
-
 mod loader;
-pub use loader::{AssetLoadFailure, AsyncAssetLoader};
+pub use loader::{AssetLoadFailure, AssetLoadScheduler, AssetLoadTask, AsyncAssetLoader};
 
 pub mod decode;
 
 pub mod export;
-pub mod writer;
 
 /// Shared private geometry builders and optional procedural source recipes.
 pub mod builtin;
@@ -222,6 +218,12 @@ pub trait AssetLoader: 'static {
     fn poll_load(&mut self, cx: &mut Context<'_>) -> Poll<Result<Self::Data, String>>;
 }
 
+/// Typed CPU representation encoded into its ordinary IPP asset format.
+pub trait AssetEncoder {
+    /// Encode without allocating more output than the supplied destination budget.
+    fn encode_asset(&self, max_bytes: usize) -> Result<Vec<u8>, String>;
+}
+
 /// Joints one skeleton, pose, skin binding or pill part may address.
 ///
 /// A skinned draw uploads one mat4 per joint (`IPP_MAX_JOINTS` in the vertex shader):
@@ -244,27 +246,9 @@ fn bounded_error(mut error: String) -> String {
     error
 }
 
-pub mod mesh;
-
-pub mod quadratic;
-
-pub mod font;
-
-pub mod drawing;
-
-pub mod expression;
-
-pub mod mesh_metadata;
-
-pub mod texture;
-
-pub mod skeleton;
-
-pub mod skin_binding;
+/// Typed CPU asset formats with their decoders and encoders.
+pub mod formats;
 
 pub mod service;
 
 pub use service::AssetManagementService;
-
-/// Immutable backend-specific shader definitions.
-pub mod shader;

@@ -8,7 +8,7 @@ use ipp_core::{
     EntityMetadata, EntityRef, HostRuntime, WorldLimits,
     expressions::{BinaryOperator, ExpressionDeclaration, ExpressionInput, ExpressionNode},
     services::{
-        asset_management::{AssetSource, expression::EXPRESSION_TYPE},
+        asset_management::{AssetSource, formats::expression::EXPRESSION_TYPE},
         data::*,
     },
     systems::{SystemId, data_bindings::*},

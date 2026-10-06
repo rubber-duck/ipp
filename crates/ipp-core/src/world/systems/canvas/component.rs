@@ -1,8 +1,8 @@
 use crate::ErrorReason;
 use crate::components::rows::{Rows, SchemaRow};
 use crate::components::schema::{ComponentAssetReference, ComponentLifecycle};
-use crate::services::asset_management::service::AssetDemandSelection;
-use crate::services::asset_management::{drawing::DRAWING_TYPE, font::FONT_TYPE};
+use crate::services::asset_management::AssetDemandSelection;
+use crate::services::asset_management::{formats::drawing::DRAWING_TYPE, formats::font::FONT_TYPE};
 use ipp_schema_derive::SchemaComponent;
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -372,7 +372,7 @@ impl ComponentLifecycle for CanvasPaint {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
-        crate::services::asset_management::service::validate_source(&self.source)
+        crate::services::asset_management::validate_source(&self.source)
     }
 
     /// Dynamic properties are indexed state: each write is checked where it
@@ -387,7 +387,7 @@ impl ComponentLifecycle for CanvasPaint {
 
     fn asset_references() -> &'static [ComponentAssetReference] {
         &[ComponentAssetReference {
-            kind: crate::services::asset_management::shader::SHADER_TYPE.0,
+            kind: crate::services::asset_management::formats::shader::SHADER_TYPE.0,
             source_offset: std::mem::offset_of!(Self, source) as u32,
             variant_offset: std::mem::offset_of!(Self, variant) as u32,
         }]
@@ -397,7 +397,7 @@ impl ComponentLifecycle for CanvasPaint {
         if !self.source.is_empty() {
             AssetDemandSelection::insert_into(
                 demand,
-                crate::services::asset_management::shader::SHADER_TYPE,
+                crate::services::asset_management::formats::shader::SHADER_TYPE,
                 &self.source,
                 self.variant,
             );

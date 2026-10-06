@@ -440,7 +440,7 @@ pub fn serve_with<P: HostServices>(
                 "HTTP source prefix requires http:// or https://",
             ));
         }
-        let source = crate::services::http::HttpIoSource::new(host.host.task_schedulers().io())
+        let source = crate::services::io::HttpIoSource::new(host.host.task_schedulers().io())
             .map_err(io::Error::other)?;
         host.host
             .runtime_mut()

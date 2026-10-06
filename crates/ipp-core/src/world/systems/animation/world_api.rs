@@ -65,7 +65,7 @@ impl WorldContext<'_> {
         }
         if let Some(description) = description {
             for driver in &description.drivers {
-                super::binding::validate_target_support(&self.world.manifest, &driver.property)?;
+                super::targets::validate_target_support(&self.world.manifest, &driver.property)?;
             }
         }
         self.enqueue_system_command(

@@ -91,10 +91,10 @@ fn gui_does_not_pass_blocked_host_control() {
     host.session_mut(session)
         .unwrap()
         .receive_decoded(
-            ipp_protocol::Request {
+            ipp_protocol::world::Request {
                 session,
                 request_id: 39,
-                body: ipp_protocol::RequestBody::Inspect(Default::default()),
+                body: ipp_protocol::world::RequestBody::Inspect(Default::default()),
             },
             None,
         )

@@ -2,7 +2,7 @@
 
 [Performance harnesses](README.md) · [Blender development](../../docs/development/blender.md)
 
-The maintained [stream scenario](../render/blender-stream.test.ts) compares a refreshed full export with a streamed export into a fresh browser World. Both paths use real Blender, HTTPS/WSS, the generated client, worker/WASM and completed WebGL frames. The ordinary Blender suite runs a 2,409-entity capacity fixture, compares exact pixels, and rejects a later chunk before repairing the same World with a full revision. It also repairs a local encoding error after thousands of commands have already committed.
+The maintained [stream scenario](../blender/blender-stream.test.ts) compares a refreshed full export with a streamed export into a fresh browser World. Both paths use real Blender, HTTPS/WSS, the generated client, worker/WASM and completed WebGL frames. The ordinary Blender suite runs a 2,409-entity capacity fixture, compares exact pixels, and rejects a later chunk before repairing the same World with a full revision. It also repairs a local encoding error after thousands of commands have already committed.
 
 Run the standard suite to build all prerequisites and verify correctness:
 
@@ -20,7 +20,7 @@ blender --background --factory-startup --python-exit-code 1 \
 IPP_BROWSER_ANGLE=vulkan \
 IPP_BLENDER_STREAM_BLEND=target/stress-benchmark/stream-medium/benchmark.blend \
 IPP_BLENDER_STREAM_SIZES=0,100,100,0 \
-ipp-browser-env node --test-concurrency=1 dist/tests/render/blender-stream.test.js
+ipp-browser-env node --test-concurrency=1 dist/tests/blender/blender-stream.test.js
 ```
 
 `0` requests a fresh full export; positive values select the maximum entities or completed clip sources per streamed group. Each navigation creates a fresh runtime. The addon process and its immutable asset store remain warm. Initial Blender startup, file opening, and the server's initial export happen before the measured connection; both compared paths then request another export. This measures export/import overlap, not Blender process startup or loading an already cached snapshot. A configured hardware run rejects software renderer identities.

@@ -5,7 +5,7 @@ use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use ipp_core::profiling::{self as profile, ProfileContext};
-use ipp_protocol::profiling::{ProfileRequest, ProfileResponse, ProfileStatus};
+use ipp_protocol::host::profiling::{ProfileRequest, ProfileResponse, ProfileStatus};
 
 // The core counters are global: two Host adapters must not reset each other's capture.
 static CAPTURE_HOST: AtomicU64 = AtomicU64::new(0);
@@ -18,8 +18,8 @@ struct Capture {
     max_events: usize,
     max_artifact_bytes: usize,
     exceeded: bool,
-    gpu_sampling: ipp_protocol::profiling::ProfileGpuSampling,
-    gpu: Option<ipp_protocol::profiling::ProfileGpuCapture>,
+    gpu_sampling: ipp_protocol::host::profiling::ProfileGpuSampling,
+    gpu: Option<ipp_protocol::host::profiling::ProfileGpuCapture>,
     first_boundary: u64,
     start: u64,
     end: u64,
@@ -111,7 +111,7 @@ impl HostProfiling {
             self.host = host;
             // Also reclaim history left by a disconnected/dropped capture owner.
             profile::release_capture();
-            if ipp_core::profiling_trace::prepare(max_events).is_err() {
+            if ipp_core::profiling::trace::prepare(max_events).is_err() {
                 CAPTURE_HOST.store(0, Ordering::Relaxed);
                 return ProfileResponse::status(ProfileStatus::Capacity);
             }
@@ -124,7 +124,7 @@ impl HostProfiling {
             let capability = services.render_profile_start(
                 id,
                 host,
-                ipp_protocol::profiling::ProfileRenderOptions {
+                ipp_protocol::host::profiling::ProfileRenderOptions {
                     gpu,
                     gl_calls,
                 },
@@ -138,10 +138,11 @@ impl HostProfiling {
                 max_artifact_bytes,
                 exceeded: false,
                 gpu_sampling: gpu,
-                gpu: Some(ipp_protocol::profiling::ProfileGpuCapture {
+                gpu: Some(ipp_protocol::host::profiling::ProfileGpuCapture {
                     sampling: gpu,
                     capability,
-                    availability: ipp_protocol::profiling::ProfileGpuAvailability::Unsupported,
+                    availability:
+                        ipp_protocol::host::profiling::ProfileGpuAvailability::Unsupported,
                     dropped_records: 0,
                     records: Vec::new(),
                     gl_calls: None,
@@ -294,16 +295,16 @@ fn artifact(host: u64, adapter: &str, capture: &Capture, boundary: u64) -> Optio
         "unavailable"
     };
     let gpu_availability =
-        if capture.gpu_sampling == ipp_protocol::profiling::ProfileGpuSampling::Off {
+        if capture.gpu_sampling == ipp_protocol::host::profiling::ProfileGpuSampling::Off {
             "not-requested"
         } else if capture.gpu.as_ref().is_some_and(|gpu| {
-            gpu.capability != ipp_protocol::profiling::ProfileGpuCapability::Unsupported
+            gpu.capability != ipp_protocol::host::profiling::ProfileGpuCapability::Unsupported
         }) {
             "available"
         } else {
             "unavailable"
         };
-    write!(out, "{{\"format\":\"ipp-profile/1\",\"captureId\":\"{}\",\"hostId\":\"{host}\",\"source\":{{\"target\":\"{target}\",\"schemaHash\":\"{}\",\"instrumentation\":true,\"scope\":\"evaluation-thread\",\"backgroundAllocations\":\"excluded\",\"adapter\":", capture.id, ipp_protocol::schema_hash()).unwrap();
+    write!(out, "{{\"format\":\"ipp-profile/1\",\"captureId\":\"{}\",\"hostId\":\"{host}\",\"source\":{{\"target\":\"{target}\",\"schemaHash\":\"{}\",\"instrumentation\":true,\"scope\":\"evaluation-thread\",\"backgroundAllocations\":\"excluded\",\"adapter\":", capture.id, ipp_protocol::contract::schema_hash()).unwrap();
     quote(&mut out, adapter);
     let trace_availability = if capture.max_events == 0 {
         "not-requested"
@@ -379,10 +380,10 @@ fn artifact(host: u64, adapter: &str, capture: &Capture, boundary: u64) -> Optio
     }
     if capture.max_events != 0 && !out.exceeded {
         out.text.pop();
-        let (capacity, dropped, backing) = ipp_core::profiling_trace::retention();
+        let (capacity, dropped, backing) = ipp_core::profiling::trace::retention();
         write!(out, ",\"trace\":{{\"clockDomain\":\"ipp-core.monotonic\",\"unit\":\"nanoseconds\",\"policy\":\"drop-new\",\"capacity\":{capacity},\"droppedEvents\":\"{dropped}\",\"retainedBytes\":\"{backing}\",\"events\":[").unwrap();
         let mut separator = "";
-        ipp_core::profiling_trace::visit(|span| {
+        ipp_core::profiling::trace::visit(|span| {
             write!(
                 out,
                 "{separator}{{\"sequence\":\"{}\",\"kind\":\"{}\",\"name\":",
@@ -458,8 +459,8 @@ impl Write for BoundedArtifact {
     }
 }
 
-fn gpu_artifact(out: &mut BoundedArtifact, gpu: &ipp_protocol::profiling::ProfileGpuCapture) {
-    use ipp_protocol::profiling::*;
+fn gpu_artifact(out: &mut BoundedArtifact, gpu: &ipp_protocol::host::profiling::ProfileGpuCapture) {
+    use ipp_protocol::host::profiling::*;
     let sampling = match gpu.sampling {
         ProfileGpuSampling::Off => "off",
         ProfileGpuSampling::Frame => "frame",
@@ -557,9 +558,9 @@ fn gpu_artifact(out: &mut BoundedArtifact, gpu: &ipp_protocol::profiling::Profil
 
 fn gpu_availability(
     out: &mut BoundedArtifact,
-    availability: ipp_protocol::profiling::ProfileGpuAvailability,
+    availability: ipp_protocol::host::profiling::ProfileGpuAvailability,
 ) {
-    use ipp_protocol::profiling::ProfileGpuAvailability::*;
+    use ipp_protocol::host::profiling::ProfileGpuAvailability::*;
     let name = match availability {
         Pending => "pending",
         Available {

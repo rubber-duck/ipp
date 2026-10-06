@@ -2,9 +2,9 @@
 
 use super::*;
 use crate::ErrorReason;
-use crate::services::asset_management::{AssetKey, font::FontAsset};
+use crate::services::asset_management::{AssetKey, formats::font::FontAsset};
 use crate::systems::canvas::*;
-use crate::systems::surface::{
+use crate::text::{
     TextFont, TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, measure_text,
 };
 use std::sync::Arc;

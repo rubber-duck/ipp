@@ -20,10 +20,10 @@ Update-requested removals wait until all scheduled updates return. Later Systems
 
 ## Source entrypoints
 
-- [Scheduler and callback contracts](scheduler.rs), [compiled composition](composition.rs) and [scoped contexts](contexts.rs) define extension boundaries.
-- [Typed bindings](bindings.rs) and [parameter examples/tests](../../../tests/system_parameters.rs) show declaration and borrowing mechanics.
-- [Mutation](../mutation.rs), [deferred removals](../removals.rs) and [asset lifecycle](../../services/asset_management/lifecycle.rs) implement invalidation and publication boundaries.
-- [Persistence hooks](persistence.rs) let each System capture and restore its own contribution through the [serialization service](../../services/world_serialization/README.md).
+- [System and factory contracts](composition/system_trait.rs), [validated schedules](composition/schedule.rs), the [World manifest](composition/manifest.rs), the [compiled catalog](composition/catalog.rs) and [scoped contexts](composition/contexts.rs) define extension boundaries.
+- [Typed update parameters](composition/parameters.rs) and [parameter examples/tests](../../../tests/system_parameters.rs) show declaration and borrowing mechanics.
+- [Ordered mutation](../mutation/mod.rs), [deferred removals](../removals.rs) and [asset lifecycle](../../services/asset_management/lifecycle.rs) implement invalidation and publication boundaries.
+- [Persistence hooks](composition/persistence.rs) let each System capture and restore its own contribution through the [serialization service](../../services/world_serialization/README.md).
 
 A System stores one `SystemBindings<Self>` field. Its factory uses `SystemBindings::resolve(context)` and `SystemBoundUpdate::dependencies()`. Inside its ordinary `impl System`, `ipp_core::system_update!(bindings)` supplies the dynamic update adapter. Lifecycle, command and persistence callbacks remain explicit methods on the same concrete instance. [RenderSystem](render/system.rs) consumes optional rig diagnostics and immutable assets; [AssetDependencySystem](asset_dependencies/system.rs) borrows Animation plus mutable asset service access. They share this generated mechanism with extension Systems in [system_parameters.rs](../../../tests/system_parameters.rs).
 
@@ -35,7 +35,7 @@ Scoped `SystemEcsAccess`, `SystemRuntimeAccess` and `SystemWorldView` observatio
 
 ## Lifecycle and frame boundaries
 
-[mutation.rs](../mutation.rs) dispatches generic frame, batch and operation hooks. Systems interpret their own commands, reconcile their own changes and detach their own report events. Constraint owns declaration binding and scalar evaluation, Animation owns playback commands and sampling, and Camera/Geometry own their queries. A final `System::observe_frame` pass after every System's finish pass lets the lifecycle publisher compare watched fields with the values it last reported. No component mirror is retained.
+The [frame loop](../update.rs) and [ordered mutation](../mutation/mod.rs) dispatch generic frame, batch and operation hooks. Systems interpret their own commands, reconcile their own changes and detach their own report events. Constraint owns declaration binding and scalar evaluation, Animation owns playback commands and sampling, and Camera/Geometry own their queries. A final `System::observe_frame` pass after every System's finish pass lets the lifecycle publisher compare watched fields with the values it last reported. No component mirror is retained.
 
 Earlier operations of a failed batch stay applied; an invalid operation has no effect. Generic commit calls every System's validation and synchronous `before_commit` hooks while old occupied storage remains live. Cleanup restores are owned values queued into the same barrier; if cleanup changes another component, every handler sees that change before any storage is cleared. Only after all handlers finish may storage be released, allocator slots reused, prepared values installed and applied observations published. `after_commit` refreshes subsystem bookkeeping. Evaluated commits do not publish client-authored component events. `SystemWorldView::effective_component` can inspect old storage even when deletion has been staged.
 
@@ -55,6 +55,6 @@ Every System has save/load callbacks with empty defaults. Generic World capture 
 
 ## Compiled numeric evaluation
 
-Per-frame evaluators use [typed component bindings](../component_binding.rs) and [retained component queries](../component_query.rs). Bindings originate from stable storage cells, not temporary mutable references; their lifecycle owner discards them before incarnation destruction. Access borrows the owning World's storage for each read or write. These helpers allocate only when membership/capacity changes and add no per-element virtual dispatch. Query owners call their before/after commit methods; preparation covers initial construction and restoration once.
+Per-frame evaluators use [typed component bindings](../direct_bindings/component_binding.rs) and [retained component queries](../direct_bindings/component_query.rs). Bindings originate from stable storage cells, not temporary mutable references; their lifecycle owner discards them before incarnation destruction. Access borrows the owning World's storage for each read or write. These helpers allocate only when membership/capacity changes and add no per-element virtual dispatch. Query owners call their before/after commit methods; preparation covers initial construction and restoration once.
 
 `System::before_numeric_update` is the batched derived-result notification for compiled numeric writes. Its context exposes affected keys and old values, with no structural cleanup API. Numeric updates do not call commit validators or manufacture component replacements. Systems retain structural hooks for client edits, discrete resource/relationship changes and storage lifetime barriers. Output-dependent arithmetic guards are separate from binding/type validation.

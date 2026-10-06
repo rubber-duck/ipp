@@ -2,7 +2,7 @@
 //! writes and semantic actions share one set of value rules, and a refused
 //! value has no effect.
 
-use super::local_tests::{
+use super::test_support::{
     GuiTestValue, action, apply, create, fixture, frame, outcomes, snapshot, submit,
 };
 use super::*;

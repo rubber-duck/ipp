@@ -9,8 +9,8 @@ use crate::{ComponentValue, world::WorldMutationState};
 use crate::{
     EntityId, ErrorReason, PoseAsset, SkeletonAsset, WorldContext, WorldId,
     components::Transform,
+    math,
     services::asset_management::{AssetKey, AssetManagementService},
-    systems::camera,
     world::{WorldEntityState, WorldSimulationState},
 };
 

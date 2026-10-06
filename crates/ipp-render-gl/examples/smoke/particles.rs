@@ -149,7 +149,7 @@ pub fn run<D: RenderDevice>(
     // Exercise the same instance attributes with a real custom mesh program.
     use ipp_core::services::asset_management::{
         AssetSource,
-        shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderRecipe},
+        formats::shader::{SHADER_TYPE, ShaderBackendSource, ShaderDefinition, ShaderRecipe},
     };
     let definition = ShaderDefinition {
         recipe: ShaderRecipe {

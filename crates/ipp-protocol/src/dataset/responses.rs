@@ -1,7 +1,7 @@
 use super::payload::{write_kind, write_schema, write_values};
 use super::*;
 use crate::codec::{ProtocolError, Writer};
-use crate::wire::*;
+use crate::contract::wire_manifest::*;
 use ipp_core::components::DynamicValue;
 use ipp_core::services::data::{
     DataBatchError, DataBatchOutcome, DataReadView, DataSchema, DataSourceKind, DataSourceMemory,

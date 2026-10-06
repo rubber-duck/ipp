@@ -4,8 +4,8 @@
 //! support intervals, including under nonuniform scale and shear. Compounds are
 //! unions: ray intersections skip surfaces internal to overlapping parts.
 
-mod components;
-pub use components::{BoundingGeometry, PickingGeometry};
+mod component;
+pub use component::{BoundingGeometry, PickingGeometry};
 
 mod enclosure;
 mod particle_bounds;

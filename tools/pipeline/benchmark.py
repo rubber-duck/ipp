@@ -473,7 +473,14 @@ def scene(config: dict) -> None:
     (output / "pose-probes.tsv").write_text("\n".join(pose_rows) + "\n")
     if not config["reuse_import"]:
         importer = output / "import.mjs"
-        run([node(), "tools/build/performance.mjs", "native-import", str(importer)])
+        run(
+            [
+                node(),
+                "tools/performance/performance.mjs",
+                "native-import",
+                str(importer),
+            ]
+        )
         run(
             [node(), str(importer), str(directory / "export"), str(bundle), str(host)],
             timeout=3600,
@@ -539,7 +546,7 @@ def browser_scene(config: dict, directory: Path, bundle: Path, output: Path) -> 
         run(
             [
                 node(),
-                "tools/import_blender_scene.mjs",
+                "tools/assets/import-blender-scene.mjs",
                 str(directory / "export"),
                 str(bundle),
                 "--namespace",
@@ -552,5 +559,8 @@ def browser_scene(config: dict, directory: Path, bundle: Path, output: Path) -> 
             timeout=3600,
         )
     target_path = output / "profile.mjs"
-    run([node(), "tools/build/performance.mjs", "stress", str(target_path)], env=env)
+    run(
+        [node(), "tools/performance/performance.mjs", "stress", str(target_path)],
+        env=env,
+    )
     run([node(), "--test", str(target_path)], env=env, timeout=3600)

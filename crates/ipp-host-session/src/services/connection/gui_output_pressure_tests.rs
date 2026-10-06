@@ -585,8 +585,8 @@ fn admitted_replies_remain_deliverable_when_uncorrelated_output_fills_its_share(
             .unwrap()
             .queue_response(
                 0,
-                ipp_protocol::ResponseBody::RuntimeFailure {
-                    scope: ipp_protocol::RuntimeFailureScope::Resource,
+                ipp_protocol::world::ResponseBody::RuntimeFailure {
+                    scope: ipp_protocol::world::RuntimeFailureScope::Resource,
                     faulted: false,
                     message: "event".into(),
                 },

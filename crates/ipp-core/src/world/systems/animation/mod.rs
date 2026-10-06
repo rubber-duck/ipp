@@ -1,29 +1,19 @@
 //! Typed immutable animation curves and world-owned multi-entity controllers.
 
-mod binding;
 mod clip;
-mod component_values;
-mod contribution;
-mod controller_commands;
-mod driver;
-mod encoding;
+mod controller;
 mod gui_motion;
 mod lifecycle;
 mod math;
-mod numeric_binding;
-mod numeric_output;
 mod persistence;
-mod row_property_destination;
-mod structural;
-mod transition;
+mod system;
+mod system_state;
+mod targets;
 mod update;
 mod world_api;
-pub(in crate::world) use update::{AnimationAccess, AnimationReadAccess};
 
 #[cfg(feature = "instrumentation")]
 mod sampling_profile;
-
-mod pose;
 
 pub(crate) use clip::animation_asset_loader;
 pub use clip::{
@@ -31,9 +21,16 @@ pub use clip::{
     AnimationKeyframe, AnimationProperty, AnimationSample, AnimationTrack, AnimationTrackData,
     AnimationTrackTarget, AnimationValue, IntoAnimationTrack,
 };
-pub use driver::AnimationDriver;
 pub(crate) use math::mix;
 pub(crate) use math::normalize;
+pub use persistence::{
+    AnimationFrozenTransitionValue, AnimationPersistentContribution, AnimationPersistentState,
+    AnimationPersistentTransition, AnimationPersistentTransitionSource,
+};
+pub use system::{AnimationSystem, AnimationSystemFactory};
+pub use system_state::{AnimationController, AnimationSystemState};
+pub use targets::AnimationDriver;
+pub(in crate::world) use update::{AnimationAccess, AnimationReadAccess};
 
 use crate::{EntityId, ErrorReason};
 
@@ -201,88 +198,6 @@ pub struct AnimationControllerSnapshot {
     pub transition: Option<AnimationControllerTransitionState>,
 }
 
-/// Complete persistent controller state, including deleted identity high-water.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnimationPersistentState {
-    /// Next fresh identity; never less than any existing or previously used ID.
-    pub next_id: u64,
-    /// Controllers in identity order.
-    pub controllers: Vec<AnimationControllerSnapshot>,
-    /// Semantic state for active crossfades, keyed by controller identity.
-    pub transitions: Vec<AnimationPersistentTransition>,
-    /// Controllers awaiting a negative-speed directional start after clip readiness.
-    pub directional_starts: Vec<AnimationControllerId>,
-    /// What each controller has added to its fields. Component storage holds the
-    /// fields with these contributions in them; stopping subtracts them.
-    pub contributions: Vec<AnimationPersistentContribution>,
-}
-
-impl Default for AnimationPersistentState {
-    fn default() -> Self {
-        Self {
-            next_id: 1,
-            controllers: Vec::new(),
-            transitions: Vec::new(),
-            directional_starts: Vec::new(),
-            contributions: Vec::new(),
-        }
-    }
-}
-
-/// A controller's contribution to one field.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnimationPersistentContribution {
-    /// Contributing controller.
-    pub controller: AnimationControllerId,
-    /// Driven entity.
-    pub target: EntityId,
-    /// Driven property, with dynamic properties resolved to their keys.
-    pub property: AnimationTrackTarget,
-    /// What the controller has added: a float delta, or a rotation composed on
-    /// the right of the field.
-    pub value: AnimationValue,
-}
-
-/// Contribution captured when a crossfade is interrupted; it fades out.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnimationFrozenTransitionValue {
-    /// Entity whose property was captured.
-    pub target: EntityId,
-    /// Property or single joint represented by this sparse value.
-    pub property: AnimationTrackTarget,
-    /// Frozen outgoing contribution at the interruption boundary.
-    pub value: AnimationValue,
-}
-
-/// Durable outgoing side of an active crossfade.
-#[derive(Clone, Debug, PartialEq)]
-pub enum AnimationPersistentTransitionSource {
-    /// Independently advancing outgoing controller.
-    Live(AnimationControllerSnapshot),
-    /// Sparse composite captured from an interrupted transition.
-    Frozen {
-        /// Captured contributions.
-        values: Vec<AnimationFrozenTransitionValue>,
-        /// Declaration metadata used only to rebuild stable output bindings.
-        bindings: AnimationControllerSnapshot,
-        /// Prior destination time used by deferred preserve and phase matching.
-        reference_time: f64,
-        /// Prior destination duration used by deferred phase matching.
-        reference_duration: f64,
-    },
-}
-
-/// Persistent crossfade state; the destination remains the ordinary controller snapshot.
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnimationPersistentTransition {
-    /// Controller identity shared with the destination snapshot.
-    pub id: AnimationControllerId,
-    /// Durable outgoing side.
-    pub source: AnimationPersistentTransitionSource,
-    /// Deferred destination clock policy.
-    pub start_time: AnimationTransitionStartTime,
-}
-
 /// Observable transition emitted once per actual state or failure change.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -364,11 +279,3 @@ pub struct AnimationControllerOutcome {
     /// A fresh identity for Create; None for the other successful commands.
     pub result: Result<Option<AnimationControllerId>, ErrorReason>,
 }
-
-mod system_state;
-pub use system_state::{AnimationController, AnimationSystemState};
-
-mod system;
-pub use system::{AnimationSystem, AnimationSystemFactory};
-
-mod codec;

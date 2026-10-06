@@ -1,7 +1,7 @@
 use super::*;
 use crate::services::asset_management::{
     AssetTypeId,
-    texture::{TextureAsset, cpu_texture_loader},
+    formats::texture::{TextureAsset, cpu_texture_loader},
 };
 
 fn provider() -> AssetProvider {

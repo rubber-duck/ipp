@@ -18,17 +18,17 @@ import {
   runBrowserEnvironment,
   type BrowserBuildConfiguration,
   type BrowserEnvironmentContext,
-} from "../browser/environment.js";
-import { runNativeEnvironment } from "../integration/environment.js";
-import { invoke } from "../render/evidence.js";
-import { encodePng } from "../render/retained-gui-images.js";
+} from "../harness/browser.js";
+import { runNativeEnvironment } from "../harness/native.js";
+import { invoke } from "../harness/page-calls.js";
+import { encodePng } from "../harness/images.js";
 import { GUI_STRESS_WORKLOAD } from "../../examples/gui-stress/workload.js";
 import {
   accountedMemory,
   sampleChromeMemory,
   sampleDrmMemory,
-} from "./gpu-memory.js";
-import { sampleWorkerAllocations } from "./worker-profiling.js";
+} from "./support/gpu-memory.js";
+import { sampleWorkerAllocations } from "../profiling/support/worker-profiling.js";
 import {
   browserLaunchOptions,
   verifyHardwareRenderer,

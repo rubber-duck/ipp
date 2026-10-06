@@ -134,10 +134,21 @@ export function percent(
   };
 }
 
+/**
+ * How interpolated outputs keep their displayed values when the view changes.
+ * `"identity"` follows exact source rows, so new rows initialize immediately.
+ * `"position"` keeps each persisting slot of the view, so it moves from its
+ * displayed value toward whichever row now occupies it; suits windowed streams
+ * whose rows replace a fixed set of stations.
+ */
+export type DataInterpolationKey = "identity" | "position";
+
 export interface BufferDataSourceBindingProps {
   source: string;
   /** null removes that output and its companions; omission preserves stored properties. */
   columns: Readonly<Record<string, DataColumnBinding | null>>;
+  /** Omission preserves the stored choice; new bindings start with `"identity"`. */
+  interpolationKey?: DataInterpolationKey;
   children?: ReactNode;
 }
 
@@ -218,13 +229,22 @@ function columnsProperties(columns: BufferDataSourceBindingProps["columns"]) {
   return properties;
 }
 
+function interpolationKeyField(key: DataInterpolationKey | undefined) {
+  if (key === undefined) return {};
+  if (key !== "identity" && key !== "position")
+    throw new Error(`Unsupported data interpolation key: ${String(key)}`);
+  return { interpolation_key: key === "position" ? 1 : 0 };
+}
+
 export function BufferDataSourceBinding({
   source,
   columns,
+  interpolationKey,
   children,
 }: BufferDataSourceBindingProps) {
   return createElement(componentContract.BufferDataSourceBinding.host, {
     source,
+    ...interpolationKeyField(interpolationKey),
     properties: columnsProperties(columns),
     children,
   });
@@ -235,11 +255,13 @@ export function StreamingDataSourceBinding({
   columns,
   windows = [],
   encodeWindows,
+  interpolationKey,
   children,
 }: StreamingDataSourceBindingProps) {
   return createElement(componentContract.StreamingDataSourceBinding.host, {
     source,
     windows: encodeWindows(windows),
+    ...interpolationKeyField(interpolationKey),
     properties: columnsProperties(columns),
     children,
   });

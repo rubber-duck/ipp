@@ -1,4 +1,6 @@
-use super::{DataBindingRuntime, decode_data_windows, encode_data_windows};
+use super::{
+    DataBindingRuntime, decode_data_windows, encode_data_windows, update::DataBindingEvaluation,
+};
 use crate::{
     DynamicProperties, DynamicPropertyKind, ErrorReason,
     components::schema::{ComponentLifecycle, FieldValue, SchemaComponent},
@@ -17,6 +19,10 @@ use std::sync::Arc;
 pub struct BufferDataSourceBinding {
     /// Host-wide stable source name; empty permits incomplete authoring.
     pub source: Arc<str>,
+    /// Interpolated-output reconciliation across view changes: 0 exact row
+    /// identity, 1 view position, where each persisting slot retargets from
+    /// its displayed value toward whichever row now occupies it.
+    pub interpolation_key: u32,
     /// Authored output asset references and optional typed companion parameters.
     #[schema(ignore)]
     pub properties: DynamicProperties,
@@ -34,6 +40,10 @@ pub struct StreamingDataSourceBinding {
     /// Portable IPPW version 1; use `set_windows`/`windows` for typed Rust access.
     /// Empty bytes select the Data Service's default cap, never a binding-local cap.
     pub windows: Vec<u8>,
+    /// Interpolated-output reconciliation across arrivals and window changes:
+    /// 0 exact row identity, 1 window position, where each persisting slot
+    /// retargets from its displayed value toward whichever row now occupies it.
+    pub interpolation_key: u32,
     /// Authored output asset references and optional typed companion parameters.
     #[schema(ignore)]
     pub properties: DynamicProperties,
@@ -77,8 +87,12 @@ pub(super) fn request(
     }
 }
 
-fn validate(source: &str, properties: &DynamicProperties) -> Result<(), ErrorReason> {
-    if source.chars().any(char::is_control) {
+fn validate(
+    source: &str,
+    interpolation_key: u32,
+    properties: &DynamicProperties,
+) -> Result<(), ErrorReason> {
+    if source.chars().any(char::is_control) || interpolation_key > 1 {
         return Err(ErrorReason::InvalidValue);
     }
     for (name, descriptor) in properties.descriptors() {
@@ -139,6 +153,16 @@ fn validate_interpolation_value(
 
 macro_rules! lifecycle {
     ($component:ty, $extra:expr) => {
+        impl $component {
+            pub(super) fn evaluation(&mut self) -> DataBindingEvaluation<'_> {
+                DataBindingEvaluation {
+                    properties: &self.properties,
+                    by_position: self.interpolation_key == 1,
+                    runtime: &mut self.runtime,
+                }
+            }
+        }
+
         impl ComponentLifecycle for $component {
             fn supports_dynamic_properties() -> bool {
                 true
@@ -162,7 +186,7 @@ macro_rules! lifecycle {
             }
 
             fn validate(&self) -> Result<(), ErrorReason> {
-                validate(&self.source, &self.properties)?;
+                validate(&self.source, self.interpolation_key, &self.properties)?;
                 ($extra)(self)
             }
 

@@ -75,6 +75,7 @@ export interface GalleryChartsState {
       extent: readonly number[];
     };
     frame: Record<string, number>;
+    bindingComponent: "BufferDataSourceBinding" | "StreamingDataSourceBinding";
     labels: readonly {
       series: number;
       row_id: string;
@@ -168,8 +169,11 @@ export async function setChartSampleInterpolation(
     incarnation: BigInt(chart.world.incarnation),
   });
   try {
-    const component = client.components.BufferDataSourceBinding;
-    chartCheck(component, "Fixture exposes buffer binding authoring");
+    const component = client.components[chart.bindingComponent];
+    chartCheck(
+      component,
+      `Fixture exposes ${chart.bindingComponent} authoring`,
+    );
     const outcome = await client.batch(
       ["y", "y2", "value", "height"]
         .filter((output) =>

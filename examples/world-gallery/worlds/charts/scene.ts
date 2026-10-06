@@ -302,6 +302,15 @@ export const chartScene: GallerySceneDefinition = {
         cameraInputGeneration: cameraGeneration,
       };
     };
+    /** Charts whose displayed rows can change the current hover or selection. */
+    const feedbackCharts = () => {
+      const charts = new Set<string>();
+      if (selection) charts.add(selection.chart);
+      if (hover) charts.add(hover.chart);
+      else if (hoverPoint)
+        for (const chart of content.charts) charts.add(chart.spec.id);
+      return charts;
+    };
     const changeView = async <T>(change: () => Promise<T>) => {
       ++feedbackGeneration;
       ++hoverGeneration;
@@ -320,7 +329,7 @@ export const chartScene: GallerySceneDefinition = {
         viewTransition = undefined;
       }
       await refreshHover();
-      const remaining = await content.remainingFeedback();
+      const remaining = await content.remainingFeedback(feedbackCharts());
       if (remaining.duration > 0) followFeedback(remaining);
       else {
         // Motion may have finished after the earlier feedback reads.
@@ -400,6 +409,11 @@ export const chartScene: GallerySceneDefinition = {
           );
       });
     };
+    // Positional live slots glide after each arrival; follow them like edits.
+    const followLiveFeedback = async () => {
+      const remaining = await content.remainingFeedback(feedbackCharts());
+      if (remaining.duration > 0) followFeedback(remaining);
+    };
     const feed = new ChartFeed(
       async (sequence, elapsed) => {
         await content.append(sequence, elapsed);
@@ -422,6 +436,7 @@ export const chartScene: GallerySceneDefinition = {
           await reconcile();
           await refreshHover();
           notify();
+          await followLiveFeedback();
         })
           .catch((error) => {
             if (!closing) {
@@ -606,6 +621,8 @@ export const chartScene: GallerySceneDefinition = {
       async select(args) {
         selection = await pick(args);
         await highlight();
+        // A slot selected mid-glide keeps its panel values current until it settles.
+        if (content.mode === "streaming") await followLiveFeedback();
       },
       async clearSelection() {
         selection = null;
@@ -665,6 +682,7 @@ export const chartScene: GallerySceneDefinition = {
           await feed.pause(content.mode === "buffer");
           await reconcile();
           await refreshHover();
+          if (content.mode === "streaming") await followLiveFeedback();
         }
       },
       async changeSamples(args) {

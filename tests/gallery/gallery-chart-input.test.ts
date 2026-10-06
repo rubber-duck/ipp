@@ -548,6 +548,9 @@ async function exerciseHoverDuringSourceReplacement(
       ).chartSourceGate?.restore();
     });
   }
+  // No hover point or selection remains, so no row feedback needs following.
+  // Feedback on a positional live chart would read its binding view after
+  // arrivals and pauses to follow the glide; this measures the path without it.
   await driver.action("hover", null);
   const streamWork = await observeChartWork(g.page, async () => {
     await driver.action("streamPlayback", true);

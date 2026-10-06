@@ -1,5 +1,9 @@
 import type { DatasetValue } from "@ipp/client";
-import { plotColorScaleColor, type DataWindow } from "@ipp/react";
+import {
+  plotColorScaleColor,
+  type DataInterpolationKey,
+  type DataWindow,
+} from "@ipp/react";
 import { CHART_SCHEMA, chartData, type ChartSpec } from "./catalog.js";
 import { CHART_HEIGHT_SCALE, chartCategoryColor } from "./colors.js";
 
@@ -14,12 +18,24 @@ export const streamKey = (spec: ChartSpec) =>
 const snapshotCount = (spec: ChartSpec) =>
   spec.id === "height-surface" ? 81 : spec.id === "grid-bars" ? 12 : 4;
 
+/** Rolling exhibits append marks; the others replace one complete snapshot. */
+const rolling = (spec: ChartSpec) =>
+  spec.component === "PlotLine2d" || spec.id === "point-plot";
+
+/**
+ * Each snapshot slot is a fixed station (a bar, cell or slice), so its display
+ * glides toward the row now occupying it. Rolling marks advance along x and
+ * keep row identity, so new marks never borrow a neighbour's value.
+ */
+export const streamInterpolationKey = (
+  spec: ChartSpec,
+): DataInterpolationKey => (rolling(spec) ? "identity" : "position");
+
 export function streamWindows(
   spec: ChartSpec,
   profile: ChartWindow,
 ): readonly DataWindow[] {
-  const rolling = spec.component === "PlotLine2d" || spec.id === "point-plot";
-  const count = rolling
+  const count = rolling(spec)
     ? profile === "time"
       ? 64
       : spec.id === "straight"

@@ -1,5 +1,6 @@
 import type {
   AnimationWorldClient,
+  Command,
   DataBindingPage,
   DatasetValue,
 } from "../../../packages/ipp-client/src/index.js";
@@ -31,10 +32,146 @@ function scalar(page: DataBindingPage, id: bigint) {
   return result.value.value;
 }
 
+function scalars(page: DataBindingPage) {
+  const index = page.columns.findIndex((column) => column.name === "displayed");
+  return page.rows.map((row) => {
+    const result = row.values[index];
+    check(
+      result?.valid && result.value.kind === "f32",
+      `Missing scalar row ${row.id}`,
+    );
+    return result.value.value;
+  });
+}
+
+const rowIds = (page: DataBindingPage) =>
+  page.rows.map((row) => String(row.id));
+
+/**
+ * A window-replacing append keeps positional slots moving from their displays,
+ * while the default identity binding initializes the new rows immediately.
+ */
+async function positionalWindowInterpolation(
+  host: DatasetHost,
+  client: AnimationWorldClient,
+  contract: Pick<typeof Generated, "encodeDataWindows">,
+  definition: { kind: 19; source: string },
+  record: (label: string, value: unknown) => Promise<void>,
+) {
+  const source = "datasets://interpolation/window";
+  const producer = await host.datasets.create(source, "streaming", [
+    { name: "raw", kind: "f32" },
+  ]);
+  try {
+    const component = client.components.StreamingDataSourceBinding!.id;
+    const binding = (alias: number, key: number): Command[] => [
+      createEntity(alias, `window-${key}`),
+      insertComponent(
+        client,
+        "StreamingDataSourceBinding",
+        { kind: "alias", alias },
+        {
+          source,
+          windows: contract.encodeDataWindows([{ kind: "count", count: 2n }]),
+          ...(key ? { interpolation_key: key } : {}),
+        },
+      ),
+      {
+        kind: "setDynamicProperty",
+        entity: { kind: "alias", alias },
+        component,
+        name: "displayed",
+        value: { kind: "asset", value: definition },
+      },
+      {
+        kind: "setDynamicProperty",
+        entity: { kind: "alias", alias },
+        component,
+        name: "displayed_interp",
+        value: { kind: "f32", value: 20 },
+      },
+    ];
+    // Await binding admission before streaming samples its windows must retain.
+    const created = await client.batch([...binding(1, 1), ...binding(2, 0)]);
+    const positional = aliasId(created, 1),
+      identity = aliasId(created, 2);
+    const read = (entity: bigint) =>
+      host.datasets.bindingView(client.session, entity);
+    const fields = (
+      await client.inspectPage({ collection: "entities", target: positional })
+    ).entities[0]!.components.find(
+      (value) => value.component === component,
+    )!.fields;
+    check(
+      fields.interpolation_key === 1,
+      "Positional reconciliation is stored as authored",
+    );
+
+    await host.datasets.update(producer, [
+      { operation: "append", rows: [row(0), row(100)] },
+    ]);
+    const initial = await until(
+      () => read(positional),
+      (page) => page.availability.reason === "Ready" && page.rows.length === 2,
+      "positional window initialization",
+    );
+    check(
+      JSON.stringify(scalars(initial)) === "[0,100]",
+      "Appearing window slots did not initialize immediately",
+    );
+
+    // One append of two rows replaces the whole count window; no row identity survives.
+    await host.datasets.update(producer, [
+      { operation: "append", rows: [row(80), row(20)] },
+    ]);
+    const moving = await until(
+      () => read(positional),
+      (page) => JSON.stringify(rowIds(page)) === '["3","4"]',
+      "positional window replacement",
+    );
+    const snapped = await until(
+      () => read(identity),
+      (page) => JSON.stringify(rowIds(page)) === '["3","4"]',
+      "identity window replacement",
+    );
+    const [first, second] = scalars(moving);
+    check(
+      first! > 0 && first! < 80 && second! > 20 && second! < 100,
+      "Positional slots did not retarget from their displayed values",
+    );
+    check(
+      JSON.stringify(scalars(snapped)) === "[80,20]",
+      "Identity reconciliation borrowed a replaced row's display",
+    );
+    const raw = await host.datasets.read(source);
+    check(
+      JSON.stringify(raw.rows.map((item) => item.values[0]!.value)) ===
+        "[80,20]",
+      "Positional interpolation changed raw source data",
+    );
+    const settled = await until(
+      () => read(positional),
+      (page) => JSON.stringify(scalars(page)) === "[80,20]",
+      "positional window settlement",
+    );
+    await record("data.interpolation.windowPosition", {
+      initial,
+      moving,
+      snapped,
+      settled,
+    });
+  } finally {
+    await host.datasets.destroy(producer).catch(() => {});
+  }
+}
+
 /** Real clocks and typed observations; the same scenario runs over every dataset transport. */
 export async function dataInterpolation(
   host: DatasetHost,
-  contract: Pick<typeof Generated, "ExpressionBuilder" | "encodeAnimationClip">,
+  contract: Pick<
+    typeof Generated,
+    "ExpressionBuilder" | "encodeAnimationClip" | "encodeDataWindows"
+  >,
   record: (label: string, value: unknown) => Promise<void>,
 ) {
   const world = await host.createWorld({
@@ -106,6 +243,13 @@ export async function dataInterpolation(
     check(
       scalar(initial, 1n) === 2,
       "New interpolation row did not initialize immediately",
+    );
+    await positionalWindowInterpolation(
+      host,
+      client,
+      contract,
+      { kind: 19, source: asset.source },
+      record,
     );
 
     const timed = async () => {

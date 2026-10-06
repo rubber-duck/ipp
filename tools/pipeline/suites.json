@@ -25,11 +25,12 @@
     "files": ["dist/tests/gallery/gallery-chart-input.test.js"]
   },
   "gallery-chart-changes": {
-    "description": "Regenerated hover, interaction-gated axes, growing numeric ranges and interpolated value picking through real browser input",
+    "description": "Regenerated hover, interaction-gated axes, growing numeric ranges, interpolated value picking and live snapshot smoothing through real browser input",
     "sourceRoots": [
       "examples/world-gallery/worlds/charts/",
       "tests/gallery/scenarios/gallery-charts.ts",
       "tests/gallery/scenarios/gallery-chart-changes.ts",
+      "tests/gallery/scenarios/gallery-chart-streaming.ts",
       "tests/gallery/gallery-chart-changes.test.ts",
       "tests/gallery/drivers/browser-gallery.ts",
       "tests/gallery/pages/viewer.ts"

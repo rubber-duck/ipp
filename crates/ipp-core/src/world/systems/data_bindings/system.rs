@@ -373,29 +373,19 @@ impl System for DataBindingSystem {
         let tick = context.world.world.tick.saturating_add(1);
         let world = context.world.world.id;
         let dt = context.dt();
+        let (data, assets) = (&*context.world.data, &*context.world.asset_acquisition);
+
+        let evaluate = |binding: super::update::DataBindingEvaluation<'_>| {
+            super::update::evaluate(binding, data, assets, world, tick, dt);
+        };
+
+        let components = &mut context.world.world.components;
         for &(_, binding) in self.buffers.entries() {
-            let value = binding.get_mut(&mut context.world.world.components);
-            super::update::evaluate(
-                &value.properties,
-                &mut value.runtime,
-                context.world.data,
-                context.world.asset_acquisition,
-                world,
-                tick,
-                dt,
-            );
+            evaluate(binding.get_mut(components).evaluation());
         }
+
         for &(_, binding) in self.streams.entries() {
-            let value = binding.get_mut(&mut context.world.world.components);
-            super::update::evaluate(
-                &value.properties,
-                &mut value.runtime,
-                context.world.data,
-                context.world.asset_acquisition,
-                world,
-                tick,
-                dt,
-            );
+            evaluate(binding.get_mut(components).evaluation());
         }
     }
 }

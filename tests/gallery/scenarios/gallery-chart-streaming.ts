@@ -253,8 +253,11 @@ async function pause(driver: StreamingChartsDriver) {
         if (state.data.feed.playing || state.data.feed.inFlight) return false;
         // Sources and binding pages are independent observations. Once ingress drains,
         // wait for every World to publish the same retained data before comparing them.
+        // Smoothed snapshot slots glide toward the last arrival on the Host clock;
+        // paused samples are compared once that bounded motion has settled.
         try {
           assertWindows(state);
+          assertUndistortedChartSamples(state);
           return true;
         } catch (error) {
           lastFailure = error instanceof Error ? error.message : String(error);

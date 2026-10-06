@@ -145,6 +145,7 @@ export type {
   ColumnBindingAssetProps,
   DataColumnBinding,
   DataColumnInterpolation,
+  DataInterpolationKey,
   BufferDataSourceBindingProps,
   StreamingDataSourceBindingProps,
   DataWindow,

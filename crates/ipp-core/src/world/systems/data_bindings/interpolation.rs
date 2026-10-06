@@ -2,7 +2,9 @@ use super::runtime_state::{
     ColumnInterpolation, ColumnInterpolationRate, ColumnInterpolationRow, DataBindingRuntime,
     PreparedColumn,
 };
-use crate::{DynamicProperties, DynamicValue, expressions::ExpressionResult};
+use crate::{
+    DynamicProperties, DynamicValue, expressions::ExpressionResult, services::data::DataRowId,
+};
 
 pub(super) fn retarget(column: &mut PreparedColumn) -> bool {
     let Some(interpolation) = &mut column.interpolation else {
@@ -204,6 +206,30 @@ pub(super) fn retarget_progress(
     }
 }
 
+/// Each current row's previous display index. Identity reconciliation follows
+/// exact row lifetimes. Positional reconciliation keeps every slot that persists
+/// in the binding's view, so its display retargets toward whichever row now
+/// occupies it; appearing slots have no predecessor and initialize immediately.
+pub(super) fn correspondence(
+    previous: &[DataRowId],
+    current: impl Iterator<Item = DataRowId>,
+    by_position: bool,
+) -> Vec<Option<usize>> {
+    if by_position {
+        return current
+            .enumerate()
+            .map(|(slot, _)| (slot < previous.len()).then_some(slot))
+            .collect();
+    }
+
+    let previous: std::collections::BTreeMap<_, _> = previous
+        .iter()
+        .enumerate()
+        .map(|(index, &id)| (id, index))
+        .collect();
+    current.map(|id| previous.get(&id).copied()).collect()
+}
+
 pub(super) fn reorder(column: &mut PreparedColumn, indices: &[Option<usize>]) {
     let Some(interpolation) = &mut column.interpolation else {
         return;
@@ -287,3 +313,7 @@ pub(super) fn advance_or_defer(
         runtime.evaluated_tick = Some(tick);
     }
 }
+
+#[cfg(test)]
+#[path = "interpolation_tests.rs"]
+mod tests;

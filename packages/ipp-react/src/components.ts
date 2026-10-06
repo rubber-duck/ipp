@@ -16,11 +16,15 @@ export const componentContract = {
   ...guiComponentContract,
   BufferDataSourceBinding: {
     host: "ipp-buffer-data-source-binding",
-    fields: { source: "string" },
+    fields: { source: "string", interpolation_key: "number" },
   },
   StreamingDataSourceBinding: {
     host: "ipp-streaming-data-source-binding",
-    fields: { source: "string", windows: "bytes" },
+    fields: {
+      source: "string",
+      windows: "bytes",
+      interpolation_key: "number",
+    },
   },
   FlatSurface: {
     host: "ipp-flat-surface",

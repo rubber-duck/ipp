@@ -11,6 +11,7 @@ import {
   type GalleryChartsDriver,
   type GalleryChartsState,
 } from "./gallery-charts.js";
+import type { StreamingChartsState } from "./gallery-chart-streaming.js";
 
 function sample(state: GalleryChartsState, id: string, row = 1n) {
   const chart = state.charts.find((chart) => chart.id === id)!;
@@ -386,5 +387,289 @@ export async function exerciseChartSmoothChanges(
     middle,
     settled,
     fast,
+  });
+}
+
+const live = async (driver: GalleryChartsDriver) =>
+  (await driver.inspect()) as StreamingChartsState;
+
+function liveChart(state: StreamingChartsState, id: string) {
+  const chart = state.charts.find((chart) => chart.id === id);
+  chartCheck(chart, `${id}: live chart exists`);
+  return chart;
+}
+
+function bindingSnapshot(state: StreamingChartsState, id: string) {
+  const chart = liveChart(state, id);
+  const component = chart.inspection.entities
+    .find((entity) => String(entity.id) === String(chart.entity))
+    ?.components.find((component) => "windows" in component.fields);
+  chartCheck(component, `${id}: streaming binding is inspectable`);
+  return component;
+}
+
+/** Displayed `y` beside the raw source value of the row now occupying each slot. */
+function liveSlots(state: StreamingChartsState, id: string) {
+  const chart = liveChart(state, id);
+  const source = state.data.sources.find(
+    (source) => source.name === chart.source,
+  );
+  chartCheck(source, `${id}: live source is observable`);
+  const displayed = chart.binding.columns.findIndex(
+      (column) => column.name === "y",
+    ),
+    raw = source.schema.findIndex((column) => column.name === "y");
+  chartCheck(chart.binding.rows.length > 0, `${id}: live rows are evaluated`);
+  return chart.binding.rows.map((row) => {
+    const value = row.values[displayed],
+      sample = source.rows.find((item) => item.id === row.id)?.values[raw];
+    chartCheck(
+      value?.valid && value.value.kind === "f32" && sample?.kind === "f32",
+      `${id}: slot has a displayed value and a retained raw sample`,
+    );
+    return {
+      id: BigInt(row.id),
+      displayed: value.value.value,
+      target: Math.fround(sample.value),
+    };
+  });
+}
+
+/** Paused, and each chart World has published every retained row of its source. */
+function synchronized(state: StreamingChartsState, ids: readonly string[]) {
+  return (
+    !state.data.feed.playing &&
+    !state.data.feed.inFlight &&
+    ids.every((id) => {
+      const chart = state.charts.find((chart) => chart.id === id);
+      const source = state.data.sources.find(
+        (source) => source.name === chart?.source,
+      );
+      return (
+        chart !== undefined &&
+        source !== undefined &&
+        chart.binding.rows.length > 0 &&
+        chart.binding.rows.length === source.rows.length &&
+        chart.binding.rows.every(
+          (row, index) => String(row.id) === String(source.rows[index]!.id),
+        )
+      );
+    })
+  );
+}
+
+const settledSlots = (state: StreamingChartsState, id: string) =>
+  liveSlots(state, id).every((slot) => slot.displayed === slot.target);
+
+const measuredCharts = ["bars", "point-plot"] as const;
+
+/** The selected mark's `y` value as last published by the gallery feedback. */
+function selectedY(state: GalleryChartsState) {
+  const value = state.selection?.values[state.selection.columns.indexOf("y")];
+  return value?.valid && value.value.kind === "f32"
+    ? value.value.value
+    : undefined;
+}
+
+/** Resume the real client feed until at least one more snapshot is acknowledged. */
+async function liveArrival(driver: GalleryChartsDriver, label: string) {
+  const sequence = (await live(driver)).data.feed.sequence;
+  await driver.action("streamPlayback", true);
+  await waitForCharts(
+    driver,
+    (state) => (state as StreamingChartsState).data.feed.sequence > sequence,
+    `${label}-arrival`,
+  );
+  await driver.action("streamPlayback", false);
+  return (await waitForCharts(
+    driver,
+    (state) => synchronized(state as StreamingChartsState, measuredCharts),
+    `${label}-paused`,
+  )) as StreamingChartsState;
+}
+
+/**
+ * The client feed sends 500 ms after resuming and again 500 ms after that send
+ * completes. Pausing between them admits one snapshot without the latency of
+ * polling whole-scene observations; callers still verify the admitted count.
+ */
+async function singleLiveArrival(driver: GalleryChartsDriver) {
+  await driver.action("streamPlayback", true);
+  await new Promise((resolve) => setTimeout(resolve, 750));
+  await driver.action("streamPlayback", false);
+  return (await waitForCharts(
+    driver,
+    (state) => synchronized(state as StreamingChartsState, measuredCharts),
+    "chart-stream-smoothing-paused",
+  )) as StreamingChartsState;
+}
+
+/**
+ * Live snapshot exhibits reconcile interpolation by window position: one arrival
+ * replaces every bar row identity, yet each bar moves from its displayed value.
+ */
+export async function exerciseChartStreamSmoothing(
+  driver: GalleryChartsDriver,
+  aspect: number,
+) {
+  chartCheck(driver.setSampleInterpolation, "Fixture can author binding rates");
+  await driver.action("streamPlayback", false);
+  await driver.action("dataSource", "streaming");
+  await focusChart(driver, "bars");
+  const primed = await live(driver);
+  chartCheck(
+    primed.data.mode === "streaming" &&
+      primed.smoothChanges &&
+      bindingSnapshot(primed, "bars").properties?.y_interp?.kind === "f32",
+    "Live data starts with authored smoothing rates",
+  );
+  for (const chart of primed.charts) {
+    const rolling =
+      chart.component === "PlotLine2d" || chart.id === "point-plot";
+    chartCheck(
+      bindingSnapshot(primed, chart.id).fields.interpolation_key ===
+        (rolling ? 0 : 1),
+      `${chart.id}: ${rolling ? "rolling marks keep row identity" : "snapshot slots reconcile by window position"}`,
+    );
+  }
+
+  // Slow bars and points so one arrival stays measurable between Host frames.
+  // An attempt is measured only when exactly one snapshot arrived after a settled one.
+  const slow = 3,
+    fast = 100;
+  let measured:
+    | { before: StreamingChartsState; after: StreamingChartsState }
+    | undefined;
+  let attempts = 0;
+  for (; attempts < 4 && !measured; attempts++) {
+    const before = (await waitForCharts(
+      driver,
+      (state) => {
+        const current = state as StreamingChartsState;
+        return (
+          synchronized(current, measuredCharts) &&
+          measuredCharts.every((id) => settledSlots(current, id))
+        );
+      },
+      "chart-stream-smoothing-settled-before",
+    )) as StreamingChartsState;
+    await Promise.all(
+      measuredCharts.map((id) =>
+        driver.setSampleInterpolation!(liveChart(before, id), slow),
+      ),
+    );
+    const after = await singleLiveArrival(driver);
+    const old = liveSlots(before, "bars"),
+      current = liveSlots(after, "bars");
+    if (
+      after.data.feed.sequence === before.data.feed.sequence + 1 &&
+      current.length === old.length &&
+      current.every((slot, index) => slot.id === old[index]!.id + 4n) &&
+      Math.max(
+        ...current.map((slot, index) =>
+          Math.abs(slot.target - old[index]!.target),
+        ),
+      ) >= 8
+    )
+      measured = { before, after };
+    else
+      await Promise.all(
+        measuredCharts.map((id) =>
+          driver.setSampleInterpolation!(liveChart(after, id), fast),
+        ),
+      );
+  }
+  chartCheck(
+    measured,
+    "One visible live arrival was isolated between settled observations",
+  );
+  const { before, after } = measured;
+  const old = liveSlots(before, "bars"),
+    moving = liveSlots(after, "bars");
+  for (const [index, slot] of moving.entries())
+    chartCheck(
+      slot.displayed >= Math.min(old[index]!.target, slot.target) &&
+        slot.displayed <= Math.max(old[index]!.target, slot.target),
+      "Every replaced bar slot moves from its previous value toward its new row",
+    );
+  const widest = moving
+    .map((slot, index) => ({ ...slot, previous: old[index]!.target }))
+    .reduce((best, slot) =>
+      Math.abs(slot.target - slot.previous) >
+      Math.abs(best.target - best.previous)
+        ? slot
+        : best,
+    );
+  chartCheck(
+    widest.displayed > Math.min(widest.previous, widest.target) &&
+      widest.displayed < Math.max(widest.previous, widest.target),
+    "A replaced bar slot displays a value strictly between its old and new source values",
+  );
+  chartCheck(
+    liveSlots(after, "point-plot").every(
+      (slot) => slot.displayed === slot.target,
+    ),
+    "Rolling point marks keep row identity: new marks appear at their values",
+  );
+
+  // A slot selected mid-glide keeps its panel values current until it settles.
+  const slot = moving.findIndex((item) => item.id === widest.id);
+  await driver.action("select", baselineBarPointer(after, aspect, slot + 1, 5));
+  const selected = await live(driver);
+  const picked = selectedY(selected);
+  chartCheck(
+    selected.selection?.chart === "bars" &&
+      BigInt(selected.selection.rowId) === widest.id &&
+      picked !== undefined &&
+      picked > Math.min(widest.previous, widest.target) &&
+      picked < Math.max(widest.previous, widest.target),
+    "A pointer selects the gliding slot's row with its displayed intermediate value",
+  );
+  const shown = await driver.capture("chart-stream-smoothing-intermediate");
+  const settled = (await waitForCharts(
+    driver,
+    (state) =>
+      synchronized(state as StreamingChartsState, measuredCharts) &&
+      settledSlots(state as StreamingChartsState, "bars") &&
+      selectedY(state) === widest.target,
+    "chart-stream-smoothing-settled",
+    30_000,
+  )) as StreamingChartsState;
+  chartCheck(
+    liveSlots(settled, "bars").every(
+      (slot, index) => slot.id === moving[index]!.id,
+    ) && BigInt(settled.selection!.rowId) === widest.id,
+    "Paused live slots and the selected mark settle at source values without another arrival",
+  );
+  const final = await driver.capture("chart-stream-smoothing-settled");
+  assertChartImageChanged(
+    shown,
+    final,
+    "Live bar slots glide on the Host clock",
+  );
+
+  // The now-enabled control returns live snapshots to immediate projection.
+  await driver.action("smoothChanges", false);
+  const disabled = await live(driver);
+  chartCheck(
+    !disabled.smoothChanges &&
+      bindingSnapshot(disabled, "bars").properties?.y_interp === undefined,
+    "Disabling smoothing removes live binding rates",
+  );
+  const immediate = await liveArrival(driver, "chart-stream-unsmoothed");
+  chartCheck(
+    settledSlots(immediate, "bars") &&
+      liveSlots(immediate, "bars").every(
+        (slot, index) => slot.id > moving[index]!.id,
+      ),
+    "Unsmoothed live snapshots display their source values on arrival",
+  );
+  await driver.record("chart-stream-smoothing", {
+    attempts,
+    before,
+    after,
+    selected,
+    settled,
+    immediate,
   });
 }

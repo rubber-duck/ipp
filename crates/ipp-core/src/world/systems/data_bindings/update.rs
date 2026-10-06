@@ -12,15 +12,28 @@ use crate::{
     },
 };
 
+/// One binding's authored inputs and runtime for an evaluation pass.
+pub(super) struct DataBindingEvaluation<'a> {
+    pub properties: &'a DynamicProperties,
+    /// Authored window-position reconciliation of interpolated outputs instead
+    /// of exact row identity.
+    pub by_position: bool,
+    pub runtime: &'a mut DataBindingRuntime,
+}
+
 pub(super) fn evaluate(
-    properties: &DynamicProperties,
-    runtime: &mut DataBindingRuntime,
+    binding: DataBindingEvaluation<'_>,
     data: &DataService,
     assets: &AssetManagementService,
     world: crate::WorldId,
     tick: u64,
     dt: f64,
 ) {
+    let DataBindingEvaluation {
+        properties,
+        by_position,
+        runtime,
+    } = binding;
     if !runtime.needs_prepare && !runtime.needs_evaluate {
         super::interpolation::advance_or_defer(runtime, properties, tick, dt);
         return;
@@ -68,17 +81,11 @@ pub(super) fn evaluate(
             .iter()
             .any(|column| column.interpolation.is_some())
     {
-        let previous: std::collections::BTreeMap<_, _> = runtime
-            .rows
-            .iter()
-            .enumerate()
-            .map(|(index, &id)| (id, index))
-            .collect();
-        Some(
-            view.rows()
-                .map(|row| previous.get(&row.id).copied())
-                .collect::<Vec<_>>(),
-        )
+        Some(super::interpolation::correspondence(
+            &runtime.rows,
+            view.rows().map(|row| row.id),
+            by_position,
+        ))
     } else {
         None
     };

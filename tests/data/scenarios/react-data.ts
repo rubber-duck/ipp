@@ -204,6 +204,7 @@ export async function reactData(
             columns: { raw: { definition: assetRef("identity") } },
             windows: [{ kind: "count", count }],
             encodeWindows: contract.encodeDataWindows,
+            interpolationKey: "position",
           }),
         ),
       ),
@@ -251,6 +252,36 @@ export async function reactData(
       (await ready(streamEntity, 2)).rows.map((row) => row.id),
       [3n, 4n],
       "stream count window",
+    );
+    let unsupported: unknown;
+    try {
+      StreamingDataSourceBinding({
+        source: stream,
+        columns: {},
+        encodeWindows: contract.encodeDataWindows,
+        interpolationKey: "slot" as never,
+      });
+    } catch (error) {
+      unsupported = error;
+    }
+    check(
+      unsupported instanceof Error &&
+        /interpolation key/.test(unsupported.message),
+      "React rejects an unsupported interpolation key before any write",
+    );
+    equal(
+      (
+        await client.inspectPage({
+          collection: "entities",
+          target: streamEntity,
+        })
+      ).entities[0]!.components.find(
+        (component) =>
+          component.component ===
+          client.components.StreamingDataSourceBinding!.id,
+      )!.fields.interpolation_key,
+      1,
+      "React positional interpolation key",
     );
     check(page.dirty, "headless initial dirty missing");
     check(

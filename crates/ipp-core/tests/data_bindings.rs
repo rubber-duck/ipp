@@ -741,6 +741,172 @@ fn interpolation_window_changes_keep_retained_rows_and_initialize_reappearing_ro
 }
 
 #[test]
+fn positional_interpolation_retargets_window_slots_while_identity_snaps_new_rows() {
+    let mut host = crate::support::task_scheduler::host();
+    let world = world(&mut host);
+    let source = producer(
+        &mut host,
+        "dataset:interp-position",
+        DataSourceKind::Streaming,
+        vec![DataColumn::new("x", K::F32)],
+    );
+    let expression = identity(&mut host, world, 1, "x", K::F32);
+    let mut binding = stream(
+        "dataset:interp-position",
+        "x",
+        expression.clone(),
+        &[DataWindow::Count(2)],
+    );
+    binding.properties.set("x_interp", V::F32(4.0)).unwrap();
+    let identity_binding = binding.clone();
+    binding.interpolation_key = 1;
+    let positional = create(
+        &mut host,
+        world,
+        "interp-position",
+        C::StreamingDataSourceBinding(binding),
+    );
+    let by_identity = create(
+        &mut host,
+        world,
+        "interp-identity",
+        C::StreamingDataSourceBinding(identity_binding),
+    );
+    let values =
+        |host: &mut HostRuntime, entity| view(host, world, entity).columns.remove(0).values;
+
+    append(
+        &mut host,
+        source,
+        vec![vec![V::F32(0.0)], vec![V::F32(10.0)]],
+    );
+    host.frame_for_test(0.5).unwrap();
+    assert_eq!(
+        values(&mut host, positional),
+        [R::Valid(V::F32(0.0)), R::Valid(V::F32(10.0))],
+        "appearing slots initialize immediately"
+    );
+
+    // Two appended rows replace the whole count window; no row identity survives.
+    append(
+        &mut host,
+        source,
+        vec![vec![V::F32(4.0)], vec![V::F32(2.0)]],
+    );
+    host.frame_for_test(0.5).unwrap();
+    let moving = view(&mut host, world, positional);
+    assert_eq!(moving.row_ids, [DataRowId(3), DataRowId(4)]);
+    assert_eq!(
+        moving.columns[0].values,
+        [R::Valid(V::F32(2.0)), R::Valid(V::F32(8.0))],
+        "persisting slots retarget from their displayed values"
+    );
+    assert_eq!(
+        values(&mut host, by_identity),
+        [R::Valid(V::F32(4.0)), R::Valid(V::F32(2.0))],
+        "identity reconciliation initializes new rows immediately"
+    );
+    host.frame_for_test(10.0).unwrap();
+    let settled = view(&mut host, world, positional);
+    assert_eq!(
+        settled.columns[0].values,
+        [R::Valid(V::F32(4.0)), R::Valid(V::F32(2.0))]
+    );
+    host.frame_for_test(1.0).unwrap();
+    assert_eq!(
+        view(&mut host, world, positional).evaluated_tick,
+        settled.evaluated_tick,
+        "settled positional slots schedule no work"
+    );
+
+    // A shrinking window releases its tail; slot 0 now holds row 4 and moves toward it.
+    apply(&mut host, world, vec![set_count(positional, 1)])
+        .result
+        .unwrap();
+    host.frame_for_test(0.25).unwrap();
+    let shrunk = view(&mut host, world, positional);
+    assert_eq!(shrunk.row_ids, [DataRowId(4)]);
+    assert_eq!(shrunk.columns[0].values, [R::Valid(V::F32(3.0))]);
+
+    // The identity binding retains row 3, so widening exposes it in slot 0 again.
+    apply(&mut host, world, vec![set_count(positional, 2)])
+        .result
+        .unwrap();
+    let widened = view(&mut host, world, positional);
+    assert_eq!(widened.row_ids, [DataRowId(3), DataRowId(4)]);
+    assert_eq!(
+        widened.columns[0].values,
+        [R::Valid(V::F32(3.0)), R::Valid(V::F32(2.0))],
+        "a persisting slot keeps its display and an appearing slot initializes"
+    );
+
+    for key in [2, u32::MAX] {
+        assert!(
+            apply(
+                &mut host,
+                world,
+                vec![set_interpolation_key(positional, key)]
+            )
+            .result
+            .is_err()
+        );
+    }
+    // Otherwise identical default bindings isolate the key as the failing value.
+    for key in [0, 1, 2] {
+        for value in [
+            C::BufferDataSourceBinding(BufferDataSourceBinding {
+                interpolation_key: key,
+                ..Default::default()
+            }),
+            C::StreamingDataSourceBinding(StreamingDataSourceBinding {
+                interpolation_key: key,
+                ..Default::default()
+            }),
+        ] {
+            let inserted = apply(
+                &mut host,
+                world,
+                vec![
+                    Command::Create {
+                        alias: 0,
+                        metadata: Default::default(),
+                        adopt: false,
+                    },
+                    Command::InsertComponentValue {
+                        entity: EntityRef::Alias(0),
+                        value: Box::new(value),
+                    },
+                ],
+            );
+            if key <= 1 {
+                assert!(inserted.result.is_ok(), "key {key} is a valid insertion");
+            } else {
+                let error = inserted.result.unwrap_err();
+                assert_eq!(
+                    (error.operation, error.reason),
+                    (Some(1), ErrorReason::InvalidValue),
+                    "an unknown reconciliation key fails insertion"
+                );
+            }
+        }
+    }
+    apply(&mut host, world, vec![set_interpolation_key(positional, 0)])
+        .result
+        .unwrap();
+    append(
+        &mut host,
+        source,
+        vec![vec![V::F32(-5.0)], vec![V::F32(5.0)]],
+    );
+    host.frame_for_test(0.25).unwrap();
+    assert_eq!(
+        values(&mut host, positional),
+        [R::Valid(V::F32(-5.0)), R::Valid(V::F32(5.0))],
+        "returning to identity reconciliation snaps replaced rows"
+    );
+}
+
+#[test]
 fn interpolation_sub_ulp_progress_survives_same_side_retargets_and_other_lane_changes() {
     let mut host = crate::support::task_scheduler::host();
     let world = world(&mut host);
@@ -1334,6 +1500,17 @@ fn set_buffer_source(entity: EntityId, source: &str) -> Command {
         field: FieldWrite {
             offset: std::mem::offset_of!(BufferDataSourceBinding, source) as u32,
             value: FieldValue::String(source.into()),
+        },
+    }
+}
+
+fn set_interpolation_key(entity: EntityId, key: u32) -> Command {
+    Command::SetField {
+        entity: EntityRef::Handle(entity),
+        component: C::STREAMING_DATA_SOURCE_BINDING,
+        field: FieldWrite {
+            offset: std::mem::offset_of!(StreamingDataSourceBinding, interpolation_key) as u32,
+            value: FieldValue::U32(key),
         },
     }
 }
@@ -2730,6 +2907,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
                 .properties
                 .set("output_parameter", V::F32(12.5))
                 .unwrap();
+            value.interpolation_key = 1;
             C::StreamingDataSourceBinding(value)
         } else {
             let mut value = buffer("dataset:persist", "output", expression);
@@ -2737,6 +2915,7 @@ fn bindings_persist_metadata_and_restore_empty_until_source_and_definitions_are_
                 .properties
                 .set("output_parameter", V::F32(12.5))
                 .unwrap();
+            value.interpolation_key = 1;
             C::BufferDataSourceBinding(value)
         };
         let entity = create(&mut host, world, "persist-binding", value);

@@ -21,8 +21,14 @@
 //! All interpolated outputs on that binding advance together. Missing/invalid refs
 //! return typed errors without changing values; projection readiness stays intact.
 //! Zero references hold without earning motion. Settled outputs request no work.
-//! Removing the companion publishes the projection immediately. New row/source
-//! or definition lifetimes and invalid-to-valid results initialize immediately.
+//! Removing the companion publishes the projection immediately. New source or
+//! definition lifetimes and invalid-to-valid results initialize immediately.
+//! Retained displays follow exact row identities by default: new rows initialize
+//! immediately and removed rows release their state. A binding whose
+//! `interpolation_key` field is 1 reconciles by view position instead: each slot
+//! persisting in its view retargets from its display toward whichever row now
+//! occupies it, slots that appear initialize immediately and slots that leave
+//! release their state.
 //!
 //! Systems read completed views and register/finish/release their entity-local
 //! consumer through `SystemUpdateContext::world` (`SystemRuntimeAccess`), using

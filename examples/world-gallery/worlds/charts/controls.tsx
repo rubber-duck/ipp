@@ -131,7 +131,10 @@ export function ChartControls({
         </button>
         <p>
           Lines share one stream with different history windows. Points keep
-          recent marks; bars, grids and pies show the newest complete sample.
+          recent marks; bars, grids, the surface and pies show the newest
+          complete sample. With smoothing, each bar, cell or slice glides from
+          its displayed value toward that sample, while new line and point marks
+          appear at their values.
         </p>
         {mount?.options.streamError ? (
           <p role="alert">
@@ -165,14 +168,13 @@ export function ChartControls({
         <label>
           <input
             id="charts-smooth-changes"
-            disabled={mount?.options.dataMode === "streaming"}
             type="checkbox"
             checked={Boolean(mount?.options.smoothChanges ?? true)}
             onChange={(event) =>
               action("smoothChanges", event.currentTarget.checked)
             }
           />{" "}
-          Smooth changes to existing samples
+          Smooth sample edits and live snapshots
         </label>
         <label>
           <input

@@ -7,6 +7,7 @@ import {
   exerciseChartAdaptiveScope,
   exerciseChartAutomaticRange,
   exerciseChartSmoothChanges,
+  exerciseChartStreamSmoothing,
   assertChartFeedback,
 } from "./scenarios/gallery-chart-changes.js";
 import {
@@ -111,6 +112,10 @@ for (const [name, exercise] of [
   [
     "gallery existing sample edits render and pick intermediate smoothed values",
     exerciseChartSmoothChanges,
+  ],
+  [
+    "gallery live snapshots glide by window position between stream arrivals",
+    exerciseChartStreamSmoothing,
   ],
 ] as const) {
   test(name, { timeout: 60_000 }, async (context) => {

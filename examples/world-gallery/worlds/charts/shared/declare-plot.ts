@@ -4,6 +4,7 @@ import type { AnimationWorldClient, RowPropertyValue } from "@ipp/client";
 import {
   BufferDataSourceBinding,
   StreamingDataSourceBinding,
+  type DataInterpolationKey,
   type DataWindow,
   DataSource,
   ColumnBindingAsset,
@@ -53,6 +54,7 @@ export async function declarePlot(
   streaming?: {
     windows: readonly DataWindow[];
     encodeWindows: (windows: readonly DataWindow[]) => Uint8Array<ArrayBuffer>;
+    interpolationKey?: DataInterpolationKey;
   },
   interpolationRates: Readonly<Record<string, number>> = {},
 ) {

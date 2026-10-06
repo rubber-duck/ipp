@@ -5,6 +5,7 @@ import {
   type DatasetProducer,
   type DatasetPage,
   type DatasetValue,
+  type DataBindingPage,
   type ClientAssetSource,
   type RowPropertyValue,
   type WorldReference,
@@ -46,6 +47,7 @@ import {
 } from "./shared/commands.js";
 import {
   STREAM_SCHEMA,
+  streamInterpolationKey,
   streamKey,
   streamRows,
   streamWindows,
@@ -53,6 +55,16 @@ import {
   type ChartWindow,
 } from "./streaming.js";
 import { declarePlot } from "./shared/declare-plot.js";
+
+/** Source column feeding each interpolated output in the chart sample layout. */
+const SOURCE_COLUMNS = {
+  y: 1,
+  y2: 3,
+  value: 1,
+  radius: 5,
+  height: 6,
+  color: 7,
+} as const;
 
 export interface ChartSurface {
   readonly anchor: bigint;
@@ -123,6 +135,11 @@ export class ChartContent {
   private readonly sampleTargets = new Map<
     GalleryChart,
     readonly DatasetValue[]
+  >();
+  /** Newest live snapshot of each positional chart, row for row with its slots. */
+  private readonly snapshotTargets = new Map<
+    GalleryChart,
+    readonly (readonly DatasetValue[])[]
   >();
   private readonly producers = new Map<string, DatasetProducer>();
   private readonly assets: {
@@ -486,7 +503,11 @@ export class ChartContent {
       spec.style,
       {},
       chart.sourceKind === "streaming"
-        ? { windows: chart.windows, encodeWindows }
+        ? {
+            windows: chart.windows,
+            encodeWindows,
+            interpolationKey: streamInterpolationKey(spec),
+          }
         : undefined,
       this.smoothChanges ? this.interpolationRates(chart) : {},
     );
@@ -511,6 +532,7 @@ export class ChartContent {
     this.highlights.clear();
     this.adaptiveAxes.clear();
     this.sampleTargets.clear();
+    this.snapshotTargets.clear();
     for (const [name, producer] of this.producers) {
       await this.context.canvas.host.datasets.destroy(producer);
       this.producers.delete(name);
@@ -613,17 +635,15 @@ export class ChartContent {
     for (const chart of this.charts) {
       if (sent.has(chart.source)) continue;
       sent.add(chart.source);
+      const rows = streamRows(chart.spec, sequence, elapsed);
       const outcome = await this.context.canvas.host.datasets.update(
         chart.producer,
-        [
-          {
-            operation: "append",
-            rows: streamRows(chart.spec, sequence, elapsed),
-          },
-        ],
+        [{ operation: "append", rows }],
       );
       if (outcome.failure)
         throw new Error(`Live ingestion failed: ${outcome.failure.reason}`);
+      if (streamInterpolationKey(chart.spec) === "position")
+        this.snapshotTargets.set(chart, rows);
     }
     // Observe Host evaluation before reconciling picked rows with their current windows.
     await this.client.waitForFrame();
@@ -856,6 +876,13 @@ export class ChartContent {
       y2: value,
       value,
       height: Number(chart.spec.frame.height),
+      // Live snapshots also vary slice radii and surface colours (0..1 lanes).
+      ...(chart.sourceKind === "streaming"
+        ? {
+            radius: Number(chart.spec.frame.height),
+            ...(chart.spec.id === "height-surface" ? { color: 1 } : {}),
+          }
+        : {}),
     };
   }
 
@@ -933,56 +960,101 @@ export class ChartContent {
     await this.client.waitForFrame();
   }
 
-  async remainingFeedback() {
-    let duration = 0;
-    if (!this.smoothChanges || this.sampleTargets.size === 0)
-      return { duration, time: 0 };
-    // Read edited rows and their current authored rates only at change boundaries.
-    const remaining = await Promise.all(
-      [...this.sampleTargets].map(async ([chart, target]) => {
-        const [view, inspection] = await Promise.all([
-          this.context.canvas.host.datasets.bindingView(
-            chart.client.session,
-            chart.entity,
-            { limit: 1 },
-          ),
-          chart.client.inspectPage({
-            collection: "entities",
-            target: chart.entity,
-            limit: 1,
-          }),
-        ]);
-        const properties = inspection.entities
-          .find((entity) => entity.id === chart.entity)
-          ?.components.find(
-            (component) =>
-              component.component ===
-              chart.client.components[this.bindingComponent(chart)]!.id,
-          )?.properties;
-        const row = view.rows.find((row) => row.id === 1n);
-        const indices = { y: 1, y2: 3, value: 1, height: 6 } as const;
-        let remaining = 0;
-        for (const [output, index] of Object.entries(indices)) {
-          const rate = properties?.[`${output}_interp`];
-          if (rate?.kind !== "f32" || rate.value <= 0) continue;
-          const value =
-            row?.values[
-              view.columns.findIndex((column) => column.name === output)
-            ];
-          const end = target[index];
-          if (value?.valid && value.value.kind === "f32" && end?.kind === "f32")
-            remaining = Math.max(
-              remaining,
-              Math.abs(value.value.value - Math.fround(end.value)) / rate.value,
+  /**
+   * Seconds until displayed interpolated outputs reach their targets: edited
+   * fixed samples, or the newest snapshot under each positional live chart in
+   * `live`. Bindings are read only at change boundaries with feedback to follow.
+   */
+  async remainingFeedback(live: ReadonlySet<string> = new Set()) {
+    if (!this.smoothChanges) return { duration: 0, time: 0 };
+    const pending =
+      this.mode === "buffer"
+        ? [...this.sampleTargets].map(([chart, target]) =>
+            this.remainingMotion(chart, 1, (row) =>
+              row.id === 1n ? target : undefined,
+            ),
+          )
+        : [...this.snapshotTargets]
+            .filter(([chart]) => live.has(chart.spec.id))
+            .map(([chart, targets]) =>
+              this.remainingMotion(
+                chart,
+                targets.length,
+                (_row, index) => targets[index],
+              ),
             );
-        }
-        return remaining;
-      }),
-    );
-    duration = Math.max(0, ...remaining);
+    if (pending.length === 0) return { duration: 0, time: 0 };
+    const duration = Math.max(0, ...(await Promise.all(pending)));
     // A later completed Host clock is a conservative upper bound for those reads.
     const frame = await this.client.waitForFrame();
     return { duration, time: frame.time };
+  }
+
+  private async remainingMotion(
+    chart: GalleryChart,
+    limit: number,
+    target: (
+      row: DataBindingPage["rows"][number],
+      index: number,
+    ) => readonly DatasetValue[] | undefined,
+  ) {
+    const [first, inspection] = await Promise.all([
+      this.context.canvas.host.datasets.bindingView(
+        chart.client.session,
+        chart.entity,
+        { limit },
+      ),
+      chart.client.inspectPage({
+        collection: "entities",
+        target: chart.entity,
+        limit: 1,
+      }),
+    ]);
+    const rows = [...first.rows];
+    for (let page = first; page.nextOffset !== null && rows.length < limit; ) {
+      page = await this.context.canvas.host.datasets.bindingView(
+        chart.client.session,
+        chart.entity,
+        { offset: page.nextOffset, limit: limit - rows.length },
+      );
+      rows.push(...page.rows);
+    }
+    const properties = inspection.entities
+      .find((entity) => entity.id === chart.entity)
+      ?.components.find(
+        (component) =>
+          component.component ===
+          chart.client.components[this.bindingComponent(chart)]!.id,
+      )?.properties;
+    const lanes = (value: DatasetValue | undefined) =>
+      value?.kind === "f32"
+        ? [value.value]
+        : value?.kind === "vec4"
+          ? value.value
+          : [];
+    let remaining = 0;
+    for (const [index, row] of rows.entries()) {
+      const end = target(row, index);
+      if (!end) continue;
+      for (const [output, column] of Object.entries(SOURCE_COLUMNS)) {
+        const rate = properties?.[`${output}_interp`];
+        if (rate?.kind !== "f32" || rate.value <= 0) continue;
+        const value =
+          row.values[
+            first.columns.findIndex((column) => column.name === output)
+          ];
+        if (!value?.valid) continue;
+        const shown = lanes(value.value),
+          goal = lanes(end[column]);
+        for (const [lane, displayed] of shown.entries())
+          if (goal[lane] !== undefined)
+            remaining = Math.max(
+              remaining,
+              Math.abs(displayed - Math.fround(goal[lane]!)) / rate.value,
+            );
+      }
+    }
+    return remaining;
   }
 
   async close() {

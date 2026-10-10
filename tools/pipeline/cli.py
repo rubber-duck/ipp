@@ -66,6 +66,12 @@ def parser() -> argparse.ArgumentParser:
             "--fail-fast", action="store_true", help="stop after the first failed step"
         )
 
+        command.add_argument(
+            "--rebuild",
+            action="store_true",
+            help="rebuild selected products even when verified outputs can be reused",
+        )
+
     def hardware(command: argparse.ArgumentParser) -> None:
         # Without either option the run detects hardware and falls back to software.
         devices = command.add_mutually_exclusive_group()
@@ -719,6 +725,7 @@ def main(argv: list[str] | None = None) -> int:
             egl_directory=args.egl_dir,
             fail_fast=args.fail_fast,
             live=args.live,
+            rebuild=args.rebuild,
             cancel=cancel,
             browser_device=getattr(args, "device", None),
             browser_choice=getattr(args, "browser_choice", "requested"),

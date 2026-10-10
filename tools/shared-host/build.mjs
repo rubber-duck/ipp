@@ -3,7 +3,8 @@
  * client packages from source, plus the input identities the launcher uses
  * to rebuild it when the sources change.
  */
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { build } from "esbuild";
 import { artifact, workspace } from "../build/helpers.mjs";
@@ -34,9 +35,16 @@ const result = await build({
   logLevel: "warning",
 });
 const inputs = [];
-for (const path of Object.keys(result.metafile.inputs)) {
-  const entry = await stat(resolve(workspace, path));
-  inputs.push([path, entry.mtimeMs, entry.size]);
+for (const path of new Set([
+  ...Object.keys(result.metafile.inputs),
+  "tools/shared-host/build.mjs",
+  "package.json",
+  "package-lock.json",
+  "tsconfig.json",
+  ".node-version",
+])) {
+  const bytes = await readFile(resolve(workspace, path));
+  inputs.push([path, createHash("sha256").update(bytes).digest("hex")]);
 }
 await writeFile(resolve(output, "inputs.json"), JSON.stringify(inputs));
 await writeFile(

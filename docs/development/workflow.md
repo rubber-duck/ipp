@@ -47,6 +47,28 @@ The first dependency argument waits for the second. Parent epics group work; blo
 - Follow the [iteration loop](../../AGENTS.md#iteration-loop): exchange coherent snapshots on known bases, stabilize interfaces before consumers, and batch routine updates.
 - Report changed contracts/blockers promptly. Keep discoveries in Beads and durable decisions in architecture. Never infer abandonment or silently take over claims.
 
+## Choose an iteration environment
+
+At claim or delegation, name the smallest environment that can observe the changed behavior, its owner, the event that requires rebuilding or changing environments, and the maintained scenarios required for delivery. Record these in the Beads task with the source base and existing evidence. A generic feature does not need every deployment arrangement during each edit cycle.
+
+| Changed behavior | Default edit/check loop | Expand when |
+| --- | --- | --- |
+| Documentation | Changed-file Markdown formatting and repository checks | Source or behavior also changes |
+| Client declarations, React components, GUI appearance, gallery content | Persistent Node session against a compatible [shared native GLES Host](shared-host.md); edit, reload, inspect and capture | The defect involves browser integration, the running Host lacks a changed runtime behavior/contract, or a maintained scenario is due |
+| Headless runtime or algorithms | Focused Rust package/test and the smallest real native transport scenario that observes the feature; GLES when pixels matter | The changed code crosses a target, renderer or platform boundary |
+| Browser input, DOM composition, worker/WASM glue or WebGL-specific behavior | Focused maintained browser scenario with its prerequisites prepared once | Another affected caller or backend needs evidence |
+| Contracts, dependencies or build composition | Affected target generation and focused contract/composition checks | The changed contract or distribution reaches additional targets; native layouts never substitute for WASM |
+
+For concurrent compatible client work, one owner prepares the native Host and shared assets once. Workers keep separate source worktrees and named Node sessions, use the Host's matching generated client, and serialize presentation through the existing capture lock. The [joining recipe](shared-host.md#joining-from-another-worktree) needs no additional application server. Do not install browser/WASM/Blender prerequisites or build the whole gallery merely to inspect a client module that only needs the basic Host and font.
+
+Share a Host only while its compiled runtime and contract can exercise the workers' changes. Independent Rust implementations need a Host built from their own source or an integrated snapshot supplied by the owner. Restarting a shared Host invalidates every session; agree on the snapshot before the owner restarts it. Keep Cargo output directories separate between worktrees under the [build guide](building.md#optional-compiler-cache); sharing a running Host does not mean sharing mutable build outputs.
+
+Complete a coherent edit, then ask one observable question: an acknowledged value, a focused assertion or a completed frame. Run the smallest check that answers it. Reuse the session and unchanged assets; restart only the layer whose inputs changed, following the [reload boundaries](shared-host.md#interactive-sessions). A passing check needs a new run when its relevant inputs change or a new concern appears. Another agent handing back the same tested snapshot is not itself a reason to rebuild every environment.
+
+Serialize pipeline invocations within a checkout: separate build, format and regression commands compete for its pipeline lock. Combine independent selections in one invocation where supported, and use its prerequisite deduplication and [verified build reuse](building.md#pipeline-setup-and-commands). Inspect `[reused]` and `reusedFrom` in the report; use `--rebuild` for a concrete stale-product concern, not as a routine prelude to validation. While it runs, inspect logs or do independent work without changing its inputs instead of launching another pipeline into the same checkout.
+
+Shared captures are development evidence. Before handoff, run the affected maintained scenarios with their owned environments and the checks below; browser-specific coverage and real image assertions remain required where applicable. One integration owner runs the combined merge/push gate, using workers' focused reports to select affected coverage and avoid duplicate runs. Do not redirect maintained regression runners to the shared development Host.
+
 ## Validation
 
 ```mermaid
@@ -72,7 +94,7 @@ flowchart LR
 
 **A merge-to-main or push request triggers core regression plus affected groups or suites.** A commit, handoff or editing on `main` does not trigger an additional pass. Full regression (`--full`) runs only when explicitly requested. One integration owner runs combined evidence; subagents report focused checks. Use only [`python tools/ipp.py regression`](building.md#regression-entry-point), including retries. Do not assemble or repeat its constituent commands separately. Add coverage for the changed subsystem and its callers: for example GUI/rendering changes need their real frame scenarios, and feature/contract changes need the relevant matrix checks. Unaffected expensive regions remain on demand.
 
-Reuse passing evidence while relevant source/configuration/environment remains unchanged. Retry unfinished steps with `python tools/ipp.py retry <summary.json>`; add affected coverage with repeatable `--group`/`--only`/`--suite`. Preserve all applicable reports and report partial scope honestly. The runner deduplicates declared prerequisites and records source/output identities; prior passing evidence still requires unchanged relevant inputs.
+Reuse passing evidence while relevant source/configuration/environment remains unchanged. Retry unfinished regression steps with `python tools/ipp.py regression --retry <summary.json>`; add affected coverage with repeatable `--group`/`--only`/`--suite`. Preserve all applicable reports and report partial scope honestly. The runner deduplicates declared prerequisites and records source/output identities; prior passing evidence still requires unchanged relevant inputs.
 
 Behavior changes extend maintained scenarios/fixtures and representative CI with failure artifacts. Await readiness/frame completion, assert real outcomes and meaningful images, and clean up owned participants under the [testing policy](integration-testing.md). Missing/skipped environments are not passing coverage. Docs-only changes need no runtime tests.
 

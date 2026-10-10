@@ -12,6 +12,7 @@ import {
 import {
   alive,
   connect,
+  listHosts,
   lockOwner,
   readHost,
   requireHost,
@@ -38,6 +39,7 @@ const USAGE = `Usage: node tools/shared-host/shared-host.mjs <command>
   host start [--egl-dir DIR] [--no-build] [--gallery]
   host start --io-read PREFIX DIRECTORY   authorize a read-only asset root (repeatable)
   host status                              Host, Worlds, sessions, lock holder
+  host list                                discover Hosts in linked worktrees
   host stop                                stop the Host and its sessions
   run MODULE [ARGS...]                     open a client module, capture once
   session start MODULE --name NAME [ARGS...]
@@ -141,7 +143,19 @@ async function hostCommand(
   common: Common,
 ): Promise<void> {
   const json = common.json === true;
-  if (action === "start") {
+  if (action === "list") {
+    const hosts = await listHosts(workspace, directory);
+    print(
+      json,
+      hosts,
+      hosts
+        .map(
+          (entry) =>
+            `${entry.running ? "running" : "stopped"} ${entry.directory}${entry.host ? ` — pid ${entry.host.pid}, contract ${entry.host.contract}, owner ${entry.host.worktree}` : ` — ${entry.error}`}`,
+        )
+        .join("\n") || "no shared Hosts found",
+    );
+  } else if (action === "start") {
     const host = await startHost(workspace, directory, {
       eglDirectory:
         text(common["egl-dir"]) ?? process.env.IPP_EGL_LIBRARY_DIR ?? "/lib64",

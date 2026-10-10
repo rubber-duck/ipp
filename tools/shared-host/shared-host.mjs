@@ -8,6 +8,7 @@
  * rebuilds it through `python tools/ipp.py build shared-host` first when
  * one of its recorded inputs changed.
  */
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import { resolve } from "node:path";
@@ -21,9 +22,10 @@ async function current() {
     const inputs = JSON.parse(
       await readFile(resolve(product, "inputs.json"), "utf8"),
     );
-    for (const [path, mtimeMs, size] of inputs) {
-      const entry = await stat(resolve(workspace, path));
-      if (entry.mtimeMs !== mtimeMs || entry.size !== size) return false;
+    for (const [path, sha256] of inputs) {
+      const bytes = await readFile(resolve(workspace, path));
+      if (createHash("sha256").update(bytes).digest("hex") !== sha256)
+        return false;
     }
     await stat(resolve(product, "cli.mjs"));
     return true;

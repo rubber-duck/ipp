@@ -25,17 +25,44 @@ def digest(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def source_identity(root: Path) -> dict:
-    """Hash current tracked/unignored source bytes, including dirty and new files."""
+def source_names(root: Path) -> list[str]:
     result = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
         cwd=root,
         capture_output=True,
         check=True,
     )
-    names = sorted(set(os.fsdecode(result.stdout).split("\0")) - {""})
+    return sorted(set(os.fsdecode(result.stdout).split("\0")) - {""})
+
+
+def source_records(root: Path) -> dict[str, str]:
+    """Current tracked/unignored source, including additions, deletions and modes."""
+    records = {}
+    for name in source_names(root):
+        path = root / name
+        if path.is_symlink():
+            # Also hash the referent: compilers can follow source symlinks.
+            value = "link:" + os.fsdecode(path.readlink())
+            value += ":" + (
+                f"{path.stat().st_mode & 0o777}:{digest(path)}"
+                if path.is_file()
+                else "missing"
+            )
+            if path.is_dir():
+                value = "directory-link:" + value
+        elif path.is_file():
+            value = f"{path.stat().st_mode & 0o777}:{digest(path)}"
+        else:
+            value = "missing"
+        records[name] = value
+    return records
+
+
+def source_identity(root: Path) -> dict:
+    """Hash current tracked/unignored source bytes, including dirty and new files."""
+    # Preserve the existing source identity format used by performance tooling.
     hasher = hashlib.sha256()
-    for name in names:
+    for name in source_names(root):
         path = root / name
         hasher.update(name.encode() + b"\0")
         if path.is_symlink():
@@ -72,6 +99,7 @@ def output_records(root: Path, outputs: tuple[str, ...]) -> list[dict]:
                     "path": item.relative_to(root).as_posix(),
                     "bytes": item.stat().st_size,
                     "sha256": digest(item),
+                    "mode": item.stat().st_mode & 0o777,
                 }
             )
     return records

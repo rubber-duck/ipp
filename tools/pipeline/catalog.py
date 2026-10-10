@@ -141,6 +141,7 @@ REGRESSION_GROUPS = {
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
         steps=(
+            "test:shared-host:native",
             "test:asset-exports:gpu-native",
             *tuple(record["id"] for record in GLES_CHECKS),
             "test:canvas:controller-gles",
@@ -325,6 +326,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         dependencies: tuple[str, ...],
         outputs: tuple[str, ...],
         requirements: tuple[str, ...] = ("node", "npm", "rust"),
+        source_roots: tuple[str, ...] = (),
     ) -> None:
         # The scheduler runs "rust" steps one at a time; builds without Cargo omit it.
         add(
@@ -335,6 +337,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                 tuple(f"build:{d}" for d in dependencies),
                 requirements,
                 outputs,
+                source_roots=source_roots,
             )
         )
 
@@ -352,6 +355,9 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             outputs=("target/presentation-wire-host",),
         )
     )
+    # Audited native compilation/generation inputs. Root files are always included.
+    # Other products conservatively depend on the complete source tree.
+    native_sources = ("crates/", "packages/ipp-client/", "tools/", "assets/", ".cargo/")
     build(
         "native",
         (),
@@ -360,6 +366,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "target/integration-artifacts/client",
             "target/integration-artifacts/native.contract",
         ),
+        source_roots=native_sources,
     )
     # Target-specific GUI contract declarations resolve the root project's aliases.
     build(
@@ -505,6 +512,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         (),
         ("target/font-assets", "target/font-sources"),
         ("python-tools",),
+        source_roots=("tools/", "assets/fonts/"),
     )
     build(
         "surface-assets",
@@ -543,7 +551,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     for name in ("gles-host", "gles-host-instrumentation"):
-        build(name, (), (f"target/{name}",), ("node", "npm", "rust"))
+        build(name, (), (f"target/{name}",), ("node", "npm", "rust"), native_sources)
     # The shared development Host command; `host start` builds gles-host itself.
     build("shared-host", (), ("target/shared-host",), ("node", "npm"))
     build("mesh-pose-fixtures", (), ("target/mesh-pose-build",), ("node", "npm"))

@@ -19,6 +19,8 @@ class Task:
     timeout: int = 1800
     interactive: bool = False
     mutates_source: bool = False
+    # Empty means all tracked/unignored source. Used only for build-artifact reuse.
+    source_roots: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-zA-Z0-9:._/+-]+", self.id):
@@ -32,6 +34,9 @@ class Task:
         for output in self.outputs:
             if Path(output).is_absolute() or ".." in Path(output).parts:
                 raise ValueError(f"Output must stay within the workspace: {output}")
+        for source in self.source_roots:
+            if Path(source).is_absolute() or ".." in Path(source).parts:
+                raise ValueError(f"Source must stay within the workspace: {source}")
 
 
 @dataclass(frozen=True)

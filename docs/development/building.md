@@ -139,7 +139,17 @@ Steps run concurrently over the dependency graph: a step starts once all its pre
 
 Suites in the [suite registry](../../tools/pipeline/suites.json) and native GLES checks in [gles.json](../../tools/pipeline/gles.json) declare shared source ownership through `sourceRoots`: a root ending in `/` owns a directory, any other root one file. Changed-file selection includes every matching suite and check, and a changed test file declared by a suite selects itself, in addition to the conservative area rules; keep these roots aligned when moving shared implementation or test helpers. Files without a precise mapping still require an explicit suite selection.
 
-Each invocation rebuilds declared prerequisites through the underlying incremental tools. There is no implicit result cache or build-skipping flag. New reports do not certify previous passing checks after edits. Retries read unfinished IDs, reuse the recorded browser device and EGL directory unless overridden, resolve the current catalog and never execute commands stored in a report:
+Build prerequisites reuse their existing products when the pipeline verifies source content, command, dependency artifacts, tool identities, environment/configuration and every output file's content and permissions. Tests and checks always execute when selected. Console output marks reused builds with `[reused]`; the step's `reusedFrom` points to its original manifest while the current report records the new invocation. Missing outputs or missing/corrupt evidence trigger a rebuild. A failed rebuild invalidates the old record; source changes during a run prevent publication of new reuse records.
+
+Most products conservatively depend on all tracked and unignored source. Native Host/client products and fonts have audited `source_roots` in the [build catalog](../../tools/pipeline/catalog.py), plus all root files, so React/gallery edits can reuse native prerequisites. Keep these inputs aligned when introducing new build dependencies. Products stay local to their checkout; share a running [development Host](shared-host.md), not mutable Cargo output directories. Installed dependencies must match their lockfiles; after manually changing an installed tool/dependency or any input outside the recorded source/configuration, use `--rebuild`.
+
+```sh
+python tools/ipp.py build gles-host font-assets       # verify and reuse when current
+python tools/ipp.py build gles-host --rebuild         # force the selected build graph
+python tools/ipp.py test shared-host                 # small real GLES/React workflow test
+```
+
+`--rebuild` also applies to selected prerequisites under `test`, `check`, `regression` and `retry`; it never suppresses validation. New reports do not certify previous passing checks after edits. Retries read unfinished IDs, reuse the recorded browser device and EGL directory unless overridden, resolve the current catalog and never execute commands stored in a report:
 
 ```sh
 python tools/ipp.py retry target/pipeline/runs/run-EXAMPLE/summary.json

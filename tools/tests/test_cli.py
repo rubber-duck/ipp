@@ -27,6 +27,14 @@ from support import plan
 
 
 class PlanningTests(unittest.TestCase):
+    def test_rebuild_preserves_selected_tests_and_minimal_shared_host_environment(self):
+        args = parser().parse_args(["test", "shared-host", "--rebuild"])
+        self.assertTrue(args.rebuild)
+        selected = plan("test", "shared-host", "--rebuild")
+        self.assertEqual(selected.tasks[-1].id, "test:shared-host:native")
+        requirements = {name for task in selected.tasks for name in task.requirements}
+        self.assertFalse({"browser", "blender", "wasm"} & requirements)
+
     def test_gallery_generates_assets_before_bundling(self):
         for command, target in (
             ("build", "gallery"),

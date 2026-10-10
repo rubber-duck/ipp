@@ -4,7 +4,14 @@
  * matches it, and the presentation lock its clients share.
  */
 import { spawn, spawnSync } from "node:child_process";
-import { closeSync, constants, existsSync, openSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  createReadStream,
+  existsSync,
+  openSync,
+} from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -23,7 +30,7 @@ export interface HostState {
   readonly pid: number;
   readonly url: string;
   readonly presentationUrl: string;
-  /** Checkout the Host was built from, and its commit. */
+  /** Checkout and commit at startup; a commit alone does not identify dirty builds. */
   readonly worktree: string;
   readonly commit: string;
   /** Compatibility hash of the Host's contract. */
@@ -32,6 +39,8 @@ export interface HostState {
   readonly client: string;
   /** The shared GUI font built with the Host. */
   readonly font: string;
+  /** Content identities of the private executable, contract and font. */
+  readonly snapshot?: Readonly<Record<string, string>>;
   readonly eglDirectory: string;
   readonly log: string;
   readonly startedAt: string;
@@ -131,6 +140,28 @@ function git(workspace: string, ...args: string[]): string {
   return result.status === 0 ? result.stdout.trim() : "";
 }
 
+/** Discover without opening a connection or selecting another owner's Host. */
+export async function listHosts(workspace: string, selected: string) {
+  const worktrees = git(workspace, "worktree", "list", "--porcelain", "-z")
+    .split("\0")
+    .filter((field) => field.startsWith("worktree "))
+    .map((field) => field.slice("worktree ".length));
+  const directories = new Set([
+    resolve(selected),
+    ...[workspace, ...worktrees].map((path) => resolve(path, STATE_DIRECTORY)),
+  ]);
+  const found = [];
+  for (const directory of directories) {
+    try {
+      const host = await readHost(directory);
+      if (host) found.push({ directory, running: alive(host.pid), host });
+    } catch (error) {
+      found.push({ directory, running: false, error: String(error) });
+    }
+  }
+  return found;
+}
+
 export async function startHost(
   workspace: string,
   directory: string,
@@ -181,6 +212,19 @@ export async function startHost(
         join(client, name),
         constants.COPYFILE_FICLONE,
       );
+  const font = join(client, "shure-tech-mono.ippf");
+  await copyFile(
+    join(workspace, "target/font-assets/shure-tech-mono.ippf"),
+    font,
+    constants.COPYFILE_FICLONE,
+  );
+  const snapshot: Record<string, string> = {};
+  for (const name of ["gles_host", "contract.bin", "shure-tech-mono.ippf"]) {
+    const hash = createHash("sha256");
+    for await (const bytes of createReadStream(join(client, name)))
+      hash.update(bytes);
+    snapshot[name] = hash.digest("hex");
+  }
   const contract = await loadContract(client);
   const log = join(directory, "host.log");
   const output = openSync(log, "w");
@@ -232,7 +276,8 @@ export async function startHost(
         commit: git(workspace, "rev-parse", "HEAD"),
         contract: contract.SCHEMA_HASH.toString(16),
         client,
-        font: join(workspace, "target/font-assets/shure-tech-mono.ippf"),
+        font,
+        snapshot,
         eglDirectory: options.eglDirectory,
         log,
         startedAt: new Date().toISOString(),

@@ -28,13 +28,31 @@ node tools/shared-host/shared-host.mjs compare target/shared-host-captures/hello
 node tools/shared-host/shared-host.mjs host stop                      # owner only
 ```
 
-`host start` builds `gles-host` and `font-assets` through the pipeline in the current checkout (skip with `--no-build`), copies the executable and its generated client to a private directory, starts the Host in the background on ephemeral loopback ports and records its state; it refuses to start while that checkout's Host runs. The EGL directory defaults to `IPP_EGL_LIBRARY_DIR`, then `/lib64`. `run MODULE [ARGS...]` opens a client module, serves one request and disconnects; `session start MODULE --name NAME [ARGS...]` keeps it open for `session capture NAME [ARGS...]` (see [interactive sessions](#interactive-sessions)), and `session stop --all`, for the owner, stops every session. The tool takes its own options (`--host`, `--out`, `--name`, `--json`, `--idle-minutes`, and `--egl-dir`, `--no-build` and `--all` where they apply) from anywhere on the command line and passes every other argument to the client module. Images are written to `target/shared-host-captures/<name>/` of the current checkout, named by the session, or for `run` by `--name` or the module's file name, unless `--out DIR` is given; `--json` prints the reply as JSON. `compare` writes two PNG files side by side, each optionally cropped with `--first-box` or `--second-box X,Y,W,H` and enlarged by `--zoom-factor`, to the file `--out` names, `compare.png` in the current directory by default. The launcher runs the `shared-host` pipeline product and rebuilds it with `python tools/ipp.py build shared-host` when one of its sources changed.
+`host start` prepares `gles-host` and `font-assets` through the pipeline, reusing verified products in the current checkout (skip with `--no-build`), copies the executable, its generated client and GUI font to a private directory, starts the Host in the background on ephemeral loopback ports and records its state; it refuses to start while that checkout's Host runs. The EGL directory defaults to `IPP_EGL_LIBRARY_DIR`, then `/lib64`. `run MODULE [ARGS...]` opens a client module, serves one request and disconnects; `session start MODULE --name NAME [ARGS...]` keeps it open for `session capture NAME [ARGS...]` (see [interactive sessions](#interactive-sessions)), and `session stop --all`, for the owner, stops every session. The tool takes its own options (`--host`, `--out`, `--name`, `--json`, `--idle-minutes`, and `--egl-dir`, `--no-build` and `--all` where they apply) from anywhere on the command line and passes every other argument to the client module. Images are written to `target/shared-host-captures/<name>/` of the current checkout, named by the session, or for `run` by `--name` or the module's file name, unless `--out DIR` is given; `--json` prints the reply as JSON. `compare` writes two PNG files side by side, each optionally cropped with `--first-box` or `--second-box X,Y,W,H` and enlarged by `--zoom-factor`, to the file `--out` names, `compare.png` in the current directory by default. The launcher runs the `shared-host` pipeline product and rebuilds it with `python tools/ipp.py build shared-host` when one of its sources changed.
 
 ## Finding and joining the Host
 
-The Host's checkout records it in `target/shared-host-state/host.json`: process id, WebSocket URL, the commit it was built from, its contract hash, the private copy of executable and generated client, the shared font and the log path. Commands find it there; from another checkout select it with `--host` or `IPP_SHARED_HOST`, naming the Host's checkout, its state directory or its `host.json`. Client modules and captures always come from the checkout whose launcher runs.
+The Host's checkout records it in `target/shared-host-state/host.json`: process id, WebSocket URL, checkout and commit at startup, contract hash, private executable/client/font paths, content hashes for the executable/contract/font, and log path. The commit at startup is not proof of compiled source when the checkout is dirty or `--no-build` was used; the owner must record that source snapshot. Commands find it there; from another checkout select it with `--host` or `IPP_SHARED_HOST`, naming the Host's checkout, its state directory or its `host.json`. Client modules and captures always come from the checkout whose launcher runs.
 
 Clients connect through the generated client copied with the Host, so a connection never meets a contract mismatch. A client module written against a newer contract, for example using a row field the running Host lacks, fails where it uses that field; ask the owner for a restart from a checkout that has it. `host status` prints the contract hash in use.
+
+### Joining from another worktree
+
+At delegation, the owner records the Host checkout, source snapshot (including any uncommitted runtime changes), contract, prepared assets and restart ownership in Beads. A matching contract alone does not prove that the Host contains a runtime fix. The executable, generated client and font are private copies, so rebuilding those owner outputs does not change running sessions. Keep configured asset roots stable while sessions use them; those still refer to the owner's checkout.
+
+Run `node tools/shared-host/shared-host.mjs host list` before starting another Host. It reads Host state from the current checkout, linked worktrees and an explicitly selected `--host`/`IPP_SHARED_HOST` location without consuming a connection. It lists state directories, process liveness, owner checkouts and contracts; it neither chooses compatibility nor starts/stops a Host. Custom state directories outside those locations require an explicit selection. Use `host status --json` to inspect the selected Host's snapshot hashes and current sessions.
+
+After the owner starts the Host once, each worker runs from its own checkout, selecting that same Host. This example assumes the owner started it in the primary checkout; replace the path when the owner uses an integration worktree and replace the session name with your task and worker name.
+
+```sh
+export IPP_SHARED_HOST=/home/dev/ipp
+node tools/shared-host/shared-host.mjs host status
+node tools/shared-host/shared-host.mjs session start tools/shared-host/hello.tsx --name TASK-WORKER
+node tools/shared-host/shared-host.mjs session capture TASK-WORKER "Updated text"
+node tools/shared-host/shared-host.mjs session stop TASK-WORKER
+```
+
+Use a client module for small React/GUI changes, or the existing [native gallery sessions](../../tools/shared-host/README.md) for gallery scenes, including animated scenes and watch/reload. Each persistent session already has a Node process and a loopback request endpoint; another application server is unnecessary for this workflow. Build gallery assets only when the scene needs them. Maintain separate sessions and Worlds, and release idle sessions so other workers can connect within the [Host limits](#concurrent-presentation-and-capture).
 
 ## Writing a client module
 
@@ -64,6 +82,16 @@ Limits:
 
 `session start` launches a detached process that opens the module once and serves requests on a loopback port recorded in `target/shared-host-state/sessions/<name>.json`, with its log beside it. Names must be unique on the Host. `session capture` sends one request; before serving it the session bundles the module again and, when the bundle changed, calls the new `capture` with the state the first `open` returned. Keep that state's shape compatible while editing, or stop and start the session after changing what `open` creates. A session keeps the tool code it started with, ends after 120 idle minutes (`--idle-minutes`), and ends when the Host stops.
 
+Reload only what changed:
+
+| Changed input | Action |
+| --- | --- |
+| Client module or its bundled scene/theme data | Capture again; gallery sessions use reload or `--watch` |
+| Generic module's `open` setup or retained state shape | Stop and start your session |
+| Shared tool code or its bundled `@ipp/client` / `@ipp/react` implementation | Let the launcher rebuild the tool, then restart your session so it loads that implementation |
+| Rust runtime or generated contract | Owner rebuilds and restarts the Host from the intended source; workers recreate sessions |
+| Prepared assets | Rebuild the affected asset product and recreate the consuming state as its module requires; coordinate writes to shared asset roots with the owner |
+
 ## Sharing rules
 
 - One owner starts and stops the Host and says so where the participants coordinate, such as the Beads task. Nobody else restarts, rebuilds into or stops it, or stops sessions they did not start.
@@ -72,3 +100,7 @@ Limits:
 - When done, stop your sessions. The owner stops the Host when the work ends; only files under `target/` remain.
 
 Images from the shared Host are development evidence. Behaviour a change needs to keep belongs in a maintained scenario under the [testing policy](integration-testing.md), registered with the pipeline and run by its own environment.
+
+## Workflow verification
+
+`python tools/ipp.py test shared-host` runs the [maintained workflow scenario](../../tests/runtime/shared-host.test.mjs) with its own native GLES Host and generated client. It discovers that Host from a linked fixture worktree, renders two independent React sessions, verifies text pixels after changing the owner font, and checks World/process cleanup. Images and failure logs remain under `target/integration-artifacts/shared-host/`. It needs only the native Host, font and shared command products; browser and gallery assets are unnecessary.

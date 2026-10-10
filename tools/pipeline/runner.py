@@ -15,7 +15,14 @@ import tempfile
 import threading
 import time
 
-from .artifacts import output_records, source_identity, workspace_lock, write_json
+from .artifacts import (
+    output_records,
+    source_identity,
+    source_records,
+    workspace_lock,
+    write_json,
+)
+from .build_cache import BuildCache
 from .environment import device_environment, inspect, records, select_browser_device
 from .model import ROOT, Plan, Task
 from .processes import blender, node
@@ -170,6 +177,7 @@ def run_plan(
     live: bool = False,
     cancel: threading.Event | None = None,
     preflight: bool = True,
+    rebuild: bool = False,
     browser_device: str | None = None,
     browser_choice: str = "requested",
 ) -> dict:
@@ -294,6 +302,12 @@ def run_plan(
                 save()
                 return report
 
+        cache = (
+            BuildCache(root, report, child_environment(selection), enabled=not rebuild)
+            if any(task.id.startswith("build:") and task.outputs for task in plan.tasks)
+            else None
+        )
+        report["rebuild"] = rebuild
         results = {task.id: result for task, result in zip(plan.tasks, report["steps"])}
         pending = list(range(len(plan.tasks)))
         running: dict[int, float] = {}
@@ -302,26 +316,42 @@ def run_plan(
 
         def step(index: int, task: Task, log: Path, inputs: dict) -> None:
             try:
-                update = execute(
-                    task,
-                    log,
-                    cancel,
-                    root=root,
-                    live=live or task.interactive,
-                    environment=selection,
-                )
-                update["status"] = (
-                    "cancelled"
-                    if cancel.is_set()
-                    else "passed"
-                    if update["exitCode"] == 0 and not update["timedOut"]
-                    else "failed"
-                )
+                key = cache.key(task, inputs) if cache else None
+                reused = cache.reuse(task, key) if cache and key else None
+                if reused and not cancel.is_set():
+                    log.write_text(f"Reused verified build: {reused['manifest']}\n")
+                    update = {
+                        "status": "passed",
+                        "exitCode": 0,
+                        "timedOut": False,
+                        "durationMs": 0,
+                        "reusedFrom": reused["manifest"],
+                    }
+                else:
+                    if cache and task.id.startswith("build:"):
+                        cache.invalidate(task)
+                    update = execute(
+                        task,
+                        log,
+                        cancel,
+                        root=root,
+                        live=live or task.interactive,
+                        environment=selection,
+                    )
+                    update["status"] = (
+                        "cancelled"
+                        if cancel.is_set()
+                        else "passed"
+                        if update["exitCode"] == 0 and not update["timedOut"]
+                        else "failed"
+                    )
                 if update["status"] == "passed" and task.outputs:
                     manifest = {
                         "version": 1,
                         "task": task.id,
-                        "source": report["source"],
+                        "source": reused["source"] if reused else report["source"],
+                        "buildKey": key,
+                        "reusedFrom": reused["manifest"] if reused else None,
                         "command": list(task.command),
                         "environment": report["environment"],
                         "platform": report["platform"],
@@ -401,8 +431,9 @@ def run_plan(
             started = running.pop(index)
             result.update(update)
             result["finishedAt"] = now()
+            label = "reused" if result.get("reusedFrom") else result["status"]
             print(
-                f"[{result['status']}] {task.id} ({time.monotonic() - started:.0f}s)",
+                f"[{label}] {task.id} ({time.monotonic() - started:.0f}s)",
                 file=sys.stderr,
                 flush=True,
             )
@@ -450,6 +481,13 @@ def run_plan(
                     complete(*finished.get())
         report["sourceAtFinish"] = source_identity(root)
         report["sourceChangedDuringRun"] = report["source"] != report["sourceAtFinish"]
+        if cache and cache.sources != source_records(root):
+            report["sourceChangedDuringRun"] = True
+        if cache and not report["sourceChangedDuringRun"]:
+            for task in plan.tasks:
+                result = results[task.id]
+                if result["status"] == "passed" and result.get("manifest"):
+                    cache.publish(task, result)
         report["sourceMutationExpected"] = any(
             task.mutates_source for task in plan.tasks
         )
@@ -474,7 +512,7 @@ def run_plan(
         print(f"Report: {directory / 'summary.json'}", file=sys.stderr)
         if report["status"] != "passed":
             print(
-                f"Retry: python tools/ipp.py retry {directory / 'summary.json'}",
+                f"Retry: python tools/ipp.py {'regression --retry' if plan.command == 'regression' else 'retry'} {directory / 'summary.json'}",
                 file=sys.stderr,
             )
         return report

@@ -24,6 +24,8 @@ Observable outcomes, including applicable failure/lifecycle behavior. Also fill 
 
 Name real participants, reusable fixtures, observable assertions, rendering captures where applicable, and scenario/driver extensions under the [testing policy](integration-testing.md). List commands, environments, failure artifacts and supplementary unit tests. Record actual results only. Docs-only tasks name repository checks.
 
+Name the [default iteration environment](workflow.md#choose-an-iteration-environment), the Host owner/checkout when shared, and which changed inputs require a rebuild or another environment. Distinguish quick development observations from maintained delivery evidence; identify the integration owner for combined checks and existing reports that remain reusable.
+
 ## Handoff
 
 Record owner, location, completed work, open decisions and next action with the [handoff template](handoff-template.md).

@@ -3634,5 +3634,34 @@
         ]
       }
     ]
+  },
+  "shared-host": {
+    "description": "Shared GLES Host discovery, private font snapshots and isolated React sessions",
+    "sourceRoots": [
+      "tools/shared-host/",
+      "tests/runtime/shared-host.test.mjs"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "partitionExcludes": ["target/gallery-platformer-native-assets"],
+        "command": [
+          "@node",
+          "--experimental-strip-types",
+          "--test",
+          "tests/runtime/shared-host.test.mjs"
+        ],
+        "builds": [
+          "gles-host",
+          "font-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      }
+    ]
   }
 }

@@ -61,6 +61,8 @@ impl<D: RenderDevice> GeneratedMeshCache<D> {
             .meshes
             .get(mesh_index)
             .ok_or(RenderError::MissingMesh)?;
+        #[cfg(feature = "instrumentation")]
+        let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.mesh-upload");
         let bytes = encode(mesh).map_err(|error| RenderError::RenderDevice(error.to_string()))?;
         let cpu = ipp_core::MeshAsset::decode(&bytes)
             .map_err(|error| RenderError::RenderDevice(error.to_string()))?;

@@ -57,6 +57,10 @@ impl<D: RenderDevice> RenderService<D> {
         host: &mut HostRuntime,
         selected: Option<(OutputRef, WorldPublicationId)>,
     ) -> Result<(), RenderError> {
+        #[cfg(feature = "instrumentation")]
+        let _profile_context = host.profile_scope();
+        #[cfg(feature = "instrumentation")]
+        let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.prepare");
         self.validate_catalog(host)?;
         let result = self.prepare_selected(host, selected);
         if result.is_err() || selected.is_none() {

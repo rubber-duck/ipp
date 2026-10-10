@@ -11,8 +11,9 @@ import {
 import { artifact } from "./helpers.mjs";
 import { instantiate } from "./wasm.mjs";
 
-/** WebGL bridge imports of whole-Surface cache targets. */
-const SURFACE_CACHE_BRIDGE_IMPORTS = [
+/** WebGL bridge imports of path limits and whole-Surface cache targets. */
+const SURFACE_RESOURCE_BRIDGE_IMPORTS = [
+  "surface_path_texture_limit",
   "surface_cache_limit",
   "create_surface_cache_target",
   "resize_surface_cache_target",
@@ -144,7 +145,7 @@ for (const name of [
   "create_gui_batch",
   "set_skin_palette",
   "draw_pose",
-  ...SURFACE_CACHE_BRIDGE_IMPORTS,
+  ...SURFACE_RESOURCE_BRIDGE_IMPORTS,
 ])
   assert.equal(importNamed(name), rendering, `${name} differs from renderer`);
 if (rendering) {
@@ -160,7 +161,7 @@ if (rendering) {
     "create_glyph_atlas_page",
     "draw_pose",
     "surfaceCacheTargetsLive",
-    ...SURFACE_CACHE_BRIDGE_IMPORTS,
+    ...SURFACE_RESOURCE_BRIDGE_IMPORTS,
   ])
     assert.equal(bridge.includes(name), true, `bridge lacks ${name}`);
 }

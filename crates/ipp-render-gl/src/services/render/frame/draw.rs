@@ -79,6 +79,10 @@ impl<D: RenderDevice> RenderService<D> {
         presentation_time: f64,
     ) -> Result<RenderFrameSummary, RenderError> {
         #[cfg(feature = "instrumentation")]
+        let _profile_context = host.profile_scope();
+        #[cfg(feature = "instrumentation")]
+        let _cpu_trace = ipp_core::profiling::CpuTraceScope::new("RenderService.draw");
+        #[cfg(feature = "instrumentation")]
         self.gpu_begin_frame();
         #[cfg(feature = "instrumentation")]
         let _gpu_frame = self.gpu_scope(
@@ -176,7 +180,11 @@ impl<D: RenderDevice> RenderService<D> {
                 )?;
                 return Ok(work);
             }
-            let scene = RenderScene::new(host, selection, publication)?;
+            let scene = {
+                #[cfg(feature = "instrumentation")]
+                let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.scene");
+                RenderScene::new(host, selection, publication)?
+            };
             self.debug.retain(&scene.debug);
             let camera = Some(
                 scene
@@ -257,6 +265,8 @@ impl<D: RenderDevice> RenderService<D> {
         scratch: &mut RenderFrameScratch,
     ) -> Result<RenderFrameWork, RenderError> {
         let items = &world.items;
+        #[cfg(feature = "instrumentation")]
+        let _cpu_trace = ipp_core::profiling::CpuTraceScope::new("RenderService.items");
         let view_projection = match camera {
             None => {
                 self.clear_shadows();
@@ -283,6 +293,8 @@ impl<D: RenderDevice> RenderService<D> {
             .pose
             .render_matrix()
             .map_err(|_| RenderError::InvalidTransform)?;
+        #[cfg(feature = "instrumentation")]
+        let _labels_trace = ipp_core::profiling::CpuTraceScope::new("RenderService.plot-labels");
         let layout = self.plot_label_layouts.entry(world.selection).or_default();
         let placed_planes = layout.place_axes(
             &world.plot_planes,
@@ -295,17 +307,26 @@ impl<D: RenderDevice> RenderService<D> {
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.
         let mut stats = prepass;
-        let customs = self.prepare_custom_materials(world, items)?;
+        let customs = {
+            #[cfg(feature = "instrumentation")]
+            let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.materials");
+            self.prepare_custom_materials(world, items)?
+        };
         let shadow_capacity = ((self.device.borrow().shadow_map_limit()
             / super::super::lighting::lights::SHADOW_TILE_SIZE)
             .pow(2) as usize)
             .min(self.shadow_capacity_limit);
-        let mut lighting = self
-            .light_selections
-            .entry(world.selection)
-            .or_default()
-            .prepare(world, items, &customs, &frustum, shadow_capacity)?;
+        let mut lighting = {
+            #[cfg(feature = "instrumentation")]
+            let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.lighting");
+            self.light_selections
+                .entry(world.selection)
+                .or_default()
+                .prepare(world, items, &customs, &frustum, shadow_capacity)?
+        };
         let result = (|| {
+            #[cfg(feature = "instrumentation")]
+            let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.submit");
             self.prepare_shadow_storage(&mut lighting)?;
             self.light_selections
                 .get_mut(&world.selection)

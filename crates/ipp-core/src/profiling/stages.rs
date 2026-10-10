@@ -290,6 +290,48 @@ impl Drop for WorldTraceScope {
     }
 }
 
+/// Named CPU operation in the current semantic context, without a counter slot.
+/// Hosts and renderers enter their Host scope for work shared between Worlds.
+/// Disabled tracing performs no allocation, timing or registry lookup.
+pub struct CpuTraceScope {
+    span: Option<trace::ProfileSpan>,
+    capture: u64,
+}
+
+impl CpuTraceScope {
+    /// Observe one implementation operation through the bounded trace recorder.
+    pub fn new(name: &'static str) -> Self {
+        let span = if measuring() && trace::enabled() {
+            Some(trace::begin(
+                "fixed",
+                name,
+                world_context(ACTIVE_CONTEXT.load(Relaxed)),
+                clock_nanos(),
+            ))
+        } else {
+            None
+        };
+        if span.is_some() {
+            ACTIVE_GUARDS.fetch_add(1, Relaxed);
+        }
+        Self {
+            span,
+            capture: capture_id(),
+        }
+    }
+}
+
+impl Drop for CpuTraceScope {
+    fn drop(&mut self) {
+        if let Some(span) = self.span.take() {
+            ACTIVE_GUARDS.fetch_sub(1, Relaxed);
+            if self.capture == capture_id() && measuring() {
+                trace::finish(span, clock_nanos());
+            }
+        }
+    }
+}
+
 /// Label of one stage slot: `system#phase` names come from
 /// [`system_name`](super::system_name); fixed slots return their fixed timer
 /// name, and unused slots are empty.

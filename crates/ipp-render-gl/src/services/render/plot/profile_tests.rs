@@ -306,7 +306,7 @@ fn chart_profile() {
 #[test]
 #[ignore = "opt-in bounded dense-path diagnostics; no GPU work"]
 fn chart_path_scaling() {
-    for count in [1000, 10000] {
+    for count in [1000, 10000, 100000] {
         let rows: Vec<_> = (0..count).map(|i| DataRowId(i as u64 + 1)).collect();
         let x: Vec<_> = (0..count)
             .map(|i| ExpressionResult::Valid(DynamicValue::F32(i as f32 / (count - 1) as f32)))
@@ -368,8 +368,18 @@ fn chart_path_scaling() {
         };
         let horizontal = (0..16).map(|i| band(i * 2 + 1)).max().unwrap();
         let vertical = (0..16).map(|i| band(32 + i * 2 + 1)).max().unwrap();
+        let grid = band(64) as usize;
+        let tile_header = band(65) as usize;
+        let tile_horizontal = (0..grid * grid)
+            .map(|i| band(tile_header + i * 4 + 1))
+            .max()
+            .unwrap_or(0);
+        let tile_vertical = (0..grid * grid)
+            .map(|i| band(tile_header + i * 4 + 3))
+            .max()
+            .unwrap_or(0);
         println!(
-            "{{\"diagnostic\":\"dense_path_bands\",\"scale\":{count},\"contours\":{},\"curveTexels\":{},\"maxHorizontalCurves\":{horizontal},\"maxVerticalCurves\":{vertical},\"atlasBytes\":{}}}",
+            "{{\"diagnostic\":\"dense_path_bands\",\"scale\":{count},\"contours\":{},\"curveTexels\":{},\"maxHorizontalCurves\":{horizontal},\"maxVerticalCurves\":{vertical},\"tileGrid\":{grid},\"maxTileHorizontalCurves\":{tile_horizontal},\"maxTileVerticalCurves\":{tile_vertical},\"atlasBytes\":{}}}",
             paths[0].contours.len(),
             atlas.texels.curves.len(),
             atlas.texels.byte_len()

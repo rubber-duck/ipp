@@ -18,6 +18,8 @@ import {
   type Plot2dContract,
 } from "../support/plot-2d-scene.js";
 import { check as checkValue } from "../../harness/page/checks.js";
+import { exerciseDenseLines } from "./dense-lines.js";
+import type { ChartContract } from "./chart-data-workload.js";
 interface RgbaImage {
   width: number;
   height: number;
@@ -82,7 +84,7 @@ function changedPixels(
 
 export async function exercisePlot2d(
   host: HostClientBase<Client>,
-  contract: Plot2dContract,
+  contract: Plot2dContract & ChartContract,
   font: Uint8Array<ArrayBuffer>,
   capture: (label: string, binding: RootBinding) => Promise<RgbaImage>,
   record: (label: string, value: unknown) => Promise<void> = async () => {},
@@ -312,6 +314,7 @@ export async function exercisePlot2d(
     equal(selectedBar?.row.rowId, 4n);
     equal(selectedPie?.row.rowId, 2n);
     await record("picks-after", changedPicks);
+    await exerciseDenseLines(host, contract, font, capture, record);
     return {
       families: 3,
       gap: true,

@@ -203,6 +203,9 @@ impl WorldContext<'_> {
         &self,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _profile = crate::profiling::ContextScope::world(self.world.profile_context);
+
         for instance in self
             .instances
             .before

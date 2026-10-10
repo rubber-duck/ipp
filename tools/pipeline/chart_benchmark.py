@@ -16,9 +16,21 @@ DIRECTORY = ROOT / "target/performance-build/chart-data"
 CHART_PROFILE = "services::render::plot::label_layout::profile_tests::chart_profile"
 
 
-def build() -> None:
-    with product(DIRECTORY) as output:
-        cargo("build", "--release", "-p", "ipp-server", "--example", "gles_host")
+def build(instrumented: bool = False) -> None:
+    directory = (
+        DIRECTORY.with_name("chart-render-profile") if instrumented else DIRECTORY
+    )
+    with product(directory) as output:
+        features = ["--features", "instrumentation"] if instrumented else []
+        cargo(
+            "build",
+            "--release",
+            "-p",
+            "ipp-server",
+            "--example",
+            "gles_host",
+            *features,
+        )
         suffix = ".exe" if os.name == "nt" else ""
         executable = output / f"gles_host{suffix}"
         shutil.copy2(ROOT / f"target/release/examples/gles_host{suffix}", executable)
@@ -30,8 +42,8 @@ def build() -> None:
             {
                 "source": source_identity(ROOT),
                 "profile": "release",
-                "features": [],
-                "instrumented": False,
+                "features": ["instrumentation"] if instrumented else [],
+                "instrumented": instrumented,
                 "executableSha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
                 "contractSha256": hashlib.sha256(
                     (output / "contract.bin").read_bytes()
@@ -54,6 +66,14 @@ def register(tasks: dict[str, Task]) -> None:
         ("node", "npm", "rust"),
         ("target/performance-build/chart-data",),
     )
+    tasks["build:performance-chart-render-profile"] = Task(
+        "build:performance-chart-render-profile",
+        "Build release instrumentation GLES Host and chart CPU/GPU capture driver",
+        operation("chart-benchmark-build", "instrumented"),
+        ("build:client", "build:font-assets"),
+        ("node", "npm", "rust"),
+        ("target/performance-build/chart-render-profile",),
+    )
     for kind in ("data", "chart"):
         for mode in ("timing", "allocations"):
             name = f"chart-{kind}-{mode}"
@@ -70,7 +90,8 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     if args.backend != "native":
         raise ValueError("chart-data currently requires the real native GLES driver")
-    if not args.diagnostic and not args.egl_dir:
+    render_profile = args.diagnostic == "render"
+    if (not args.diagnostic or render_profile) and not args.egl_dir:
         raise ValueError("chart-data requires --egl-dir")
     if not 1 <= args.samples <= 64 or not 1 <= args.repetitions <= 8:
         raise ValueError("chart-data accepts 1..64 samples and 1..8 repetitions")
@@ -87,9 +108,15 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         raise ValueError(
             "Native end-to-end timings require the normal release build; use paired local diagnostics for allocations"
         )
+    if render_profile and args.instrumented:
+        raise ValueError(
+            "render diagnostics already use instrumentation; allocation counters stay disabled"
+        )
     mode = "allocations" if args.instrumented else "timing"
     dependency = (
-        f"build:performance-chart-{args.diagnostic}-{mode}"
+        "build:performance-chart-render-profile"
+        if render_profile
+        else f"build:performance-chart-{args.diagnostic}-{mode}"
         if args.diagnostic
         else "build:performance-chart-data"
     )
@@ -105,8 +132,9 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
         "eglDir": args.egl_dir,
         "allowSoftware": args.allow_software,
         "output": args.output or "target/performance/chart-data",
+        "renderProfile": render_profile,
     }
-    if args.diagnostic:
+    if args.diagnostic and not render_profile:
         from .catalog import operation
 
         configuration.update({"kind": args.diagnostic, "mode": mode})
@@ -119,10 +147,15 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
             timeout=900,
         )
         return ["benchmark:chart-diagnostic"]
+    directory = (
+        DIRECTORY.with_name("chart-render-profile") if render_profile else DIRECTORY
+    )
     tasks["benchmark:chart-data"] = Task(
         "benchmark:chart-data",
-        "Measure bounded chart/data native transport and completed frames",
-        (node(), str(DIRECTORY / "chart-data.js"), json.dumps(configuration)),
+        "Capture bounded native chart CPU/GPU work"
+        if render_profile
+        else "Measure bounded chart/data native transport and completed frames",
+        (node(), str(directory / "chart-data.js"), json.dumps(configuration)),
         () if args.reuse_build else (dependency,),
         ("node", "npm", "gles"),
         timeout=900,

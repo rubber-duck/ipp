@@ -221,6 +221,18 @@ impl PlotSystem {
             ),
             _ => return Err(ErrorReason::InvalidValue),
         }?;
+
+        // A dirty binding or component can produce the same complete local
+        // result. Keep its allocation identity after one comparison here, so
+        // publication and renderer caches do not repeatedly compare or upload
+        // equal replacement streams on otherwise unchanged frames.
+        let geometry = match self.state.charts.get(&(entity, component)) {
+            Some(previous) if previous.target == target && *previous.geometry == geometry => {
+                previous.geometry.clone()
+            }
+            _ => Arc::new(geometry),
+        };
+
         let (source, variant) = if let Some(frame) = storage
             .plot_frame2d(index)
             .filter(|_| component <= C::PLOT_PIE2D)
@@ -275,7 +287,7 @@ impl PlotSystem {
         Ok(PlotRetainedChart {
             target,
             consumer,
-            geometry: Arc::new(geometry),
+            geometry,
             canvas,
             planes: planes.into(),
         })

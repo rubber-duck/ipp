@@ -10,6 +10,8 @@ Device-owned query pools and renderer sample retention are bounded independently
 
 Physical GL-call observations can be requested independently of timer support. [Device counters](src/services/render/device/gl_call_counts.rs) count issued entry points after retained-state suppression, with profiler calls classified separately from workload calls. Counts belong to the original device context and their actual observation window, which ends on owner stop or context loss. Restoring a context requires a new capture; partial counts remain available without implying they cover the parent CPU interval.
 
+When CPU tracing is requested, named [renderer scopes](src/services/render/service/frame.rs) distinguish shared preparation, draw submission and generated-resource uploads. [Host frame and Plot publication scopes](../ipp-core/src/profiling.rs) also cover work outside World evaluation. These scopes keep the Host identity; they do not assign shared renderer work to an arbitrary World. The [chart diagnostic guide](../../tests/performance/chart-data.md) describes paired CPU/GPU captures and their attribution limits.
+
 ## Resources and recovery
 
 Install RenderService loaders before creating resources. Host service progression decodes and uploads meshes and compiles requested programs before reporting graphics readiness. Presentation consumes ready resources and declares further demand. Missing required resources skip affected draws; custom materials follow their defined fallback chain.

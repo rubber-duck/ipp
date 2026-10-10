@@ -1,6 +1,6 @@
 # Chart and data measurements — 3 October 2026
 
-The [maintained benchmark](chart-data.md) establishes bounded native stress evidence and identifies two useful CPU improvements: unchanged count/non-clock-driven range streams no longer scan retained rows on every clock update, and exact identity columns avoid expression evaluation. Host-time ranges still expire on clock updates. Chart preparation reuses label-placement scratch and skips unused normal calculations for unshaded edges. Dense chart presentation remains expensive despite those improvements.
+The [maintained benchmark](chart-data.md) establishes bounded native stress evidence and identifies two useful CPU improvements: unchanged count/non-clock-driven range streams no longer scan retained rows on every clock update, and exact identity columns avoid expression evaluation. Host-time ranges still expire on clock updates. Chart preparation reuses label-placement scratch and skips unused normal calculations for unshaded edges. The [profiling follow-up](#dense-chart-profiling-follow-up) below identifies and removes repeated publication comparisons and narrows dense analytic lookup work; the earlier tables retain their original measurements.
 
 ## Measurement scope
 
@@ -79,3 +79,43 @@ python tools/ipp.py benchmark native --scene chart-data --egl-dir /lib64 --reuse
 python tools/ipp.py benchmark native --scene chart-data --egl-dir /lib64 --reuse-build --preset full --repetitions 1 --samples 4 --warmup 1 --cases PlotGridBars3d-1000,surface-32x32,labels-128,rolling-1000 --output target/performance/chart-after-small
 python tools/ipp.py benchmark native --scene chart-data --egl-dir /lib64 --reuse-build --preset full --repetitions 1 --samples 6 --warmup 2 --cases PlotPoints3d-10000 --modes idle,edit --output target/performance/chart-after-dense
 ```
+
+## Dense chart profiling follow-up
+
+After advanced profiling landed on main `21b86c6c`, the same hardware and viewport were used for bounded before/after measurements. Ordinary release runs used one repetition, three samples and one warmup per idle/edit mode; separate release instrumentation captures used two samples, allocation counters disabled, named CPU spans and frame GPU queries. Before runs preceded the implementation; they were not an alternating A/B campaign. These short windows describe this fixture and machine, not general FPS or mobile performance.
+
+### Outlined 3D points
+
+The expensive path was CPU publication equality, rather than the triangle count alone. Each mesh chunk retained the complete chart geometry; derived equality rescanned that geometry for every chunk on every publication. Four baseline idle frames spent 3,047.67 ms in `PlotSystem.publish` out of 3,052.43 ms in `HostRuntime.frame`, versus 1.50 ms of renderer CPU submission. Publication now compares retained allocations directly and compares distinct geometry once per chart. Equal rebuilt geometry reuses its previous immutable allocation after one evaluation-time comparison, preserving value equality and ordinary invalidation.
+
+| Workload / operation      | Before p50 / p95, ms | After p50 / p95, ms |
+| ------------------------- | -------------------: | ------------------: |
+| 1k outlined points, idle  |      16.661 / 26.768 |     16.642 / 17.285 |
+| 1k outlined points, edit  |      83.467 / 92.525 |     83.609 / 84.631 |
+| 10k outlined points, idle |  1555.130 / 1557.176 |     16.704 / 18.813 |
+| 10k outlined points, edit |  5938.539 / 6430.601 |   173.310 / 177.733 |
+
+The final idle capture spent 0.109 ms in publication across six frames. Geometry remains 156 triangles per outlined cube, with 1,560,410 total submitted triangles at 10k points including other scene content. Idle uploads remain zero, and all four initial/final point PNGs match the baseline byte for byte. Available median GPU frame intervals remain approximately 0.4 ms; long baseline query intervals can include CPU queue starvation and are not evidence of equivalent active GPU work. The final edit capture attributed 120.98 ms to 144 mesh-upload calls across two edits; idle submission used 1.67 ms across six frames. These upload scopes include CPU packing, driver submission and any synchronous driver wait, without isolating those costs. Real edits still rebuild and upload mesh streams; this change does not reduce geometry or establish a cheap arbitrary-density edit path.
+
+### Dense analytic lines
+
+The original 16 axis bands produced candidate lists that grew with source size. A conservative 64×64 lookup now filters each curve by its perpendicular hull and its entire closed contour's ray-axis hull. Entire distant contours have cancelling winding and no antialiasing contribution. Lists retain curve order, and the shader still draws one analytic union with the same fill rule, overlap alpha and antialiasing. Large pixel footprints use the original bands. Optional storage is bounded relative to band storage, and an atlas exceeding the device texture extent is repacked with original bands before upload, including subsequent paths' descriptor offsets.
+
+| Workload / operation | Before median GPU interval, ms | After median GPU interval, ms |
+| --- | --: | --: |
+| 1k line samples, idle | 6.915 | 0.545 |
+| 1k line samples, edit | 7.050 | 0.587 |
+| 10k line samples, idle | 42.242 | 3.624 |
+| 10k line samples, edit | 35.471 | 3.827 |
+
+These are available hardware query samples from separate diagnostic captures, not ordinary application latency. Pending and unavailable records remain explicit; the capture driver drains query results outside the timing window. Final captures dropped no CPU spans or GPU records and retain World identity for publication and shared Host identity for renderer work. All eight line PNGs match the baseline byte for byte. Maintained native GLES and worker WebGL scenarios additionally assert dense alpha overlap, restored paint, edited paint and final source-row picking, including minified placement.
+
+At 10k samples, maximum horizontal/vertical candidates fall from 32,350/12,772 to 1,676/1,252. Packed atlas data rises from 5,623,368 to 18,649,720 bytes, excluding device row padding and temporary CPU allocations. CPU-only 100k packing retains all 299,997 contours and 2,299,977 curve texels; its tiled atlas is 185,587,428 bytes. No 100k GPU submission was attempted. The historical Radeon hard-recovery evidence is preserved unchanged; bounded results support the excessive-fragment-work diagnosis but do not prove a unique driver-reset cause or a safe 100k GPU workload.
+
+### Reproduction and identities
+
+Use the commands in the [benchmark guide](chart-data.md) with `--cases PlotPoints3d-1000,PlotPoints3d-10000 --modes idle,edit --samples 3 --repetitions 1 --warmup 1` for ordinary release timing. Use `--diagnostic render --cases PlotPoints3d-10000,PlotLine2d-1000,PlotLine2d-10000 --modes idle,edit --samples 2 --repetitions 1 --warmup 1` for the separate capture product. CPU-only path scaling remains the ignored renderer test documented in that guide.
+
+The ordinary before executable SHA256 is `07599a819e2976442b6f8c2ca0de87035190ced54cf8dfbab35dc7a9dae7ded7`; final is `4ec4f0a98d5c50a52a3a500e0dd319f1e0be808ba2139f7bfcf0ffd5a702f3ea`. Both use contract SHA256 `200e8aa4c191d35d77d03a3f69d90070d3b108d67ad8c6672fdc2dbedbd7e89d`. Final ordinary source identity is `627f390ce829d09440df6ec09b5f7139bc8b0a998cd24354c5249dfe72af4d5f` on base `21b86c6c`; report-only edits follow the measured build. Raw reports retain the instrumentation build identity separately.
+
+Local raw evidence, before/after captures, PNGs, historical failure hashes and `comparison-device-final.json` are preserved under `/home/dev/ipp/.worktrees/ipp-u0na.27/worker-logs/dense-charts/`. Final measurement pipeline reports are `run-ek02xc9r` and `run-iawcrysk` in the implementation worktree's `target/pipeline/runs/`. These artifacts are local measurement evidence; no remote publication is implied.

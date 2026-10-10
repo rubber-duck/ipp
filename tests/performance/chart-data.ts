@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import type { Client, HostClientBase } from "@ipp/client";
 import { nativePresentationTransport } from "@ipp/client/testing";
 import { renderDiagnostics } from "@ipp/client/diagnostics";
+import { hostProfiling } from "../../packages/ipp-client/src/profiling.js";
 import { encodePng } from "../harness/images.js";
 import { image } from "../../tools/shared-host/presentation.js";
 import {
@@ -28,6 +29,7 @@ interface Configuration {
   eglDir: string;
   allowSoftware: boolean;
   output: string;
+  renderProfile?: boolean;
 }
 const config = JSON.parse(process.argv[2]!) as Configuration;
 assert.ok(config.samples >= 1 && config.samples <= 64);
@@ -35,12 +37,16 @@ assert.ok(config.repetitions >= 1 && config.repetitions <= 8);
 assert.ok(config.warmup >= 0 && config.warmup <= 16);
 const directory = resolve(config.output);
 await mkdir(directory, { recursive: true });
-const product = resolve("target/performance-build/chart-data");
+const product = resolve(
+  config.renderProfile
+    ? "target/performance-build/chart-render-profile"
+    : "target/performance-build/chart-data",
+);
 const build = JSON.parse(
   await readFile(resolve(product, "build-identity.json"), "utf8"),
 );
 assert.equal(build.profile, "release");
-assert.equal(build.instrumented, false);
+assert.equal(build.instrumented, Boolean(config.renderProfile));
 assert.equal(
   createHash("sha256")
     .update(await readFile(resolve(product, "contract.bin")))
@@ -237,31 +243,74 @@ try {
           const rssBefore = await rssBytes();
           const statisticsBefore = await diagnostics.statistics();
           const samples = [];
-          for (let cycle = 0; cycle < config.samples; cycle++) {
-            abort.signal.throwIfAborted();
-            const start = performance.now();
-            await fixture.action(mode, cycle + config.warmup);
-            const acknowledged = performance.now();
-            const frame = await host.presentation.frame(view, {
-              afterOutputs: [fixture.binding.output],
-              afterSequence: sequence,
+          const profiler = config.renderProfile
+            ? hostProfiling(host)
+            : undefined;
+          let captureId: string | undefined;
+          if (profiler)
+            captureId = await profiler.start({
+              counters: false,
+              gpu: "frame",
+              glCalls: true,
+              trace: { maxEvents: 100000 },
+              maxArtifactBytes: 134217728,
             });
-            const completed = performance.now();
-            assert.ok(frame.sequence > sequence);
-            assert.equal(frame.failedDrawCalls, 0);
-            assert.ok(
-              frame.drawCalls > 0 && frame.triangles > 0,
-              `${workload.name}/${mode} completed an empty frame`,
-            );
-            sequence = frame.sequence;
-            samples.push({
-              acknowledgedMs: acknowledged - start,
-              completedMs: completed - start,
-              sequence: frame.sequence.toString(),
-              tick: frame.sources.map((source) => source.tick.toString()),
-              drawCalls: frame.drawCalls,
-              triangles: frame.triangles,
-            });
+          try {
+            for (let cycle = 0; cycle < config.samples; cycle++) {
+              abort.signal.throwIfAborted();
+              const start = performance.now();
+              await fixture.action(mode, cycle + config.warmup);
+              const acknowledged = performance.now();
+              const frame = await host.presentation.frame(view, {
+                afterOutputs: [fixture.binding.output],
+                afterSequence: sequence,
+              });
+              const completed = performance.now();
+              assert.ok(frame.sequence > sequence);
+              assert.equal(frame.failedDrawCalls, 0);
+              assert.ok(
+                frame.drawCalls > 0 && frame.triangles > 0,
+                `${workload.name}/${mode} completed an empty frame`,
+              );
+              sequence = frame.sequence;
+              samples.push({
+                acknowledgedMs: acknowledged - start,
+                completedMs: completed - start,
+                sequence: frame.sequence.toString(),
+                tick: frame.sources.map((source) => source.tick.toString()),
+                drawCalls: frame.drawCalls,
+                triangles: frame.triangles,
+              });
+            }
+            if (profiler) {
+              // Readback waits for queued rendering outside the timed samples.
+              // Otherwise a short capture can end before asynchronous queries
+              // become available, leaving only explicit stopped observations.
+              const drained = await host.presentation.capture(view, {
+                afterSequence: sequence,
+              });
+              assert.equal(drained.failedDrawCalls, 0);
+              await writeFile(
+                resolve(directory, `${workload.name}-${repeat}-${mode}.png`),
+                encodePng(image(drained)),
+              );
+              const profile = await profiler.stop();
+              await writeFile(
+                resolve(
+                  directory,
+                  `${workload.name}-${repeat}-${mode}-profile.json`,
+                ),
+                json(profile),
+              );
+              assert.ok(
+                profile.gpu &&
+                  (profile.gpu.capability === "unsupported" ||
+                    profile.gpu.records.length > 0),
+                "Render capture must retain GPU observations or explicit unavailability",
+              );
+            }
+          } finally {
+            if (profiler && captureId) await profiler.release(captureId);
           }
           const statisticsAfter = await diagnostics.statistics();
           const rssAfter = await rssBytes();
@@ -362,8 +411,9 @@ try {
       hostPid: child.pid,
       hostExit: { code: child.exitCode, signal: child.signalCode },
       termination: abort.signal.aborted ? String(abort.signal.reason) : null,
-      metric:
-        "native command acknowledgement and next completed frame; includes transport and Host scheduling, excludes pixel capture",
+      metric: config.renderProfile
+        ? "instrumented diagnostic latency; CPU spans and GPU observations retained separately, not an ordinary-build timing baseline"
+        : "native command acknowledgement and next completed frame; includes transport and Host scheduling, excludes pixel capture",
       results,
       failure: failure instanceof Error ? failure.stack : (failure ?? null),
     }),

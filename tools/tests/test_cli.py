@@ -192,6 +192,24 @@ class PlanningTests(unittest.TestCase):
                 )
             )
 
+        render = plan(
+            "benchmark",
+            "native",
+            "--scene",
+            "chart-data",
+            "--egl-dir",
+            "/example/egl",
+            "--diagnostic",
+            "render",
+        )
+        self.assertIn(
+            "build:performance-chart-render-profile", [task.id for task in render.tasks]
+        )
+        self.assertIn("chart-render-profile/chart-data.js", render.tasks[-1].command[1])
+        self.assertIn('"renderProfile": true', render.tasks[-1].command[2])
+        with self.assertRaises(ValueError):
+            plan("benchmark", "native", "--scene", "chart-data", "--diagnostic", "render")
+
     def test_chart_data_rejects_invalid_sampling_and_arrangements(self):
         base = (
             "benchmark",
@@ -209,6 +227,7 @@ class PlanningTests(unittest.TestCase):
             ("--warmup", "-1"),
             ("--warmup", "17"),
             ("--instrumented",),
+            ("--diagnostic", "render", "--instrumented"),
         ):
             with self.subTest(flags=flags), self.assertRaises(ValueError):
                 plan(*base, *flags)

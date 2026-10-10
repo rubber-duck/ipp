@@ -297,8 +297,8 @@ def parser() -> argparse.ArgumentParser:
     )
     benchmarking.add_argument(
         "--diagnostic",
-        choices=("data", "chart"),
-        help="separate local release/allocation diagnostics for chart-data",
+        choices=("data", "chart", "render"),
+        help="local preparation diagnostics or native CPU/GPU captures for chart-data",
     )
     benchmarking.add_argument("--scene-dir")
     benchmarking.add_argument("--bundle-dir")

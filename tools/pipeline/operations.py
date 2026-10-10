@@ -31,7 +31,7 @@ def main(args: list[str]) -> None:
     elif operation == "chart-benchmark-build":
         from .chart_benchmark import build as build_charts
 
-        build_charts()
+        build_charts(bool(remaining))
     elif operation == "chart-diagnostic-build":
         from .chart_benchmark import build_diagnostic
 

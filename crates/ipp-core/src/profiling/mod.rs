@@ -40,7 +40,7 @@ pub use contexts::{
 pub(crate) use contexts::{register_world, retire_world};
 pub(crate) use stages::{FixedStage, Stage, WorldTraceScope};
 pub use stages::{
-    SYSTEM_PHASES, clock_nanos, counter, counter_count, fixed_stage_base, fixed_stage_name,
+    CpuTraceScope, SYSTEM_PHASES, clock_nanos, counter, counter_count, fixed_stage_base, fixed_stage_name,
 };
 
 #[cfg(test)]

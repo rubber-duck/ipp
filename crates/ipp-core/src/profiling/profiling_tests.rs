@@ -459,3 +459,39 @@ fn trace_generation_reset_clears_history_and_rejects_live_trace_only_guards() {
     assert_eq!(spans[0].host_frame, None);
     release_capture();
 }
+
+#[test]
+fn named_cpu_scopes_preserve_shared_host_identity_and_capture_lifetime() {
+    let _serial = SERIAL.lock().unwrap();
+    release_capture();
+    crate::profiling::trace::prepare(4).unwrap();
+    reset_for_host(false, 9101);
+    enable_trace();
+    let shared = register_world(9101, 0, 0, 0);
+    {
+        let _context = ContextScope::new(shared);
+        let outer = CpuTraceScope::new("RenderService.draw");
+        let inner = CpuTraceScope::new("RenderService.submit");
+        assert!(std::panic::catch_unwind(release_capture).is_err());
+        drop(inner);
+        drop(outer);
+    }
+    pause();
+    let mut spans = Vec::new();
+    crate::profiling::trace::visit(|span| {
+        spans.push(*span);
+        true
+    });
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].name, "RenderService.draw");
+    assert_eq!(spans[1].name, "RenderService.submit");
+    assert!(spans[0].start <= spans[1].start && spans[0].end >= spans[1].end);
+    assert!(spans.iter().all(|span| span.context.host == 9101
+        && span.context.world == 0
+        && span.context.incarnation == 0
+        && span.context.composition == 0));
+    assert_eq!(allocations(), (0, 0));
+    release_capture();
+    drop(CpuTraceScope::new("disabled"));
+    assert_eq!(crate::profiling::trace::retention(), (0, 0, 0));
+}

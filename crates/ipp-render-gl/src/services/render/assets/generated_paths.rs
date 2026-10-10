@@ -61,6 +61,8 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
         // Derived contours already use the Canvas +Y-down coordinates. The shared
         // analytic shader evaluates supplied coordinates directly; no source SVG/font
         // normalization or second Y flip applies to these runtime paths.
+        #[cfg(feature = "instrumentation")]
+        let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.path-upload");
         let atlas = pack_surface_paths_with_limit(
             [(source.bounds, source.contours.as_ref())],
             self.device.borrow().surface_path_texture_limit(),

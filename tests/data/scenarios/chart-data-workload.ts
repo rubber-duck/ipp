@@ -96,13 +96,15 @@ export function workloads(preset: "smoke" | "full"): Workload[] {
       })),
     ),
     ...markScales.flatMap((rows) =>
-      ["PlotBars2d", "PlotPoints3d", "PlotGridBars3d"].map((component) => ({
-        name: `${component}-${rows}`,
-        rows,
-        bindings: 1,
-        labels: 4,
-        component: component as Workload["component"],
-      })),
+      ["PlotLine2d", "PlotBars2d", "PlotPoints3d", "PlotGridBars3d"].map(
+        (component) => ({
+          name: `${component}-${rows}`,
+          rows,
+          bindings: 1,
+          labels: 4,
+          component: component as Workload["component"],
+        }),
+      ),
     ),
     ...[10, ...(preset === "full" ? [32] : [])].map((grid) => ({
       name: `surface-${grid}x${grid}`,

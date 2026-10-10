@@ -24,6 +24,8 @@ impl HostRuntime {
     pub fn frame(&mut self, delta: f64) -> Result<HostFrameReport, ErrorReason> {
         #[cfg(feature = "instrumentation")]
         let _profile = self.profile_scope();
+        #[cfg(feature = "instrumentation")]
+        let _cpu_trace = crate::profiling::CpuTraceScope::new("HostRuntime.frame");
 
         if !delta.is_finite() || delta < 0.0 {
             return Err(ErrorReason::InvalidValue);

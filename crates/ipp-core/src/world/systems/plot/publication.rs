@@ -286,7 +286,7 @@ impl PlotPrimitive {
 }
 
 /// Completed local primitive data and entity placement for one Plot component lifetime.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PlotPublishedChart {
     /// Exact ordinary producing component lifetime.
     pub target: crate::systems::canvas::CanvasTarget,
@@ -301,7 +301,7 @@ pub struct PlotPublishedChart {
 }
 
 /// Retained geometry beside an ordinary complete scene draw.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct PlotPublishedMesh {
     /// Complete ordinary mesh/material/placement draw inputs.
     pub render: crate::systems::render::PublishedRenderItem,
@@ -310,6 +310,42 @@ pub struct PlotPublishedMesh {
     /// Mesh ordinal in the immutable complete local result.
     pub mesh_index: usize,
 }
+
+// Every mesh chunk retains the same complete chart geometry. Comparing the
+// unchanged allocation by value here would rescan all streams for every chunk
+// on every publication, even when evaluation reused the immutable result.
+fn same_geometry(left: &Arc<PlotPreparedGeometry>, right: &Arc<PlotPreparedGeometry>) -> bool {
+    Arc::ptr_eq(left, right) || left == right
+}
+
+impl PartialEq for PlotPublishedChart {
+    fn eq(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.model == other.model
+            && same_geometry(&self.geometry, &other.geometry)
+            && self.meshes.len() == other.meshes.len()
+            && self.meshes.iter().zip(&other.meshes).all(|(left, right)| {
+                left.mesh_index == right.mesh_index
+                    && left.render == right.render
+                    && ((Arc::ptr_eq(&left.geometry, &self.geometry)
+                        && Arc::ptr_eq(&right.geometry, &other.geometry))
+                        || same_geometry(&left.geometry, &right.geometry))
+            })
+            && (Arc::ptr_eq(&self.planes, &other.planes) || self.planes == other.planes)
+    }
+}
+
+impl PartialEq for PlotPublishedMesh {
+    fn eq(&self, other: &Self) -> bool {
+        self.mesh_index == other.mesh_index
+            && self.render == other.render
+            && same_geometry(&self.geometry, &other.geometry)
+    }
+}
+
+#[cfg(test)]
+#[path = "publication_tests.rs"]
+mod tests;
 
 /// Shared local paint on a scene plane; neither a child World nor a Surface component.
 #[derive(Clone, Debug, PartialEq)]
@@ -345,6 +381,8 @@ impl PlotSystem {
         world: &crate::WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), crate::ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _trace = crate::profiling::CpuTraceScope::new("PlotSystem.publish");
         use crate::systems::render::{PbrMaterial, PublishedRenderItem, RenderItem, UnlitMaterial};
         let mut charts = Vec::with_capacity(self.state.charts.len());
         for chart in self.state.charts.values() {

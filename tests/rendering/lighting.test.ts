@@ -415,13 +415,64 @@ test("direct lights and spotlight depth maps follow authored state and recover i
           (await difference("four-shadows", "four-shadows-restored"))
             .changedPixels < atArea(5),
         );
-        await call("initialize", [
+        // Install before the instrumentation bridge caches native GL methods.
+        // Hold WASM loading so worker creation and injection have a real barrier.
+        const nextWorker = environment.page.waitForEvent("worker");
+        let releaseWasm!: () => void;
+        const wasmGate = new Promise<void>((resolve) => {
+          releaseWasm = resolve;
+        });
+        await environment.page.route(environment.urls.wasm, async (route) => {
+          await wasmGate;
+          await route.continue();
+        });
+        const initializing = call("initialize", [
           {
             generatedModuleUrl: environment.urls.generated,
             workerScriptUrl: environment.urls.workerScript,
             wasmUrl: environment.urls.wasm,
           },
         ]);
+        const worker = await (async () => {
+          try {
+            const worker = await nextWorker;
+            await worker.evaluate(() => {
+              const original = WebGL2RenderingContext.prototype.texImage2D;
+              const state = globalThis as typeof globalThis & {
+                shadowFixtureLimit?: number;
+                restoreShadowFixture?: () => void;
+              };
+              state.restoreShadowFixture = () => {
+                delete state.shadowFixtureLimit;
+                WebGL2RenderingContext.prototype.texImage2D = original;
+              };
+              WebGL2RenderingContext.prototype.texImage2D = new Proxy(
+                original,
+                {
+                  apply(target, receiver, args) {
+                    if (
+                      state.shadowFixtureLimit !== undefined &&
+                      args[2] === receiver.DEPTH_COMPONENT24 &&
+                      args[3] > state.shadowFixtureLimit
+                    )
+                      throw new Error(
+                        "Fixture shadow allocation exceeds one tile",
+                      );
+                    return Reflect.apply(target, receiver, args);
+                  },
+                },
+              );
+            });
+            return worker;
+          } finally {
+            releaseWasm();
+            try {
+              await initializing;
+            } finally {
+              await environment.page.unroute(environment.urls.wasm);
+            }
+          }
+        })();
         const eight = await call<string[]>("multipleShadowSources", [8]);
         await capture("eight-shadows");
         await update(eight[7]!, "Light", { cast_shadows: false });
@@ -431,24 +482,12 @@ test("direct lights and spotlight depth maps follow authored state and recover i
             .darkened > atArea(20),
           "The eighth source renders and samples the third atlas row",
         );
-        const worker = environment.page.workers()[0]!;
         // A constrained allocation fixture still uses the real WebGL programs,
         // atlas rendering, samplers and completed-frame capture.
         await worker.evaluate(() => {
-          const original = WebGL2RenderingContext.prototype.texImage2D;
-          const state = globalThis as typeof globalThis & {
-            restoreShadowFixture?: () => void;
-          };
-          state.restoreShadowFixture = () => {
-            WebGL2RenderingContext.prototype.texImage2D = original;
-          };
-          WebGL2RenderingContext.prototype.texImage2D = new Proxy(original, {
-            apply(target, receiver, args) {
-              if (args[2] === receiver.DEPTH_COMPONENT24 && args[3] > 1024)
-                throw new Error("Fixture shadow allocation exceeds one tile");
-              return Reflect.apply(target, receiver, args);
-            },
-          });
+          (
+            globalThis as typeof globalThis & { shadowFixtureLimit?: number }
+          ).shadowFixtureLimit = 1024;
         });
         try {
           await call("recoverContext");

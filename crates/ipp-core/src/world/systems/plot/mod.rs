@@ -3,7 +3,6 @@
 
 mod component;
 mod frame_mapping;
-mod interpolation_reference;
 mod picking;
 mod prepared_input;
 mod primitive_preparation;

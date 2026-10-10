@@ -79,7 +79,9 @@ export function useGallery(
       ? mounted.handle
       : undefined;
   const canvasFrame = useRef<HTMLDivElement>(null);
-  const cameraControls = useRef<(() => void) | undefined>(undefined);
+  const cameraControls = useRef<
+    ReturnType<typeof installCameraControls> | undefined
+  >(undefined);
   const page = scene.id;
   const [pendingPicks] = useState(() => new PendingRequests());
   const [error, setError] = useState<string>();
@@ -212,6 +214,7 @@ export function useGallery(
   async function navigate(nextPage: CameraView) {
     if (!canvas && !handle && !error) return;
     if (nextPage === page) {
+      cameraControls.current?.cancel();
       try {
         await mounted?.mount.action("resetCamera");
       } catch (failure) {
@@ -219,7 +222,7 @@ export function useGallery(
       }
       return;
     }
-    cameraControls.current?.();
+    cameraControls.current?.dispose();
     setTransitioning(true);
     if (mounted && page !== "gui") retainOptions(page, mounted.mount.options);
     if (
@@ -286,7 +289,7 @@ export function useGalleryControls(
   useEffect(() => {
     const element = canvasFrame.current?.querySelector("canvas");
     if (!enabled || switching || !canvas || !element) return;
-    const dispose = installCameraControls(element, {
+    const controls = installCameraControls(element, {
       client: canvas.client as GalleryClient,
       picking: page === "lighting",
       pan: false,
@@ -299,10 +302,10 @@ export function useGalleryControls(
         ? {}
         : guiAdmission(unhandledInputGate)),
     });
-    cameraControls.current = dispose;
+    cameraControls.current = controls;
     return () => {
-      dispose();
-      if (cameraControls.current === dispose)
+      controls.dispose();
+      if (cameraControls.current === controls)
         cameraControls.current = undefined;
     };
   }, [

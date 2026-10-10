@@ -1716,6 +1716,9 @@ export async function settleGalleryInput() {
 export async function awaitGalleryIngress(): Promise<void> {
   await nextFrame(10_000);
   await nextFrame(10_000);
+  // Scene mounts serialize their own authored updates before the Canvas queue.
+  // A Canvas flush alone cannot await those writes before they reach its roots.
+  await window.ippGalleryScene?.inspect();
   await requireCanvas().client.inspectPage();
 }
 
@@ -2041,6 +2044,7 @@ export async function waitForViewer(): Promise<ViewerObservation> {
 }
 
 export async function observeViewer(): Promise<ViewerObservation> {
+  await awaitGalleryIngress();
   return await observeCanvas(requireCanvas());
 }
 
@@ -2049,6 +2053,7 @@ export async function captureViewer(
   waitForResources = true,
 ): Promise<ViewerBrowserCapture> {
   if (!label) throw new Error("Capture label must be nonempty");
+  await awaitGalleryIngress();
   const {
     frame: presented,
     tick,

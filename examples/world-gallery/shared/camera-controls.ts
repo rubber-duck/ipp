@@ -493,7 +493,7 @@ export function installCameraControls(
   const cancelAll = () => cancel();
   window.addEventListener("blur", cancelAll);
   window.addEventListener("resize", cancelAll);
-  return () => {
+  const dispose = () => {
     disposed = true;
     cancel();
     canvas.removeEventListener("pointerdown", down);
@@ -506,6 +506,7 @@ export function installCameraControls(
     window.removeEventListener("blur", cancelAll);
     window.removeEventListener("resize", cancelAll);
   };
+  return { cancel, dispose };
 }
 
 function sameBinding(left: RootBinding, right: RootBinding): boolean {

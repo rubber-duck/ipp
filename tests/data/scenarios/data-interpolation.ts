@@ -533,6 +533,62 @@ export async function dataInterpolation(
       resumedLater,
       resumedExpected,
     });
+    // This World has no Plot consumer: implicit percentage fitting must still
+    // advance in Data Binding, using only the displayed output's range.
+    successfulBatch(
+      await client.batch([
+        {
+          kind: "removeDynamicProperty",
+          entity: { kind: "handle", id: entity },
+          component,
+          name: "displayed_interp_reference",
+        },
+      ]),
+    );
+    await host.datasets.update(replacement, [
+      { operation: "edit", row: 1n, values: row(-500) },
+    ]);
+    const implicitFirst = await timed();
+    frame = await client.waitForFrame(implicitFirst.clock.tick);
+    while (frame.time - implicitFirst.clock.time < 0.2)
+      frame = await client.waitForFrame(frame.tick);
+    const implicitSecond = await timed();
+    const magnitude = (page: DataBindingPage) => {
+      const index = page.columns.findIndex(
+        (column) => column.name === "displayed",
+      );
+      return Math.max(
+        0,
+        ...page.rows.map((row) => {
+          const result = row.values[index];
+          return result?.valid && result.value.kind === "f32"
+            ? Math.abs(result.value.value)
+            : 0;
+        }),
+      );
+    };
+    const elapsed = implicitSecond.clock.time - implicitFirst.clock.time;
+    const displacement = Math.abs(
+      scalar(implicitSecond.page, 1n) - scalar(implicitFirst.page, 1n),
+    );
+    const firstMagnitude = magnitude(implicitFirst.page),
+      secondMagnitude = magnitude(implicitSecond.page);
+    check(
+      displacement > 0 &&
+        displacement >=
+          0.25 * Math.min(firstMagnitude, secondMagnitude) * elapsed - 0.002 &&
+        displacement <=
+          0.25 * Math.max(firstMagnitude, secondMagnitude) * elapsed + 0.002,
+      "Headless implicit percentage did not use its displayed column range",
+    );
+    await record("data.interpolation.implicit-percentage", {
+      implicitFirst,
+      implicitSecond,
+      elapsed,
+      displacement,
+      firstMagnitude,
+      secondMagnitude,
+    });
   } finally {
     collectingClocks = false;
     await client.close();

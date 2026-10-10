@@ -207,8 +207,17 @@ class PlanningTests(unittest.TestCase):
         )
         self.assertIn("chart-render-profile/chart-data.js", render.tasks[-1].command[1])
         self.assertIn('"renderProfile": true', render.tasks[-1].command[2])
-        with self.assertRaises(ValueError):
-            plan("benchmark", "native", "--scene", "chart-data", "--diagnostic", "render")
+        with patch.dict(os.environ):
+            os.environ.pop("IPP_EGL_LIBRARY_DIR", None)
+            with self.assertRaises(ValueError):
+                plan(
+                    "benchmark",
+                    "native",
+                    "--scene",
+                    "chart-data",
+                    "--diagnostic",
+                    "render",
+                )
 
     def test_chart_data_rejects_invalid_sampling_and_arrangements(self):
         base = (

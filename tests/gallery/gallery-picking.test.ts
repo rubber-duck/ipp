@@ -25,7 +25,7 @@ test("combined gallery picks every object, keeps one outline and edits independe
       const g = await openGallery(scenario);
       assert.equal(
         await g.page.locator("#scene-picker .scene-option").count(),
-        5,
+        6,
       );
       await g.navigate("lighting");
       await g.seek(0);
@@ -194,11 +194,15 @@ test("skinned gallery picking and its selected pills follow both bone segments",
       const rest = await g.capture("pills-rest");
       const beam = entity(rest.inspection, symbol).id;
       assert.equal(rest.frame.drawCalls, 10, "both selected pills render");
+      const pickingSource = entity(rest.inspection, symbol).components.find(
+        (component) => component.fields.outline === true,
+      )?.fields.source;
+      assert.equal(typeof pickingSource, "string");
+      assert.ok(String(pickingSource).includes("/assets/6/"));
       assert.ok(
         rest.inspection.resources.some(
           (resource) =>
-            resource.source.endsWith("/assets/6/920013#immutable") &&
-            resource.status === "loaded",
+            resource.source === pickingSource && resource.status === "loaded",
         ),
       );
 

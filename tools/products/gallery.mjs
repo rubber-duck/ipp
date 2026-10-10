@@ -34,19 +34,23 @@ const renderContract = resolve(
 );
 
 // Workspace installs share node_modules between worktrees. Resolve every public
-// React entry from this worktree's built package so contexts never mix products.
+// React entry from this worktree's matching package so contexts never mix products.
 const reactDirectory = resolve(workspace, "packages/ipp-react");
 const reactExports = JSON.parse(
   await readFile(resolve(reactDirectory, "package.json"), "utf8"),
 ).exports;
-const reactAliases = Object.fromEntries(
-  Object.entries(reactExports).map(([entry, conditions]) => [
-    `@ipp/react${entry === "." ? "" : entry.slice(1)}`,
-    resolve(reactDirectory, conditions.default),
-  ]),
-);
-
 function bundleGallery(entry, destination, environment = "production") {
+  const reactAliases = Object.fromEntries(
+    Object.entries(reactExports).map(([entry, conditions]) => [
+      `@ipp/react${entry === "." ? "" : entry.slice(1)}`,
+      resolve(
+        reactDirectory,
+        environment === "development"
+          ? conditions.development
+          : conditions.default,
+      ),
+    ]),
+  );
   return bundleBrowser(entry, destination, environment, {
     alias: {
       ...reactAliases,

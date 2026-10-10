@@ -14,12 +14,10 @@
 //! optional nonnegative F32 `foo_interp_reference` supplies an explicit scale.
 //! Fixed and percentage companions are mutually exclusive. Change modes by removing
 //! the old rate companion before setting the new one; displayed values are retained.
-//! A percentage without an explicit scale uses its consumer's temporary reference.
-//! After projection, the consumer checks `SystemUpdateContext::data_binding_interpolation_request`
-//! before skipping clean geometry, fits its pre-step displayed view, ends that read,
-//! and calls `advance_data_binding_interpolation` once with the named references.
-//! All interpolated outputs on that binding advance together. Missing/invalid refs
-//! return typed errors without changing values; projection readiness stays intact.
+//! A percentage without an explicit scale uses the largest absolute finite lane
+//! in its own column's pre-step displayed numeric range. The ordinary Data Binding
+//! evaluation advances all outputs before any consumer reads them, including in
+//! headless Worlds. Axis selectors and chart bounds never affect that reference.
 //! Zero references hold without earning motion. Settled outputs request no work.
 //! Removing the companion publishes the projection immediately. New source or
 //! definition lifetimes and invalid-to-valid results initialize immediately.
@@ -45,11 +43,6 @@
 
 mod component;
 mod interpolation;
-mod interpolation_step;
-pub use interpolation_step::{
-    DataBindingInterpolationError, DataBindingInterpolationReference,
-    DataBindingInterpolationRequest,
-};
 mod presentation;
 mod queries;
 pub use presentation::DataBindingPresentationConsumer;

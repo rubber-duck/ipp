@@ -115,7 +115,7 @@ export async function mountGalleryScene(
       if (!action) throw new Error(`Unknown gallery action: ${name}`);
       return action(args);
     },
-    inspect: () => context.canvas.client.inspect(),
+    inspect: () => enqueue(() => context.canvas.client.inspect()),
     dispose() {
       if (closing) return closing;
       disposed = true;

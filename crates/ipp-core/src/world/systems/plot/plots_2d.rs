@@ -378,22 +378,6 @@ fn numeric<'a>(
     }
 }
 
-/// Fit the same Cartesian bounds used by paint and picking without preparing
-/// geometry. Percentage interpolation borrows the pre-step displayed input here.
-pub(super) fn interpolation_ranges(
-    frame: &PlotFrame2d,
-    rows: &Rows<PlotSeriesRow>,
-    input: &PlotPreparedInput<'_>,
-    bars: bool,
-) -> Result<([f64; 2], [f64; 2]), ErrorReason> {
-    let series = samples(rows, input, false)?;
-    Ok(if bars {
-        bar_ranges(frame, &series, bar_spacing(&series))
-    } else {
-        ranges(frame, &series, false)
-    })
-}
-
 fn ranges(frame: &PlotFrame2d, series: &[Series], baseline: bool) -> ([f64; 2], [f64; 2]) {
     let mut min = [f64::INFINITY; 2];
     let mut max = [f64::NEG_INFINITY; 2];

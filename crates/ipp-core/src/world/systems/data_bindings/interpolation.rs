@@ -277,36 +277,45 @@ pub(super) fn new(rate: ColumnInterpolationRate) -> ColumnInterpolation {
     }
 }
 
-pub(super) fn needs_reference(column: &PreparedColumn) -> bool {
-    column.interpolation.as_ref().is_some_and(|interpolation| {
-        interpolation.rate.implicit() && !interpolation.active_rows.is_empty()
-    })
+/// Fit the output itself, including every valid numeric lane. Presentation
+/// visibility, other columns and axis bounds never enter this reference.
+fn column_reference(values: &[ExpressionResult]) -> f64 {
+    values
+        .iter()
+        .filter_map(|value| match value {
+            ExpressionResult::Valid(value) => value.floats(),
+            ExpressionResult::Invalid(_) => None,
+        })
+        .flatten()
+        .filter(|value| value.is_finite())
+        .fold(0.0_f64, |maximum, &value| {
+            maximum.max(f64::from(value).abs())
+        })
 }
 
-pub(super) fn advance_or_defer(
+pub(super) fn advance_outputs(
     runtime: &mut DataBindingRuntime,
     properties: &DynamicProperties,
     tick: u64,
     dt: f64,
 ) {
-    runtime.pending_interpolation = None;
     if dt <= 0.0 {
-        return;
-    }
-    if runtime.columns.iter().any(needs_reference) {
-        runtime.pending_interpolation = Some(tick);
         return;
     }
     let mut active = false;
     for column in &mut runtime.columns {
-        if column
-            .interpolation
-            .as_ref()
-            .is_some_and(|interpolation| !interpolation.active_rows.is_empty())
+        if let Some(interpolation) = &column.interpolation
+            && !interpolation.active_rows.is_empty()
         {
-            // A settled implicit column needs no reference or numerical work.
             active = true;
-            runtime.dirty |= advance(column, properties, dt, None);
+            let reference = match interpolation.rate {
+                ColumnInterpolationRate::Percent {
+                    reference: None,
+                    ..
+                } => Some(column_reference(&column.values)),
+                _ => None,
+            };
+            runtime.dirty |= advance(column, properties, dt, reference);
         }
     }
     if active {

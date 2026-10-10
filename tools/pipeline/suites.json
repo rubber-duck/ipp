@@ -2928,7 +2928,6 @@
       "tests/data/support/plot-3d-scene.ts",
       "tests/data/support/plot-capture.ts",
       "tests/data/scenarios/plots-2d.ts",
-      "tests/data/scenarios/chart-data-workload.ts",
       "tests/data/scenarios/dense-lines.ts",
       "tests/data/scenarios/chart-data-workload.ts",
       "tests/data/scenarios/plots-3d.ts",

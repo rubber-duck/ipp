@@ -1,4 +1,4 @@
-//! Plot owns fitted references; bindings own all displayed interpolation progress.
+//! Column-local binding interpolation precedes Plot geometry and picking.
 
 mod support;
 use support::task_scheduler::HostTaskTestDriver;
@@ -274,7 +274,7 @@ impl Fixture {
 }
 
 #[test]
-fn percentage_uses_pre_step_automatic_bounds_and_steps_mixed_outputs_once_before_dirty_skip() {
+fn percentage_uses_pre_step_column_range_and_steps_mixed_outputs_before_dirty_skip() {
     let mut fixture = Fixture::new([10.0, 20.0], 50.0);
     fixture.targets([50.0, 60.0]);
     fixture.step(0.5);
@@ -340,17 +340,32 @@ fn explicit_zero_holds_without_catch_up_and_explicit_scale_bypasses_axis_inferen
 }
 
 #[test]
-fn changed_ambiguous_selectors_fail_when_movement_next_starts_and_suppress_stale_geometry() {
+fn percentage_is_independent_of_shared_axes_and_fixed_chart_bounds() {
     let mut fixture = Fixture::new([10.0, 20.0], 50.0);
     fixture.ambiguous_series();
-    fixture.step(0.5);
-    assert_eq!(fixture.geometry().charts.len(), 1);
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PlotFrame2d(PlotFrame2d {
+            automatic_x: false,
+            automatic_y: false,
+            min_x: 0.0,
+            max_x: 1000.0,
+            min_y: 0.0,
+            max_y: 1000.0,
+            ..Default::default()
+        }),
+    ));
     fixture.targets([50.0, 60.0]);
     fixture.step(0.5);
-    assert_eq!(fixture.value("temperature", 0), 10.0);
-    assert!(fixture.geometry().charts.is_empty());
-    fixture.reference(Some(20.0));
-    fixture.step(0.5);
     assert_eq!(fixture.value("temperature", 0), 15.0);
+    assert_eq!(fixture.value("temperature", 1), 25.0);
     assert_eq!(fixture.geometry().charts.len(), 1);
+    // Removing the presentation consumer leaves ordinary binding progress active.
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_BARS2D,
+    });
+    fixture.step(0.5);
+    assert_eq!(fixture.value("temperature", 0), 21.25);
+    assert_eq!(fixture.value("offset", 0), 5.0);
 }

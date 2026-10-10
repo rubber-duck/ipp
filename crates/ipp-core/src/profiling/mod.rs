@@ -38,10 +38,11 @@ pub use contexts::{
     system_composition, system_context, system_count, system_name, world_profile_context,
 };
 pub(crate) use contexts::{register_world, retire_world};
-pub(crate) use stages::{FixedStage, Stage, WorldTraceScope};
 pub use stages::{
-    CpuTraceScope, SYSTEM_PHASES, clock_nanos, counter, counter_count, fixed_stage_base, fixed_stage_name,
+    CpuTraceScope, SYSTEM_PHASES, clock_nanos, counter, counter_count, fixed_stage_base,
+    fixed_stage_name,
 };
+pub(crate) use stages::{FixedStage, Stage, WorldTraceScope};
 
 #[cfg(test)]
 #[path = "profiling_tests.rs"]

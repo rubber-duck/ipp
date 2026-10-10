@@ -206,3 +206,70 @@ fn positional_invalid_targets_stay_invalid_and_valid_ones_initialize_fresh() {
     assert_eq!(column.values, [scalar(5.0), scalar(20.0)]);
     assert_eq!(active(&column), [1]);
 }
+
+#[test]
+fn implicit_percentage_fits_all_valid_lanes_and_advances_before_observation() {
+    let (mut properties, mut column) = column(&[-40.0, -10.0]);
+    properties
+        .set("y_interp_percent", DynamicValue::F32(50.0))
+        .unwrap();
+    let rate = ColumnInterpolationRate::Percent {
+        percentage: properties.descriptors()["y_interp_percent"],
+        reference: None,
+    };
+    column.interpolation.as_mut().unwrap().rate = rate;
+    column.interpolation.as_mut().unwrap().targets = vec![scalar(-80.0), scalar(-50.0)];
+    retarget(&mut column);
+    let mut runtime = DataBindingRuntime {
+        columns: vec![column],
+        ..Default::default()
+    };
+    advance_outputs(&mut runtime, &properties, 1, 0.5);
+    assert_eq!(runtime.columns[0].values, [scalar(-50.0), scalar(-20.0)]);
+    advance_outputs(&mut runtime, &properties, 2, 0.5);
+    assert_eq!(runtime.columns[0].values, [scalar(-62.5), scalar(-32.5)]);
+    assert_eq!(runtime.evaluated_tick, Some(2));
+    assert_eq!(
+        column_reference(&[
+            invalid(),
+            ExpressionResult::Valid(DynamicValue::Vec3([-2.0, 8.0, -16.0]))
+        ]),
+        16.0
+    );
+    assert_eq!(column_reference(&[scalar(0.0), invalid()]), 0.0);
+}
+
+#[test]
+fn zero_column_reference_holds_without_motion_until_explicit_override() {
+    let (mut properties, mut column) = column(&[0.0]);
+    properties
+        .set("y_interp_percent", DynamicValue::F32(50.0))
+        .unwrap();
+    column.interpolation.as_mut().unwrap().rate = ColumnInterpolationRate::Percent {
+        percentage: properties.descriptors()["y_interp_percent"],
+        reference: None,
+    };
+    column.interpolation.as_mut().unwrap().targets = vec![scalar(100.0)];
+    retarget(&mut column);
+    let mut runtime = DataBindingRuntime {
+        columns: vec![column],
+        ..Default::default()
+    };
+    advance_outputs(&mut runtime, &properties, 1, 100.0);
+    assert_eq!(runtime.columns[0].values, [scalar(0.0)]);
+    properties
+        .set("y_interp_reference", DynamicValue::F32(10.0))
+        .unwrap();
+    runtime.columns[0].interpolation.as_mut().unwrap().rate = ColumnInterpolationRate::Percent {
+        percentage: properties.descriptors()["y_interp_percent"],
+        reference: Some(properties.descriptors()["y_interp_reference"]),
+    };
+    advance_outputs(&mut runtime, &properties, 2, 0.5);
+    assert_eq!(runtime.columns[0].values, [scalar(2.5)]);
+    advance_outputs(&mut runtime, &properties, 3, 100.0);
+    assert_eq!(runtime.columns[0].values, [scalar(100.0)]);
+    runtime.dirty = false;
+    advance_outputs(&mut runtime, &properties, 4, 1.0);
+    assert!(!runtime.dirty);
+    assert_eq!(runtime.evaluated_tick, Some(3));
+}

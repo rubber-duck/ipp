@@ -79,18 +79,6 @@ pub(super) enum ColumnInterpolationRate {
     },
 }
 
-impl ColumnInterpolationRate {
-    pub fn implicit(self) -> bool {
-        matches!(
-            self,
-            Self::Percent {
-                reference: None,
-                ..
-            }
-        )
-    }
-}
-
 pub(super) struct ColumnInterpolationRow {
     pub index: usize,
     pub residual: [f64; 4],
@@ -110,8 +98,6 @@ pub struct DataBindingRuntime {
     pub(super) needs_prepare: bool,
     pub(super) needs_evaluate: bool,
     pub(super) presentation: Option<(EntityId, u16, u64)>,
-    // A one-frame work token, never an accumulated clock or an authored-value mirror.
-    pub(super) pending_interpolation: Option<u64>,
 }
 
 impl std::fmt::Debug for PreparedColumn {
@@ -138,7 +124,6 @@ impl Default for DataBindingRuntime {
             needs_prepare: true,
             needs_evaluate: true,
             presentation: None,
-            pending_interpolation: None,
         }
     }
 }
@@ -162,13 +147,11 @@ impl DataBindingRuntime {
     }
 
     pub(super) fn invalidate(&mut self) {
-        self.pending_interpolation = None;
         self.needs_prepare = true;
         self.needs_evaluate = true;
     }
 
     pub(super) fn unavailable(&mut self, reason: DataBindingUnavailable) {
-        self.pending_interpolation = None;
         let availability = DataBindingAvailability::Unavailable(reason);
         self.dirty |= self.availability != availability || !self.rows.is_empty();
         self.availability = availability;
@@ -178,7 +161,6 @@ impl DataBindingRuntime {
     }
 
     pub(super) fn reset_rows(&mut self) {
-        self.pending_interpolation = None;
         self.dirty |= !self.rows.is_empty();
         self.rows.clear();
         for column in &mut self.columns {

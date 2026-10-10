@@ -35,7 +35,7 @@ pub(super) fn evaluate(
         runtime,
     } = binding;
     if !runtime.needs_prepare && !runtime.needs_evaluate {
-        super::interpolation::advance_or_defer(runtime, properties, tick, dt);
+        super::interpolation::advance_outputs(runtime, properties, tick, dt);
         return;
     }
     let view = runtime
@@ -192,7 +192,7 @@ pub(super) fn evaluate(
     }
     runtime.evaluated_tick = Some(tick);
     runtime.needs_evaluate = false;
-    super::interpolation::advance_or_defer(runtime, properties, tick, dt);
+    super::interpolation::advance_outputs(runtime, properties, tick, dt);
 }
 
 fn prepare(

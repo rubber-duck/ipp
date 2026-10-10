@@ -293,17 +293,19 @@ impl<D: RenderDevice> RenderService<D> {
             .pose
             .render_matrix()
             .map_err(|_| RenderError::InvalidTransform)?;
-        #[cfg(feature = "instrumentation")]
-        let _labels_trace = ipp_core::profiling::CpuTraceScope::new("RenderService.plot-labels");
-        let layout = self.plot_label_layouts.entry(world.selection).or_default();
-        let placed_planes = layout.place_axes(
-            &world.plot_planes,
-            camera_model,
-            view_projection,
-            viewport,
-            presentation_time,
-        )?;
-        let plot_planes = layout.arrange(&placed_planes, view_projection, viewport);
+        let plot_planes = {
+            #[cfg(feature = "instrumentation")]
+            let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.plot-labels");
+            let layout = self.plot_label_layouts.entry(world.selection).or_default();
+            let placed_planes = layout.place_axes(
+                &world.plot_planes,
+                camera_model,
+                view_projection,
+                viewport,
+                presentation_time,
+            )?;
+            layout.arrange(&placed_planes, view_projection, viewport)
+        };
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.
         let mut stats = prepass;

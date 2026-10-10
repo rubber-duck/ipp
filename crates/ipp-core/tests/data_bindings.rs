@@ -3566,9 +3566,6 @@ struct ConsumerTestSystem {
     observed: Vec<(bool, Vec<R>)>,
     failures: usize,
     stale_rejections: usize,
-    reference: Option<f64>,
-    interpolation_requests: usize,
-    interpolation_steps: usize,
 }
 
 impl ConsumerTestSystem {
@@ -3633,35 +3630,7 @@ impl ipp_core::systems::System for ConsumerTestSystem {
                     context.world.finish_data_binding_presentation(previous),
                     Err(ErrorReason::InvalidEntity)
                 );
-                assert_eq!(
-                    context.data_binding_interpolation_request(previous),
-                    Err(ErrorReason::InvalidEntity)
-                );
                 self.stale_rejections += 1;
-            }
-            if let Some(request) = context
-                .data_binding_interpolation_request(consumer)
-                .unwrap()
-            {
-                self.interpolation_requests += 1;
-                if matches!(self.mode, ConsumerTestMode::Succeed) {
-                    let references: Vec<_> = request
-                        .outputs
-                        .iter()
-                        .map(|output| DataBindingInterpolationReference {
-                            output,
-                            maximum: self.reference.expect("test reference"),
-                        })
-                        .collect();
-                    context
-                        .advance_data_binding_interpolation(consumer, &references)
-                        .unwrap();
-                    self.interpolation_steps += 1;
-                    assert_eq!(
-                        context.advance_data_binding_interpolation(consumer, &references),
-                        Ok(false)
-                    );
-                }
             }
             let view = context
                 .world
@@ -3789,7 +3758,7 @@ fn explicit_percentage_reference_changes_and_rate_mode_switches_keep_the_display
         .result
         .unwrap();
     host.frame_for_test(20.0).unwrap();
-    assert_eq!(scalar(&mut host), R::Valid(V::F32(17.5))); // Implicit ref has no consumer; no stale explicit rate.
+    assert_eq!(scalar(&mut host), R::Valid(V::F32(100.0))); // Headless implicit reference replaces the old explicit rate.
     assert_eq!(
         view(&mut host, world, entity).availability,
         DataBindingAvailability::Ready
@@ -3797,7 +3766,7 @@ fn explicit_percentage_reference_changes_and_rate_mode_switches_keep_the_display
 }
 
 #[test]
-fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up() {
+fn percentage_advances_before_consumers_even_when_presentation_is_skipped() {
     let mut factories = ipp_core::systems::compiled_system_factories();
     factories.push(std::sync::Arc::new(ConsumerTestFactory));
     let mut host = crate::support::task_scheduler::with_factories(factories).unwrap();
@@ -3845,20 +3814,11 @@ fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up
             .unwrap()
             .with_system::<ConsumerTestSystem, _>(ConsumerTestSystem::ID, |system, _| {
                 system.mode = mode;
-                system.reference = Some(10.0);
             })
             .unwrap()
     };
     mode(&mut host, ConsumerTestMode::Succeed);
     host.frame_for_test(1.0).unwrap();
-    assert_eq!(
-        host.world_mut(world)
-            .unwrap()
-            .system::<ConsumerTestSystem>(ConsumerTestSystem::ID)
-            .unwrap()
-            .interpolation_requests,
-        0
-    );
     host.data_sources_mut()
         .apply_batch(
             source,
@@ -3879,7 +3839,7 @@ fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up
     host.frame_for_test(1.0).unwrap();
     assert_eq!(
         view(&mut host, world, entity).columns[0].values,
-        [R::Valid(V::F32(12.0))]
+        [R::Valid(V::F32(72.6))]
     );
     apply(
         &mut host,
@@ -3895,10 +3855,10 @@ fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up
     .result
     .unwrap();
     host.frame_for_test(1.0).unwrap();
-    assert_eq!(
-        view(&mut host, world, entity).columns[0].values,
-        [R::Valid(V::F32(13.0))]
-    );
+    let R::Valid(V::F32(value)) = view(&mut host, world, entity).columns[0].values[0] else {
+        panic!("scalar display");
+    };
+    assert!((value - 79.86).abs() < 0.00002);
     let mut replacement = buffer("dataset:consumer-percent", "x", expression);
     replacement
         .properties
@@ -3929,7 +3889,6 @@ fn percentage_consumer_authority_advances_once_and_missed_frames_do_not_catch_up
         .system::<ConsumerTestSystem>(ConsumerTestSystem::ID)
         .unwrap();
     assert_eq!(consumer.stale_rejections, 2);
-    assert_eq!(consumer.interpolation_steps, 3);
 }
 
 #[test]

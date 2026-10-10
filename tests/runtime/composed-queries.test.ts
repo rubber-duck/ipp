@@ -98,7 +98,7 @@ async function controllerBindingRevalidation(
       return typeof value === "function" ? value.bind(target) : value;
     },
   });
-  const dispose = installCameraControls(
+  const controls = installCameraControls(
     surface as unknown as HTMLCanvasElement,
     {
       client: controlled,
@@ -234,7 +234,7 @@ async function controllerBindingRevalidation(
     assert.deepEqual(failures, []);
     return records;
   } finally {
-    dispose();
+    controls.dispose();
   }
 }
 
@@ -397,7 +397,7 @@ test("generated client and gallery controller keep current-bound gestures usable
       let pending = 0;
       const failures: unknown[] = [];
       let bindingCancellations;
-      const dispose = installCameraControls(
+      const controls = installCameraControls(
         surface as unknown as HTMLCanvasElement,
         {
           client,
@@ -456,7 +456,7 @@ test("generated client and gallery controller keep current-bound gestures usable
         near(projected.position[0], -0.4);
         assert.deepEqual(failures, []);
         assert.equal(pending, 0);
-        dispose();
+        controls.dispose();
         bindingCancellations = await controllerBindingRevalidation(
           surface,
           client,
@@ -468,7 +468,7 @@ test("generated client and gallery controller keep current-bound gestures usable
           },
         );
       } finally {
-        dispose();
+        controls.dispose();
         for (const timeout of frames.values()) clearTimeout(timeout);
         for (const [key, previous] of [
           ["window", previousWindow],

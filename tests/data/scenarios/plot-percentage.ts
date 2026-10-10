@@ -53,7 +53,7 @@ function scalar(page: DataBindingPage, name: string, row: number): number {
 }
 
 function scale(page: DataBindingPage): number {
-  // Bars include zero; these two complete, visible samples are nondegenerate.
+  // Independent output-column range; chart bounds and selectors do not contribute.
   return Math.max(
     Math.abs(scalar(page, "temperature", 0)),
     Math.abs(scalar(page, "temperature", 1)),
@@ -117,13 +117,13 @@ function cyanPanel(frame: PlotFrame, panel: number): number {
   return count;
 }
 
-function rateBounds(first: Timed, second: Timed) {
+function rateBounds(first: Timed, second: Timed, row = 1) {
   const elapsed = second.time - first.time;
   const before = scale(first.page),
     after = scale(second.page);
   const displacement = Math.abs(
-    scalar(second.page, "temperature", 1) -
-      scalar(first.page, "temperature", 1),
+    scalar(second.page, "temperature", row) -
+      scalar(first.page, "temperature", row),
   );
   // The fitted magnitude grows monotonically between these observations. Every
   // unseen Host step therefore uses a reference inside these independent bounds.
@@ -404,7 +404,7 @@ export async function exercisePlotPercentage(
           interval.elapsed > 0.5 &&
             interval.displacement >= interval.lower - 0.002 &&
             interval.displacement <= interval.upper + 0.002,
-          "Percentage displacement did not follow pre-step fitted bounds and Host time",
+          "Percentage displacement did not follow pre-step column range and Host time",
         );
       check(
         measurement.late.before > measurement.early.before * 1.1,
@@ -549,8 +549,8 @@ export async function exercisePlotPercentage(
       idle.evaluatedTick === idleTick && !idle.dirty,
       "Settled percentage Plot continued preparing work",
     );
-    // A settled selector edit needs no reference yet. The next target movement
-    // uses one output on both axes and must suppress the chart rather than guess.
+    // Reuse one output on both axes and author fixed chart bounds. Data Binding
+    // continues independently, while Plot must render the updated shared view.
     successfulBatch(
       await client.batch([
         {
@@ -559,7 +559,14 @@ export async function exercisePlotPercentage(
           component: chart.id,
           field: seriesField(true),
         },
-        ...componentFields(client, "PlotFrame2d", { automatic_x: true }).map(
+        ...componentFields(client, "PlotFrame2d", {
+          automatic_x: false,
+          automatic_y: false,
+          min_x: 0,
+          max_x: 200,
+          min_y: 0,
+          max_y: 200,
+        }).map(
           (field): Command => ({
             kind: "setField",
             entity: { kind: "handle", id: entities[0]! },
@@ -569,30 +576,34 @@ export async function exercisePlotPercentage(
         ),
       ]),
     );
-    const beforeInvalid = await capture(
-      "percentage-ambiguous-settled",
-      binding,
-    );
-    check(
-      cyanPanel(beforeInvalid, 0) > 10_000,
-      "Settled ambiguous selector changed before movement requested a reference",
-    );
     await host.datasets.update(producers[0]!, [
       { operation: "edit", row: 1n, values: row(0.5, 100, 100) },
     ]);
-    await client.waitForFrame();
-    const invalid = await capture("percentage-ambiguous-active", binding);
-    const invalidPage = await read(0);
-    await record("percentage-ambiguous", {
-      invalidPage,
-      leftInk: cyanPanel(invalid, 0),
-      rightInk: cyanPanel(invalid, 1),
+    const sharedFirst = await until(
+      () => timed(0),
+      (sample) =>
+        scalar(sample.page, "temperature", 0) > 50 &&
+        scalar(sample.page, "temperature", 0) < 80,
+      "shared-axis column motion",
+    );
+    await waitAfter(sharedFirst, 0.4);
+    const sharedSecond = await timed(0);
+    const interval = rateBounds(sharedFirst, sharedSecond, 0);
+    const rendered = await capture("percentage-shared-axes", binding);
+    await record("percentage-shared-axes", {
+      sharedFirst,
+      sharedSecond,
+      interval,
+      ink: cyanPanel(rendered, 0),
     });
     check(
-      cyanPanel(invalid, 0) === 0 &&
-        cyanPanel(invalid, 1) > 80_000 &&
-        scalar(invalidPage, "temperature", 0) === 50,
-      "Ambiguous active percentage retained stale geometry or advanced display",
+      interval.displacement >= interval.lower - 0.002 &&
+        interval.displacement <= interval.upper + 0.002,
+      "Shared axes or fixed chart bounds changed the column-local percentage rate",
+    );
+    check(
+      cyanPanel(rendered, 0) > 1000,
+      "Shared-axis percentage chart was suppressed",
     );
     const raw = await host.datasets.read("datasets://plot-percentage/1");
     check(

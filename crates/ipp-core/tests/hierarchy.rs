@@ -277,6 +277,101 @@ fn terminal_aim_tracks_through_affine_parent_and_finalizes_children_without_chan
 }
 
 #[test]
+fn terminal_aim_at_world_point_needs_no_target_entity() {
+    let mut host = crate::support::task_scheduler::host();
+    let id = host.create_world(Default::default(), SPATIAL).unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let local = Transform {
+        x: 1.0,
+        y: 2.0,
+        z: 4.0,
+        ..Default::default()
+    };
+    let tracker = create(&mut world, Some(local));
+    let normalize = |v: [f32; 3]| {
+        let n = v.iter().map(|v| v * v).sum::<f32>().sqrt();
+        v.map(|v| v / n)
+    };
+    let forward = |world: &WorldContext<'_>| {
+        let matrix = world.world_matrix(tracker).unwrap();
+        normalize([-matrix[8], -matrix[9], -matrix[10]])
+    };
+    ok(
+        &mut world,
+        vec![put(
+            tracker,
+            ComponentValue::LookAt(LookAt {
+                has_point: true,
+                point_x: 1.0,
+                point_y: 2.0,
+                point_z: 0.0,
+                ..Default::default()
+            }),
+        )],
+    );
+    close(&forward(&world), &[0.0, 0.0, -1.0]);
+    // The authored Transform is untouched; the aim is evaluated state.
+    assert!(
+        world
+            .inspect(tracker)
+            .unwrap()
+            .components
+            .contains(&ComponentValue::Transform(local))
+    );
+    // A point aim wins over a simultaneously declared entity target.
+    let other = create(
+        &mut world,
+        Some(Transform {
+            x: 50.0,
+            ..Default::default()
+        }),
+    );
+    ok(
+        &mut world,
+        vec![put(
+            tracker,
+            ComponentValue::LookAt(LookAt {
+                target: other,
+                has_point: true,
+                point_x: 1.0,
+                point_y: 6.0,
+                point_z: 4.0,
+                ..Default::default()
+            }),
+        )],
+    );
+    close(&forward(&world), &[0.0, 1.0, 0.0]);
+    // Without the point, the same declaration tracks the entity instead.
+    ok(
+        &mut world,
+        vec![put(
+            tracker,
+            ComponentValue::LookAt(LookAt {
+                target: other,
+                ..Default::default()
+            }),
+        )],
+    );
+    close(&forward(&world), &normalize([49.0, -2.0, -4.0]));
+    // A coincident point withdraws the contribution like a coincident target.
+    ok(
+        &mut world,
+        vec![put(
+            tracker,
+            ComponentValue::LookAt(LookAt {
+                has_point: true,
+                point_x: 1.0,
+                point_y: 2.0,
+                point_z: 4.0,
+                ..Default::default()
+            }),
+        )],
+    );
+    let expected = ipp_core::math::model_matrix(&local).unwrap();
+    close(&world.world_matrix(tracker).unwrap(), &expected);
+}
+
+#[test]
 fn cycles_and_terminal_dependencies_retain_changes_and_recover_on_correction() {
     let mut host = crate::support::task_scheduler::host();
     let id = host.create_world(Default::default(), SPATIAL).unwrap();
@@ -363,7 +458,7 @@ fn coincident_and_pole_targets_are_finite_and_runtime_fields_are_not_serialized(
         assert_eq!(world.world_matrix(tracker).unwrap(), first);
         close(&[-first[8], -first[9], -first[10]], &[0.0, y, 0.0]);
     }
-    assert_eq!(ComponentValue::LookAt(LookAt::default()).fields().len(), 2);
+    assert_eq!(ComponentValue::LookAt(LookAt::default()).fields().len(), 6);
 }
 
 #[test]

@@ -119,7 +119,14 @@ export const componentContract = {
   },
   LookAt: {
     host: "ipp-look-at",
-    fields: { target: "bigint", enabled: "boolean" },
+    fields: {
+      target: "bigint",
+      enabled: "boolean",
+      has_point: "boolean",
+      point_x: "number",
+      point_y: "number",
+      point_z: "number",
+    },
   },
   Scalar: { host: "ipp-scalar", fields: { value: "number" } },
   Transform: {

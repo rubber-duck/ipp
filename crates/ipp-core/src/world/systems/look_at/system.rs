@@ -209,22 +209,39 @@ impl LookAtSystem {
         _hierarchy: &HierarchySystem,
         _dt: f64,
     ) {
-        for &entity in self.dependencies.targets.keys() {
+        let owners: BTreeSet<_> = self
+            .dependencies
+            .targets
+            .keys()
+            .chain(self.dependencies.points.iter())
+            .copied()
+            .collect();
+        for entity in owners {
             let index = entity.index() as usize;
             let Some(value) = ecs.world.components.look_at(index) else {
                 continue;
             };
             let mut invalid = self.dependencies.invalid.contains(&entity);
             let rotation = (|| {
-                if !value.enabled || value.target.to_bits() == 0 || invalid {
+                if !value.enabled || invalid {
                     return None;
                 }
-                let target = match evaluated_affine(ecs.world, value.target) {
-                    Ok(target) => target.point([0.0; 3]),
-                    Err(_) => {
-                        invalid = true;
-                        return None;
+                let target = if value.has_point {
+                    [
+                        f64::from(value.point_x),
+                        f64::from(value.point_y),
+                        f64::from(value.point_z),
+                    ]
+                } else if value.target.to_bits() != 0 {
+                    match evaluated_affine(ecs.world, value.target) {
+                        Ok(target) => target.point([0.0; 3]),
+                        Err(_) => {
+                            invalid = true;
+                            return None;
+                        }
                     }
+                } else {
+                    return None;
                 };
                 let parent = match ecs.world.state.links.parent(entity) {
                     Some(parent) => match parent_affine(ecs.world, entity, parent) {

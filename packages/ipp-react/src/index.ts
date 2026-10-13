@@ -74,6 +74,9 @@ export {
 export { createRoot } from "./root.js";
 export type { ReactWorldRoot } from "./root.js";
 
+export { CameraRig } from "./camera.js";
+export type { CameraRigProps, CameraVec3 } from "./camera.js";
+
 export {
   f32,
   i32,

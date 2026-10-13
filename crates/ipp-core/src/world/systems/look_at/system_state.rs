@@ -12,6 +12,8 @@ thread_local! {
 #[derive(Default)]
 pub(super) struct LookAtDependencies {
     pub(super) targets: BTreeMap<EntityId, EntityId>,
+    /// Owners aiming at a World-space point; they have no entity target.
+    pub(super) points: BTreeSet<EntityId>,
     inputs: BTreeMap<EntityId, BTreeSet<EntityId>>,
     readers: BTreeMap<EntityId, BTreeSet<EntityId>>,
     pub(super) invalid: BTreeSet<EntityId>,
@@ -35,11 +37,15 @@ impl LookAtDependencies {
             if let Some(readers) = self.readers.get(entity) {
                 affected.extend(readers);
             }
-            let target = Self::target(world, state, *entity);
-            if let Some(target) = target {
+            if Self::is_point(world, state, *entity) {
+                self.points.insert(*entity);
+                self.targets.remove(entity);
+            } else if let Some(target) = Self::target(world, state, *entity) {
                 self.targets.insert(*entity, target);
+                self.points.remove(entity);
             } else {
                 self.targets.remove(entity);
+                self.points.remove(entity);
             }
         }
         #[cfg(test)]
@@ -56,20 +62,20 @@ impl LookAtDependencies {
                 }
             }
             self.invalid.remove(&entity);
-            let Some(&target) = self.targets.get(&entity) else {
+            let target = self.targets.get(&entity).copied();
+            if target.is_none() && !self.points.contains(&entity) {
                 continue;
-            };
+            }
             let mut inputs = BTreeSet::new();
             let mut invalid = state.links.invalid.contains(&entity);
-            for mut current in [Some(target), state.links.parent(entity)]
-                .into_iter()
-                .flatten()
-            {
+            for mut current in [target, state.links.parent(entity)].into_iter().flatten() {
                 loop {
                     if !inputs.insert(current) {
                         break;
                     }
-                    if self.targets.contains_key(&current) || state.links.invalid.contains(&current)
+                    if self.targets.contains_key(&current)
+                        || self.points.contains(&current)
+                        || state.links.invalid.contains(&current)
                     {
                         invalid = true;
                     }
@@ -110,30 +116,34 @@ impl LookAtDependencies {
         #[cfg(test)]
         LOOK_AT_CHECKS.set(LOOK_AT_CHECKS.get() + affected.len());
         affected.into_iter().any(|entity| {
-            let target = if changed.contains(&entity) {
-                Self::target(world, state, entity)
+            let (target, is_point) = if changed.contains(&entity) {
+                (
+                    Self::target(world, state, entity),
+                    Self::is_point(world, state, entity),
+                )
             } else {
-                self.targets.get(&entity).copied()
+                (
+                    self.targets.get(&entity).copied(),
+                    self.points.contains(&entity),
+                )
             };
-            let Some(target) = target else {
+            if target.is_none() && !is_point {
                 return false;
-            };
+            }
             if state.links.invalid.contains(&entity) {
                 return true;
             }
             let mut visited = BTreeSet::new();
-            for mut current in [Some(target), state.links.parent(entity)]
-                .into_iter()
-                .flatten()
-            {
+            for mut current in [target, state.links.parent(entity)].into_iter().flatten() {
                 loop {
                     if !visited.insert(current) {
                         break;
                     }
                     let aimed = if changed.contains(&current) {
                         Self::target(world, state, current).is_some()
+                            || Self::is_point(world, state, current)
                     } else {
-                        self.targets.contains_key(&current)
+                        self.targets.contains_key(&current) || self.points.contains(&current)
                     };
                     if aimed || state.links.invalid.contains(&current) {
                         return true;
@@ -156,12 +166,20 @@ impl LookAtDependencies {
         match state.input_value(&world.components, entity, ComponentValue::LOOK_AT) {
             Some(ComponentValue::LookAt(value))
                 if value.enabled
+                    && !value.has_point
                     && value.target.to_bits() != 0
                     && state.entities.contains_key(&value.target) =>
             {
                 Some(value.target)
             }
             _ => None,
+        }
+    }
+
+    fn is_point(world: &WorldSimulationState, state: &WorldEntityState, entity: EntityId) -> bool {
+        match state.input_value(&world.components, entity, ComponentValue::LOOK_AT) {
+            Some(ComponentValue::LookAt(value)) => value.enabled && value.has_point,
+            _ => false,
         }
     }
 }

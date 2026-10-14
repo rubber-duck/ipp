@@ -341,6 +341,7 @@ impl RenderDevice for WebGlRenderDevice {
         textures: impl ExactSizeIterator<Item = Result<(&'a str, &'a u32), RenderError>>,
         alpha_mode: u32,
         alpha_cutoff: f32,
+        portable_sampling: bool,
     ) -> Result<(), RenderError> {
         // SAFETY: Imports copy borrowed words and names synchronously. Resource
         // handles remain owned by this live context throughout each call.
@@ -358,7 +359,14 @@ impl RenderDevice for WebGlRenderDevice {
             let (name, texture) = texture?;
             // SAFETY: The live name is borrowed only during this synchronous call.
             self.check(unsafe {
-                bind_custom_texture(program.id, index, name.as_ptr(), name.len(), *texture)
+                bind_custom_texture(
+                    program.id,
+                    index,
+                    name.as_ptr(),
+                    name.len(),
+                    *texture,
+                    u32::from(portable_sampling),
+                )
             })?;
         }
         Ok(())

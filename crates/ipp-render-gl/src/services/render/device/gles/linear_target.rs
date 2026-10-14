@@ -150,6 +150,9 @@ impl Drop for GlesRenderDevice {
             self.gl.delete_buffers(1, &self.parameter_buffer);
             self.gl.delete_vertex_arrays(1, &self.surface_quad_vao);
             self.gl.delete_buffers(1, &self.instance_buffer);
+            if self.portable_sampler != 0 {
+                self.gl.delete_samplers(1, &self.portable_sampler);
+            }
         }
     }
 }

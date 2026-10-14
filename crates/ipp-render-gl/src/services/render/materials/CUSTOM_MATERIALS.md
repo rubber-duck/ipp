@@ -8,6 +8,10 @@ Property identities survive value edits and unrelated additions; removal, retypi
 
 The `glsl-es-300` backend serves WebGL 2 and GLES 3. Other backend entries round-trip as opaque source without claiming renderer support. Encode definitions with `encodeShaderDefinition` and upload through the ordinary owned asset API. Every source edit requires a new asset identity.
 
+## Portable `ipp` target
+
+A definition may instead carry its bodies under the `ipp` backend key (with `recipe.backend: "ipp"`), as one restricted GLSL-flavoured body per stage that the receiving renderer's builder lowers to its native backend; a renderer-specific entry for the receiving backend takes precedence when both exist. Portable bodies reference only generated `p_<name>` parameters, framework names and these intrinsics, and declare no uniforms, samplers or entry points: `ippSample(tex, uv)`, `ippSampleLod(tex, uv, lod)`, `ippSampleBias(tex, uv, bias)`, `ippLoad(tex, coord, lod)`, `ippTextureSize(tex, lod)`, `ippMul(a, b)`, `ippDiscard()` and `ippFragmentCoord()`. Texture parameters keep the `Texture2D` declaration; the IPP sampler is linear filtering with clamp-to-edge, and sampling returns linear values from the sRGB texture on every backend. A portable vertex body writes `ipp_position` instead of `gl_Position` (the builder binds it to the native clip output, so `ippDefaultVertex()` composes as usual). Raw `texture` calls and `gl_` names are rejected in portable bodies. The builder owns prologues, stage inputs and outputs, parameter packing and binding assignment per backend; anything outside this subset belongs in a renderer-specific entry.
+
 ```ts
 const definition = {
   recipe: { normals: true, lighting: false, shadowPass: false },

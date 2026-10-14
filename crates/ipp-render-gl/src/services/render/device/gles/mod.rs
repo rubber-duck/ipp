@@ -52,6 +52,8 @@ pub struct GlesRenderDevice {
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::gpu_queries::GpuQueryPool<gpu_queries::GlesGpuQueries>,
     parameter_buffer: u32,
+    /// Shared IPP sampler (linear, clamp-to-edge) for portable programs; zero until first use.
+    portable_sampler: u32,
     parameter_capacity: usize,
     max_parameter_bytes: usize,
     max_parameter_textures: usize,

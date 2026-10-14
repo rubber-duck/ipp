@@ -168,6 +168,9 @@ pub trait RenderDevice: 'static {
     }
 
     /// Upload renderer-packed std140 words and bind named texture parameters.
+    /// `portable_sampling` selects the IPP sampler (linear filtering,
+    /// clamp-to-edge) for programs lowered from a portable `ipp` definition,
+    /// leaving renderer-specific programs on the texture's own sampler state.
     fn set_custom_parameters<'a>(
         &mut self,
         _program: &Self::Program,
@@ -175,6 +178,7 @@ pub trait RenderDevice: 'static {
         _textures: impl ExactSizeIterator<Item = Result<(&'a str, &'a Self::Texture), RenderError>>,
         _alpha_mode: u32,
         _alpha_cutoff: f32,
+        _portable_sampling: bool,
     ) -> Result<(), RenderError>
     where
         Self::Texture: 'a,

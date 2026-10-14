@@ -39,6 +39,32 @@ impl GlesRenderDevice {
         Ok(())
     }
 
+    /// The shared IPP sampler object, created on first portable use.
+    fn portable_sampler(&mut self) -> Result<u32, RenderError> {
+        if self.portable_sampler == 0 {
+            // SAFETY: The current context owns the new sampler; parameters set
+            // sampling state only, retaining no pointers or aliases.
+            unsafe {
+                self.gl.gen_samplers(1, &mut self.portable_sampler);
+                if self.portable_sampler == 0 {
+                    return Err(RenderError::RenderDevice(
+                        "portable sampler allocation failed".into(),
+                    ));
+                }
+                self.gl
+                    .sampler_parameter(self.portable_sampler, 0x2801, 0x2601);
+                self.gl
+                    .sampler_parameter(self.portable_sampler, 0x2800, 0x2601);
+                self.gl
+                    .sampler_parameter(self.portable_sampler, 0x2802, 0x812F);
+                self.gl
+                    .sampler_parameter(self.portable_sampler, 0x2803, 0x812F);
+            }
+            self.check()?;
+        }
+        Ok(self.portable_sampler)
+    }
+
     pub(super) fn upload_custom_parameters<'a>(
         &mut self,
         program: &GlesRenderProgram,
@@ -46,7 +72,13 @@ impl GlesRenderDevice {
         textures: impl ExactSizeIterator<Item = Result<(&'a str, &'a u32), RenderError>>,
         alpha_mode: u32,
         alpha_cutoff: f32,
+        portable_sampling: bool,
     ) -> Result<(), RenderError> {
+        let sampler = if portable_sampling {
+            self.portable_sampler()?
+        } else {
+            0
+        };
         self.prepare_parameter_storage(program, words.len(), textures.len())?;
         // SAFETY: The current context owns the program and buffer. Uploads copy
         // live borrowed words synchronously and retain no CPU pointers or aliases.
@@ -66,7 +98,7 @@ impl GlesRenderDevice {
                 let unit = (index + 2) as u32;
                 let location = self.custom_texture_location(program, name)?;
                 self.gl.active_texture(0x84C0 + unit);
-                self.gl.bind_sampler(unit, 0);
+                self.gl.bind_sampler(unit, sampler);
                 self.gl.bind_texture(0x0DE1, *texture);
                 self.program_int(program, location, unit as i32);
             }

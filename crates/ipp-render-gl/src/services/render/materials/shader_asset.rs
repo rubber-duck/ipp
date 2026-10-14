@@ -21,6 +21,9 @@ use std::any::Any;
 
 pub(in crate::services::render) struct GlShaderData<D: RenderDevice> {
     pub definition: ShaderDefinition,
+    /// The program was lowered from the portable `ipp` entry, so its texture
+    /// sampling uses the IPP sampler instead of texture-owned sampler state.
+    pub portable: bool,
     asset_lease: RenderAssetLease,
     pub surface: Option<D::Program>,
     pub shadow: Option<D::Program>,
@@ -78,7 +81,10 @@ impl<D: RenderDevice> Drop for GlShaderData<D> {
 
 pub(super) fn config(definition: &ShaderDefinition) -> Result<RenderShaderConfig, RenderError> {
     let flags = definition.recipe.features;
-    if definition.recipe.backend != "glsl-es-300" {
+    if definition.recipe.backend != "glsl-es-300"
+        && definition.recipe.backend
+            != ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND
+    {
         return Err(RenderError::RenderDevice(
             "Unsupported shader backend".into(),
         ));
@@ -133,6 +139,7 @@ pub(in crate::services::render) fn loader<D: RenderDevice>(
                         definition.backends.clear();
                         return Ok(GlShaderData {
                             definition,
+                            portable: false,
                             asset_lease,
                             surface: None,
                             shadow: None,
@@ -188,12 +195,13 @@ pub(in crate::services::render) fn loader<D: RenderDevice>(
                 None
             };
             let custom_vertex = definition
-                .backends
-                .get(&definition.recipe.backend)
+                .backend_source("glsl-es-300")
                 .is_some_and(|source| !source.vertex.trim().is_empty());
+            let portable = definition.selects_portable("glsl-es-300");
             definition.backends.clear();
             return Ok(GlShaderData {
                 definition,
+                portable,
                 asset_lease,
                 surface: Some(surface),
                 shadow,
@@ -213,16 +221,48 @@ fn validate_paint<D: RenderDevice>(
     device: &SharedRenderDevice<D>,
     definition: &ShaderDefinition,
 ) -> Result<CanvasPaintSource, RenderError> {
-    if definition.recipe.backend != paint::CANVAS_PAINT_BACKEND {
+    if definition.recipe.backend != paint::CANVAS_PAINT_BACKEND
+        && definition.recipe.backend
+            != ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND
+    {
         return Err(RenderError::RenderDevice(
             "Unsupported shader backend".into(),
         ));
     }
-    let body = definition
-        .paint_body(paint::CANVAS_PAINT_BACKEND)
-        .ok_or_else(|| {
-            RenderError::RenderDevice("Paint definition has no GLSL ES paint body".into())
-        })?;
+    if definition
+        .parameters
+        .values()
+        .any(|kind| *kind == Kind::Texture2D)
+    {
+        return Err(RenderError::RenderDevice(
+            "paint textures are not yet supported by the canvas program".into(),
+        ));
+    }
+    // A renderer-specific entry, even with a blank body, takes precedence:
+    // selection is by entry presence, exactly as for material stages, so a
+    // blank native paint fails here instead of silently using the portable one.
+    let native_entry = definition
+        .backends
+        .contains_key(paint::CANVAS_PAINT_BACKEND);
+    let lowered;
+    let body = if native_entry {
+        definition
+            .paint_body(paint::CANVAS_PAINT_BACKEND)
+            .ok_or_else(|| {
+                RenderError::RenderDevice("Paint definition has no GLSL ES paint body".into())
+            })?
+    } else {
+        let portable = definition
+            .paint_body(ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND)
+            .ok_or_else(|| {
+                RenderError::RenderDevice(
+                    "Paint definition has no GLSL ES or portable ipp paint body".into(),
+                )
+            })?;
+        lowered = super::ipp_shader::lower(portable, super::ipp_shader::IppShaderTarget::GlslEs300)
+            .map_err(RenderError::RenderDevice)?;
+        &lowered
+    };
     paint::check_paint_body(body).map_err(RenderError::RenderDevice)?;
     let source = CanvasPaintSource {
         body: body.into(),

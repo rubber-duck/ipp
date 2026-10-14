@@ -106,6 +106,7 @@ impl GlesRenderDevice {
             #[cfg(feature = "instrumentation")]
             gpu_queries,
             parameter_buffer: 0,
+            portable_sampler: 0,
             parameter_capacity: 0,
             max_parameter_bytes: max_parameter_bytes.max(0) as usize,
             max_parameter_textures: vertex_units.min(fragment_units).max(0) as usize,

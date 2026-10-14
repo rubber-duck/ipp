@@ -131,6 +131,20 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let boundVertexArray: WebGLVertexArrayObject | null | undefined;
   let blendMode: number | undefined;
   let boundShadowMap: number | undefined;
+  let ippSampler: WebGLSampler | null | undefined;
+
+  /** The shared IPP sampler (linear, clamp-to-edge) for portable programs. */
+  function portableSampler(): WebGLSampler {
+    if (!ippSampler) {
+      ippSampler = gl.createSampler();
+      if (!ippSampler) throw new Error("IPP sampler allocation failed");
+      gl.samplerParameteri(ippSampler, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.samplerParameteri(ippSampler, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.samplerParameteri(ippSampler, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.samplerParameteri(ippSampler, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    }
+    return ippSampler;
+  }
 
   /*
    * Framebuffer bindings, viewport and depth writes as this bridge last set
@@ -976,6 +990,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   function lost(event: Event): void {
     linearTarget = undefined;
     presentationTarget = undefined;
+    ippSampler = undefined;
     parameterBuffer = null;
     parameterBufferBound = false;
     parameterCapacity = 0;
@@ -1007,6 +1022,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   function restored(): void {
     initializeAttributeDefaults();
+    ippSampler = undefined;
     parameterBufferBound = false;
     // A restored context starts from default bindings and state.
     drawFramebuffer = null;
@@ -1422,6 +1438,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       pointer: number,
       length: number,
       texture: number,
+      portableSampling: number,
     ): number {
       return status(() => {
         const program = programs.get(handle >>> 0),
@@ -1430,7 +1447,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         const unit = index + 2;
         useProgram(program.object);
         gl.activeTexture(gl.TEXTURE0 + unit);
-        gl.bindSampler(unit, null);
+        gl.bindSampler(unit, portableSampling ? portableSampler() : null);
         gl.bindTexture(gl.TEXTURE_2D, object);
         programInt(
           program,
@@ -3172,6 +3189,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         surfaceQuadVao = null;
         for (const program of programs.values())
           gl.deleteProgram(program.object);
+        if (ippSampler) gl.deleteSampler(ippSampler);
+        ippSampler = undefined;
       }
       guiBatches.clear();
       glyphAtlasPages.clear();

@@ -178,8 +178,16 @@ impl RenderDevice for GlesRenderDevice {
         textures: impl ExactSizeIterator<Item = Result<(&'a str, &'a u32), RenderError>>,
         alpha_mode: u32,
         alpha_cutoff: f32,
+        portable_sampling: bool,
     ) -> Result<(), RenderError> {
-        self.upload_custom_parameters(program, words, textures, alpha_mode, alpha_cutoff)
+        self.upload_custom_parameters(
+            program,
+            words,
+            textures,
+            alpha_mode,
+            alpha_cutoff,
+            portable_sampling,
+        )
     }
 
     fn set_alpha_blend(&mut self, enabled: bool) -> Result<(), RenderError> {

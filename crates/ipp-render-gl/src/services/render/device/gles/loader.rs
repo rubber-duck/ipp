@@ -108,6 +108,9 @@ gl_functions! {
     active_texture: c"glActiveTexture"(arg0: u32) -> () => State;
     bind_texture: c"glBindTexture"(arg0: u32, arg1: u32) -> () => State;
     bind_sampler: c"glBindSampler"(arg0: u32, arg1: u32) -> () => State;
+    gen_samplers: c"glGenSamplers"(arg0: i32, arg1: *mut u32) -> () => Other;
+    delete_samplers: c"glDeleteSamplers"(arg0: i32, arg1: *const u32) -> () => Other;
+    sampler_parameter: c"glSamplerParameteri"(arg0: u32, arg1: u32, arg2: i32) -> () => State;
     pixel_store: c"glPixelStorei"(arg0: u32, arg1: i32) -> () => State;
     tex_parameter: c"glTexParameteri"(arg0: u32, arg1: u32, arg2: i32) -> () => State;
     tex_image: c"glTexImage2D"(arg0: u32, arg1: i32, arg2: i32, arg3: i32, arg4: i32, arg5: i32, arg6: u32, arg7: u32, arg8: *const c_void) -> () => Upload;

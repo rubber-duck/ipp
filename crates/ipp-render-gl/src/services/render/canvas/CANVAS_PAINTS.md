@@ -6,7 +6,7 @@ A [CanvasPaint](../../../../../ipp-core/src/world/systems/canvas/component.rs) f
 
 ## Definition
 
-A paint definition has a `paint` body for the `glsl-es-300` backend, shared by WebGL 2 and GLES 3, and float scalar or vector parameters (`f32`, `vec2`, `vec3`, `vec4`). It has no vertex or fragment body, recipe flags, required streams or textures. Encode it with `encodeShaderDefinition` and upload it through the ordinary owned asset API; every source edit is a new asset identity.
+A paint definition has a `paint` body for the `glsl-es-300` backend, shared by WebGL 2 and GLES 3, or a portable [`ipp` body](../materials/CUSTOM_MATERIALS.md#portable-ipp-target) the builder lowers to it, and float scalar or vector parameters (`f32`, `vec2`, `vec3`, `vec4`). Definitions may also declare `Texture2D` parameters for the unified sampling contract; the canvas program does not bind paint textures yet, so a texture-carrying paint fails to load with that reason until that binding lands. It has no vertex or fragment body, recipe flags or required streams. Encode it with `encodeShaderDefinition` and upload it through the ordinary owned asset API; every source edit is a new asset identity.
 
 The body is the statements of one function. The engine wraps it as
 

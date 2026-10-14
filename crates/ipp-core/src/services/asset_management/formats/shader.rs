@@ -1,10 +1,12 @@
 //! Immutable backend-specific custom shader definitions (IPPH version 3).
 //!
 //! One definition is either a mesh material, with vertex and fragment bodies, a
-//! recipe and required streams, or a canvas paint: one fill function body with
-//! float scalar or vector parameters and nothing else. The renderer's material and
-//! paint guides, `CUSTOM_MATERIALS.md` and `CANVAS_PAINTS.md` beside its render
-//! service, own the backend interfaces.
+//! recipe and required streams, or a canvas paint: one fill function body and
+//! nothing else. Sources are keyed by backend; the portable [`IPP_SHADER_BACKEND`]
+//! entry holds a restricted GLSL-flavoured body the receiving renderer's builder
+//! lowers to its native backend, while renderer-specific entries keep precedence.
+//! The renderer's material and paint guides, `CUSTOM_MATERIALS.md` and
+//! `CANVAS_PAINTS.md` beside its render service, own the backend interfaces.
 
 use crate::services::asset_management::{
     Asset, AssetEncoder, AssetLoader, AssetTypeId, AsyncAssetLoader, IoReader,
@@ -14,6 +16,13 @@ use std::collections::BTreeMap;
 
 /// Shader-definition resource identity.
 pub const SHADER_TYPE: AssetTypeId = AssetTypeId(13);
+
+/// Backend key of the portable authored-shader entry: a restricted
+/// GLSL-flavoured body using only generated `p_<name>` parameters, framework
+/// names and `ipp*` intrinsics, lowered by the receiving renderer's builder to
+/// its native backend. A renderer-specific entry for the receiving backend
+/// takes precedence over this one.
+pub const IPP_SHADER_BACKEND: &str = "ipp";
 
 /// Shader-specific interpretation of component values. Tags belong to IPPH, not property storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,9 +79,13 @@ impl ShaderParameterKind {
         }
     }
 
-    /// Whether a canvas paint may declare this kind: a float scalar or vector.
+    /// Whether a canvas paint may declare this kind: a float scalar or vector,
+    /// or a texture the unified sampling intrinsics read.
     pub fn paint_parameter(self) -> bool {
-        matches!(self, Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4)
+        matches!(
+            self,
+            Self::F32 | Self::Vec2 | Self::Vec3 | Self::Vec4 | Self::Texture2D
+        )
     }
 
     fn accepts(self, properties: &DynamicProperties, name: &str) -> bool {
@@ -127,7 +140,8 @@ pub struct ShaderDefinition {
     pub recipe: ShaderRecipe,
     /// Parameter name to exact required type. Extra component properties are permitted.
     pub parameters: BTreeMap<String, ShaderParameterKind>,
-    /// Backend identifiers; `glsl-es-300` is shared by WebGL 2 and GLES 3.
+    /// Backend identifiers; `glsl-es-300` is shared by WebGL 2 and GLES 3, and
+    /// [`IPP_SHADER_BACKEND`] is the portable entry any renderer may lower.
     pub backends: BTreeMap<String, ShaderBackendSource>,
     /// Required authored streams: bit 0 color, bit 1 UV, bit 2 normal, bit 3 weight.
     pub required_attributes: u32,
@@ -169,7 +183,7 @@ impl ShaderDefinition {
                 );
             }
             if !self.parameters.values().all(|kind| kind.paint_parameter()) {
-                return Err("Paint parameters are float scalars or vectors".into());
+                return Err("Paint parameters are float scalars, vectors or textures".into());
             }
         }
         Ok(())
@@ -180,6 +194,20 @@ impl ShaderDefinition {
         self.backends
             .values()
             .any(|source| !source.paint.trim().is_empty())
+    }
+
+    /// The source for `backend`, falling back to the portable
+    /// [`IPP_SHADER_BACKEND`] entry when no renderer-specific entry exists.
+    pub fn backend_source(&self, backend: &str) -> Option<&ShaderBackendSource> {
+        self.backends
+            .get(backend)
+            .or_else(|| self.backends.get(IPP_SHADER_BACKEND))
+    }
+
+    /// Whether the source selected for `backend` is the portable entry, so the
+    /// receiving renderer must lower its bodies before compiling them.
+    pub fn selects_portable(&self, backend: &str) -> bool {
+        !self.backends.contains_key(backend) && self.backends.contains_key(IPP_SHADER_BACKEND)
     }
 
     /// The paint body of `backend`, if it has a nonblank one.
@@ -387,5 +415,74 @@ impl ShaderDefinition {
         input.finish().await?;
         definition.validate()?;
         Ok(definition)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn paint_definition(parameters: BTreeMap<String, ShaderParameterKind>) -> ShaderDefinition {
+        ShaderDefinition {
+            recipe: ShaderRecipe {
+                backend: IPP_SHADER_BACKEND.into(),
+                features: 0,
+            },
+            parameters,
+            backends: BTreeMap::from([(
+                IPP_SHADER_BACKEND.into(),
+                ShaderBackendSource {
+                    paint: "return ippSample(p_image, position / size);".into(),
+                    ..Default::default()
+                },
+            )]),
+            required_attributes: 0,
+        }
+    }
+
+    #[test]
+    fn paint_definitions_accept_texture_parameters() {
+        let definition = paint_definition(BTreeMap::from([(
+            "image".into(),
+            ShaderParameterKind::Texture2D,
+        )]));
+        assert!(definition.is_paint());
+        definition.validate().expect("texture paint validates");
+        let decoded =
+            ShaderDefinition::decode(&definition.encode().expect("encodes")).expect("round-trips");
+        assert_eq!(decoded, definition);
+    }
+
+    #[test]
+    fn paint_definitions_still_reject_matrix_parameters() {
+        let definition =
+            paint_definition(BTreeMap::from([("warp".into(), ShaderParameterKind::Mat4)]));
+        assert!(definition.validate().is_err());
+    }
+
+    #[test]
+    fn backend_source_prefers_renderer_specific_then_portable() {
+        let mut definition = paint_definition(BTreeMap::new());
+        definition.backends.insert(
+            "glsl-es-300".into(),
+            ShaderBackendSource {
+                paint: "return color;".into(),
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            definition
+                .backend_source("glsl-es-300")
+                .map(|source| source.paint.as_str()),
+            Some("return color;")
+        );
+        assert!(!definition.selects_portable("glsl-es-300"));
+        assert_eq!(
+            definition
+                .backend_source("metal")
+                .map(|source| source.paint.as_str()),
+            Some("return ippSample(p_image, position / size);")
+        );
+        assert!(definition.selects_portable("metal"));
     }
 }

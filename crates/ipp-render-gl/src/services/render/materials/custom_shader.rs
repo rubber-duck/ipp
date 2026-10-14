@@ -88,13 +88,34 @@ pub(crate) fn sources(
     lit: bool,
     shadow: bool,
 ) -> Result<(String, String), RenderError> {
-    let backend = definition
-        .backends
-        .get("glsl-es-300")
+    let selected = definition
+        .backend_source("glsl-es-300")
         .filter(|source| !source.fragment.trim().is_empty())
         .ok_or_else(|| {
-            RenderError::RenderDevice("custom material has no GLSL ES fragment body".into())
+            RenderError::RenderDevice(
+                "custom material has no GLSL ES or portable ipp fragment body".into(),
+            )
         })?;
+    let portable = definition.selects_portable("glsl-es-300");
+    let lowered;
+    let backend = if portable {
+        lowered = ipp_core::services::asset_management::formats::shader::ShaderBackendSource {
+            vertex: super::ipp_shader::lower(
+                &selected.vertex,
+                super::ipp_shader::IppShaderTarget::GlslEs300,
+            )
+            .map_err(RenderError::RenderDevice)?,
+            fragment: super::ipp_shader::lower(
+                &selected.fragment,
+                super::ipp_shader::IppShaderTarget::GlslEs300,
+            )
+            .map_err(RenderError::RenderDevice)?,
+            paint: String::new(),
+        };
+        &lowered
+    } else {
+        selected
+    };
     let pass = if shadow {
         1
     } else {
@@ -108,6 +129,12 @@ pub(crate) fn sources(
     let template = crate::services::render::embedded_shader!("shaders/custom.vert");
     let mut vertex = config.custom_vertex_source(template)?;
     vertex = vertex.replace("// CUSTOM_DECLARATIONS", &common);
+    if portable && !backend.vertex.trim().is_empty() {
+        // Portable vertex bodies write the builder-provided `ipp_position`;
+        // in GLSL it aliases the native output, so `ippDefaultVertex()` and
+        // later adjustments compose exactly as in a native body.
+        vertex.push_str("#define ipp_position gl_Position\n");
+    }
     vertex.push_str(&backend.vertex);
     vertex.push_str(if backend.vertex.trim().is_empty() {
         "\nvoid main() { ippDefaultVertex(); }\n"

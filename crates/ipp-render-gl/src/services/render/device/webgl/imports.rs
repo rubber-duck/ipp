@@ -137,6 +137,7 @@ unsafe extern "C" {
         name: *const u8,
         length: usize,
         texture: u32,
+        portable_sampling: u32,
     ) -> u32;
 
     pub(super) fn set_alpha_blend(enabled: u32) -> u32;

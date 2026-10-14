@@ -44,6 +44,8 @@ pub(in crate::services::render) struct PreparedCustomMaterial {
     pub words: Vec<u32>,
     pub textures: Vec<(String, AssetKey)>,
     pub custom_vertex: bool,
+    /// The selected program was lowered from a portable `ipp` definition.
+    pub portable: bool,
 }
 
 impl<D: RenderDevice> RenderService<D> {
@@ -207,6 +209,7 @@ impl<D: RenderDevice> RenderService<D> {
                 };
                 prepared.key = key;
                 prepared.custom_vertex = shader.custom_vertex;
+                prepared.portable = shader.portable;
                 // Validate resource/unit/UBO limits before selecting the candidate for any pass.
                 self.prepare_custom_material(world, prepared, false)?;
                 if material.casts_shadows && material.alpha_mode != 2 {
@@ -310,6 +313,7 @@ impl<D: RenderDevice> RenderService<D> {
             textures,
             material.material.alpha_mode,
             material.material.alpha_cutoff,
+            material.portable,
         )
     }
 

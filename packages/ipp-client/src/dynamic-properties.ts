@@ -370,6 +370,7 @@ const paintKinds: readonly ShaderParameterKind[] = [
   "vec2",
   "vec3",
   "vec4",
+  "texture2D",
 ];
 
 /** Encode immutable IPPH v3 source for the ordinary owned asset data plane. */
@@ -412,7 +413,9 @@ export function encodeShaderDefinition(
         (kind) => !paintKinds.includes(kind),
       )
     )
-      throw new Error("Paint parameters are float scalars or vectors");
+      throw new Error(
+        "Paint parameters are float scalars, vectors or textures",
+      );
   }
   chunks.push(new Uint8Array([73, 80, 80, 72]));
   u32(3);

@@ -80,6 +80,75 @@ fn pose_and_skin_variants_keep_custom_vertex_and_shadow_entries() {
 }
 
 #[test]
+fn portable_ipp_material_bodies_lower_into_glsl_sources() {
+    let definition = ShaderDefinition {
+        recipe: ipp_core::services::asset_management::formats::shader::ShaderRecipe {
+            backend: ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND
+                .into(),
+            features: 0,
+        },
+        parameters: BTreeMap::from([("image".into(), Kind::Texture2D)]),
+        backends: BTreeMap::from([(
+            ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND.into(),
+            ipp_core::services::asset_management::formats::shader::ShaderBackendSource {
+                fragment: "vec4 materialFragment() { return ippSample(p_image, v_uv); }".into(),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let mut properties = DynamicProperties::default();
+    properties
+        .set(
+            "image",
+            DynamicValue::Asset(AssetSource {
+                kind: TEXTURE_TYPE,
+                uri: "file:///image.png".into(),
+                variant: 0,
+            }),
+        )
+        .unwrap();
+    let (declarations, _, textures) = parameter_layout(&definition, &properties).unwrap();
+    assert!(declarations.contains("uniform sampler2D p_image;"));
+    assert_eq!(textures, ["image"]);
+    let (_, fragment) = sources(
+        RenderShaderConfig::default(),
+        &definition,
+        &declarations,
+        false,
+        false,
+    )
+    .unwrap();
+    assert!(fragment.contains("texture(p_image, v_uv)"));
+    assert!(!fragment.contains("ippSample"));
+}
+
+#[test]
+fn portable_ipp_vertex_bodies_write_the_builder_position() {
+    let definition = ShaderDefinition {
+        recipe: ipp_core::services::asset_management::formats::shader::ShaderRecipe {
+            backend: ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND
+                .into(),
+            features: 0,
+        },
+        backends: BTreeMap::from([(
+            ipp_core::services::asset_management::formats::shader::IPP_SHADER_BACKEND.into(),
+            ipp_core::services::asset_management::formats::shader::ShaderBackendSource {
+                vertex: "void materialVertex() { ippDefaultVertex(); ipp_position.x += 0.1; }"
+                    .into(),
+                fragment: "vec4 materialFragment() { return vec4(1); }".into(),
+                ..Default::default()
+            },
+        )]),
+        ..Default::default()
+    };
+    let (vertex, _) =
+        sources(RenderShaderConfig::default(), &definition, "", false, false).unwrap();
+    assert!(vertex.contains("#define ipp_position gl_Position"));
+    assert!(vertex.contains("void main() { materialVertex(); }"));
+}
+
+#[test]
 fn shader_requirements_validate_asset_types_without_retyping_properties() {
     let mut properties = DynamicProperties::default();
     let mesh = DynamicValue::Asset(AssetSource {

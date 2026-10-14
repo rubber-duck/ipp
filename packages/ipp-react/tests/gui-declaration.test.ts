@@ -425,7 +425,7 @@ test("A PaintShader stage makes a ShaderAsset a canvas paint definition", () => 
     new TextDecoder().decode(bytes.subarray(bytes.length - 13)),
     "return color;",
   );
-  // A paint has no material stage, recipe flag or texture input.
+  // A paint has no material stage or recipe flag; texture inputs are allowed.
   const mixed = describeShader(
     [
       { type: PAINT_SHADER_HOST_TYPE, props: { children: "return color;" } },
@@ -442,10 +442,8 @@ test("A PaintShader stage makes a ShaderAsset a canvas paint definition", () => 
     () => encodeShaderDefinition({ ...paint, recipe: { lighting: true } }),
     /recipe flags/,
   );
-  assert.throws(
-    () =>
-      encodeShaderDefinition({ ...paint, parameters: { image: "texture2D" } }),
-    /float scalars or vectors/,
+  assert.doesNotThrow(() =>
+    encodeShaderDefinition({ ...paint, parameters: { image: "texture2D" } }),
   );
 });
 

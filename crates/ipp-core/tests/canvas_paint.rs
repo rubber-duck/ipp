@@ -386,18 +386,25 @@ fn a_paint_definition_round_trips_and_excludes_material_stages() {
     };
     let mut streams = paint("return color;");
     streams.required_attributes = 1;
-    let mut texture = paint("return color;");
-    texture
-        .parameters
-        .insert("image".into(), ShaderParameterKind::Texture2D);
     let mut integer = paint("return color;");
     integer
         .parameters
         .insert("count".into(), ShaderParameterKind::I32);
-    for invalid in [staged, recipe, streams, texture, integer] {
+    for invalid in [staged, recipe, streams, integer] {
         assert!(invalid.validate().is_err(), "{invalid:?}");
         assert!(invalid.encode().is_err());
     }
+
+    // A paint may declare a texture parameter for the unified sampling contract.
+    let mut texture = paint("return ippSample(p_image, position / size);");
+    texture
+        .parameters
+        .insert("image".into(), ShaderParameterKind::Texture2D);
+    assert!(texture.validate().is_ok(), "{texture:?}");
+    assert_eq!(
+        ShaderDefinition::decode(&texture.encode().unwrap()).unwrap(),
+        texture
+    );
 
     // A material keeps its blank paint entry.
     let material = ShaderDefinition {

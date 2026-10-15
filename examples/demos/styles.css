@@ -1,0 +1,3 @@
+html, body, #app, .stage { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #080b10; }
+.stage { position: fixed; inset: 0; }
+.stage canvas { display: block; width: 100%; height: 100%; }

@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * An option list: the rows of a dropdown, searchable dropdown, multi-select
  * or autocomplete, drawn on their floating surface. Each option is a Button
@@ -17,7 +18,7 @@
  * up to `maxRows`, and scrolls past that or where its overlay has less room.
  */
 import { useState } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Group, Layout } from "../../gui/components.js";
 import { ScrollView } from "../../gui/scroll.js";
@@ -51,7 +52,7 @@ export interface OptionListProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
-  readonly id: string;
+  readonly id?: string;
   readonly options: readonly SelectOption[];
   /** Keys of the selected options, shown with `mark`. */
   readonly selected?: readonly string[];
@@ -92,7 +93,7 @@ export function optionListGeometry(
 }
 
 export function OptionList({
-  id,
+  id: providedId,
   layer = 0,
   options,
   selected = [],
@@ -103,6 +104,7 @@ export function OptionList({
   maxRows = OPTION_LIST_ROWS,
   layout,
 }: OptionListProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const empty = options.length === 0 && loading === undefined;
   const rows = options.length + (loading !== undefined || empty ? 1 : 0);
@@ -114,6 +116,7 @@ export function OptionList({
   const status = { padding_left: g.gap, padding_right: g.gap };
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout kind={LAYOUT_STACK} height={g.height} {...layout} />
       <Skin theme={kit.theme("gridBody")} />
@@ -124,6 +127,7 @@ export function OptionList({
       />
       <Children>
         <Entity id={`${id}/rows`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_COLUMN}
             height={g.content}
@@ -170,7 +174,7 @@ export function OptionList({
 }
 
 function OptionRow({
-  id,
+  id: providedId,
   option,
   mark,
   selected,
@@ -182,12 +186,14 @@ function OptionRow({
   readonly selected: boolean;
   readonly onPress: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const gap = kit.unit(t.inset / 2);
   const row = kit.unit(t.row);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_ROW}
         height={row}

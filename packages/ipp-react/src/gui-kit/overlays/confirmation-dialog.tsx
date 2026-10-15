@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A confirmation dialog: a modal floating surface centred on the canvas,
  * whose header strip holds the action-specific title, in the accent, and a
@@ -19,7 +20,7 @@
  * width unless given.
  */
 import { useRef } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -40,7 +41,7 @@ export interface ConfirmationDialogProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the dialog; its parts extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** Whether the dialog is open; the application closes it once answered. */
   readonly open: boolean;
   /** The action-specific title, such as "Delete node?". */
@@ -61,7 +62,7 @@ export interface ConfirmationDialogProps {
 }
 
 export function ConfirmationDialog({
-  id,
+  id: providedId,
   layer = 0,
   open,
   title,
@@ -73,6 +74,7 @@ export function ConfirmationDialog({
   onCancel,
   width = WIDTH,
 }: ConfirmationDialogProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const lines = typeof body === "string" ? [body] : body;
@@ -106,6 +108,7 @@ export function ConfirmationDialog({
     first: boolean,
   ) => (
     <Entity id={`${id}/${name}`}>
+      <PresentationGate open />
       {/* A flexible box's margin comes out of its own share of the row, so
           each button gives half the gap and both stay equal. */}
       <Layout
@@ -114,7 +117,9 @@ export function ConfirmationDialog({
         height={kit.unit(t.controlHeight)}
         {...(first ? { margin_right: inset / 2 } : { margin_left: inset / 2 })}
       />
-      {theme && <Skin theme={kit.theme(theme)} />}
+      {(theme ? kit.theme(theme) : kit.controlTheme("button")) && (
+        <Skin theme={theme ? kit.theme(theme) : kit.controlTheme("button")} />
+      )}
       <Button label={label} onPress={onPress} />
     </Entity>
   );
@@ -127,6 +132,7 @@ export function ConfirmationDialog({
       mode="modal"
       band="dialog"
       open={open}
+      controlled={overlay.controlled}
       onVisibleChange={overlay.onVisibleChange}
       layout={{ width: kit.unit(width) }}
     >
@@ -140,6 +146,7 @@ export function ConfirmationDialog({
         />
       </PanelHeader>
       <Entity id={`${id}/body`}>
+        <PresentationGate open />
         <Layout
           kind={LAYOUT_COLUMN}
           height={
@@ -156,11 +163,16 @@ export function ConfirmationDialog({
         />
         <Children>
           {lines.map((line, index) => (
-            <Row key={index} id={`${id}/line/${index}`} height={t.denseRow}>
+            <Row
+              key={index}
+              id={`${id}/line/${index}`}
+              height={kit.unit(t.denseRow)}
+            >
               <TextLine id={`${id}/line/${index}/text`} text={line} />
             </Row>
           ))}
           <Entity id={`${id}/actions`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_ROW}
               height={kit.unit(t.controlHeight)}

@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 /** Shared projected-Surface assertions for native WebSocket/GLES and worker WASM/WebGL. */
 import type {
   Client,
@@ -16,6 +17,7 @@ import {
   CylinderSurface,
   Entity,
   FlatSurface,
+  PresentationGate,
   SphereSurface,
   Transform,
   assetRef,
@@ -49,10 +51,7 @@ type Point = readonly [number, number];
 type ProjectedContract = GuiContract &
   Pick<
     typeof import("@ipp/gui-authoring-contract"),
-    | "encodeBoundingShape"
-    | "GUI_SKIN_LOOKS"
-    | "GuiThemeMotion"
-    | "GUI_SKIN_TOKENS"
+    "encodeBoundingShape" | "GuiThemeMotion"
   >;
 const SIZE = [1.6, 1.2] as const;
 const EXTENT = [160, 120] as const;
@@ -277,13 +276,16 @@ export async function guiProjectedSurfaces(
         layer_spacing={pose.spacing}
       />
     );
-  const scene = (pose: Pose) => (
+  const scene = (pose: Pose, open = true) => (
     <>
       <Entity id="projected-camera">
         <Transform z={CAMERA_Z} />
         <Camera projection={0} fov_y={FOV} near={0.05} far={20} />
       </Entity>
-      <Entity id="projected-panel">{surface(pose, ...SIZE)}</Entity>
+      <Entity id="projected-panel">
+        <PresentationGate open={open} />
+        {surface(pose, ...SIZE)}
+      </Entity>
       <CanvasWorld
         presentation={{ anchor: "projected-panel" }}
         create={{ selectedSystems: CANVAS_SYSTEMS }}
@@ -352,12 +354,14 @@ export async function guiProjectedSurfaces(
               />
             </Entity>
             <GuiKit
+              skin={cybertronSkin(contract)}
               contract={contract}
               font={assetRef("projected-font")}
               fontSize={8}
             >
               <Panel
                 id="projected-kit-panel"
+                padding={0}
                 layer={1000000}
                 layout={{
                   width: 100,
@@ -388,6 +392,7 @@ export async function guiProjectedSurfaces(
         </Entity>
       </CanvasWorld>
       <Entity id="projected-camera-panel">
+        <PresentationGate open={open} />
         <Transform x={1.15} y={0.45} />
         {surface(pose, 0.4, 0.3)}
       </Entity>
@@ -685,6 +690,58 @@ export async function guiProjectedSurfaces(
         check(ink > 2, `${name} has no ink on its inherited physical rank`);
       }
       check(errors.length === 0, errors.map(String).join("; "));
+      if (index === 0) {
+        const retainedWorld = panelWorld;
+        const ink = (capture: PresentedCapture) => {
+          const pixels = new Uint8Array(capture.pixels);
+          let count = 0;
+          for (let at = 0; at < pixels.length; at += 4)
+            if (Math.max(pixels[at]!, pixels[at + 1]!, pixels[at + 2]!) > 80)
+              count++;
+          return count;
+        };
+        const visibleInk = ink(frame);
+        const captureGate = async (open: boolean) => {
+          await root.render(scene(pose, open));
+          const deadline = performance.now() + 10_000;
+          let next = frame;
+          do {
+            next = await session.capture({ afterSequence: next.sequence });
+            if (
+              open ? ink(next) > visibleInk * 0.8 : ink(next) < visibleInk * 0.1
+            )
+              break;
+          } while (performance.now() < deadline);
+          images.push({
+            label: open ? "projected-gate-revealed" : "projected-gate-hidden",
+            width: VIEW[0],
+            height: VIEW[1],
+            pixels: [...new Uint8Array(next.pixels)],
+            sequence: next.sequence,
+          });
+          check(
+            open ? ink(next) > visibleInk * 0.8 : ink(next) < visibleInk * 0.1,
+            "Presentation gate did not hide/reveal attached Canvas and Camera pixels",
+          );
+          check(
+            panelWorld?.id === retainedWorld?.id &&
+              panelWorld?.incarnation === retainedWorld?.incarnation,
+            "Presentation gate recreated attached World",
+          );
+        };
+        await captureGate(false);
+        const hiddenInput = await input.send({
+          kind: "pointerDown",
+          pointer: 3n,
+          point,
+        });
+        check(
+          hiddenInput.disposition !== "routed",
+          "Hidden attachment still accepts projected input",
+        );
+        await input.send({ kind: "pointerUp", pointer: 3n, point });
+        await captureGate(true);
+      }
     }
   } catch (error) {
     if (diagnosticFrame)

@@ -2337,6 +2337,17 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.deleteBuffer(batch.vbo);
         }
       },
+      set_surface_paint(programHandle: number, pointer: number): number {
+        return status(() => {
+          const program = programs.get(programHandle >>> 0);
+          if (!program) throw new Error("Stale analytic paint program handle");
+          useProgram(program.object);
+          const location = parameterLocation(program, "u_path_paint");
+          if (location) gl.uniform4fv(location, floats(pointer, 4));
+          checkDraw();
+          return 1;
+        });
+      },
       set_gui_paint_blocks(
         programHandle: number,
         pointer: number,
@@ -2955,6 +2966,26 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   {
     imports.create_mesh_uv = createMesh;
+    imports.reorder_mesh_indices = (
+      handle: number,
+      pointer: number,
+      count: number,
+    ): number =>
+      status(() => {
+        const mesh = meshes.get(handle >>> 0);
+        if (!mesh || mesh.count !== count >>> 0)
+          throw new Error("mesh index count changed");
+        const indices = new Uint16Array(
+          buffer(pointer >>> 0, (count >>> 0) * 2, 2),
+          pointer >>> 0,
+          count >>> 0,
+        );
+        bindVertexArray(mesh.vao);
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mesh.index);
+        gl.bufferSubData(gl.ELEMENT_ARRAY_BUFFER, 0, indices);
+        check();
+        return 1;
+      });
     imports.draw_textured = drawMesh;
     imports.texture_readback_begin = (
       texture: number,

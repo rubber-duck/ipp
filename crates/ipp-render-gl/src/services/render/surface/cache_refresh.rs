@@ -41,6 +41,7 @@ pub(in crate::services::render) struct CanvasCacheState {
     raster_dependencies: Vec<(OutputRef, u64)>,
     paint_revision: u64,
     resource_revision: u64,
+    paint_context: super::super::canvas::presentation::PaintContextStamp,
 }
 
 #[derive(Default)]
@@ -140,6 +141,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
 
             let stamp = OutputContentStamp::read(host, *selection, *publication)?;
+            let paint_context = self.paint_context_stamp(&stamp);
             let raster_dependencies = self.canvas_image_generations(&stamp, *selection);
             let replaced: Vec<_> = self
                 .canvas_caches
@@ -190,6 +192,7 @@ impl<D: RenderDevice> RenderService<D> {
                     raster_dependencies: Vec::new(),
                     paint_revision: 0,
                     resource_revision: 0,
+                    paint_context: Vec::new(),
                 });
 
             if state.stamp != stamp || state.raster_dependencies != raster_dependencies {
@@ -199,12 +202,14 @@ impl<D: RenderDevice> RenderService<D> {
             if !state.stamp.same_dependencies(&stamp)
                 || state.request.clip != request.clip
                 || state.request.opacity != request.opacity
+                || state.paint_context != paint_context
             {
                 state.resource_revision += 1;
             }
             state.root = root;
             state.stamp = stamp;
             state.request = request.clone();
+            state.paint_context = paint_context;
             let world = request.owner.id();
             self.canvas_cache_frame
                 .bindings

@@ -46,6 +46,12 @@ pub struct GuiPaintPart {
     pub checker_size: Option<f32>,
     pub checker_color0: Option<[f32; 4]>,
     pub checker_color1: Option<[f32; 4]>,
+    /// Select the CanvasPaint on the entity owning this appearance row.
+    pub paint: Option<bool>,
+    /// Bounded per-part inputs delivered to the paint function.
+    pub paint_data: Option<[f32; 4]>,
+    /// Signed expansion per axis of paint only, in logical units.
+    pub outset: Option<[f32; 2]>,
     pub part: u32,
 }
 
@@ -69,6 +75,7 @@ impl GuiPaintPart {
 
     pub(super) fn style(&self) -> GuiPartStyle {
         GuiPartStyle {
+            authored: true,
             color: self.color,
             opacity: self.opacity,
             scale: self.scale,
@@ -101,6 +108,10 @@ impl GuiPaintPart {
             checker_size: self.checker_size,
             checker_color0: self.checker_color0,
             checker_color1: self.checker_color1,
+            paint: self.paint,
+            paint_data: self.paint_data,
+            outset: self.outset,
+            paint_owner: None,
         }
     }
 }
@@ -204,17 +215,15 @@ impl ComponentLifecycle for GuiTheme {
 /// One entity's shared-theme reference and sparse appearance overrides.
 ///
 /// A control resolves every part through its interaction states, property by
-/// property from the override row, then the theme's rows, then the default look
-/// of its kind. Any other entity with layout bounds or a `CanvasBox` paints only
+/// property from the override row, then the theme's rows. Any other entity
+/// with layout bounds or a `CanvasBox` paints only
 /// its Background part over that box, before its content and children, from the
 /// override row and the theme's unqualified base row; it gains no state, focus or
 /// hit target.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiSkin {
-    /// Ordinary same-World generational theme entity; zero leaves a control on
-    /// its default look, and an entity that is not a control on the override
-    /// rows alone.
+    /// Ordinary same-World generational theme entity; zero uses override rows alone.
     pub theme: EntityId,
     /// Unqualified part overrides win over every theme state and variant.
     #[schema(rows)]

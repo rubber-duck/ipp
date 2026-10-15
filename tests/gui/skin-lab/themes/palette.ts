@@ -1,13 +1,8 @@
 /**
- * The skin palette the specimens draw with: the colours of the roles they
- * use, as linear RGBA, read from the design language's tokens that the
- * connected runtime exports (`GUI_SKIN_TOKENS`; the values and their roles
- * are written once, in the core's built-in looks,
- * `crates/ipp-core/src/world/systems/gui/presentation/looks.rs`). Specimens
- * import these instead of defining their own; the rules that use them are in
- * the README's "Design language" section.
+ * Cybertron colours as linear RGBA. Specimens share the client skin's tokens;
+ * the skin-lab README describes their visual roles.
  */
-import { GUI_SKIN_TOKENS as T } from "@ipp/host-contract";
+import { cybertronTokens as T } from "@ipp/react/gui-cybertron";
 
 /** Linear RGBA. */
 export type Color = readonly [number, number, number, number];

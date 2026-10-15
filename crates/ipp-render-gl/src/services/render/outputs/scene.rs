@@ -65,6 +65,7 @@ pub(in crate::services::render) struct ScenePlotPlane<'a> {
     pub publication: WorldPublicationId,
     pub model: [f32; 16],
     pub chart_model: [f32; 16],
+    pub callout_paint: Option<&'a ipp_core::systems::canvas::CanvasPaintInstance>,
     pub geometry: &'a std::sync::Arc<ipp_core::systems::plot::PlotPreparedGeometry>,
     pub plane: &'a ipp_core::systems::plot::PlotPublishedPlane,
 }
@@ -77,6 +78,30 @@ pub(in crate::services::render) struct SceneItem<'a> {
         ipp_core::systems::canvas::CanvasTarget,
         &'a ipp_core::systems::plot::PlotPublishedMesh,
     )>,
+}
+
+impl SceneItem<'_> {
+    pub fn custom_material_key(
+        &self,
+    ) -> super::super::materials::custom_material::CustomMaterialKey {
+        super::super::materials::custom_material::CustomMaterialKey {
+            entity: self.entity,
+            mesh: self.mesh,
+            component: self.derived.map_or_else(
+                || {
+                    self.particle
+                        .map_or(ipp_core::ComponentValue::MESH_INSTANCE, |particle| {
+                            if particle.sprite {
+                                ipp_core::ComponentValue::PARTICLE_SPRITE
+                            } else {
+                                ipp_core::ComponentValue::PARTICLE_MESH
+                            }
+                        })
+                },
+                |(target, _)| target.component,
+            ),
+        }
+    }
 }
 
 impl std::ops::Deref for SceneItem<'_> {
@@ -294,6 +319,10 @@ impl<'a> RenderScene<'a> {
                             publication: publication.id,
                             geometry: &chart.geometry,
                             chart_model,
+                            callout_paint: (plane.layout
+                                == ipp_core::systems::plot::PlotPlaneLayout::Callout)
+                                .then_some(chart.callout_paint.as_ref())
+                                .flatten(),
                             plane,
                             model: super::super::plot::plane_facing::model(
                                 super::super::plot::view_placement::model(

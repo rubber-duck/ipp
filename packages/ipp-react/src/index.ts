@@ -155,6 +155,8 @@ export type {
 } from "./data/declarations.js";
 
 export {
+  PlotCalloutStyle,
+  PlotCalloutPaint,
   PlotFrame2d,
   PlotFrame3d,
   PlotLine2d,
@@ -189,6 +191,8 @@ export type {
   PlotSeries,
   PlotLabel,
   PlotRowsProps,
+  PlotCalloutStyleProps,
+  PlotCalloutPaintProps,
   PlotFrame2dProps,
   PlotFrame3dProps,
   PlotLine2dProps,
@@ -213,3 +217,37 @@ export type {
   CylinderSurfaceAngleOptions,
   SphereSurfaceAngleOptions,
 } from "@ipp/client";
+
+export { useWorld, useOptionalWorld } from "./scope/world.js";
+export type {
+  ReactWorldScope,
+  ReactWorldContract,
+  ReactWorldCodecs,
+  ReactWorldServiceOptions,
+  ReactAssetCodec,
+} from "./scope/world.js";
+export { useEntityId, useAssetId, useAssetRef } from "./scope/identity.js";
+export { useAsset, useDataSource } from "./scope/hooks.js";
+export { usePlotRows, keyedPlotRows } from "./plots/rows.js";
+export type { KeyedPlotRow } from "./plots/rows.js";
+export { useCommitStatus } from "./scope/hooks.js";
+export { useField } from "./scope/field.js";
+export type { ReactFieldState } from "./scope/field.js";
+export type { ReactCommitStatus } from "./reconciler/commits.js";
+export { MeshAsset, FontAsset } from "./assets/typed.js";
+export type { MeshAssetProps, FontAssetProps } from "./assets/typed.js";
+
+export { Resources } from "./resources.js";
+
+export { PresentationGate } from "./components.js";
+export type { PresentationGateProps } from "./components.js";
+export {
+  createWorldRoot,
+  canvasWorldOptions,
+  guiWorldOptions,
+  sceneWorldOptions,
+} from "./scope/setup.js";
+export type { OwnedReactWorldRoot, WorldPresetOptions } from "./scope/setup.js";
+
+export { PlotSkinProvider } from "./plots/skin-provider.js";
+export type { PlotSkinAppearance } from "./plots/skin-types.js";

@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Persistent information beside the content it concerns: a frame tinted in
  * the severity's role colour, the severity's icon, one line of text and an
@@ -6,7 +7,7 @@
  * fills its container's width; put a validation alert after its field, so
  * that it moves only what lies below.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiPressListener } from "../../gui/callbacks.js";
@@ -29,7 +30,7 @@ export interface InlineAlertAction {
 export interface InlineAlertProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly severity: InlineAlertSeverity;
   readonly text: string;
   readonly action?: InlineAlertAction;
@@ -45,13 +46,14 @@ const SEVERITIES: Readonly<
 };
 
 export function InlineAlert({
-  id,
+  id: providedId,
   layer = 0,
   severity,
   text,
   action,
   layout,
 }: InlineAlertProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const { tone, theme } = SEVERITIES[severity];
@@ -59,6 +61,7 @@ export function InlineAlert({
   // clear of the frame's cut.
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}

@@ -4,7 +4,6 @@ import { FieldKind, encodeShaderDefinition } from "@ipp/client";
 import type { ReactWorldClient } from "../src/reconciler/world-client.js";
 import { componentNames } from "../src/components.js";
 import { LayerTransition } from "../src/gui/components.js";
-import { Color, Slider } from "../src/gui/controls.js";
 import {
   FRAGMENT_SHADER_HOST_TYPE,
   PAINT_SHADER_HOST_TYPE,
@@ -127,9 +126,8 @@ test("GUI declarations use ordinary entities, plain component declarations and e
 test("A dial is a Slider declared with axis 2", () => {
   const tree = new ReactWorldTree(client());
   const entity = tree.instance("ipp-entity", { id: "gain" });
-  const element = Slider({ value: 0.65, origin: 0, axis: 2 });
   entity.children.push(
-    tree.instance(element.type as ReactWorldElementType, element.props),
+    tree.instance("ipp-gui-slider", { value: 0.65, origin: 0, axis: 2 }),
   );
   tree.children.push(entity);
   const [dial] = tree.describe().components;
@@ -149,17 +147,15 @@ test("A Color declares its HSVA channels and takes its colour callback, not a sc
   });
   const entity = tree.instance("ipp-entity", { id: "picker" });
   const onColorCommit = () => {};
-  const element = Color({
+  const fields = {
     hue: 0.5,
     saturation: 0.25,
     value: 1,
     alpha: 0.75,
     alpha_rail: true,
     onColorCommit,
-  });
-  entity.children.push(
-    tree.instance(element.type as ReactWorldElementType, element.props),
-  );
+  };
+  entity.children.push(tree.instance("ipp-gui-color", fields));
   tree.children.push(entity);
   const [color] = tree.describe().components;
   assert.equal(color!.component, 53);
@@ -175,13 +171,11 @@ test("A Color declares its HSVA channels and takes its colour callback, not a sc
       { kind: "bool", value: true },
     ],
   );
-  const scalar = Color({ onScalarCommit: () => {} } as never);
   assert.throws(
     () =>
-      new ReactWorldTree(client()).instance(
-        scalar.type as ReactWorldElementType,
-        scalar.props,
-      ),
+      new ReactWorldTree(client()).instance("ipp-gui-color", {
+        onScalarCommit: () => {},
+      }),
     /Unsupported GuiColor callback: onScalarCommit/,
   );
 });
@@ -425,7 +419,7 @@ test("A PaintShader stage makes a ShaderAsset a canvas paint definition", () => 
     new TextDecoder().decode(bytes.subarray(bytes.length - 13)),
     "return color;",
   );
-  // A paint has no material stage or recipe flag; texture inputs are allowed.
+  // A paint has no material stages or mesh recipe flags; texture inputs are allowed.
   const mixed = describeShader(
     [
       { type: PAINT_SHADER_HOST_TYPE, props: { children: "return color;" } },
@@ -439,8 +433,8 @@ test("A PaintShader stage makes a ShaderAsset a canvas paint definition", () => 
   );
   assert.throws(() => encodeShaderDefinition(mixed), /material stages/);
   assert.throws(
-    () => encodeShaderDefinition({ ...paint, recipe: { lighting: true } }),
-    /recipe flags/,
+    () => encodeShaderDefinition({ ...paint, recipe: { normals: true } }),
+    /only presentation\/lighting flags/,
   );
   assert.doesNotThrow(() =>
     encodeShaderDefinition({ ...paint, parameters: { image: "texture2D" } }),

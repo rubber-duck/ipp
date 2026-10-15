@@ -1,0 +1,12 @@
+{
+  "extends": "../../../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": [
+    "scenarios/glass-skin.tsx",
+    "glass-skin.test.ts",
+    "preview.browser.test.ts",
+    "optical-material/preview.ts"
+  ]
+}

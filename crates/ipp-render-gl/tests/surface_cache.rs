@@ -2367,6 +2367,30 @@ fn projected_provider_replacement_context_recovery_and_affine_transition_retire_
 fn projected_live_focus_bypasses_optional_refresh_cap_with_current_images() {
     use ipp_core::components::{GuiCheckbox, GuiLayout};
     use ipp_core::systems::gui::local::GuiLocalAction;
+    use ipp_core::systems::gui::presentation::{GuiPaintPart, GuiSkin};
+    use ipp_core::systems::gui::{GuiPartId, GuiPrimitivePart};
+
+    // Core controls have no implicit appearance. Make the focus change visible
+    // so this test observes a current image, rather than an unchanged empty one.
+    let mut parts = ipp_core::components::rows::Rows::new();
+    for (key, color) in [
+        (
+            GuiPartId::base(GuiPrimitivePart::Background),
+            [0.1, 0.2, 0.3, 1.0],
+        ),
+        (
+            GuiPartId::base(GuiPrimitivePart::FocusRing),
+            [0.4, 0.7, 0.9, 1.0],
+        ),
+    ] {
+        parts
+            .push(GuiPaintPart {
+                color: Some(color),
+                ..GuiPaintPart::keyed(key).unwrap()
+            })
+            .unwrap();
+    }
+
     let mut host = support::task_scheduler::host();
     let (mut renderer, _, world, _) = scene(&mut host);
     let panel = CanvasSurface::new(
@@ -2375,6 +2399,10 @@ fn projected_live_focus_bypasses_optional_refresh_cap_with_current_images() {
         -1.0,
         vec![
             ComponentValue::GuiCheckbox(GuiCheckbox::default()),
+            ComponentValue::GuiSkin(GuiSkin {
+                parts,
+                ..Default::default()
+            }),
             ComponentValue::GuiLayout(GuiLayout {
                 width: 1.0,
                 height: 1.0,

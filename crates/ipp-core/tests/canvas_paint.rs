@@ -153,6 +153,7 @@ fn a_painted_box_names_its_paint_and_the_publication_carries_the_instance() {
     let CanvasShapeFill::Paint {
         color,
         paint,
+        ..
     } = fill(&canvas)
     else {
         panic!("the box fills with its paint");
@@ -375,7 +376,20 @@ fn a_paint_definition_round_trips_and_excludes_material_stages() {
     let decoded = ShaderDefinition::decode(&definition.encode().unwrap()).unwrap();
     assert_eq!(decoded, definition);
 
-    // A paint has no material stages, recipe features, streams or non-float inputs.
+    // Presentation is opt-in; lights additionally require presentation context.
+    for features in [64, 64 | 8] {
+        let mut presented = definition.clone();
+        presented.recipe.features = features;
+        let bytes = presented.encode().unwrap();
+        assert_eq!(ShaderDefinition::decode(&bytes).unwrap(), presented);
+    }
+    for features in [8, 64 | 1, 128] {
+        let mut invalid = definition.clone();
+        invalid.recipe.features = features;
+        assert!(invalid.validate().is_err());
+    }
+
+    // A paint has no material stages, mesh features, streams or non-float inputs.
     let mut staged = paint("return color;");
     staged.backends.get_mut("glsl-es-300").unwrap().fragment =
         "vec4 materialFragment() { return vec4(1); }".into();

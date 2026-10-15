@@ -36,7 +36,7 @@ pub use crate::systems::skinning::Skin;
 
 pub use crate::systems::geometry::{BoundingGeometry, PickingGeometry};
 
-pub use crate::systems::hierarchy::ParentJoint;
+pub use crate::systems::hierarchy::{ParentJoint, PresentationGate};
 
 pub use crate::systems::look_at::LookAt;
 
@@ -59,11 +59,11 @@ pub use crate::systems::gui::local::{
     GuiTextInput, GuiVirtualItem, GuiVirtualList,
 };
 pub use crate::systems::gui::motion::GuiThemeMotion;
-pub use crate::systems::gui::presentation::{GuiFont, GuiSkin, GuiTheme};
+pub use crate::systems::gui::presentation::{GuiFont, GuiMetrics, GuiSkin, GuiTheme};
 
 pub use crate::systems::data_bindings::{BufferDataSourceBinding, StreamingDataSourceBinding};
 
 pub use crate::systems::plot::{
-    PlotBars2d, PlotFrame2d, PlotFrame3d, PlotGridBars3d, PlotHeightSurface3d, PlotLine2d,
-    PlotPie2d, PlotPie3d, PlotPoints3d,
+    PlotBars2d, PlotCalloutPaint, PlotCalloutStyle, PlotFrame2d, PlotFrame3d, PlotGridBars3d,
+    PlotHeightSurface3d, PlotLine2d, PlotPie2d, PlotPie3d, PlotPoints3d,
 };

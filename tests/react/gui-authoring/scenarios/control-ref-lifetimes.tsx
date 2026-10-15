@@ -76,6 +76,23 @@ export async function controlRefLifetimes(
     const initial = current();
     check(initial, "Initial ref missing");
     first = initial;
+    check((await initial.focus()).ok, "Ref focus action failed");
+    const focus = await peer.inspectPage({ collection: "guiFocus" });
+    check(
+      focus.guiFocus?.some(
+        (entry) =>
+          entry.target.entity === initial.target.entity &&
+          entry.target.incarnation === initial.target.incarnation,
+      ),
+      "Ref focus did not reach its exact native control",
+    );
+    check((await initial.blur()).ok, "Ref blur action failed");
+    check(
+      !(await peer.inspectPage({ collection: "guiFocus" })).guiFocus?.some(
+        (entry) => entry.target.entity === initial.target.entity,
+      ),
+      "Ref blur left its native control focused",
+    );
     // An external insertion replaces the component with a new incarnation.
     check(
       (

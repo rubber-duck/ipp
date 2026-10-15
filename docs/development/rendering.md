@@ -13,7 +13,7 @@ python tools/ipp.py test render canvas textures shapes
 python tools/ipp.py dev gallery
 ```
 
-The server prints its loopback URL. The [gallery guide](../../examples/world-gallery/README.md) owns scene controls. Use `python tools/ipp.py dev gallery --build` to prepare the application without serving it.
+The server prints its loopback URL. The [gallery guide](../../examples/demos/README.md) owns scene controls. Use `python tools/ipp.py dev gallery --build` to prepare the application without serving it.
 
 ```mermaid
 flowchart LR
@@ -31,11 +31,11 @@ Rust owns rendering; the bridge supplies WebGL against a transferred OffscreenCa
 
 The [suite registry](../../tools/pipeline/suites.json) selects real browser scenarios and shared prerequisites. `render` exercises resource lifecycle and gallery controls; `canvas` covers composition/density; `textures` and `shapes` check sampling and generated geometry. Select lighting, custom-materials, animation, particles or deformation suites when those behaviors change.
 
-[Render lifecycle tests](../../tests/rendering/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/rendering/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/gallery/viewer.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
+[Render lifecycle tests](../../tests/rendering/render.test.ts) pair acknowledged state/events with completed images. [Prepared geometry](../../tests/rendering/ready-geometry.test.ts) gates real HTTP loads to verify that old selections remain visible until a replacement is ready, and that failure/cancellation preserves usable state. [Viewer tests](../../tests/gallery/application.browser.test.ts) drive the actual packaged application. Detailed cases and image tolerances belong in those tests.
 
 `host.presentation.frame(view, options)` resolves with a completed draw of the selected view (view, sequence, source publication, draw calls, triangles, failed draws and included output sources) without reading pixels; use it as a render-readiness barrier after resources load, with `afterOutputs` to wait for the exact child outputs an action changed. `host.presentation.capture(view, options)` additionally reads back the full drawing buffer as top-left RGBA8, which finishes pending GPU work and copies width × height × 4 bytes, so reserve it for image evidence. Neither advances time. Renderer statistics are separate observations through `renderDiagnostics(host).statistics()` from `@ipp/client/diagnostics` in every build; they are measurements, never readiness signals. Loss simulation and renderer budget overrides live in `@ipp/client/testing` and require an `instrumentation` build. A batch never withholds presentation; a frame or capture completes with an actual later draw of the selected view (after `afterSequence` when given) that includes any requested `afterOutputs` at or after their admitted ticks. Acknowledgement and resource readiness alone do not prove visible output. Runners retain logs, session/tick metadata and images under `target/integration-artifacts/`, and clean up owned browsers, workers, servers and connections under the [testing policy](integration-testing.md).
 
-The `gallery-charts` suite exercises the unified chart gallery through the production worker/WASM/WebGL path; `native-gallery` runs the same chart assertions through native WebSocket/GLES. Both verify the ring spacing and inward-facing transforms, camera turns at the center, each focused chart, stable source values, explicit data edits and two-second camera motion against the Host clock. Browser pointer hover/selection preserves source row identity; native scene actions exercise the same normalized picking queries. Frame and state artifacts are retained by the maintained environment runners.
+The `native-gallery` suite exercises the shared chart scenarios through WebSocket/GLES: ring spacing, camera focus, source identities, explicit edits, streaming and skin changes. The `gallery-browser` suite checks the same application through physical browser input, worker/WASM rendering, composed camera navigation, pixel density and owned cleanup. Frame and state artifacts remain with the maintained environment runners.
 
 ## Asset loading and recovery
 

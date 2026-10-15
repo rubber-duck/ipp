@@ -1,3 +1,5 @@
+import type { ValueChangeHandler } from "./value-synchronization.js";
+import { useEntityId } from "../../scope/identity.js";
 /**
  * An ordered interval on one rail: the runtime's range slider, whose two
  * thumbs are each a focus stop with its own keys and stop at each other, with
@@ -23,7 +25,7 @@
  * below it, and the readouts right of the thumbs, the lower one below its
  * thumb's centre and the upper one above, reaching past the column's centre.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
 import { LAYOUT_COLUMN, LAYOUT_ROW, LAYOUT_STACK, Row } from "../layout.js";
@@ -51,7 +53,7 @@ export interface RangeSliderProps extends SliderCompositeProps {
   /** The initial interval while `value` is omitted; the whole range by default. */
   readonly defaultValue?: RangeValue;
   /** The runtime committed a new interval: one or both values changed. */
-  readonly onChange?: (value: RangeValue) => void;
+  readonly onChange?: ValueChangeHandler<RangeValue>;
   /** Along a vertical rail, minimum at the bottom. */
   readonly vertical?: boolean;
   /** A vertical rail's length at the tokens' em; the unsized slider's by default. */
@@ -62,7 +64,7 @@ export interface RangeSliderProps extends SliderCompositeProps {
 
 export function RangeSlider(props: RangeSliderProps) {
   const {
-    id,
+    id: providedId,
     layer = 0,
     label,
     min,
@@ -79,6 +81,7 @@ export function RangeSlider(props: RangeSliderProps) {
     layout,
     ref,
   } = props;
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const g = railGeometry(kit);
@@ -124,6 +127,7 @@ export function RangeSlider(props: RangeSliderProps) {
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0);
     return (
       <Entity id={id}>
+        <PresentationGate open />
         <Style layer={layer} />
         <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
         <Font source={kit.font} font_size={kit.fontSize} />
@@ -140,10 +144,12 @@ export function RangeSlider(props: RangeSliderProps) {
             />
           )}
           <Entity id={`${id}/track`}>
+            <PresentationGate open />
             <Layout kind={LAYOUT_STACK} height={rail} />
             <Children>
               {/* The rail centred: the readouts' reach past it takes no room. */}
               <Entity id={`${id}/rail`}>
+                <PresentationGate open />
                 <Layout
                   kind={LAYOUT_STACK}
                   width={box}
@@ -181,6 +187,7 @@ export function RangeSlider(props: RangeSliderProps) {
   const box = g.depth + g.row;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -190,11 +197,12 @@ export function RangeSlider(props: RangeSliderProps) {
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {label !== undefined && (
-          <Row id={`${id}/header`} height={t.denseRow}>
+          <Row id={`${id}/header`} height={kit.unit(t.denseRow)}>
             <TextLine id={`${id}/label`} text={label} tone={tones.label} />
           </Row>
         )}
         <Entity id={`${id}/rail-row`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_ROW} height={box} />
           <Children>
             {bounds && (
@@ -205,6 +213,7 @@ export function RangeSlider(props: RangeSliderProps) {
               />
             )}
             <Entity id={`${id}/rail`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_STACK} height={box} flex={1} />
               <Children>
                 {readoutMarks}

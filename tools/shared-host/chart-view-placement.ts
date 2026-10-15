@@ -1,3 +1,4 @@
+import { cybertronTokens } from "@ipp/react/gui-cybertron";
 /** Real-source selected-view refinement; camera poses are ordinary authored values. */
 import type { FieldWrite, PickingWorldClient } from "@ipp/client";
 import { defineClient } from "./client.js";
@@ -5,7 +6,7 @@ import { image, settled } from "./presentation.js";
 import {
   componentFields,
   successfulBatch,
-} from "../../examples/world-gallery/worlds/charts/shared/commands.js";
+} from "../../examples/demos/scenes/charts/shared/commands.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -15,12 +16,12 @@ import {
   PLOT_3D_EXTENT,
   type Plot3dContract,
   type Plot3dScene,
-} from "../../examples/world-gallery/worlds/charts3d/content.js";
+} from "../../examples/demos/scenes/charts3d/content.js";
 import {
   openPlot3dSheet,
   closePlot3dSheet,
   type Plot3dSheet,
-} from "../../examples/world-gallery/worlds/charts3d/sheet.js";
+} from "../../examples/demos/scenes/charts3d/sheet.js";
 
 interface Study {
   scene: Plot3dScene;
@@ -93,7 +94,7 @@ export default defineClient<Study>({
     if (args.includes("sheet") && !state.sheet)
       state.sheet = await openPlot3dSheet(
         state.scene,
-        (context.contract as unknown as Plot3dContract).GUI_SKIN_TOKENS,
+        cybertronTokens,
         await context.font(),
         context.name,
       );

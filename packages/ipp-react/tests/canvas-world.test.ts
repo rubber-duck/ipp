@@ -354,6 +354,7 @@ test("closing the Canvas releases a root CanvasWorld without destroying its Worl
   const handle = handles[0]!;
   assert.ok(handle);
   assert.deepEqual(handle.output, canvasOutput(handle.world));
+  assert.equal(handle.attachment, undefined, "a root canvas has no attachment");
   assert.deepEqual(boundary.created[0]?.canvas, {
     extent: [1, 1],
     unitsPerMetre: 4,

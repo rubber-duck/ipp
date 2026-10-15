@@ -10,7 +10,7 @@
 import type { SkinThemes } from "../theme.js";
 
 export const themes: SkinThemes = {
-  default: [],
+  default: { look: "button" },
   secondary: { look: "secondary" },
   docked: { look: "docked" },
 };

@@ -1,9 +1,10 @@
+import { useEntityId } from "../scope/identity.js";
 /**
  * Lines one idle line weight thick whose layout box is the line, filling their
  * container across: horizontal in a column, or vertical in a row; and the
  * labelled separator that names a section.
  */
-import { Entity } from "../components.js";
+import { PresentationGate, Entity } from "../components.js";
 import { Style, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
@@ -13,7 +14,7 @@ import { TextLine } from "./text.js";
 export interface SeparatorProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /**
    * `division` (neutral) divides a panel, `rule` (accent) underlines a
    * heading, and `quiet` (the quiet line) separates what repeats between data,
@@ -25,16 +26,18 @@ export interface SeparatorProps {
 }
 
 export function Separator({
-  id,
+  id: providedId,
   layer = 0,
   tone = "division",
   vertical = false,
   layout,
 }: SeparatorProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const thickness = kit.unit(kit.tokens.lineWidth);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={vertical ? LAYOUT_COLUMN : LAYOUT_ROW}
@@ -49,7 +52,7 @@ export function Separator({
 export interface LabelledSeparatorProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The section's label, in the accent at body size. */
   readonly label: string;
   /**
@@ -67,12 +70,13 @@ export interface LabelledSeparatorProps {
  * label on either side. It is a dense row high.
  */
 export function LabelledSeparator({
-  id,
+  id: providedId,
   layer = 0,
   label,
   stub = true,
   layout,
 }: LabelledSeparatorProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const gap = kit.unit(t.inset / 2);
@@ -81,7 +85,7 @@ export function LabelledSeparator({
     <Row
       id={id}
       layer={layer}
-      height={t.denseRow}
+      height={kit.unit(t.denseRow)}
       {...(layout ? { layout } : {})}
     >
       {stub && (

@@ -31,10 +31,12 @@ impl GuiSkinState {
 }
 
 /// Appearance properties resolved for one part. A control's parts resolve
-/// through its kind's default look, so only properties no row sets are absent;
-/// paint gives those the primitive's neutral value.
+/// through explicit override and theme rows. An enabled primitive uses neutral
+/// values for properties no authored row supplies.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GuiPartStyle {
+    /// A matching authored row explicitly enables this primitive.
+    pub(crate) authored: bool,
     /// Optional linear RGBA override.
     pub color: Option<[f32; 4]>,
     /// Optional opacity multiplier.
@@ -108,6 +110,14 @@ pub struct GuiPartStyle {
     pub checker_color0: Option<[f32; 4]>,
     /// Optional straight linear RGBA colour of the checker's other cells.
     pub checker_color1: Option<[f32; 4]>,
+    /// Select the CanvasPaint on the entity owning this appearance row.
+    pub paint: Option<bool>,
+    /// Bounded per-part inputs delivered to the paint function.
+    pub paint_data: Option<[f32; 4]>,
+    /// Signed expansion per axis of paint only, in logical units.
+    pub outset: Option<[f32; 2]>,
+    /// Resolved row owner; derived presentation state, never authored.
+    pub(crate) paint_owner: Option<crate::EntityId>,
 }
 
 impl GuiPartStyle {
@@ -141,6 +151,7 @@ impl GuiPartStyle {
         {
             *length *= factor;
         }
+        each(&mut self.outset, factor);
         each(&mut self.corner_radius, factor);
         each(&mut self.gradient_start, factor);
         each(&mut self.gradient_end, factor);
@@ -156,6 +167,13 @@ impl GuiPartStyle {
             }
         }
 
+        self.authored |= next.authored;
+        if self.paint.is_none() {
+            self.paint_owner = next.paint_owner;
+        }
+        or(&mut self.paint, &next.paint);
+        or(&mut self.paint_data, &next.paint_data);
+        or(&mut self.outset, &next.outset);
         or(&mut self.color, &next.color);
         or(&mut self.opacity, &next.opacity);
         or(&mut self.scale, &next.scale);

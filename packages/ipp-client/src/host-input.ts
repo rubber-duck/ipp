@@ -2,6 +2,7 @@ import { HostWireReader, HostWireWriter } from "./host-protocol.js";
 import { writeView, type PresentationView } from "./host-presentation.js";
 import { RequestNotSentError } from "./client.js";
 import type { GuiTarget } from "./gui-types.js";
+import type { CameraAttachmentReference } from "./types.js";
 
 /** Exact published PickingGeometry incarnation; ordinary renderables are transparent to input. */
 export type GuiPickingBlocker = Omit<GuiTarget, "component">;
@@ -140,6 +141,14 @@ export type GuiPhysicalInput =
   | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
   | { kind: "blur" };
 
+/** Fresh eligible control under a wheel event, independent of delta consumption.
+ * The path identifies exact attachment producers at dispatch, not a durable input capability.
+ */
+export interface GuiInputHit {
+  readonly target: GuiTarget;
+  readonly path: readonly CameraAttachmentReference[];
+}
+
 /** Correlated physical routing settlement, not an effect stream or completed frame. */
 export interface GuiInputRoutingOutcome {
   readonly disposition: "routed" | "miss" | "blocked" | "unhandled";
@@ -148,6 +157,7 @@ export interface GuiInputRoutingOutcome {
   readonly cancelled: number;
   readonly error?: string;
   readonly remaining?: readonly [number, number];
+  readonly hit?: GuiInputHit;
 }
 
 export interface GuiInputCancellation {
@@ -184,7 +194,7 @@ export class HostPhysicalInput {
 
   /**
    * `tag` and `limit` resolve Host contract tags and physical input bounds
-   * (`GUI_PHYSICAL_POINTERS`, `GUI_PHYSICAL_BLOCKERS`) of the connected target.
+   * (`GUI_PHYSICAL_POINTERS`, `GUI_PHYSICAL_BLOCKERS`, `GUI_PHYSICAL_HIT_PATH`) of the connected target.
    */
   constructor(
     private readonly request: Request,
@@ -226,6 +236,7 @@ export class HostPhysicalInput {
           (encode, activate) => this.control(encode, activate),
           () => this.contexts.delete(identity),
           this.tag,
+          this.limit,
         );
         this.contexts.set(identity, context);
       },
@@ -384,6 +395,7 @@ export class GuiPhysicalContext {
     ) => Promise<HostWireReader>,
     private readonly released: () => void,
     private readonly tag: (name: string) => number,
+    private readonly limit: (name: string) => number,
   ) {}
 
   get isClosed(): boolean {
@@ -641,6 +653,27 @@ export class GuiPhysicalContext {
     const native = reader.boolean()
       ? readNative(new HostWireReader(reader.raw(reader.u32())))
       : undefined;
+    let hit: GuiInputHit | undefined;
+    if (reader.boolean()) {
+      const target: GuiTarget = {
+        world: { id: reader.u64(), incarnation: reader.u64() },
+        entity: reader.u64(),
+        component: reader.u16(),
+        incarnation: reader.u64(),
+      };
+      const count = reader.u32();
+      if (count > this.limit("GUI_PHYSICAL_HIT_PATH"))
+        throw new Error("Physical hit path exceeds framing limit");
+      const path: CameraAttachmentReference[] = [];
+      for (let index = 0; index < count; index++)
+        path.push({
+          parent: { id: reader.u64(), incarnation: reader.u64() },
+          anchor: reader.u64(),
+          incarnation: reader.u64(),
+          revision: reader.u64(),
+        });
+      hit = { target, path };
+    }
     reader.end();
     if (native) this.observeText(native, "terminal");
     return {
@@ -650,6 +683,7 @@ export class GuiPhysicalContext {
       cancelled,
       ...(error === undefined ? {} : { error }),
       ...(remaining === undefined ? {} : { remaining }),
+      ...(hit === undefined ? {} : { hit }),
     };
   }
 }

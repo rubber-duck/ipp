@@ -220,7 +220,8 @@ export class CameraFixture {
       check(!Object.hasOwn(result, "viewPlane"), "Misses/errors have no plane");
     }
     if (result.ok) {
-      const expected = "binding" in view ? view.binding.output : view.output;
+      const root = view.kind === "camera" ? view.root : view;
+      const expected = "binding" in root ? root.binding.output : root.output;
       check(
         sameOutputReference(result.view.output, expected),
         "A query never redirects to another output",
@@ -1152,6 +1153,34 @@ export async function compoundPicking(fixture: CameraFixture) {
   equal(hit.viewPlane!.normal, [0, 0, -1], "View plane uses camera forward");
   close(hit.distance, 6, "Compound hit distance");
   check(hit.part === 1, "The right rim retains its authored part identity");
+  successfulBatch(
+    await fixture.batch([
+      insertComponent(
+        fixture.client,
+        "PresentationGate",
+        { kind: "handle", id: target },
+        { open: false },
+      ),
+    ]),
+  );
+  const hidden = await fixture.pick(x, 0.5);
+  check(
+    hidden.ok && hidden.hit === null,
+    "Closed presentation gate excludes published picking geometry",
+  );
+  successfulBatch(
+    await fixture.batch(
+      fixture.set(target, "PresentationGate", { open: true }),
+    ),
+  );
+  const revealed = picked(await fixture.pick(x, 0.5), target);
+  check(
+    revealed.incarnation === hit.incarnation && revealed.part === hit.part,
+    "Revealed geometry retains component incarnation and authored part",
+  );
+  successfulBatch(
+    await fixture.batch([fixture.remove(target, "PresentationGate")]),
+  );
   successfulBatch(
     await fixture.batch(fixture.set(target, "Transform", { qy: 1, qw: 0 })),
   );

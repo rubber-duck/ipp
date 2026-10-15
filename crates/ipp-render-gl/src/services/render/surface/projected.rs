@@ -82,6 +82,7 @@ pub(in crate::services::render) struct ProjectedSurface<D: RenderDevice> {
     allocations: u32,
     presentation: SurfaceCachePresentation,
     repaint_this_frame: bool,
+    paint_context: super::super::canvas::presentation::PaintContextStamp,
 }
 
 impl<D: RenderDevice> ProjectedSurface<D> {
@@ -549,6 +550,7 @@ impl<D: RenderDevice> RenderService<D> {
         )
         .ok_or(RenderError::UnavailableOutput)?;
         let stamp = OutputContentStamp::read(host, selection, surface.publication)?;
+        let paint_context = self.paint_context_stamp(&stamp);
         let raster_dependencies = self.canvas_image_generations(&stamp, selection);
         let mut state = previous.unwrap_or_else(|| ProjectedSurface {
             surface: surface.clone(),
@@ -576,6 +578,7 @@ impl<D: RenderDevice> RenderService<D> {
             allocations: 0,
             presentation: SurfaceCachePresentation::Unavailable,
             repaint_this_frame: false,
+            paint_context: Vec::new(),
         });
         let mut final_demand = demand;
         let result = (|| {
@@ -801,6 +804,7 @@ impl<D: RenderDevice> RenderService<D> {
             let repaint = state.stamp.is_none()
                 || !state.current_image
                 || dependencies_changed
+                || state.paint_context != paint_context
                 || (dirty && (interaction || time - state.painted_at >= interval));
             if repaint {
                 let scene = CanvasScene::new(host, selection, surface.publication)?;
@@ -882,6 +886,7 @@ impl<D: RenderDevice> RenderService<D> {
                 self.inclusions.active = parent;
                 drawn?;
                 state.stamp = Some(stamp.clone());
+                state.paint_context = paint_context.clone();
                 state.raster_dependencies = raster_dependencies.clone();
                 state.painted_at = time;
                 state.repaints = state.repaints.saturating_add(state.groups.len() as u32);
@@ -898,7 +903,8 @@ impl<D: RenderDevice> RenderService<D> {
             state.current_publication = state.current_image
                 && state.painted_current
                 && state.stamp.as_ref() == Some(&stamp)
-                && state.raster_dependencies == raster_dependencies;
+                && state.raster_dependencies == raster_dependencies
+                && state.paint_context == paint_context;
             Ok(())
         })();
         if result.is_err() {

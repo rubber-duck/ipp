@@ -11,7 +11,7 @@ use ipp_core::{ErrorReason, HostRuntime, ViewDescriptor, ViewPickHit, WorldRef, 
 
 /// Explicit current root or retained CPU publication, never implicit presentation selection.
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum ViewQueryTarget {
+pub enum RootViewQueryTarget {
     /// Current or exact source under an exact current root binding, including generation.
     BoundView {
         /// Acknowledged root identity and viewport.
@@ -39,7 +39,7 @@ pub enum ViewQueryTarget {
     },
 }
 
-impl ViewQueryTarget {
+impl RootViewQueryTarget {
     /// Validate the session's World and every runtime lifetime at query execution.
     pub fn resolve(
         self,
@@ -103,9 +103,140 @@ impl ViewQueryTarget {
     }
 }
 
-/// Correlated navigation of the exact bound root Camera, never an active-camera fallback.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A selected root or an explicit Camera domain below that root.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ViewQueryTarget {
+    /// Existing root query semantics.
+    Root(RootViewQueryTarget),
+    /// Coordinates and geometry belong to the Camera reached by this exact path.
+    CameraView {
+        /// Nonrecursive root target.
+        root: RootViewQueryTarget,
+        /// Applied attachment producer identities.
+        path: Vec<CameraAttachmentReference>,
+    },
+}
+
+impl From<RootViewQueryTarget> for ViewQueryTarget {
+    fn from(root: RootViewQueryTarget) -> Self {
+        Self::Root(root)
+    }
+}
+
+/// Exact attachment producer metadata copied from an acknowledged receipt.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CameraAttachmentReference {
+    /// Parent World lifetime.
+    pub parent: crate::references::WorldReference,
+    /// Generational attachment entity.
+    pub anchor: u64,
+    /// Attachment component lifetime.
+    pub incarnation: u64,
+    /// Host-unique applied producer revision.
+    pub revision: u64,
+}
+
+/// Bounded wire path; the bound is independent of scene/World count.
+pub const MAX_CAMERA_PATH_DEPTH: usize = 64;
+
+fn camera_path(
+    host: &HostRuntime,
+    root: ipp_core::ViewQueryTarget,
+    path: &[CameraAttachmentReference],
+) -> Result<Vec<ipp_core::WorldAttachmentToken>, ErrorReason> {
+    if path.len() > MAX_CAMERA_PATH_DEPTH {
+        return Err(ErrorReason::Capacity);
+    }
+    let view = host.resolve_view(root)?;
+    let mut source = host
+        .publication(view.publication)
+        .ok_or(ErrorReason::InvalidEntity)?;
+    let mut tokens = Vec::with_capacity(path.len());
+    for reference in path {
+        let edge = source
+            .attachments
+            .iter()
+            .find(|edge| {
+                crate::references::WorldReference::from(edge.token.parent()) == reference.parent
+                    && edge.token.anchor().to_bits() == reference.anchor
+                    && edge.token.incarnation() == reference.incarnation
+                    && edge.token.identity().1 == reference.revision
+            })
+            .ok_or(ErrorReason::InvalidEntity)?;
+        tokens.push(edge.token.clone());
+        source = host
+            .attached_publication(edge)
+            .ok_or(ErrorReason::InvalidEntity)?;
+    }
+    Ok(tokens)
+}
+
+impl ViewQueryTarget {
+    /// Resolve the explicit root through its authoring session.
+    pub fn resolve(
+        &self,
+        host: &HostRuntime,
+        world: WorldRef,
+    ) -> Result<ipp_core::ViewQueryTarget, ErrorReason> {
+        let root = match self {
+            Self::Root(root)
+            | Self::CameraView {
+                root,
+                ..
+            } => root,
+        };
+        root.resolve(host, world)
+    }
+
+    /// Query geometry in either the root or explicitly named child Camera domain.
+    pub fn pick(
+        &self,
+        host: &HostRuntime,
+        world: WorldRef,
+        point: [f32; 2],
+        include_view_plane: bool,
+    ) -> Result<(ViewDescriptor, Option<ViewPickHit>), ErrorReason> {
+        let root = self.resolve(host, world)?;
+        match self {
+            Self::Root(_) => host.pick_view(root, point, include_view_plane),
+            Self::CameraView {
+                path,
+                ..
+            } => {
+                let path = camera_path(host, root, path)?;
+                host.pick_camera_domain(root, &path, point, include_view_plane)
+            }
+        }
+    }
+
+    /// Project an explicit plane in the selected Camera domain.
+    pub fn project(
+        &self,
+        host: &HostRuntime,
+        world: WorldRef,
+        point: [f32; 2],
+        plane: ipp_core::WorldPlane,
+    ) -> Result<(ViewDescriptor, Option<[f32; 3]>), ErrorReason> {
+        let root = self.resolve(host, world)?;
+        match self {
+            Self::Root(_) => host.project_view(root, point, plane),
+            Self::CameraView {
+                path,
+                ..
+            } => {
+                let path = camera_path(host, root, path)?;
+                host.project_camera_view(root, &path, point, plane)
+                    .map(|(view, point)| (view.root, point))
+            }
+        }
+    }
+}
+
+/// Correlated navigation of an explicit composed Camera, without target fallback.
+#[derive(Clone, Debug, PartialEq)]
 pub struct CameraNavigateRequest {
+    /// Exact root-to-Camera attachment producer path.
+    pub path: Vec<CameraAttachmentReference>,
     /// Exact root identity and source; historical-only targets cannot authorize mutation.
     pub binding: RootBinding,
     /// None requests current completed state; Some is strict and never substitutes a new source.
@@ -124,7 +255,7 @@ impl CameraNavigateRequest {
         let ipp_core::ViewQueryTarget::BoundView {
             binding,
             publication,
-        } = (ViewQueryTarget::BoundView {
+        } = (RootViewQueryTarget::BoundView {
             binding: self.binding,
             publication: self.publication,
         })
@@ -132,12 +263,17 @@ impl CameraNavigateRequest {
         else {
             unreachable!("bound view");
         };
-        host.camera_navigation(binding, publication, &[], self.motion)
+        let root = ipp_core::ViewQueryTarget::BoundView {
+            binding,
+            publication,
+        };
+        let path = camera_path(host, root, &self.path)?;
+        host.camera_navigation(binding, publication, &path, self.motion)
     }
 }
 
 /// Normalized viewport picking against an exact completed view.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct GeometryPickQuery {
     /// Exact view selection.
     pub view: ViewQueryTarget,
@@ -150,7 +286,7 @@ pub struct GeometryPickQuery {
 }
 
 /// Projection onto an explicit plane in a completed camera domain.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct CameraProjectQuery {
     /// Exact view selection.
     pub view: ViewQueryTarget,
@@ -198,21 +334,28 @@ impl Reader<'_> {
         })
     }
 
-    pub(crate) fn view_target(&mut self) -> Result<ViewQueryTarget, ProtocolError> {
+    fn root_view_target(&mut self) -> Result<RootViewQueryTarget, ProtocolError> {
         let tag = self.u8()?;
+        self.root_view_tag(tag)
+    }
+
+    fn root_view_tag(&mut self, tag: u8) -> Result<RootViewQueryTarget, ProtocolError> {
         if tag == VIEW_BOUND {
-            return Ok(ViewQueryTarget::BoundView {
+            return Ok(RootViewQueryTarget::BoundView {
                 binding: self.root_binding()?,
                 publication: self.view_source()?,
             });
         }
+        if !matches!(tag, VIEW_ROOT | VIEW_PUBLICATION) {
+            return Err(ProtocolError::Malformed("nonrecursive root view target"));
+        }
         let output = self.output_reference()?;
         match tag {
-            VIEW_ROOT => Ok(ViewQueryTarget::RootView {
+            VIEW_ROOT => Ok(RootViewQueryTarget::RootView {
                 output,
                 expected_viewport: self.view_viewport()?,
             }),
-            VIEW_PUBLICATION => Ok(ViewQueryTarget::PublicationView {
+            VIEW_PUBLICATION => Ok(RootViewQueryTarget::PublicationView {
                 output,
                 host: self.u64()?,
                 revision: self.u64()?,
@@ -220,6 +363,35 @@ impl Reader<'_> {
             }),
             _ => Err(ProtocolError::Malformed("view target")),
         }
+    }
+
+    pub(crate) fn view_target(&mut self) -> Result<ViewQueryTarget, ProtocolError> {
+        let tag = self.u8()?;
+        if tag == VIEW_CAMERA {
+            Ok(ViewQueryTarget::CameraView {
+                root: self.root_view_target()?,
+                path: self.camera_path()?,
+            })
+        } else {
+            self.root_view_tag(tag).map(Into::into)
+        }
+    }
+
+    pub(crate) fn camera_path(&mut self) -> Result<Vec<CameraAttachmentReference>, ProtocolError> {
+        let count = self.u32()? as usize;
+        if count > MAX_CAMERA_PATH_DEPTH {
+            return Err(ProtocolError::Malformed("camera path depth"));
+        }
+        (0..count)
+            .map(|_| {
+                Ok(CameraAttachmentReference {
+                    parent: self.world_reference()?,
+                    anchor: self.u64()?,
+                    incarnation: self.u64()?,
+                    revision: self.u64()?,
+                })
+            })
+            .collect()
     }
 }
 

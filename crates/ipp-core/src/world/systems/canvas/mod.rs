@@ -62,8 +62,8 @@ mod system;
 mod system_state;
 #[cfg(test)]
 pub(crate) mod test_support;
-mod update;
-mod walk;
+pub(in crate::world::systems) mod update;
+pub(in crate::world::systems) mod walk;
 
 pub use component::CanvasBounds;
 pub use component::{
@@ -72,11 +72,11 @@ pub use component::{
 };
 pub use layer_transition::CanvasLayerTransition;
 pub use publication::{
-    CanvasAttachmentSlot, CanvasAxis, CanvasBoxShape, CanvasClip, CanvasGlyph, CanvasHit,
-    CanvasHitKind, CanvasInteractionPriority, CanvasLayerPlane, CanvasPaintChanges,
-    CanvasPaintEntry, CanvasPaintInstance, CanvasPart, CanvasPrimitive, CanvasPrimitiveId,
-    CanvasPrimitiveStyle, CanvasPublication, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow,
-    CanvasTarget,
+    CanvasAttachmentSlot, CanvasAxis, CanvasBoxEdge, CanvasBoxSection, CanvasBoxShape, CanvasClip,
+    CanvasGlyph, CanvasHit, CanvasHitKind, CanvasInteractionPriority, CanvasLayerPlane,
+    CanvasPaintChanges, CanvasPaintEntry, CanvasPaintInstance, CanvasPart, CanvasPrimitive,
+    CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasPublication, CanvasShapeChecker,
+    CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 pub use statistics::CanvasWork;
 pub use system::{CanvasSystem, CanvasSystemFactory};

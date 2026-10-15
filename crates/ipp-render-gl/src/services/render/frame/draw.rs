@@ -410,7 +410,9 @@ impl<D: RenderDevice> RenderService<D> {
                     }
                 };
                 let draw_lighting = lighting.draws.get(&item.entity);
-                let custom = customs.get(&item.entity);
+                let custom = customs
+                    .get(&item.custom_material_key())
+                    .filter(|_| item.custom_material);
                 let instances = {
                     scratch.instances.clear();
                     if item.particle.is_some() {
@@ -452,11 +454,30 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 let derived = if let Some((target, mesh)) = item.derived {
                     let (data, uploaded) = self.generated_meshes.get(
-                        (item.entity.world, target, item.mesh.variant),
+                        (
+                            item.entity.world,
+                            target,
+                            item.mesh.variant,
+                            mesh.variant,
+                            custom.is_some(),
+                        ),
                         &mesh.geometry,
                         mesh.mesh_index,
                     )?;
                     stats.uploaded(uploaded);
+                    let transparent = custom.is_some_and(|m| m.material.alpha_mode == 2)
+                        || mesh.geometry.meshes[mesh.mesh_index].color[3] < 1.0;
+                    let projection = transparent.then(|| math::multiply(view_projection, *model));
+                    stats.uploaded(self.generated_meshes.order(
+                        (
+                            item.entity.world,
+                            target,
+                            item.mesh.variant,
+                            mesh.variant,
+                            custom.is_some(),
+                        ),
+                        projection,
+                    )?);
                     Some(data)
                 } else {
                     None

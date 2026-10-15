@@ -268,10 +268,11 @@ pub fn run<D: RenderDevice>(
             }));
         }
         let mut host = HostRuntime::with_system_factories(factories)?;
+        super::task_scheduler::SmokeAssetTasks::for_host(&mut host);
         renderer.install(&mut host)?;
         let (world, target) = scene(&mut host)?;
         let (peer, _) = scene(&mut host)?;
-        load(&mut host, [world, peer], fixture)?;
+        load(renderer, &mut host, [world, peer], fixture)?;
         assert_eq!(
             super::world::render_host_frame(renderer, &mut host, world, WIDTH, HEIGHT)?.draw_calls,
             1
@@ -462,7 +463,7 @@ fn update(host: &mut HostRuntime, worlds: &[WorldId]) -> Result<()> {
     for &world in worlds {
         host.world_mut(world).unwrap().prepare_update(0.0)?;
     }
-    host.progress_assets();
+    super::task_scheduler::progress(host);
     for &world in worlds {
         host.world_mut(world).unwrap().step(0.0)?;
     }
@@ -470,9 +471,16 @@ fn update(host: &mut HostRuntime, worlds: &[WorldId]) -> Result<()> {
     Ok(())
 }
 
-fn load(host: &mut HostRuntime, worlds: [WorldId; 2], fixture: &[u8]) -> Result<()> {
+fn load<D: RenderDevice>(
+    renderer: &mut RenderService<D>,
+    host: &mut HostRuntime,
+    worlds: [WorldId; 2],
+    fixture: &[u8],
+) -> Result<()> {
     for _ in 0..128 {
-        update(host, &worlds)?;
+        for world in worlds {
+            super::world::render_host_frame(renderer, host, world, WIDTH, HEIGHT)?;
+        }
         for request in host.take_resource_requests() {
             assert_eq!(request.kind, ipp_core::AssetResourceKind::Mesh);
             host.complete_resource(request.id, Ok(fixture.to_vec()))?;

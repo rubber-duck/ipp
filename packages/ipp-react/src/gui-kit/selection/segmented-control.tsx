@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A small set of mutually exclusive modes as adjacent segments, with the
  * radio group's keys: one Tab stop entered at the selected segment, arrows
@@ -12,7 +13,7 @@
  * cut, so the whole reads as one control in the language's one cut pattern.
  * The control is the control height and fills its container's width.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Group, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -39,7 +40,7 @@ export interface SegmentedControlProps extends ChoiceProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the control's frame; segments extend it. */
-  readonly id: string;
+  readonly id?: string;
   readonly options: readonly SegmentedOption[];
   readonly layout?: GuiKitLayout;
 }
@@ -52,16 +53,18 @@ function segmentTheme(index: number, count: number): KitThemeName {
 }
 
 export function SegmentedControl({
-  id,
+  id: providedId,
   layer = 0,
   options,
   layout,
   ...props
 }: SegmentedControlProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const choice = useChoice(props);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
@@ -87,7 +90,7 @@ export function SegmentedControl({
 }
 
 function Segment({
-  id,
+  id: providedId,
   option,
   choice,
   theme,
@@ -97,11 +100,13 @@ function Segment({
   readonly choice: Choice;
   readonly theme: KitThemeName;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const item = choice.item(option.value);
   const selected = useMountSelection(item.selected);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         flex={1}

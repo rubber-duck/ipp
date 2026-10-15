@@ -35,7 +35,7 @@ impl ScrollScene {
     fn new(items: u32) -> Self {
         let (mut host, _) = host();
         let world = world(&mut host);
-        let list = create(
+        let list = create_painted(
             &mut host,
             world,
             vec![
@@ -184,7 +184,7 @@ fn thumb_drag_continues_across_layout_anchor_normalization() {
 
     // A realized item above the anchor measures 30 instead of its 10 estimate;
     // layout keeps the visible anchor by writing a normalized offset.
-    create(
+    create_painted(
         &mut scene.host,
         scene.world,
         vec![
@@ -244,7 +244,7 @@ fn thumb_drag_after_an_external_scroll_action_applies_from_the_written_offset() 
 
 /// A 20-unit checkbox realized as the list's first item.
 fn checkbox_item(scene: &mut ScrollScene) -> EntityId {
-    let checkbox = create(
+    let checkbox = create_painted(
         &mut scene.host,
         scene.world,
         vec![
@@ -338,7 +338,7 @@ impl ScrollScene {
                 })
                 .unwrap();
         }
-        let theme = create(
+        let theme = create_painted(
             &mut self.host,
             self.world,
             vec![ComponentValue::GuiTheme(GuiTheme {
@@ -502,7 +502,7 @@ fn released_thumb_repaints_idle_in_the_next_frame_after_a_captured_drag() {
 fn slider_scene() -> ScrollScene {
     let (mut host, _) = host();
     let world = world(&mut host);
-    let list = create(
+    let list = create_painted(
         &mut host,
         world,
         vec![

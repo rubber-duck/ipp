@@ -107,6 +107,7 @@ export default defineSpecimen({
       <GuiKit fontSize={TEXT_BODY * K}>
         <Panel
           id="grid-panel"
+          padding={0}
           layout={{ ...placed(GRID_AT, u(PANEL[0])), height: u(PANEL[1]) }}
         >
           <PanelHeader id="grid-panel/header" title="NODE STATUS" />

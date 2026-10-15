@@ -1,3 +1,5 @@
+import type { ValueChangeHandler } from "./value-synchronization.js";
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A numeric stepper: the runtime's numeric text input, with its decrement and
  * increment parts, between a caption with the range's ends above it and a
@@ -15,13 +17,14 @@
  * carries the tick of the frame it happened in, so a report delivered after a
  * later commit or discard of the same frame does not bring the alert back.
  *
- * The stepper is a fixed-height column filling its container's width: an
- * optional caption row, the field row, the control height, and the error
- * line's room, a gap and the control height, reserved whether or not the
- * alert shows, so that neither the field nor what lies below it ever moves.
+ * The caption follows the form width; the entry fits a stable number of digits
+ * and its step buttons. An explicit layout width or flex stretches the entry
+ * with the column. An alert
+ * expands the form below the field without moving the field itself. Set
+ * reserveErrorSpace when a stable validation slot is explicitly wanted.
  */
 import { useRef, useState } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import type {
   GuiFocusChangeEvent,
   GuiFocusChangeListener,
@@ -31,7 +34,8 @@ import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { TextInput } from "../../gui/controls.js";
 import { InlineAlert } from "../feedback/inline-alert.js";
-import { useGuiKit, type GuiKitTokens } from "../kit.js";
+import { Skin } from "../../gui/theme.js";
+import { useGuiKit } from "../kit.js";
 import {
   LAYOUT_COLUMN,
   LAYOUT_LEAF,
@@ -46,7 +50,7 @@ export interface NumericStepperProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the stepper's root entity; its parts extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** The caption naming the number, such as EXPOSURE, in the accent. */
   readonly label?: string;
   /** Inclusive bounds commits and steps clamp to; unbounded when omitted. */
@@ -65,11 +69,13 @@ export interface NumericStepperProps {
   /** The initial number while `value` is omitted; zero within the range. */
   readonly defaultValue?: number;
   /** The runtime committed a new number. */
-  readonly onChange?: (value: number) => void;
+  readonly onChange?: ValueChangeHandler<number>;
   /** Keep the number and look but refuse input; every text turns neutral. */
   readonly disabled?: boolean;
   /** The range's ends after the caption; shown by default when both are given. */
   readonly bounds?: boolean;
+  /** Keep validation room while valid; omitted forms fit only visible content. */
+  readonly reserveErrorSpace?: boolean;
   /** Show the decrement and increment parts; true by default. */
   readonly stepParts?: boolean;
   /** The error shown for an entry that does not parse. */
@@ -82,20 +88,8 @@ export interface NumericStepperProps {
 
 const notANumber = () => "Not a number";
 
-/** The stepper's height at the tokens' em: caption, field and error line. */
-export function numericStepperHeight(
-  tokens: GuiKitTokens,
-  caption: boolean,
-): number {
-  return (
-    (caption ? tokens.denseRow : 0) +
-    2 * tokens.controlHeight +
-    tokens.inset / 2
-  );
-}
-
 export function NumericStepper({
-  id,
+  id: providedId,
   layer = 0,
   label,
   min,
@@ -109,12 +103,14 @@ export function NumericStepper({
   onChange,
   disabled = false,
   bounds = true,
+  reserveErrorSpace = false,
   stepParts = true,
   invalidMessage = notANumber,
   layout,
   ref,
   onFocusChange,
 }: NumericStepperProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const tones = textTones(disabled);
@@ -143,22 +139,47 @@ export function NumericStepper({
         )}`
       : undefined;
   const caption = label !== undefined || ends !== undefined;
-  const gap = kit.unit(t.inset / 2);
+  const gap = layout?.gap ?? kit.spacing.label;
+  const validationRoom = reserveErrorSpace || error !== undefined;
+  const contentHeight =
+    (caption ? kit.unit(t.denseRow) + gap : 0) +
+    kit.unit(t.controlHeight) +
+    (validationRoom ? gap + kit.unit(t.controlHeight) : 0);
+  const digits = Math.max(
+    6,
+    precision + 3,
+    ...[min, max].map((bound) =>
+      bound === undefined ? 0 : formatValue(bound, precision, false).length,
+    ),
+  );
+  const entryWidth =
+    lineWidth("0".repeat(digits), kit.fontSize) +
+    kit.unit(2 * t.inset + (stepParts ? 2 * t.controlHeight : 0));
+  const rowWidth =
+    layout?.width !== undefined || (layout?.flex ?? 0) > 0
+      ? undefined
+      : entryWidth +
+        (units === undefined
+          ? 0
+          : gap + lineWidth(units, kit.typeSize("body")));
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        height={kit.unit(numericStepperHeight(t, caption))}
+        height={contentHeight}
+        gap={gap}
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {caption && (
-          <Row id={`${id}/caption`} height={t.denseRow}>
+          <Row id={`${id}/caption`} height={kit.unit(t.denseRow)}>
             {label === undefined ? (
               <Entity id={`${id}/space`}>
+                <PresentationGate open />
                 <Layout kind={LAYOUT_LEAF} flex={1} />
               </Entity>
             ) : (
@@ -179,8 +200,13 @@ export function NumericStepper({
             )}
           </Row>
         )}
-        <Row id={`${id}/row`} height={t.controlHeight}>
+        <Row
+          id={`${id}/row`}
+          width={rowWidth}
+          height={kit.unit(t.controlHeight)}
+        >
           <Entity id={`${id}/field`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_LEAF}
               height={kit.unit(t.controlHeight)}
@@ -190,6 +216,9 @@ export function NumericStepper({
               enabled={!disabled}
               {...(label === undefined ? {} : { semantic_label: label })}
             />
+            {kit.controlTheme("textInput") && (
+              <Skin theme={kit.controlTheme("textInput")!} />
+            )}
             <TextInput
               numeric
               value={state.control.value}
@@ -229,12 +258,7 @@ export function NumericStepper({
           )}
         </Row>
         {error !== undefined && (
-          <InlineAlert
-            id={`${id}/error`}
-            severity="error"
-            text={error}
-            layout={{ margin_top: gap }}
-          />
+          <InlineAlert id={`${id}/error`} severity="error" text={error} />
         )}
       </Children>
     </Entity>

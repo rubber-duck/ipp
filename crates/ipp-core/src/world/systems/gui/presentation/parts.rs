@@ -382,17 +382,21 @@ pub enum GuiPartProperty {
     /// its alpha being linear coverage. A box with a checker paints no corner
     /// accents, and strokes and arcs paint no checker.
     CheckerSize,
-    /// `checker_color0`: Vec4 in 0..=1; the corner cell's colour. Absent is the
-    /// light grey of sRGB `#CCCCCC`.
+    /// `checker_color0`: Vec4 in 0..=1; the corner cell's colour. Absent is white.
     CheckerColor0,
-    /// `checker_color1`: Vec4 in 0..=1; the other cells' colour. Absent is the
-    /// grey of sRGB `#999999`.
+    /// `checker_color1`: Vec4 in 0..=1; the other cells' colour. Absent is black.
     CheckerColor1,
+    /// `paint`: Bool; select the row owner's CanvasPaint.
+    Paint,
+    /// `paint_data`: Vec4 of finite per-part paint inputs.
+    PaintData,
+    /// `outset`: Vec2 of signed paint-only logical lengths.
+    Outset,
 }
 
 impl GuiPartProperty {
     /// Number of part properties.
-    pub const COUNT: u32 = 32;
+    pub const COUNT: u32 = 35;
 
     /// Every property in layout order; `ALL[i] as u32 == i`.
     pub const ALL: [Self; Self::COUNT as usize] = [
@@ -428,6 +432,9 @@ impl GuiPartProperty {
         Self::CheckerSize,
         Self::CheckerColor0,
         Self::CheckerColor1,
+        Self::Paint,
+        Self::PaintData,
+        Self::Outset,
     ];
 
     /// Property at a layout index.
@@ -479,6 +486,9 @@ impl GuiPartProperty {
             Self::CheckerSize => "checker_size",
             Self::CheckerColor0 => "checker_color0",
             Self::CheckerColor1 => "checker_color1",
+            Self::Paint => "paint",
+            Self::PaintData => "paint_data",
+            Self::Outset => "outset",
         }
     }
 
@@ -495,12 +505,15 @@ impl GuiPartProperty {
             | Self::StrokeA
             | Self::StrokeB
             | Self::CheckerColor0
-            | Self::CheckerColor1 => DynamicPropertyKind::Vec4,
+            | Self::CheckerColor1
+            | Self::PaintData => DynamicPropertyKind::Vec4,
             Self::Scale
             | Self::CornerRadius
             | Self::GradientStart
             | Self::GradientEnd
-            | Self::ArcDashes => DynamicPropertyKind::Vec2,
+            | Self::ArcDashes
+            | Self::Outset => DynamicPropertyKind::Vec2,
+            Self::Paint => DynamicPropertyKind::Bool,
             Self::Asset => DynamicPropertyKind::Asset,
             Self::Opacity
             | Self::AlignX
@@ -520,10 +533,9 @@ impl GuiPartProperty {
         }
     }
 
-    /// Whether numeric animation may target it: every property except the
-    /// asset reference.
+    /// Whether numeric animation may target it: numeric properties only.
     pub const fn numeric_animatable(self) -> bool {
-        !matches!(self, Self::Asset)
+        !matches!(self, Self::Asset | Self::Paint)
     }
 }
 

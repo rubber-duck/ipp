@@ -3,6 +3,19 @@
 
 use super::*;
 
+fn metrics(em: f32) -> GuiMetrics {
+    GuiMetrics {
+        color_inset: em * 0.5,
+        color_gap: em,
+        color_rail: em * 1.5,
+        color_swatch: em * 1.5,
+        color_field: em * 9.0,
+        color_marker: em * 0.75,
+        color_thumb: em * 0.5,
+        ..Default::default()
+    }
+}
+
 /// The textbook HSV model: hue sector, then the three products.
 fn textbook(hue: f64, saturation: f64, value: f64) -> [f64; 3] {
     let sector = hue.rem_euclid(1.0) * 6.0;
@@ -23,18 +36,18 @@ fn textbook(hue: f64, saturation: f64, value: f64) -> [f64; 3] {
 
 #[test]
 fn an_unsized_control_has_a_square_field_with_the_rails_beside_and_the_swatch_beneath() {
-    assert_eq!(intrinsic_size(16.0, true), [240.0, 200.0]);
-    assert_eq!(intrinsic_size(16.0, false), [200.0, 200.0]);
-    assert_eq!(intrinsic_size(8.0, true), [120.0, 100.0]);
+    assert_eq!(intrinsic_size(&metrics(16.0), true), [240.0, 200.0]);
+    assert_eq!(intrinsic_size(&metrics(16.0), false), [200.0, 200.0]);
+    assert_eq!(intrinsic_size(&metrics(8.0), true), [120.0, 100.0]);
 
-    let layout = GuiColorLayout::new([240.0, 200.0], 16.0, true);
+    let layout = GuiColorLayout::new([240.0, 200.0], &metrics(16.0), true);
     assert_eq!(layout.field, [8.0, 8.0, 144.0, 144.0]);
     assert_eq!(layout.hue, [168.0, 8.0, 24.0, 144.0]);
     assert_eq!(layout.alpha, Some([208.0, 8.0, 24.0, 144.0]));
     assert_eq!(layout.swatch, [8.0, 168.0, 224.0, 24.0]);
     assert_eq!((layout.marker, layout.thumb), (12.0, 8.0));
 
-    let opaque = GuiColorLayout::new([200.0, 200.0], 16.0, false);
+    let opaque = GuiColorLayout::new([200.0, 200.0], &metrics(16.0), false);
     assert_eq!(opaque.field, [8.0, 8.0, 144.0, 144.0]);
     assert_eq!(opaque.alpha, None);
     assert_eq!(opaque.swatch, [8.0, 168.0, 184.0, 24.0]);
@@ -44,21 +57,21 @@ fn an_unsized_control_has_a_square_field_with_the_rails_beside_and_the_swatch_be
 #[test]
 fn resizing_grows_the_field_and_keeps_the_rails_and_swatch_thickness() {
     // Twice as wide and 100 taller at half the type: lengths halve.
-    let layout = GuiColorLayout::new([480.0, 300.0], 8.0, true);
+    let layout = GuiColorLayout::new([480.0, 300.0], &metrics(8.0), true);
     assert_eq!(layout.field, [4.0, 4.0, 432.0, 272.0]);
     assert_eq!(layout.hue, [444.0, 4.0, 12.0, 272.0]);
     assert_eq!(layout.alpha, Some([464.0, 4.0, 12.0, 272.0]));
     assert_eq!(layout.swatch, [4.0, 284.0, 472.0, 12.0]);
 
     // Too small a box leaves an empty field rather than negative extents.
-    let small = GuiColorLayout::new([40.0, 30.0], 16.0, true);
+    let small = GuiColorLayout::new([40.0, 30.0], &metrics(16.0), true);
     assert_eq!(small.field[2..], [0.0, 0.0]);
     assert!(small.swatch[2] >= 0.0 && small.swatch[3] >= 0.0);
 }
 
 #[test]
 fn pointers_address_the_surface_whose_zone_meets_its_neighbours_halfway() {
-    let layout = GuiColorLayout::new([240.0, 200.0], 16.0, true);
+    let layout = GuiColorLayout::new([240.0, 200.0], &metrics(16.0), true);
     for (point, part) in [
         ([80.0, 80.0], Some(0)),
         // The box's margin belongs to the nearest surface.
@@ -77,14 +90,14 @@ fn pointers_address_the_surface_whose_zone_meets_its_neighbours_halfway() {
         assert_eq!(layout.part_at(point), part, "{point:?}");
     }
     // Without the alpha rail the hue rail's zone reaches the box's edge.
-    let opaque = GuiColorLayout::new([200.0, 200.0], 16.0, false);
+    let opaque = GuiColorLayout::new([200.0, 200.0], &metrics(16.0), false);
     assert_eq!(opaque.part_at([199.9, 50.0]), Some(1));
     assert_eq!(opaque.part_at([200.0, 50.0]), None);
 }
 
 #[test]
 fn the_field_maps_saturation_rightward_and_value_upward_and_rails_upward() {
-    let layout = GuiColorLayout::new([240.0, 200.0], 16.0, true);
+    let layout = GuiColorLayout::new([240.0, 200.0], &metrics(16.0), true);
     let [x, y, width, height] = layout.field;
     assert_eq!(
         layout.channels_at(0, [x, y]),
@@ -117,7 +130,7 @@ fn the_field_maps_saturation_rightward_and_value_upward_and_rails_upward() {
 
 #[test]
 fn a_press_at_the_painted_marker_or_thumb_maps_back_to_the_value() {
-    let layout = GuiColorLayout::new([300.0, 220.0], 12.0, true);
+    let layout = GuiColorLayout::new([300.0, 220.0], &metrics(12.0), true);
     for (saturation, value) in [(0.0, 0.0), (1.0, 1.0), (0.3, 0.8), (0.75, 0.125)] {
         let [x, y, size, _] = layout.marker_rect(saturation, value);
         assert_eq!(size, 9.0);

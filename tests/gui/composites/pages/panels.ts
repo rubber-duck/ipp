@@ -1,3 +1,5 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
+import type { GuiKitContract } from "@ipp/react/gui-kit";
 /**
  * Panels declared through a panel World's generated batch client, for the
  * parts that exercise the runtime's controls, groups and overlays without a
@@ -88,7 +90,63 @@ class PanelCommands {
   readonly #named: Record<string, number> = {};
   #next = 1;
 
-  constructor(private readonly client: Client) {}
+  readonly #skin;
+  readonly #themes = new Map<string, number>();
+
+  constructor(
+    private readonly client: Client,
+    private readonly contract: GuiKitContract,
+  ) {
+    this.#skin = cybertronSkin(contract);
+  }
+
+  /** These foundation fixtures explicitly choose Cybertron, as an application does. */
+  private skin(component: string, fields: Fields): number | undefined {
+    const name =
+      component === "GuiButton"
+        ? "button"
+        : component === "GuiTextInput"
+          ? "textInput"
+          : component === "GuiSlider"
+            ? fields.axis === 2
+              ? "dial"
+              : "slider"
+            : component === "GuiScrollView"
+              ? "scroll"
+              : undefined;
+    if (!name) return undefined;
+    const known = this.#themes.get(name);
+    if (known !== undefined) return known;
+    const recipe = this.#skin.themes[name]!;
+    const table = (rows: typeof recipe.rows) => ({
+      nextSlot: rows.length,
+      rows: new Map(rows.map((row, index) => [index, row])),
+    });
+    const theme = this.add(`skin-${name}`, null, []);
+    this.commands.push(
+      insertComponent(this.client, "GuiTheme", alias(theme), {
+        em: recipe.em,
+        parts: this.contract.GuiTheme.encodeParts(table(recipe.rows)),
+      }),
+    );
+    if (recipe.metrics)
+      this.commands.push(
+        insertComponent(
+          this.client,
+          "GuiMetrics",
+          alias(theme),
+          recipe.metrics as Record<string, number>,
+        ),
+      );
+    if (recipe.motion)
+      this.commands.push(
+        insertComponent(this.client, "GuiThemeMotion", alias(theme), {
+          parts: this.contract.GuiThemeMotion.encodeParts(table(recipe.motion)),
+        }),
+      );
+    this.#themes.set(name, theme);
+    return theme;
+  }
 
   add(
     name: string,
@@ -102,6 +160,21 @@ class PanelCommands {
       this.commands.push(
         insertComponent(this.client, component, alias(id), fields),
       );
+    for (const [component, fields] of components) {
+      const theme = this.skin(component, fields);
+      if (theme !== undefined)
+        this.commands.push({
+          kind: "insertComponent",
+          entity: alias(id),
+          component: this.client.components.GuiSkin!.id,
+          fields: [
+            {
+              offset: this.client.components.GuiSkin!.fields.theme!.offset,
+              value: { kind: "entity", value: alias(theme) },
+            },
+          ],
+        });
+    }
     if (parent !== null)
       this.commands.push({
         kind: "placeEntity",
@@ -176,7 +249,7 @@ function commandPanel(
     origin,
     extent,
     async build(context): Promise<PanelBuild> {
-      const panel = new PanelCommands(context.client);
+      const panel = new PanelCommands(context.client, context.contract);
       declare(panel, context);
       return { entities: await panel.apply() };
     },

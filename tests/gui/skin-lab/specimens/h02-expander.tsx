@@ -82,7 +82,7 @@ function content(id: string) {
     <Row
       key={name}
       id={`${id}/${name}`}
-      height={DENSE_ROW}
+      height={DENSE_ROW * K}
       layout={{ padding_left: INSET * K, padding_right: INSET * K }}
     >
       <TextLine id={`${id}/${name}/name`} text={name} layout={{ flex: 1 }} />

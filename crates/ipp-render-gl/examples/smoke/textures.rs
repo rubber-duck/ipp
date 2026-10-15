@@ -4,13 +4,12 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use ipp_core::{
-    Command, ComponentValue, EntityRef, FieldValue, FieldWrite, MeshAsset, MeshUpload,
-    TextureAsset,
+    Command, ComponentValue, EntityRef, FieldValue, FieldWrite, MeshAsset, TextureAsset,
     components::{MeshInstance, UnlitMaterial, UnlitTexture},
 };
 use ipp_render_gl::{RenderDevice, RenderService};
 
-use super::world::{HEIGHT, KEY, MATERIAL, WIDTH, apply, coverage, deliver, float, matches, save};
+use super::world::{HEIGHT, MATERIAL, WIDTH, apply, coverage, deliver, float, matches, save};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -233,8 +232,10 @@ fn streaming_reload<D: RenderDevice>(
     let key = world.asset_resources().find(&source).unwrap();
     let row_bytes = TextureAsset::decode(texture)?.width() as usize * 4;
     let first = 16 + row_bytes;
+    // The source retains one consumer window plus bounded transport prefetch.
+    let staging_bound = STREAM_CAPACITY + row_bytes.max(16);
     assert!(
-        texture.len() > STREAM_CAPACITY,
+        texture.len() > staging_bound,
         "fixture must exceed source staging"
     );
 
@@ -286,7 +287,7 @@ fn streaming_reload<D: RenderDevice>(
     let mut uploaded = 0;
     for chunk in texture.chunks(STREAM_CAPACITY) {
         assert!(world.asset_input_chunk(replacement.id, chunk)?);
-        assert!(world.asset_input_bytes() <= STREAM_CAPACITY);
+        assert!(world.asset_input_bytes() <= staging_bound);
         let stats = super::world::present_world!(renderer, host, world, WIDTH, HEIGHT)?;
         assert_eq!(stats.draw_calls, 0, "all bytes still require valid EOF");
         uploaded += stats.uploaded_bytes;
@@ -606,26 +607,9 @@ fn optional_streams<D: RenderDevice>(
     let decoded_texture = TextureAsset::decode(&texture)?;
     let odd_source = |x, y| ODD_RGB[(y * 3 + x) as usize];
 
-    let mut source_host = ipp_core::HostRuntime::new();
-    // Mesh uploads and reads belong to the Render System.
-    let source_id = source_host.create_world(
-        Default::default(),
-        &super::selection::select(&[super::selection::RENDER]),
-    )?;
-    let mut source = source_host.world_mut(source_id).unwrap();
-    source
-        .enqueue_mesh(MeshUpload {
-            id: 1,
-            key: KEY,
-            bytes: mesh,
-        })
-        .map_err(|e| format!("optional source: {e:?}"))?;
-    source.prepare_update(0.0)?;
-    source.poll_all_assets();
-    source
-        .step(0.0)
-        .map_err(|e| format!("optional boundary: {e:?}"))?;
-    let mesh = source.mesh(KEY).unwrap();
+    // Decode the fixture used to construct variants; each variant below still
+    // loads through its real Host and GPU provider before pixel comparisons.
+    let mesh = MeshAsset::decode(&mesh)?;
     let n = mesh.vertex_count();
     let cases = [
         ("position", false, false, None),
@@ -665,7 +649,7 @@ fn optional_streams<D: RenderDevice>(
         })?;
         let vertex_bytes = n
             * (12 + usize::from(color) * 12 + usize::from(uv) * 8 + usize::from(weights.is_some()));
-        let bytes = optional_payload(mesh, color, uv, weights.clone());
+        let bytes = optional_payload(&mesh, color, uv, weights.clone());
         let mut world_host = ipp_core::HostRuntime::new();
         renderer.install(&mut world_host)?;
         let mut world = super::world::fixture_world(&mut world_host)?;

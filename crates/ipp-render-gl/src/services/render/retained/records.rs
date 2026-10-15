@@ -39,7 +39,7 @@ mod private {
     impl Sealed for super::GuiGlyphRecord {}
 }
 
-/// One instanced quad of a box, stroke or arc (192 bytes).
+/// One instanced quad of a box, stroke or arc (208 bytes).
 ///
 /// The vertex shader places the quad's corners at `rect` and grows exterior corners
 /// by the projected antialias footprint. Every other lane is the primitive's: an
@@ -103,6 +103,8 @@ pub struct GuiShapeRecord {
     pub glow_color: [f32; 4],
     /// Effective clip rectangle `[min_x, min_y, max_x, max_y]`.
     pub clip: [f32; 4],
+    /// Per-part numeric custom-paint inputs.
+    pub paint_data: [f32; 4],
 }
 
 impl GuiRecord for GuiShapeRecord {
@@ -121,11 +123,12 @@ impl GuiRecord for GuiShapeRecord {
         material_params: [0.0; 4],
         glow_color: [0.0; 4],
         clip: [0.0; 4],
+        paint_data: [0.0; 4],
     };
 }
 
 // GLES attribute strides and the WebGL bridge read exactly this many bytes per record.
-const _: () = assert!(std::mem::size_of::<GuiShapeRecord>() == 192);
+const _: () = assert!(std::mem::size_of::<GuiShapeRecord>() == 208);
 
 /// One instanced atlas glyph quad (64 bytes).
 ///

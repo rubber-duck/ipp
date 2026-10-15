@@ -56,7 +56,7 @@ impl GuiCanvasTransform {
     };
 
     /// Canvas `[min_x, min_y, max_x, max_y]` of a local box at the origin.
-    fn bounds(self, size: [f32; 2]) -> [f32; 4] {
+    pub(super) fn bounds(self, size: [f32; 2]) -> [f32; 4] {
         let end = [
             self.position[0] + self.scale[0] * size[0],
             self.position[1] + self.scale[1] * size[1],
@@ -157,7 +157,7 @@ pub(in crate::world::systems) struct GuiOverlayLayout {
 /// Canvas transform of `entity`'s local space: the layout origins and
 /// `CanvasStyle` of every ancestor, root first, composed as the Canvas walk
 /// composes them.
-fn canvas_transform(
+pub(super) fn canvas_transform(
     world: &WorldSimulationState,
     placements: &BTreeMap<EntityId, GuiEntityLayout>,
     entity: EntityId,

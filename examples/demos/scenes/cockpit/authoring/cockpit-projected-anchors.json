@@ -1,0 +1,507 @@
+{
+  "scene": "Cockpit projected presentation",
+  "meshes": [
+    [
+      "cockpit-space",
+      117
+    ],
+    [
+      "cockpit-planet",
+      138
+    ],
+    [
+      "cockpit-exterior-cities",
+      12
+    ],
+    [
+      "cockpit-exterior-atmosphere",
+      12
+    ],
+    [
+      "cockpit-exterior-stars",
+      12
+    ],
+    [
+      "cockpit-window-shell",
+      169
+    ],
+    [
+      "cockpit-console-shell",
+      2007
+    ],
+    [
+      "cockpit-dial-left",
+      158
+    ],
+    [
+      "cockpit-dial-centre",
+      336
+    ],
+    [
+      "cockpit-dial-right",
+      160
+    ],
+    [
+      "cockpit-light-white-cabin-port",
+      84
+    ],
+    [
+      "cockpit-light-white-cabin-starboard",
+      84
+    ],
+    [
+      "cockpit-light-white-dashboard",
+      879
+    ],
+    [
+      "cockpit-light-cyan-port-bank",
+      145
+    ],
+    [
+      "cockpit-light-cyan-starboard-bank",
+      138
+    ],
+    [
+      "cockpit-light-cyan-dial-left",
+      69
+    ],
+    [
+      "cockpit-light-cyan-dial-centre",
+      177
+    ],
+    [
+      "cockpit-light-cyan-dial-right",
+      69
+    ]
+  ],
+  "anchors": [
+    {
+      "id": "cockpit-screen-0",
+      "width": 2.5928508139952204,
+      "height": 2.557721579616271,
+      "matrix_blender": [
+        [
+          0.8757078051567078,
+          -0.4821028709411621,
+          0.02669183909893036,
+          -3.1374130249023438
+        ],
+        [
+          0.48209482431411743,
+          0.8760897517204285,
+          0.007158991415053606,
+          0.02499997615814209
+        ],
+        [
+          -0.026835815981030464,
+          0.006598814390599728,
+          0.9996179938316345,
+          3.6148266792297363
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "id": "cockpit-screen-1",
+      "width": 3.755920949223885,
+      "height": 2.582583923748765,
+      "matrix_blender": [
+        [
+          1.0,
+          0.0,
+          0.0,
+          0.009312212467193604
+        ],
+        [
+          0.0,
+          1.0,
+          4.371138828673793e-08,
+          0.6499999761581421
+        ],
+        [
+          0.0,
+          -4.371138828673793e-08,
+          1.0,
+          3.5707240104675293
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "id": "cockpit-screen-2",
+      "width": 2.6072202283059465,
+      "height": 2.5632912308818856,
+      "matrix_blender": [
+        [
+          0.8771646022796631,
+          0.4795385003089905,
+          -0.024999132379889488,
+          3.1424999237060547
+        ],
+        [
+          -0.47943782806396484,
+          0.8775157928466797,
+          0.010265777818858624,
+          0.02499997615814209
+        ],
+        [
+          0.026859968900680542,
+          0.0029807533137500286,
+          0.9996346831321716,
+          3.6119465827941895
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "id": "cockpit-pulse-surface",
+      "width": 0.6957014399610975,
+      "height": 0.6257881704226387,
+      "matrix_blender": [
+        [
+          0.9947344660758972,
+          0.09624920040369034,
+          -0.03520495444536209,
+          -3.2958731651306152
+        ],
+        [
+          1.481540667924719e-09,
+          0.3435112535953522,
+          0.9391484260559082,
+          -1.125
+        ],
+        [
+          0.10248559713363647,
+          -0.9342034459114075,
+          0.3417024612426758,
+          1.6106936931610107
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "id": "cockpit-scanner-surface",
+      "width": 0.6978861913814234,
+      "height": 0.6168462788447732,
+      "matrix_blender": [
+        [
+          0.9947673678398132,
+          -0.09616043418645859,
+          0.03450788930058479,
+          3.27884578704834
+        ],
+        [
+          2.56561238920483e-09,
+          0.3377673029899597,
+          0.9412296414375305,
+          -1.125
+        ],
+        [
+          -0.10216467082500458,
+          -0.9363046884536743,
+          0.3359999358654022,
+          1.6106936931610107
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  ],
+  "surfaces": {
+    "cockpit-screen-0": {
+      "width": 2.5928508139952204,
+      "height": 2.557721579616271
+    },
+    "cockpit-screen-1": {
+      "width": 3.755920949223885,
+      "height": 2.582583923748765
+    },
+    "cockpit-screen-2": {
+      "width": 2.6072202283059465,
+      "height": 2.5632912308818856
+    },
+    "cockpit-pulse-surface": {
+      "width": 0.6957014399610975,
+      "height": 0.6257881704226387
+    },
+    "cockpit-scanner-surface": {
+      "width": 0.6978861913814234,
+      "height": 0.6168462788447732
+    }
+  },
+  "lights": [
+    {
+      "id": "cockpit-light-white-cabin-port",
+      "channel": -1,
+      "category": 0,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-white-cabin.png"
+    },
+    {
+      "id": "cockpit-light-white-cabin-starboard",
+      "channel": -1,
+      "category": 0,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-white-cabin.png"
+    },
+    {
+      "id": "cockpit-light-white-dashboard",
+      "channel": -1,
+      "category": 1,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-white-dashboard.png"
+    },
+    {
+      "id": "cockpit-light-cyan-port-bank",
+      "channel": -1,
+      "category": 2,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-cyan.png"
+    },
+    {
+      "id": "cockpit-light-cyan-starboard-bank",
+      "channel": -1,
+      "category": 2,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-cyan.png"
+    },
+    {
+      "id": "cockpit-light-cyan-dial-left",
+      "channel": -1,
+      "category": 2,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-cyan.png"
+    },
+    {
+      "id": "cockpit-light-cyan-dial-centre",
+      "channel": -1,
+      "category": 2,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-cyan.png"
+    },
+    {
+      "id": "cockpit-light-cyan-dial-right",
+      "channel": -1,
+      "category": 2,
+      "tint": [
+        1,
+        1,
+        1
+      ],
+      "default_gain": 1.0,
+      "texture": "cockpit-emission-cyan.png"
+    }
+  ],
+  "exterior": {
+    "layers": [
+      {
+        "id": "cockpit-exterior-cities",
+        "layer": "cities",
+        "texture": "cockpit-exterior-cities-emission.png"
+      },
+      {
+        "id": "cockpit-exterior-atmosphere",
+        "layer": "atmosphere",
+        "texture": "cockpit-exterior-atmosphere-emission.png"
+      },
+      {
+        "id": "cockpit-exterior-stars",
+        "layer": "stars",
+        "texture": "cockpit-exterior-stars-emission.png"
+      }
+    ],
+    "limb_fit_max_error_pixels": 20.429257595860687,
+    "encoding": "sRGB-encoded positive linear RGB; original colors retained"
+  },
+  "mask_registration": [
+    {
+      "zone": "white-cabin-port",
+      "source_bounds": [
+        0,
+        70,
+        836,
+        740
+      ],
+      "registration_pixels": [
+        0,
+        5
+      ]
+    },
+    {
+      "zone": "white-cabin-starboard",
+      "source_bounds": [
+        836,
+        70,
+        1672,
+        740
+      ],
+      "registration_pixels": [
+        0,
+        5
+      ]
+    },
+    {
+      "zone": "white-dashboard",
+      "source_bounds": [
+        720,
+        730,
+        949,
+        773
+      ],
+      "registration_pixels": [
+        0,
+        4
+      ]
+    },
+    {
+      "zone": "white-dashboard",
+      "source_bounds": [
+        260,
+        809,
+        307,
+        858
+      ],
+      "registration_pixels": [
+        3,
+        3
+      ]
+    },
+    {
+      "zone": "white-dashboard",
+      "source_bounds": [
+        1369,
+        808,
+        1405,
+        858
+      ],
+      "registration_pixels": [
+        -2,
+        4
+      ]
+    },
+    {
+      "zone": "cyan-port-bank",
+      "source_bounds": [
+        260,
+        754,
+        646,
+        812
+      ],
+      "registration_pixels": [
+        0,
+        7
+      ]
+    },
+    {
+      "zone": "cyan-starboard-bank",
+      "source_bounds": [
+        1035,
+        754,
+        1403,
+        812
+      ],
+      "registration_pixels": [
+        0,
+        7
+      ]
+    },
+    {
+      "zone": "cyan-dial-left",
+      "source_bounds": [
+        495,
+        810,
+        630,
+        888
+      ],
+      "registration_pixels": [
+        -1,
+        5
+      ]
+    },
+    {
+      "zone": "cyan-dial-centre",
+      "source_bounds": [
+        710,
+        785,
+        960,
+        901
+      ],
+      "registration_pixels": [
+        0,
+        1
+      ]
+    },
+    {
+      "zone": "cyan-dial-right",
+      "source_bounds": [
+        1040,
+        810,
+        1180,
+        888
+      ],
+      "registration_pixels": [
+        2,
+        4
+      ]
+    }
+  ]
+}

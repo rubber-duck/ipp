@@ -1,9 +1,7 @@
 //! Frame-local material ordering. Fingerprints affect ordering only, never draw
 //! merging or upload elision: a hash collision cannot change submitted state.
 
-use super::super::outputs::scene::{
-    RenderEntity as EntityId, SceneDebug as DebugRenderItem, SceneItem as RenderItem,
-};
+use super::super::outputs::scene::{SceneDebug as DebugRenderItem, SceneItem as RenderItem};
 use super::super::{
     lighting::selection::PreparedLighting,
     materials::{custom_material::PreparedCustomMaterial, shader::RenderShaderConfig},
@@ -94,7 +92,10 @@ pub(super) fn prepare(
     debug: &[DebugRenderItem],
     surfaces: &[super::super::outputs::scene::SceneOutputSurface],
     plot_planes: &[super::super::outputs::scene::ScenePlotPlane<'_>],
-    customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
+    customs: &BTreeMap<
+        super::super::materials::custom_material::CustomMaterialKey,
+        PreparedCustomMaterial,
+    >,
     lighting: &PreparedLighting,
     view_projection: &[f32; 16],
 ) {
@@ -102,7 +103,9 @@ pub(super) fn prepare(
     let mut index = 0;
     while index < items.len() {
         let item = &items[index];
-        let custom = customs.get(&item.entity);
+        let custom = customs
+            .get(&item.custom_material_key())
+            .filter(|_| item.custom_material);
         let sprite = item.particle.filter(|p| p.sprite);
         let transparent = sprite.is_some()
             || custom.is_some_and(|c| c.material.alpha_mode == 2)

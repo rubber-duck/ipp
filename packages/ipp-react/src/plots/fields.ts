@@ -1,5 +1,31 @@
 /** Authored Plot fields; target layouts are resolved by the React root. */
 export const plotComponentContract = {
+  PlotCalloutStyle: {
+    host: "ipp-plot-callout-style",
+    fields: {
+      padding_x: "number",
+      padding_y: "number",
+      radius: "number",
+      border_width: "number",
+      red: "number",
+      green: "number",
+      blue: "number",
+      alpha: "number",
+      text_red: "number",
+      text_green: "number",
+      text_blue: "number",
+      text_alpha: "number",
+      leader_red: "number",
+      leader_green: "number",
+      leader_blue: "number",
+      leader_alpha: "number",
+      leader_width: "number",
+    },
+  },
+  PlotCalloutPaint: {
+    host: "ipp-plot-callout-paint",
+    fields: { source: "string", variant: "number" },
+  },
   PlotFrame2d: {
     host: "ipp-plot-frame2d",
     fields: {
@@ -29,6 +55,10 @@ export const plotComponentContract = {
       grid_green: "number",
       grid_blue: "number",
       grid_alpha: "number",
+      highlight_red: "number",
+      highlight_green: "number",
+      highlight_blue: "number",
+      highlight_alpha: "number",
       line_width: "number",
     },
   },
@@ -62,6 +92,7 @@ export const plotComponentContract = {
       grid_green: "number",
       grid_blue: "number",
       grid_alpha: "number",
+      mark_outlines: "boolean",
       line_width: "number",
     },
   },

@@ -4,7 +4,7 @@
 
 Property animation is standard and works headlessly without skeletons or constraint declarations. Controllers are World-owned system objects, not entity components. Hosts advance time; clients submit controls.
 
-Interactive example: `python tools/ipp.py dev gallery` → **Lighting, Picking & Animation**. See [gallery controls](../../examples/world-gallery/README.md#lighting-picking--animation).
+Interactive example: `python tools/ipp.py dev gallery` → **Lighting, Picking & Animation**. See [gallery controls](../../examples/demos/scenes/lighting/scene.tsx).
 
 ## Clips, tracks and drivers
 

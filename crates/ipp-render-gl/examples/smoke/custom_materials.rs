@@ -23,6 +23,7 @@ pub fn run<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let mut world = fixture_world(&mut host)?;
     let mut material = CustomMaterial {

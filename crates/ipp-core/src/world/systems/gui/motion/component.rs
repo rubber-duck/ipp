@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 
 /// Timing of the transitions into and out of one qualified part identity's
 /// appearance. Properties resolve independently through the part's chain, like
-/// appearance properties: a theme's rows first, then the default look's.
+/// appearance properties, within the explicitly authored theme.
 #[derive(Clone, Debug, Default, PartialEq, SchemaRow)]
 pub struct GuiMotionPart {
     /// Qualified GuiPartId, independent of the row slot.
@@ -67,7 +67,7 @@ impl GuiMotionEasing {
 }
 
 /// Optional motion companion on a theme entity: transition timing rows beside
-/// its `GuiTheme`, over the default look's own timing.
+/// its `GuiTheme`. Missing timing is immediate.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
 pub struct GuiThemeMotion {

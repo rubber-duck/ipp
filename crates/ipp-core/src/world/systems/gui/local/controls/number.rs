@@ -247,8 +247,8 @@ impl GuiTextInput {
 /// The local `[x, y, width, height]` of a numeric input's decrement and
 /// increment parts in a control of `size`: squares of the control's height at
 /// its start and end, never overlapping.
-pub(crate) fn number_step_rects(size: [f32; 2]) -> [[f32; 4]; 2] {
-    let side = size[1].min(size[0] * 0.5).max(0.0);
+pub(crate) fn number_step_rects(size: [f32; 2], ratio: f32) -> [[f32; 4]; 2] {
+    let side = (size[1] * ratio).min(size[0] * 0.5).max(0.0);
     [
         [0.0, 0.0, side, size[1]],
         [size[0] - side, 0.0, side, size[1]],

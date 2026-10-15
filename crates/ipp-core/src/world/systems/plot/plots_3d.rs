@@ -143,6 +143,7 @@ pub fn prepare_bars(
     chart: &PlotGridBars3d,
     frame: &PlotFrame3d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let samples = collect(&chart.series, input, true, false)?;
     let (mapping, min, max) = mapping(frame, &samples, true)?;
@@ -162,23 +163,26 @@ pub fn prepare_bars(
             baseline.max(point[1]),
             point[2] + chart.bar_depth * 0.5,
         ];
+        meshes.highlighted = labels.highlighted(sample.row);
         meshes.cuboid(low, high, sample.color)?;
         let highlighted = labels.highlighted(sample.row);
-        meshes.outline(
-            low,
-            high,
-            frame.line_width
-                * if highlighted {
-                    2.4
+        if frame.mark_outlines {
+            meshes.outline(
+                low,
+                high,
+                frame.line_width
+                    * if highlighted {
+                        2.4
+                    } else {
+                        1.0
+                    },
+                if highlighted {
+                    [0.2, 1.0, 1.0, 1.0]
                 } else {
-                    1.0
+                    [0.0, 0.7, 0.85, 1.0]
                 },
-            if highlighted {
-                [0.2, 1.0, 1.0, 1.0]
-            } else {
-                [0.0, 0.7, 0.85, 1.0]
-            },
-        )?;
+            )?;
+        }
         output.hits.push(PlotHit {
             row: sample.row,
             shape: PlotHitShape::Box {
@@ -198,6 +202,7 @@ pub fn prepare_bars(
             },
             frame,
             0.0,
+            callout,
         )?;
     }
     axes(&mut output, frame, min, max)?;
@@ -209,6 +214,7 @@ pub fn prepare_surface(
     chart: &PlotHeightSurface3d,
     frame: &PlotFrame3d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let samples = collect(&chart.series, input, false, true)?;
     let (mapping, min, max) = mapping(frame, &samples, false)?;
@@ -220,17 +226,24 @@ pub fn prepare_surface(
             .iter()
             .map(|sample| checked_point(mapping.map(sample.point)))
             .collect::<Result<Vec<_>, _>>()?;
-        let triangles = triangulate(series)?;
+        let triangles: Vec<_> = triangulate(series)?
+            .into_iter()
+            .filter(|&[a, b, c]| series[a].valid && series[b].valid && series[c].valid)
+            .collect();
+        let normals = surface_normals(&points, &triangles);
         let mut edges = BTreeSet::new();
         for [a, b, c] in triangles {
-            if !(series[a].valid && series[b].valid && series[c].valid) {
-                continue;
-            }
             // Positive X/Z orientation faces downward in the right-handed 3D frame.
-            meshes.triangle(
+            // A height surface has one continuous chart-plane paint domain.
+            // Triangle boundaries are decoration only when wireframe is authored.
+            meshes.highlighted = [a, b, c].iter().any(|&i| labels.highlighted(series[i].row));
+            meshes.triangle_normals(
                 [points[a], points[c], points[b]],
                 [series[a].color, series[c].color, series[b].color],
                 true,
+                [points[a], points[c], points[b]]
+                    .map(|point| [6.0 + point[0] / frame.width, point[2] / frame.depth]),
+                Some([normals[a], normals[c], normals[b]]),
             )?;
             if chart.wireframe {
                 for [a, b] in [[a, b], [b, c], [c, a]] {
@@ -270,6 +283,7 @@ pub fn prepare_surface(
                 },
                 frame,
                 frame.font_size,
+                callout,
             )?;
         }
     }
@@ -277,11 +291,45 @@ pub fn prepare_surface(
     finish(output, meshes)
 }
 
+/// Area-weighted normals affect optical attributes only; triangulation and
+/// default unlit colours still describe the exact sampled height surface.
+fn surface_normals(points: &[[f32; 3]], triangles: &[[usize; 3]]) -> Vec<[f32; 3]> {
+    let mut normals = vec![[0.0_f64; 3]; points.len()];
+    for &[a, b, c] in triangles {
+        let u: [f64; 3] =
+            std::array::from_fn(|i| f64::from(points[c][i]) - f64::from(points[a][i]));
+        let v: [f64; 3] =
+            std::array::from_fn(|i| f64::from(points[b][i]) - f64::from(points[a][i]));
+        let face = [
+            u[1] * v[2] - u[2] * v[1],
+            u[2] * v[0] - u[0] * v[2],
+            u[0] * v[1] - u[1] * v[0],
+        ];
+        for index in [a, b, c] {
+            for (normal, contribution) in normals[index].iter_mut().zip(face) {
+                *normal += contribution;
+            }
+        }
+    }
+    normals
+        .into_iter()
+        .map(|normal| {
+            let length = normal[0].hypot(normal[1]).hypot(normal[2]);
+            if length > 0.0 {
+                normal.map(|v| (v / length) as f32)
+            } else {
+                [0.0, 1.0, 0.0]
+            }
+        })
+        .collect()
+}
+
 /// Prepare disconnected spatial marks and their authored labels.
 pub fn prepare_points(
     chart: &PlotPoints3d,
     frame: &PlotFrame3d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let samples = collect(&chart.series, input, false, false)?;
     let (mapping, min, max) = mapping(frame, &samples, false)?;
@@ -291,11 +339,14 @@ pub fn prepare_points(
     for sample in samples.iter().flatten() {
         let point = checked_point(mapping.map(sample.point))?;
         let radius = chart.marker_size * 0.5;
+        meshes.highlighted = labels.highlighted(sample.row);
         if chart.marker_shape == 0 {
             let low = point.map(|v| v - radius);
             let high = point.map(|v| v + radius);
             meshes.cuboid(low, high, sample.color)?;
-            meshes.outline(low, high, frame.line_width * 0.5, [0.0, 0.7, 0.85, 1.0])?;
+            if frame.mark_outlines {
+                meshes.outline(low, high, frame.line_width * 0.5, [0.0, 0.7, 0.85, 1.0])?;
+            }
         } else {
             meshes.octahedron(point, radius, sample.color)?;
         }
@@ -325,6 +376,7 @@ pub fn prepare_points(
             },
             frame,
             chart.marker_size,
+            callout,
         )?;
     }
     axes(&mut output, frame, min, max)?;
@@ -344,6 +396,7 @@ pub fn prepare_pie(
     chart: &PlotPie3d,
     frame: &PlotFrame3d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let mut slices = Vec::new();
     for (slot, series) in chart.series.iter().filter(|(_, series)| series.visible) {
@@ -396,8 +449,12 @@ pub fn prepare_pie(
     for slice in slices {
         let sweep = TAU * (slice.share / largest) / total;
         let steps = (sweep / (TAU / 96.0)).ceil().max(1.0) as usize;
+        // Bound triangle span on broad sectors so transparent face ordering
+        // does not compare one long cap fan against an entire tall cut wall.
+        let subdivisions = ((sweep / (TAU / 24.0)).ceil() as usize).clamp(1, 4);
         let top = [center[0], slice.height, center[2]];
         let highlighted = labels.highlighted(slice.row);
+        meshes.highlighted = highlighted;
         let edge_color = if highlighted {
             [0.0, 0.95, 1.0, 1.0]
         } else {
@@ -417,26 +474,88 @@ pub fn prepare_pie(
         for step in 0..steps {
             let a = start + sweep * step as f64 / steps as f64;
             let b = start + sweep * (step + 1) as f64 / steps as f64;
-            let bottom_a = radial(center, slice.radius, a, 0.0);
-            let bottom_b = radial(center, slice.radius, b, 0.0);
             let top_a = radial(center, slice.radius, a, slice.height);
             let top_b = radial(center, slice.radius, b, slice.height);
-            meshes.face([top, top_a, top_b], slice.color, true)?;
-            meshes.face([center, bottom_b, bottom_a], slice.color, true)?;
-            meshes.quad([bottom_a, bottom_b, top_b, top_a], slice.color, true)?;
-            meshes.line(top_a, top_b, edge_width, edge_color)?;
+            let u0 = step as f32 / steps as f32;
+            let u1 = (step + 1) as f32 / steps as f32;
+            for ring in 0..subdivisions {
+                let v0 = ring as f32 / subdivisions as f32;
+                let v1 = (ring + 1) as f32 / subdivisions as f32;
+                let inner_u0 = if ring == 0 {
+                    (u0 + u1) * 0.5
+                } else {
+                    u0
+                };
+                let inner_u1 = if ring == 0 {
+                    (u0 + u1) * 0.5
+                } else {
+                    u1
+                };
+                let cap = [
+                    radial(center, slice.radius * v0, a, slice.height),
+                    radial(center, slice.radius * v1, a, slice.height),
+                    radial(center, slice.radius * v1, b, slice.height),
+                    radial(center, slice.radius * v0, b, slice.height),
+                ];
+                let uv = [
+                    [4.0 + inner_u0, v0],
+                    [4.0 + u0, v1],
+                    [4.0 + u1, v1],
+                    [4.0 + inner_u1, v0],
+                ];
+                meshes.quad_uv(cap, slice.color, true, uv)?;
+                meshes.quad_uv(
+                    [3, 2, 1, 0].map(|i| [cap[i][0], 0.0, cap[i][2]]),
+                    slice.color,
+                    true,
+                    [3, 2, 1, 0].map(|i| uv[i]),
+                )?;
+                let points = [
+                    radial(center, slice.radius, a, slice.height * v0),
+                    radial(center, slice.radius, b, slice.height * v0),
+                    radial(center, slice.radius, b, slice.height * v1),
+                    radial(center, slice.radius, a, slice.height * v1),
+                ];
+                let uvs = [
+                    [u0, 1.0 - v0],
+                    [u1, 1.0 - v0],
+                    [u1, 1.0 - v1],
+                    [u0, 1.0 - v1],
+                ];
+                let normals = points.map(|point| {
+                    [
+                        (point[0] - center[0]) / slice.radius,
+                        0.0,
+                        (point[2] - center[2]) / slice.radius,
+                    ]
+                });
+                for corners in [[0, 1, 2], [0, 2, 3]] {
+                    meshes.triangle_normals(
+                        corners.map(|i| points[i]),
+                        [slice.color; 3],
+                        true,
+                        corners.map(|i| uvs[i]),
+                        Some(corners.map(|i| normals[i])),
+                    )?;
+                }
+            }
+            if frame.mark_outlines {
+                meshes.line(top_a, top_b, edge_width, edge_color)?;
+            }
         }
         let first = radial(center, slice.radius, start, 0.0);
         let last = radial(center, slice.radius, start + sweep, 0.0);
         if sweep < TAU - 1e-12 {
             let top_first = [first[0], slice.height, first[2]];
             let top_last = [last[0], slice.height, last[2]];
-            meshes.quad([center, first, top_first, top], slice.color, true)?;
-            meshes.quad([center, top, top_last, last], slice.color, true)?;
-            meshes.line(top, top_first, edge_width, edge_color)?;
-            meshes.line(top, top_last, edge_width, edge_color)?;
-            meshes.line(first, top_first, edge_width, edge_color)?;
-            meshes.line(last, top_last, edge_width, edge_color)?;
+            meshes.subdivided_quad([center, first, top_first, top], slice.color, subdivisions)?;
+            meshes.subdivided_quad([center, top, top_last, last], slice.color, subdivisions)?;
+            if frame.mark_outlines {
+                meshes.line(top, top_first, edge_width, edge_color)?;
+                meshes.line(top, top_last, edge_width, edge_color)?;
+                meshes.line(first, top_first, edge_width, edge_color)?;
+                meshes.line(last, top_last, edge_width, edge_color)?;
+            }
         }
         let point = radial(
             center,
@@ -470,6 +589,7 @@ pub fn prepare_pie(
             },
             frame,
             0.0,
+            callout,
         )?;
         start += sweep;
     }
@@ -497,6 +617,7 @@ fn checked_point(point: [f32; 3]) -> Result<[f32; 3], ErrorReason> {
 
 #[derive(Default)]
 struct MeshBuilder {
+    highlighted: bool,
     chunks: Vec<PlotMesh>,
     current: BTreeMap<u32, usize>,
 }
@@ -507,6 +628,27 @@ impl MeshBuilder {
         points: [[f32; 3]; 3],
         colors: [[f32; 4]; 3],
         shade: bool,
+    ) -> Result<(), ErrorReason> {
+        self.triangle_uv(points, colors, shade, [[2.0, 0.0], [3.0, 0.0], [2.0, 1.0]])
+    }
+
+    fn triangle_uv(
+        &mut self,
+        points: [[f32; 3]; 3],
+        colors: [[f32; 4]; 3],
+        shade: bool,
+        uvs: [[f32; 2]; 3],
+    ) -> Result<(), ErrorReason> {
+        self.triangle_normals(points, colors, shade, uvs, None)
+    }
+
+    fn triangle_normals(
+        &mut self,
+        points: [[f32; 3]; 3],
+        colors: [[f32; 4]; 3],
+        shade: bool,
+        uvs: [[f32; 2]; 3],
+        normals: Option<[[f32; 3]; 3]>,
     ) -> Result<(), ErrorReason> {
         for point in points {
             checked_point(point)?;
@@ -559,6 +701,33 @@ impl MeshBuilder {
         mesh.colors
             .extend(colors.map(|color| [color[0] * factor, color[1] * factor, color[2] * factor]));
         mesh.indices.extend([base, base + 1, base + 2]);
+        let material = mesh.material.get_or_insert_with(Default::default);
+        let length = normal[0].hypot(normal[1]).hypot(normal[2]);
+        material
+            .normals
+            .extend(normals.unwrap_or([normal.map(|v| (v / length) as f32); 3]));
+        material
+            .colors
+            .extend(colors.map(|color| [color[0], color[1], color[2]]));
+        // Keep feedback constant over each face, outside its normalized UV domain.
+        // Unpainted geometry and source colours remain untouched.
+        material.uvs.extend(uvs.map(|[u, v]| {
+            [
+                u,
+                v + if shade && self.highlighted {
+                    2.0
+                } else {
+                    0.0
+                },
+            ]
+        }));
+        if shade {
+            material.data_indices.extend([base, base + 1, base + 2]);
+        } else {
+            material
+                .decoration_indices
+                .extend([base, base + 1, base + 2]);
+        }
         Ok(())
     }
 
@@ -577,8 +746,67 @@ impl MeshBuilder {
         color: [f32; 4],
         shade: bool,
     ) -> Result<(), ErrorReason> {
-        self.face([points[0], points[1], points[2]], color, shade)?;
-        self.face([points[0], points[2], points[3]], color, shade)
+        self.quad_uv(
+            points,
+            color,
+            shade,
+            [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        )
+    }
+
+    fn quad_uv(
+        &mut self,
+        points: [[f32; 3]; 4],
+        color: [f32; 4],
+        shade: bool,
+        uvs: [[f32; 2]; 4],
+    ) -> Result<(), ErrorReason> {
+        self.triangle_uv(
+            [points[0], points[1], points[2]],
+            [color; 3],
+            shade,
+            [uvs[0], uvs[1], uvs[2]],
+        )?;
+        self.triangle_uv(
+            [points[0], points[2], points[3]],
+            [color; 3],
+            shade,
+            [uvs[0], uvs[2], uvs[3]],
+        )
+    }
+
+    fn subdivided_quad(
+        &mut self,
+        points: [[f32; 3]; 4],
+        color: [f32; 4],
+        steps: usize,
+    ) -> Result<(), ErrorReason> {
+        let at = |u: f32, v: f32| {
+            std::array::from_fn(|axis| {
+                (points[0][axis] * (1.0 - u) + points[1][axis] * u) * (1.0 - v)
+                    + (points[3][axis] * (1.0 - u) + points[2][axis] * u) * v
+            })
+        };
+        for y in 0..steps {
+            for x in 0..steps {
+                let u0 = x as f32 / steps as f32;
+                let u1 = (x + 1) as f32 / steps as f32;
+                let v0 = y as f32 / steps as f32;
+                let v1 = (y + 1) as f32 / steps as f32;
+                self.quad_uv(
+                    [at(u0, v0), at(u1, v0), at(u1, v1), at(u0, v1)],
+                    color,
+                    true,
+                    [
+                        [u0, 1.0 - v0],
+                        [u1, 1.0 - v0],
+                        [u1, 1.0 - v1],
+                        [u0, 1.0 - v1],
+                    ],
+                )?;
+            }
+        }
+        Ok(())
     }
 
     fn outline(
@@ -1149,6 +1377,7 @@ fn annotate(
     mark: PlotMark,
     frame: &PlotFrame3d,
     mark_size: f32,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<(), ErrorReason> {
     let PlotMark {
         row,
@@ -1163,7 +1392,7 @@ fn annotate(
         .into_iter()
         .flatten()
     {
-        if label.highlighted && mark_size > 0.0 {
+        if frame.mark_outlines && label.highlighted && mark_size > 0.0 {
             let r = mark_size * 0.65;
             let highlight = [0.0, 0.95, 1.0, 1.0];
             let corners: [[f32; 3]; 8] = std::array::from_fn(|i| {
@@ -1188,34 +1417,55 @@ fn annotate(
         if label.text.is_empty() {
             continue;
         }
-        let font = frame.font_size;
+        // A shared paint uses ordinary GUI logical units; this affine preserves
+        // the exact authored physical font and chart-relative label displacement.
+        let unit = if callout.is_some() {
+            frame.font_size / 16.0
+        } else {
+            1.0
+        };
+        let font = frame.font_size / unit;
         // Pie direction is selected by projection, not a client-provided offset.
         let position = if radial.is_some() {
             [0.0, 0.0]
         } else {
-            label.offset
+            label.offset.map(|v| v / unit)
         };
-        let width = (label.text.chars().count() as f32 * font * 0.62 + font).max(font * 2.0);
-        let height = font * 1.6;
+        let padding = callout.map_or([font * 0.4, font * 0.3], |style| {
+            [style.padding_x * font, style.padding_y * font]
+        });
+        let extent = super::callout::text_extent(&label.text, font);
+        let width = callout.map_or((extent[0] + font).max(font * 2.0), |_| {
+            extent[0] + 2.0 * padding[0]
+        });
+        let height = callout.map_or(font * 1.6, |_| extent[1] + 2.0 * padding[1]);
         let mut primitives = Vec::new();
         let p = [position[0], position[1] - height];
         primitives.push(PlotPrimitive {
+            data_mark: false,
             part: 1,
             position: p,
-            color: [0.002, 0.016, 0.025, 0.95],
-            kind: PlotPrimitiveKind::Box {
-                size: [width, height],
-                border_width: frame.line_width,
-                border_color: color,
-            },
+            color: callout.map_or([0.002, 0.016, 0.025, 0.95], PlotCalloutStyle::color),
+            kind: callout.map_or(
+                PlotPrimitiveKind::Box {
+                    size: [width, height],
+                    border_width: frame.line_width,
+                    border_color: color,
+                },
+                |style| PlotPrimitiveKind::CalloutBox {
+                    size: [width, height],
+                    radius: style.radius * font,
+                    border_width: style.border_width * font,
+                },
+            ),
         });
         primitives.push(PlotPrimitive::text(
             2,
             // Text's position is a layout top, not an alphabetic baseline.
-            [p[0] + font * 0.4, p[1] + font * 0.3],
+            [p[0] + padding[0], p[1] + padding[1]],
             label.text.clone(),
             font,
-            frame.color(),
+            callout.map_or(frame.color(), PlotCalloutStyle::text_color),
         ));
         let panel = next_plane_part(output)?;
         output.planes.push(PlotPlane {
@@ -1229,7 +1479,7 @@ fn annotate(
                     spacing: label.offset[0].hypot(label.offset[1]),
                 }
             }),
-            model: plane_model(point, [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
+            model: plane_model(point, [unit, 0.0, 0.0], [0.0, -unit, 0.0]),
             clip: [
                 p[0].min(0.0) - font,
                 p[1].min(0.0) - font,
@@ -1244,8 +1494,10 @@ fn annotate(
                 facing: PlotPlaneFacing::Camera,
                 layout: PlotPlaneLayout::Connector {
                     panel,
-                    endpoint: position,
-                    width: frame.line_width,
+                    endpoint: position.map(|v| v * unit),
+                    width: callout.map_or(frame.line_width, |style| {
+                        style.leader_width * frame.font_size
+                    }),
                 },
                 placement: PlotPlanePlacement::Fixed,
                 model: plane_model(point, [1.0, 0.0, 0.0], [0.0, -1.0, 0.0]),
@@ -1255,7 +1507,7 @@ fn annotate(
                 primitives: vec![polygon(
                     0,
                     &[[0.0, -0.5], [1.0, -0.5], [1.0, 0.5], [0.0, 0.5]],
-                    color,
+                    callout.map_or(color, PlotCalloutStyle::leader_color),
                 )],
             });
         }

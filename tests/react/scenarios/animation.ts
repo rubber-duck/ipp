@@ -47,7 +47,12 @@ export async function animationComponents(
     if (!ok) throw new Error(message);
     checks.push(message);
   };
-  const scene = (start: number, show = true, failed = false) =>
+  const scene = (
+    start: number,
+    show = true,
+    failed = false,
+    playing?: boolean,
+  ) =>
     React.createElement(
       React.StrictMode,
       null,
@@ -59,6 +64,7 @@ export async function animationComponents(
           bindings: [{ track: 0, property }],
           ref,
           speed: 0,
+          ...(playing === undefined ? {} : { playing }),
         }),
       React.createElement(
         Entity,
@@ -184,6 +190,18 @@ export async function animationComponents(
     check(
       (await snapshot()).value === 25,
       "restart pause and seek control real Host playback",
+    );
+    await root.render(scene(20, true, false, true));
+    check(
+      (await snapshot()).controllers[0]?.state === "playing",
+      "live playing prop resumes the existing native controller",
+    );
+    await root.render(scene(20, true, false, false));
+    const controlled = await snapshot();
+    check(
+      controlled.controllers[0]?.state === "paused" &&
+        controlled.controllers[0]?.id === ids[0],
+      "live playing prop pauses without replacing controller identity",
     );
     await root.render(scene(20, false));
     check(

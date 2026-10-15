@@ -1,21 +1,39 @@
+import type { GuiSkinTheme } from "../gui/skin-types.js";
 /**
  * The kit's looks: theme tables built from the design-language tokens and the
- * built-in looks of the receiving runtime's generated contract, never from
- * copied values. `GuiKit` declares every table once per World as an ordinary
+ * explicit client recipes. `GuiKit` declares every table once per World as an ordinary
  * theme entity with the tokens' `em`, so lengths follow the font each skinned
  * entity inherits; kit components reference them through `useGuiKit().theme`.
  *
  * Entities that are not controls paint only their Background part's base row,
  * so their tables are one row. A kit component's tables live in its section
- * below; the rules they follow are the skin lab's design language
- * (`tests/gui/skin-lab/README.md`).
+ * below. These are reusable recipe builders; the caller supplies their design tokens.
  */
 import type {
   GuiKitColor,
   GuiKitContract,
+  GuiKitTokens,
   GuiKitLook,
   GuiKitRow,
 } from "./kit.js";
+
+export interface GuiKitRecipeInputs extends GuiKitContract {
+  readonly tokens: GuiKitTokens;
+  readonly looks: Readonly<
+    Record<
+      | "button"
+      | "checkbox"
+      | "amber"
+      | "secondary"
+      | "secondaryAmber"
+      | "docked"
+      | "textInput"
+      | "scroll",
+      GuiKitLook
+    >
+  > &
+    Readonly<Record<string, GuiKitLook>>;
+}
 
 type Corners = readonly [number, number, number, number];
 
@@ -26,7 +44,7 @@ const SQUARE: Corners = [0, 0, 0, 0];
 const CLEAR: GuiKitColor = [0, 0, 0, 0];
 
 /** One table of rows and the font size their lengths were designed at. */
-interface KitTheme {
+export interface KitTheme extends GuiSkinTheme {
   readonly rows: readonly GuiKitRow[];
   readonly em: number;
 }
@@ -64,8 +82,8 @@ function over(
 const ALERT_TINT = 0.01;
 
 /**
- * A built-in look's rows with `overrides` merged property by property at
- * their paint keys, as a theme sits on a default look.
+ * A client recipe's rows with `overrides` merged property by property at
+ * their paint keys, within an explicitly selected recipe.
  */
 function extend(
   look: GuiKitLook,
@@ -84,9 +102,9 @@ function square(rows: readonly GuiKitRow[]): readonly GuiKitRow[] {
   );
 }
 
-function catalogue(contract: GuiKitContract) {
-  const t = contract.GUI_SKIN_TOKENS;
-  const looks = contract.GUI_SKIN_LOOKS;
+export function kitThemes(contract: GuiKitRecipeInputs) {
+  const t = contract.tokens;
+  const looks = contract.looks;
   const background = contract.guiPaintPartIndex({ part: "background" });
   const state = (name: "hovered" | "pressed") =>
     contract.guiPaintPartIndex({ part: "background", state: name });
@@ -107,23 +125,17 @@ function catalogue(contract: GuiKitContract) {
   // em is scaled with the text that sets the control's font size.
   const at = (look: GuiKitLook, size: number, rows = look.parts) => ({
     rows,
+    motion: look.motion,
+    metrics: look.metrics,
     em: look.em * (size / t.textBody),
   });
 
-  // Containers: uncut, a thin frame with corner accents on all four corners,
-  // filled with the page; unlit when minimised.
+  // Containers use one continuous frame of uniform width, unlit when minimised.
   const container = (line: GuiKitColor) =>
     box({
       color: t.page,
       border_width: t.lineWidth,
       border_color: line,
-      corner_accent: [
-        t.cornerAccent,
-        t.cornerAccent,
-        t.cornerAccent,
-        t.cornerAccent,
-      ],
-      corner_accent_width: t.cornerAccentWidth,
     });
 
   // A value mark: a solid part of the part cut, as the switch block.
@@ -197,6 +209,17 @@ function catalogue(contract: GuiKitContract) {
     container: container(t.accent),
     containerUnlit: container(t.neutral),
     division: box({ color: t.neutral }),
+    // The rail shares the strip's box; selected tabs paint over this same
+    // baseline, never above a separate divider with its own layout height.
+    tabSurface: box({ color: CLEAR, paint: false, border_width: 0 }),
+    tabRail: box({
+      color: CLEAR,
+      fill_mode: 1,
+      gradient_start: [0, t.controlHeight - t.lineWidth],
+      gradient_end: [0, t.controlHeight - t.lineWidth + 0.01],
+      gradient_color0: CLEAR,
+      gradient_color1: t.neutral,
+    }),
     rule: box({ color: t.accent }),
     quiet: box({ color: t.line }),
 
@@ -223,6 +246,12 @@ function catalogue(contract: GuiKitContract) {
     // rest, and a progress fill value marks in the roles of its parts or its
     // state; each piece's own row keeps the cut on the outer ends of the run
     // only.
+    progressFrame: box({
+      color: t.surface,
+      border_width: t.lineWidth,
+      border_color: t.neutral,
+      corner_cut: paired(t.cut),
+    }),
     frame: box({
       color: t.surface,
       border_width: t.lineWidth,
@@ -260,6 +289,8 @@ function catalogue(contract: GuiKitContract) {
     // Expander: its header is a button whose content is child entities that
     // do not follow its paint states, so a press keeps the surface under the
     // hover edge, as the switch rail does, and the content stays legible.
+    expanderBody: box({ color: CLEAR, border_width: 0, paint: false }),
+    expanderBodyDisabled: box({ color: CLEAR, border_width: 0, paint: false }),
     expanderHeader: {
       rows: [{ part: pressed, color: t.surface }],
       em: looks.button.em,
@@ -272,6 +303,7 @@ function catalogue(contract: GuiKitContract) {
     // the text input look, square because it sits on those lines; the
     // scrolling body is the scroll look without a frame, since the grid's
     // lines are its frame.
+    gridFrame: box({ color: CLEAR, border_width: 0, paint: false }),
     gridRow: {
       rows: extend(looks.docked, [
         { part: background, color: CLEAR, border_width: 0 },
@@ -340,9 +372,9 @@ function catalogue(contract: GuiKitContract) {
 /**
  * Floating surfaces and the rows of menus and option lists.
  */
-function overlayThemes(contract: GuiKitContract) {
-  const t = contract.GUI_SKIN_TOKENS;
-  const looks = contract.GUI_SKIN_LOOKS;
+function overlayThemes(contract: GuiKitRecipeInputs) {
+  const t = contract.tokens;
+  const looks = contract.looks;
   const key = (
     state?: "idle" | "hovered" | "pressed" | "disabled",
     variant?: "checked",
@@ -370,6 +402,31 @@ function overlayThemes(contract: GuiKitContract) {
     ],
     em: t.em,
   });
+
+  // An autocomplete keeps its text, caret and selection while its background
+  // takes the common open-list finish. Surface-only entities ignore these parts.
+  const editingParts = new Set(
+    ["label", "caret", "selection"].flatMap((part) =>
+      [undefined, "idle", "hovered", "pressed", "disabled"].flatMap((state) =>
+        (state ? [undefined, "checked", "unchecked"] : [undefined]).map(
+          (variant) =>
+            contract.guiPaintPartIndex({
+              part,
+              ...(state ? { state } : {}),
+              ...(variant ? { variant } : {}),
+            }),
+        ),
+      ),
+    ),
+  );
+  const floating: KitTheme = {
+    ...surface(t.cut),
+    metrics: looks.textInput.metrics,
+    rows: [
+      ...surface(t.cut).rows,
+      ...looks.textInput.parts.filter((row) => editingParts.has(row.part)),
+    ],
+  };
 
   // A menu row or option is a docked button that paints nothing at rest.
   // The active row, which the runtime paints as hovered whether the pointer
@@ -403,7 +460,7 @@ function overlayThemes(contract: GuiKitContract) {
   };
 
   return {
-    floating: surface(t.cut),
+    floating,
     floatingSmall: surface(t.partCut),
     menuRow: row(looks.docked, t.accent),
     menuRowAmber: row(
@@ -419,12 +476,12 @@ function overlayThemes(contract: GuiKitContract) {
 /**
  * Choice composites: radio options, segments, tabs and tree chevrons, all
  * Buttons whose selection paints through the checked variants. Each table
- * extends a built-in look, so the states it does not restyle stay the
+ * extends a client recipe, so the states it does not restyle stay the
  * language's own.
  */
-function choiceThemes(contract: GuiKitContract) {
-  const t = contract.GUI_SKIN_TOKENS;
-  const looks = contract.GUI_SKIN_LOOKS;
+function choiceThemes(contract: GuiKitRecipeInputs) {
+  const t = contract.tokens;
+  const looks = contract.looks;
   type Part = "background" | "icon" | "label" | "focusRing";
   type State = "idle" | "hovered" | "pressed" | "disabled";
   const key = (part: Part, state?: State, variant?: "checked") =>
@@ -440,20 +497,33 @@ function choiceThemes(contract: GuiKitContract) {
 
   // The radio mark: a functional circle, the box rounded to half its side
   // around a dark interior, the focus ring on the same circle. Selected, the
-  // ring is lit and the Icon, the Button's centred square of 0.55 its side,
-  // is a filled dot: the arc shape (2) thicker than its radius. Pressed, the
+  // ring is lit and the Icon is a filled dot: the arc shape (2) thicker
+  // than its radius. Choice marks keep their own visual/hit sizes. Pressed, the
   // circle fills as every pressed part does and the dot takes the surface.
-  const round = [t.icon / 2, t.icon / 2];
+  const indicator = t.choiceIndicator ?? t.icon;
+  const target = t.choiceTarget ?? t.icon;
+  const outset = [(indicator - target) / 2, (indicator - target) / 2];
+  const round = [indicator / 2, indicator / 2];
   const radio = extend(looks.button, [
-    { part: background, corner_cut: SQUARE, corner_radius: round },
+    {
+      part: background,
+      corner_cut: SQUARE,
+      corner_radius: round,
+      ...(t.choiceIndicator === undefined ? {} : { outset }),
+    },
     ...checked("background", ["idle", "hovered", "disabled"], {
       color: t.surface,
     }),
-    { part: key("icon"), shape: 2, border_width: t.icon, color: CLEAR },
+    { part: key("icon"), shape: 2, border_width: indicator, color: CLEAR },
     ...checked("icon", ["idle", "hovered"], { color: t.accent }),
     ...checked("icon", ["pressed"], { color: t.surface }),
     ...checked("icon", ["disabled"], { color: t.neutral }),
-    { part: key("focusRing"), corner_cut: SQUARE, corner_radius: round },
+    {
+      part: key("focusRing"),
+      corner_cut: SQUARE,
+      corner_radius: round,
+      ...(t.choiceIndicator === undefined ? {} : { outset }),
+    },
   ]);
 
   // A bare button: only its label, which `hover` lights while the pointer
@@ -505,7 +575,7 @@ function choiceThemes(contract: GuiKitContract) {
     em: looks.secondary.em,
   });
 
-  // Tabs: clear at rest, lit by hover and focus on their part-cut contour.
+  // Tabs are docked to the panel baseline, so their corners stay square.
   // Selected, the label is lit and an accent bar the selection gutter thick
   // runs along the tab's bottom edge, on the strip's line, so selection
   // reads apart from focus; a filled tab would read as a segment.
@@ -518,7 +588,18 @@ function choiceThemes(contract: GuiKitContract) {
   });
 
   return {
-    radio: { rows: radio, em: looks.button.em },
+    radio: {
+      rows: radio,
+      em: looks.button.em,
+      ...(t.choiceIndicator === undefined
+        ? {}
+        : {
+            metrics: {
+              ...looks.button.metrics,
+              icon_ratio: (0.45 * indicator) / target,
+            },
+          }),
+    },
     radioLabel: bare(false),
     segmentFirst: segment([t.cut, 0, 0, 0], false),
     segment: segment(SQUARE, true),
@@ -526,11 +607,25 @@ function choiceThemes(contract: GuiKitContract) {
     segmentOnly: segment(paired(t.cut), false),
     tab: {
       rows: extend(looks.secondary, [
-        { part: background, color: CLEAR, border_width: 0 },
-        ...checked("background", ["idle", "hovered"], bar(t.accent)),
+        { part: background, color: CLEAR, border_width: 0, corner_cut: SQUARE },
+        {
+          part: key("background", "hovered"),
+          color: t.rowTint,
+          border_width: 0,
+          glow_intensity: 0,
+        },
+        {
+          part: key("background", "pressed"),
+          color: t.rowTint,
+          border_width: 0,
+          glow_intensity: 0,
+        },
+        { part: key("label", "pressed"), color: t.accent },
+        ...checked("background", enabled, bar(t.accent)),
         ...checked("background", ["disabled"], bar(t.neutral)),
-        ...checked("label", ["idle", "hovered"], { color: t.accent }),
+        ...checked("label", enabled, { color: t.accent }),
         ...checked("label", ["disabled"], { color: t.neutral }),
+        { part: key("focusRing"), corner_cut: SQUARE, glow_intensity: 0 },
       ]),
       em: looks.secondary.em,
     },
@@ -553,9 +648,9 @@ const CHEVRON: readonly (readonly [number, number])[] = [
  * Selection controls: the trigger of a dropdown, its chevron and the rows of
  * an option list whose options toggle.
  */
-function selectThemes(contract: GuiKitContract) {
-  const t = contract.GUI_SKIN_TOKENS;
-  const looks = contract.GUI_SKIN_LOOKS;
+function selectThemes(contract: GuiKitRecipeInputs) {
+  const t = contract.tokens;
+  const looks = contract.looks;
   type State = "idle" | "hovered" | "pressed" | "disabled";
   const key = (
     part: "background" | "icon",
@@ -661,15 +756,15 @@ function selectThemes(contract: GuiKitContract) {
 }
 
 /** Names of the kit's themes. */
-export type KitThemeName = keyof ReturnType<typeof catalogue>;
+export type KitThemeName = keyof ReturnType<typeof kitThemes>;
 
 /** Every kit theme as its encoded `GuiTheme` fields, rows in paint-key order. */
 export function encodeKitThemes(
-  contract: GuiKitContract,
+  contract: GuiKitRecipeInputs,
 ): Readonly<
   Record<KitThemeName, { parts: Uint8Array<ArrayBuffer>; em: number }>
 > {
-  const themes = catalogue(contract);
+  const themes = kitThemes(contract);
   return Object.fromEntries(
     Object.entries(themes).map(([name, { rows, em }]) => {
       const ordered = [...rows].sort((left, right) => left.part - right.part);

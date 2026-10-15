@@ -204,6 +204,8 @@ def parser() -> argparse.ArgumentParser:
     importing.add_argument("--namespace", default="scene")
     importing.add_argument("--world", default="world.ipp")
     importing.add_argument("--clips-only", action="store_true")
+    importing.add_argument("--system", action="append", default=[])
+    importing.add_argument("--native", action="store_true")
     tracing = commands.add_parser(
         "trace",
         help="capture bounded instrumentation timelines outside ordinary timing",
@@ -523,9 +525,11 @@ def make_plan(args: argparse.Namespace) -> Plan:
                 "--world",
                 args.world,
                 *(["--clips-only"] if args.clips_only else []),
+                *[part for system in args.system for part in ("--system", system)],
+                *(["--native"] if args.native else []),
             ),
-            ("build:browser:render",),
-            ("node", "npm", "browser"),
+            ("build:native" if args.native else "build:browser:render",),
+            ("node", "npm") if args.native else ("node", "npm", "browser"),
         )
         requested = [id_]
     elif args.command == "trace":

@@ -29,6 +29,8 @@ fn flush(thickness: f32) -> GuiScrollBarStyle {
         thickness,
         inset: 0.0,
         end_inset: 0.0,
+        tip_ratio: 0.5,
+        min_thumb_ratio: 2.0,
     }
 }
 
@@ -110,33 +112,47 @@ fn vertical_thumb_follows_viewport_ratio_and_offset_between_the_pointed_ends() {
 }
 
 #[test]
-fn default_fields_follow_one_bar_thickness_of_the_font() {
+fn absent_bar_fields_take_authored_skin_dimensions() {
+    let metrics = crate::systems::gui::presentation::GuiMetrics {
+        scroll_thickness: 8.0,
+        scroll_inset: 8.0,
+        scroll_end_inset: 4.0,
+        scroll_tip_ratio: 0.5,
+        scroll_min_thumb_ratio: 2.0,
+        ..Default::default()
+    };
     // Half a 16-unit font thick, one thickness in from the far side and half
     // of one from the ends: the design language's bar 8 at inset 8.
     assert_eq!(
-        GuiScrollBarStyle::from_fields([-1.0; 3], 16.0),
+        GuiScrollBarStyle::from_fields([-1.0; 3], &metrics),
         GuiScrollBarStyle {
             thickness: 8.0,
             inset: 8.0,
             end_inset: 4.0,
+            tip_ratio: 0.5,
+            min_thumb_ratio: 2.0,
         }
     );
 
     // Default insets follow an authored thickness; authored insets stay.
     assert_eq!(
-        GuiScrollBarStyle::from_fields([4.0, -1.0, -1.0], 16.0),
+        GuiScrollBarStyle::from_fields([4.0, -1.0, -1.0], &metrics),
         GuiScrollBarStyle {
             thickness: 4.0,
-            inset: 4.0,
-            end_inset: 2.0,
+            inset: 8.0,
+            end_inset: 4.0,
+            tip_ratio: 0.5,
+            min_thumb_ratio: 2.0,
         }
     );
     assert_eq!(
-        GuiScrollBarStyle::from_fields([-1.0, 0.0, 1.0], 16.0),
+        GuiScrollBarStyle::from_fields([-1.0, 0.0, 1.0], &metrics),
         GuiScrollBarStyle {
             thickness: 8.0,
             inset: 0.0,
             end_inset: 1.0,
+            tip_ratio: 0.5,
+            min_thumb_ratio: 2.0,
         }
     );
 }
@@ -149,6 +165,8 @@ fn authored_insets_place_the_bar_inside_the_control_box() {
         thickness: 10.0,
         inset: 9.5,
         end_inset: 5.0,
+        tip_ratio: 0.5,
+        min_thumb_ratio: 2.0,
     };
     let rows = view([226.0, 78.0], [198.0, 208.0]);
     let bar = ordinary_scroll_bars(&rows, [226.0, 82.0], style, [0.0; 2], &[]);
@@ -185,6 +203,8 @@ fn both_axes_share_the_corner_and_thumbs_keep_a_minimum_length() {
         thickness: 10.0,
         inset: 4.0,
         end_inset: 2.0,
+        tip_ratio: 0.5,
+        min_thumb_ratio: 2.0,
     };
     let both = bars(inset, [200.0, 120.0], [400.0, 20_000.0], [0.0; 2], &[]);
     assert_rect(both[0].track, [2.0, 106.0, 184.0, 10.0]);

@@ -70,81 +70,232 @@ async function serveSite(prefix) {
 
 async function captureScene(page) {
   return page.evaluate(async () => {
-    const handle = window.ippWorldCanvas;
+    const handle = window.ippDemoCanvas;
     if (!handle) throw new Error("Gallery did not expose its live canvas");
-    const output = handle.view?.binding.output;
-    if (!output) throw new Error("Gallery did not select a root view");
-    const sameWorld =
-      output.world.id === handle.client.worldReference?.id &&
-      output.world.incarnation === handle.client.worldReference?.incarnation;
-    const client = sameWorld
-      ? handle.client
-      : await handle.host.openWorld(output.world);
+    const output = window.ippDemoApplication.sceneOutput;
+    const client = handle.client;
     const deadline = performance.now() + 60_000;
-    try {
-      for (;;) {
-        await handle.flush();
-        const state = await client.inspect();
-        const failed = state.resources.find(
-          (resource) => resource.status === "failed",
+    for (;;) {
+      await window.ippDemoApplication.flush();
+      await handle.flush();
+      const state = await client.inspect();
+      const cockpit =
+        window.ippDemoApplication.sceneId === "cockpit"
+          ? await window.ippDemoApplication.inspect()
+          : undefined;
+      const resources = [
+        ...state.resources,
+        ...(cockpit?.panels.flatMap((panel) => panel.resources) ?? []),
+      ];
+      const failed = resources.find((resource) => resource.status === "failed");
+      if (failed) throw new Error(`${failed.source}: ${failed.error}`);
+      if (resources.every((resource) => resource.status === "loaded")) {
+        if (state.renderDiagnostics.length)
+          throw new Error(JSON.stringify(state.renderDiagnostics));
+        const focusedPanel =
+          cockpit?.panels[Math.round(cockpit.options.carousel)];
+        const frame = await handle.capture({
+          afterOutputs: [
+            ...window.ippDemoApplication.frameOutputs,
+            ...(focusedPanel
+              ? [{ kind: "canvas", world: focusedPanel.world }]
+              : []),
+          ],
+        });
+        const source = frame.sources.find(
+          (source) =>
+            source.output.entity === output.entity &&
+            source.output.world.id === output.world.id &&
+            source.output.world.incarnation === output.world.incarnation,
         );
-        if (failed) throw new Error(`${failed.source}: ${failed.error}`);
-        if (state.resources.every((resource) => resource.status === "loaded")) {
-          if (state.renderDiagnostics.length)
-            throw new Error(JSON.stringify(state.renderDiagnostics));
-          const frame = await handle.capture({ afterOutputs: [output] });
-          const source = frame.sources.find(
-            (source) =>
-              source.output.entity === output.entity &&
-              source.output.world.id === output.world.id &&
-              source.output.world.incarnation === output.world.incarnation,
-          );
-          if (!source || source.tick < state.tick)
-            throw new Error("Capture predates the inspected World");
-          const { width, height } = frame.view.binding.viewport;
-          const pixels = new Uint8ClampedArray(frame.pixels);
-          let foreground = 0;
-          for (let offset = 0; offset < pixels.length; offset += 4) {
-            const difference =
-              Math.abs(pixels[offset] - pixels[0]) +
-              Math.abs(pixels[offset + 1] - pixels[1]) +
-              Math.abs(pixels[offset + 2] - pixels[2]);
-            if (difference > 40 && pixels[offset + 3] > 200) foreground++;
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = width;
-          canvas.height = height;
-          canvas
-            .getContext("2d")
-            .putImageData(new ImageData(pixels, width, height), 0, 0);
-          return {
-            width,
-            height,
-            drawCalls: frame.drawCalls,
-            triangles: frame.triangles,
-            foreground,
-            entities: state.entities.length,
-            sources: state.resources.map(({ source }) => source),
-            png: canvas.toDataURL("image/png"),
-          };
+        if (!source || source.tick < state.tick)
+          throw new Error("Capture predates the inspected World");
+        const { width, height } = frame.view.binding.viewport;
+        const pixels = new Uint8ClampedArray(frame.pixels);
+        let foreground = 0;
+        let fallbackRed = 0;
+        let blueInk = 0;
+        for (let offset = 0; offset < pixels.length; offset += 4) {
+          if (
+            pixels[offset] > 240 &&
+            pixels[offset + 1] < 16 &&
+            pixels[offset + 2] < 16
+          )
+            fallbackRed++;
+          if (
+            pixels[offset + 2] > pixels[offset] + 20 &&
+            pixels[offset + 1] > 70
+          )
+            blueInk++;
+          const difference =
+            Math.abs(pixels[offset] - pixels[0]) +
+            Math.abs(pixels[offset + 1] - pixels[1]) +
+            Math.abs(pixels[offset + 2] - pixels[2]);
+          if (difference > 40 && pixels[offset + 3] > 200) foreground++;
         }
-        if (performance.now() >= deadline)
-          throw new Error("Gallery resources did not finish loading");
-        await client.waitForFrame(state.tick);
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas
+          .getContext("2d")
+          .putImageData(new ImageData(pixels, width, height), 0, 0);
+        return {
+          width,
+          height,
+          drawCalls: frame.drawCalls,
+          triangles: frame.triangles,
+          foreground,
+          fallbackRed,
+          blueInk,
+          sequence: String(frame.sequence),
+          cockpit: cockpit && {
+            sceneWorld: `${output.world.incarnation}:${output.world.id}`,
+            focusedPanel: Math.round(cockpit.options.carousel),
+            panels: cockpit.panels.map((panel) => ({
+              world: `${panel.world.incarnation}:${panel.world.id}`,
+              entities: panel.entities.length,
+              sources: panel.resources.map(({ source }) => source),
+              completed: frame.sources.some(
+                (source) =>
+                  source.output.kind === "canvas" &&
+                  source.output.world.id === panel.world.id &&
+                  source.output.world.incarnation === panel.world.incarnation &&
+                  source.tick >= panel.tick,
+              ),
+            })),
+            exterior: ["cockpit-space", "cockpit-planet"].map((name) => {
+              const entity = state.entities.find(
+                (entity) => entity.metadata.symbolicId === name,
+              );
+              const material = entity?.components.find(
+                (component) =>
+                  component.component === client.components.CustomMaterial.id,
+              );
+              return {
+                name,
+                custom: !!material,
+                properties: Object.keys(material?.properties ?? {}),
+              };
+            }),
+          },
+          entities: state.entities.length,
+          sources: state.resources.map(({ source }) => source),
+          png: canvas.toDataURL("image/png"),
+        };
       }
-    } finally {
-      if (!sameWorld) await client.close();
+      if (performance.now() >= deadline)
+        throw new Error("Gallery resources did not finish loading");
+      await client.waitForFrame(state.tick);
     }
   });
 }
 
+async function press(page, id) {
+  // Browser mouse events enqueue transport work. A declaration flush alone
+  // does not establish that the previous click opened and laid out its menu.
+  await page.waitForFunction(async (id) => {
+    const app = window.ippDemoApplication;
+    const canvas = window.ippDemoCanvas;
+    await app.flush();
+    await canvas.frame({ afterOutputs: app.frameOutputs });
+    const root = await canvas.host.openWorld(app.output.world);
+    try {
+      const state = await root.inspect();
+      const entity = state.entities.find(
+        (entity) => entity.metadata.symbolicId === id,
+      );
+      const fields = (entity, name) =>
+        entity?.components.find(
+          (component) => component.component === root.components[name].id,
+        )?.fields;
+      const bounds = fields(entity, "CanvasBounds");
+      if (id.startsWith("demo-scene-picker/options/")) {
+        const menu = state.entities.find(
+          (entity) => entity.metadata.symbolicId === "demo-scene-picker/list",
+        );
+        if (
+          !fields(menu, "GuiOverlay") ||
+          fields(menu, "GuiBehavior")?.visible !== true
+        )
+          return false;
+      }
+      return (
+        bounds &&
+        [bounds.x, bounds.y, bounds.width, bounds.height].every(
+          Number.isFinite,
+        ) &&
+        bounds.width > 0 &&
+        bounds.height > 0
+      );
+    } finally {
+      await root.close();
+    }
+  }, id);
+  const point = await page.evaluate(async (id) => {
+    const app = window.ippDemoApplication;
+    const canvas = window.ippDemoCanvas;
+    const root = await canvas.host.openWorld(app.output.world);
+    try {
+      const state = await root.inspect();
+      const entity = state.entities.find(
+        (entity) => entity.metadata.symbolicId === id,
+      );
+      const bounds = entity.components.find(
+        (component) => component.component === root.components.CanvasBounds.id,
+      ).fields;
+      const rect = document
+        .querySelector("#ipp-demo-canvas")
+        .getBoundingClientRect();
+      const viewport = canvas.viewport;
+      return {
+        entity: String(entity.id),
+        x:
+          rect.x +
+          (((bounds.x + bounds.width / 2) * viewport.devicePixelRatio) /
+            viewport.width) *
+            rect.width,
+        y:
+          rect.y +
+          (((bounds.y + bounds.height / 2) * viewport.devicePixelRatio) /
+            viewport.height) *
+            rect.height,
+      };
+    } finally {
+      await root.close();
+    }
+  }, id);
+  await page.mouse.move(point.x, point.y);
+  await page.waitForFunction(async (entity) => {
+    const app = window.ippDemoApplication;
+    const canvas = window.ippDemoCanvas;
+    await canvas.frame({ afterOutputs: app.frameOutputs });
+    const root = await canvas.host.openWorld(app.output.world);
+    try {
+      const page = await root.inspectPage({ collection: "guiPointers" });
+      return page.guiPointers?.some(
+        (pointer) =>
+          String(pointer.target.entity) === entity && pointer.state.hovered,
+      );
+    } finally {
+      await root.close();
+    }
+  }, point.entity);
+  await page.mouse.click(point.x, point.y);
+  await page.evaluate(async () => {
+    const app = window.ippDemoApplication;
+    await app.flush();
+    await window.ippDemoCanvas.frame({ afterOutputs: app.frameOutputs });
+  });
+}
+
 async function selectScene(page, scene) {
-  await page.locator("#scene-picker-trigger").click();
-  await page.locator(`#world-${scene}`).click();
+  await press(page, "demo-scene-picker");
+  await press(page, `demo-scene-picker/options/${scene}`);
 }
 
 test("the release gallery is complete and renders at root and project URLs", {
-  timeout: 240_000,
+  // Both URL layouts render every scene; software WebGL needs a full-run budget.
+  timeout: 360_000,
 }, async () => {
   const report = JSON.parse(
     await readFile(resolve(site, "build-report.json"), "utf8"),
@@ -164,6 +315,19 @@ test("the release gallery is complete and renders at root and project URLs", {
       entry.sha256,
     );
   }
+  const cockpitManifest = JSON.parse(
+    await readFile(resolve(site, "assets/cockpit/manifest.json"), "utf8"),
+  );
+  const exteriorPaths = [
+    ...cockpitManifest.exterior.bodies.map(({ baseTexture }) => baseTexture),
+    ...Object.values(cockpitManifest.exterior.textures),
+  ].map((source) => {
+    assert.ok(
+      source.startsWith("/assets/"),
+      `Invalid exterior texture: ${source}`,
+    );
+    return `assets/cockpit/${source.slice("/assets/".length)}`;
+  });
   await mkdir(evidenceRoot, { recursive: true });
   const evidence = await mkdtemp(resolve(evidenceRoot, "run-"));
   const browser = await chromium.launch(browserLaunchOptions());
@@ -171,23 +335,7 @@ test("the release gallery is complete and renders at root and project URLs", {
     for (const prefix of ["/", "/preview/ipp/"]) {
       const server = await serveSite(prefix);
       const context = await browser.newContext({
-        viewport: { width: 1280, height: 900 },
-      });
-      // Rasterize half the canvas width and height, as the gallery scenarios
-      // do (`confineGalleryCanvas` in
-      // tests/gallery/drivers/browser-gallery.ts): the published desktop
-      // layout stays and its canvas frame takes half of the showcase per axis.
-      // This scenario proves the published files, not the canvas size.
-      await context.addInitScript(() => {
-        const style = document.createElement("style");
-        style.textContent =
-          ".viewer-shell .canvas-frame { width: 50%; height: 50%; }";
-        const install = () => document.head.append(style);
-        if (document.head) install();
-        else
-          document.addEventListener("DOMContentLoaded", install, {
-            once: true,
-          });
+        viewport: { width: 800, height: 600 },
       });
       const page = await context.newPage();
       page.setDefaultTimeout(60_000);
@@ -200,31 +348,33 @@ test("the release gallery is complete and renders at root and project URLs", {
       const label = prefix === "/" ? "root" : "project";
       try {
         // The fragment also proves direct links do not require an SPA rewrite.
-        const initialScene = prefix === "/" ? "gui" : "platformer";
+        const initialScene = prefix === "/" ? "shapes" : "platformer";
         await page.goto(`${server.url}#${initialScene}`);
+        let cockpitWorlds = [];
         for (const [index, scene] of [
           initialScene,
           "platformer",
           "shapes",
           "lighting",
           "particles",
-          "gui",
           "charts",
+          "cockpit",
           "shapes",
         ].entries()) {
           if (index > 0) await selectScene(page, scene);
-          await page.waitForFunction((expected) => {
-            const state = document.querySelector("#status")?.dataset.state;
-            return (
-              document.querySelector(".viewer-shell")?.dataset.page ===
-                expected &&
-              (state === "ready" || state === "error")
-            );
-          }, scene);
+          await page.waitForFunction(
+            (expected) =>
+              window.ippDemoApplication?.sceneId === expected &&
+              !!window.ippDemoCanvas,
+            scene,
+          );
+          await page.evaluate(async () => {
+            await window.ippDemoApplication.ready;
+            await window.ippDemoApplication.flush();
+          });
           assert.equal(
-            await page.locator("#status").getAttribute("data-state"),
-            "ready",
-            await page.locator("#status").innerText(),
+            await page.evaluate(() => window.ippDemoApplication.sceneId),
+            scene,
           );
           const { png, ...frame } = await captureScene(page);
           await writeFile(
@@ -244,99 +394,74 @@ test("the release gallery is complete and renders at root and project URLs", {
             `${scene}: captured frame is blank`,
           );
           assert.ok(frame.entities > 0, `${scene}: no World entities`);
-          if (scene === "charts") {
-            const controls = page.locator("#controls-toggle");
-            if ((await controls.getAttribute("aria-expanded")) === "false")
-              await controls.click();
+          if (scene === "cockpit") {
             assert.equal(
-              await page.locator("#charts-playback").count(),
-              0,
-              "Published charts have no decorative animation control",
+              frame.cockpit.panels.length,
+              5,
+              "all projected GUI panel Worlds load",
             );
-            await page.evaluate(async () => {
-              const state = await window.ippGalleryScene.inspect();
-              for (const chart of state.charts)
-                if (
-                  chart.inspection.controllers?.some((controller) =>
-                    controller.description.drivers.some(
-                      (driver) => driver.target === chart.entity,
-                    ),
-                  )
-                )
-                  throw new Error(
-                    "Published chart data must have no animation controller",
-                  );
-              const eye = state.camera.transform;
-              if (
-                state.camera.navigation !== "look" ||
-                Math.hypot(eye.x, eye.y - 6, eye.z) > 0.001
-              )
-                throw new Error(
-                  "The published ring must start with the camera at its center",
+            assert.equal(
+              new Set(frame.cockpit.panels.map(({ world }) => world)).size,
+              5,
+            );
+            assert.ok(
+              frame.cockpit.panels.every(
+                (panel) => panel.entities > 0 && panel.sources.length > 0,
+              ),
+              "all five panel Worlds load their entities and assets",
+            );
+            assert.ok(
+              frame.cockpit.panels[frame.cockpit.focusedPanel].completed,
+              "the focused panel contributes current completed output; off-focus panels may cache",
+            );
+            for (const exterior of frame.cockpit.exterior) {
+              assert.ok(
+                exterior.custom,
+                `${exterior.name} uses the runtime exterior shader`,
+              );
+              for (const name of [
+                "base",
+                "cities",
+                "atmosphere",
+                "stars",
+                "phase",
+                "cityPhase",
+                "starPhase",
+              ])
+                assert.ok(
+                  exterior.properties.includes(name),
+                  `${exterior.name} exposes ${name}`,
                 );
-              const worlds = await window.ippWorldCanvas.host.listWorlds();
-              if (worlds.length !== 6)
-                throw new Error(
-                  "Unified charts must own a camera World and five Canvas children",
-                );
-            });
-            const paused = await captureScene(page);
-            await page.locator("#charts-changed").click();
-            await page.waitForFunction(
-              () => document.querySelector("#charts-changed")?.checked === true,
+            }
+            assert.ok(
+              frame.fallbackRed < 256,
+              "WebGL exterior and instrument shaders avoid solid-red fallback",
             );
-            const changed = await captureScene(page);
-            assert.notEqual(
-              changed.png,
-              paused.png,
-              "Dataset control changes chart pixels",
+            assert.ok(
+              frame.blueInk > 500,
+              "projected panels contribute visible instrument ink",
             );
-            await page.locator("#charts-focus-bars").click();
-            await page.evaluate(async () => {
-              const deadline = performance.now() + 15_000;
-              for (;;) {
-                const state = await window.ippGalleryScene.inspect();
-                if (
-                  state.focus?.chart === "bars" &&
-                  state.focus.time >= 1.999
-                ) {
-                  if (state.focus.duration !== 2)
-                    throw new Error("Chart focus must take two seconds");
-                  return;
-                }
-                if (performance.now() > deadline)
-                  throw new Error("Chart camera did not focus");
-              }
-            });
-            const adjusted = await captureScene(page);
-            assert.notEqual(
-              adjusted.png,
-              changed.png,
-              "Focus control moves the rendered camera",
+            cockpitWorlds = [
+              frame.cockpit.sceneWorld,
+              ...frame.cockpit.panels.map(({ world }) => world),
+            ];
+          }
+          if (scene === "shapes") {
+            const worlds = await page.evaluate(() =>
+              window.ippDemoCanvas.host.listWorlds(),
             );
-            await writeFile(
-              resolve(evidence, `${label}-${scene}-adjusted.png`),
-              Buffer.from(adjusted.png.split(",")[1], "base64"),
+            assert.ok(
+              worlds.every(
+                (world) =>
+                  !cockpitWorlds.includes(`${world.incarnation}:${world.id}`),
+              ),
+              "returning to Shapes retires the cockpit and all five panel Worlds",
             );
-            await page.locator("#charts-focus-center").click();
-            await page.evaluate(async () => {
-              const deadline = performance.now() + 15_000;
-              for (;;) {
-                const state = await window.ippGalleryScene.inspect();
-                const eye = state.camera.transform;
-                if (
-                  state.focus?.chart === "center" &&
-                  state.focus.time >= 1.999 &&
-                  state.camera.navigation === "look" &&
-                  Math.hypot(eye.x, eye.y - 6, eye.z) < 0.001
-                )
-                  return;
-                if (performance.now() > deadline)
-                  throw new Error(
-                    "Return to center did not restore the ring camera",
-                  );
-              }
-            });
+            assert.equal(
+              worlds.length,
+              2,
+              "scene replacements retire their owned Worlds",
+            );
           }
         }
         assert.deepEqual(errors, []);
@@ -348,7 +473,12 @@ test("the release gallery is complete and renders at root and project URLs", {
           "runtime/runtime.wasm",
           "assets/shared/shure-tech-mono.ippf",
           "assets/platformer/platformer.ipp",
-          "assets/gui/projector/shell.ippm",
+          "assets/platformer/pose-origins.json",
+          "assets/cockpit/cockpit.ipp",
+          "assets/cockpit/manifest.json",
+          "assets/drawings/waveform.ippd",
+          "assets/drawings/waveform-pulse.ippd",
+          ...new Set(exteriorPaths),
         ])
           assert.ok(
             server.requests.some(({ path }) => path === prefix + required),

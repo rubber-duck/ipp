@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Toasts: brief notifications above the content that never take focus or
  * move it. Each toast is a control row in half-inset margins: its severity's
@@ -32,7 +33,7 @@ import {
   type AnimationHandle,
 } from "../../animation/declarations.js";
 import { AnimationAsset, assetRef } from "../../assets/declarations.js";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import {
   Behavior,
@@ -106,7 +107,7 @@ const SEVERITIES: Readonly<
 export interface ToastProps extends Omit<ToastItem, "key"> {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The close button's press, or the end of the toast's time. */
   readonly onDismiss?: () => void;
   /** Milliseconds before a toast that dismisses itself does; 6000 by default. */
@@ -115,7 +116,7 @@ export interface ToastProps extends Omit<ToastItem, "key"> {
 }
 
 export function Toast({
-  id,
+  id: providedId,
   layer = 0,
   severity = "information",
   text,
@@ -125,6 +126,7 @@ export function Toast({
   duration = DURATION,
   layout,
 }: ToastProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const { tone, theme, icon } = SEVERITIES[severity];
@@ -158,6 +160,7 @@ export function Toast({
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_ROW}
         height={kit.unit(height)}
@@ -229,7 +232,7 @@ export function Toast({
  * Completion ends the toast.
  */
 function Countdown({
-  id,
+  id: providedId,
   duration,
   timer,
   onEnd,
@@ -239,6 +242,7 @@ function Countdown({
   readonly timer: RefObject<AnimationHandle | null>;
   readonly onEnd?: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { reducedMotion } = kit;
   const style = kit.contract.components.CanvasStyle;
@@ -298,7 +302,7 @@ function Countdown({
 export interface ToastStackProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The toasts in the order they stack, the first nearest the stack's top. */
   readonly toasts: readonly ToastItem[];
   /** A toast's close button was pressed or its time ended. */
@@ -318,7 +322,7 @@ export interface ToastStackProps {
 const ALIGNS = { start: 0, centre: 1, end: 2 } as const;
 
 export function ToastStack({
-  id,
+  id: providedId,
   layer = 0,
   toasts,
   onDismiss,
@@ -328,12 +332,14 @@ export function ToastStack({
   duration,
   layout,
 }: ToastStackProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const shown = limit === undefined ? toasts : toasts.slice(0, limit);
   const inset = kit.unit(t.inset);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Overlay
         side={side === "top" ? 1 : 0}
         align={ALIGNS[align]}

@@ -11,6 +11,7 @@ export async function importNativeBlenderScene({
   source,
   namespace,
   clipsOnly,
+  additionalSystems,
   output,
   origin,
 }) {
@@ -111,7 +112,7 @@ export async function importNativeBlenderScene({
           return prefix + (await response.text());
         },
       },
-      { symbolicId: namespace, clipsOnly },
+      { symbolicId: namespace, clipsOnly, additionalSystems },
     );
   } finally {
     try {

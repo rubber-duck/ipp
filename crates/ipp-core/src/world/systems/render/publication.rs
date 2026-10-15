@@ -75,20 +75,72 @@ pub struct RenderPublication {
     pub state: crate::RenderState,
 }
 
+/// Capture an entity's authored custom material and retain its exact resources.
+/// Shared by ordinary render items and Plot-owned generated mesh draws.
+pub(crate) fn publish_custom_material(
+    world: &WorldContext<'_>,
+    entity: EntityId,
+    output: &mut crate::host::WorldOutputBuilder<'_>,
+) -> Option<PublishedCustomMaterial> {
+    let available = |key: AssetKey| {
+        world
+            .asset_resources()
+            .get(key)
+            .is_some_and(|provider| provider.data().is_some())
+    };
+
+    world.custom_material(entity).map(|value| {
+        let shader = world
+            .asset_source_key(SHADER_TYPE, &value.source, value.variant)
+            .filter(|key| available(*key));
+        if let Some(key) = shader {
+            output.retain(key);
+        }
+        let properties = value
+            .properties
+            .descriptors()
+            .keys()
+            .filter_map(|name| {
+                let value = value.properties.get(name)?;
+                let property = if let DynamicValue::Asset(source) = value {
+                    let key = world
+                        .asset_source_key(source.kind, &source.uri, source.variant)
+                        .filter(|key| available(*key));
+                    if let Some(key) = key {
+                        output.retain(key);
+                    }
+                    PublishedMaterialProperty::Resource(key)
+                } else {
+                    PublishedMaterialProperty::Value(value)
+                };
+                Some((name.clone(), property))
+            })
+            .collect();
+        PublishedCustomMaterial {
+            shader,
+            alpha_mode: value.alpha_mode,
+            alpha_cutoff: value.alpha_cutoff,
+            receives_light: value.receives_light,
+            receives_shadows: value.receives_shadows,
+            casts_shadows: value.casts_shadows,
+            conservative_bounds: value.conservative_bounds,
+            properties,
+        }
+    })
+}
+
 impl RenderSystem {
     pub(super) fn publish(
         &self,
         world: &WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
-        let available = |key: AssetKey| {
-            world
-                .asset_resources()
-                .get(key)
-                .is_some_and(|provider| provider.data().is_some())
-        };
+        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
         let mut items = Vec::new();
         for item in &self.state.items {
+            if !presentation.open(world.world, item.entity) {
+                continue;
+            }
             let record = &world.world.state.entities[&item.entity];
             let component = ComponentValue::MESH_INSTANCE;
             let component = if let Some(particle) = item.particle {
@@ -113,44 +165,7 @@ impl RenderSystem {
             if let Some((pose, _)) = item.pose {
                 output.retain(AssetKey::from_u64(pose.asset));
             }
-            let custom = world.custom_material(item.entity).map(|value| {
-                let shader = world
-                    .asset_source_key(SHADER_TYPE, &value.source, value.variant)
-                    .filter(|key| available(*key));
-                if let Some(key) = shader {
-                    output.retain(key);
-                }
-                let properties = value
-                    .properties
-                    .descriptors()
-                    .keys()
-                    .filter_map(|name| {
-                        let value = value.properties.get(name)?;
-                        let property = if let DynamicValue::Asset(source) = value {
-                            let key = world
-                                .asset_source_key(source.kind, &source.uri, source.variant)
-                                .filter(|key| available(*key));
-                            if let Some(key) = key {
-                                output.retain(key);
-                            }
-                            PublishedMaterialProperty::Resource(key)
-                        } else {
-                            PublishedMaterialProperty::Value(value)
-                        };
-                        Some((name.clone(), property))
-                    })
-                    .collect();
-                PublishedCustomMaterial {
-                    shader,
-                    alpha_mode: value.alpha_mode,
-                    alpha_cutoff: value.alpha_cutoff,
-                    receives_light: value.receives_light,
-                    receives_shadows: value.receives_shadows,
-                    casts_shadows: value.casts_shadows,
-                    conservative_bounds: value.conservative_bounds,
-                    properties,
-                }
-            });
+            let custom = publish_custom_material(world, item.entity, output);
             items.push(PublishedRenderItem {
                 item: *item,
                 incarnation,
@@ -161,6 +176,9 @@ impl RenderSystem {
         let lights = world
             .light_items()
             .filter_map(|(entity, model, light)| {
+                if !presentation.open(world.world, entity) {
+                    return None;
+                }
                 Some(PublishedLight {
                     entity,
                     incarnation: world
@@ -179,7 +197,13 @@ impl RenderSystem {
             Self::ID,
             RenderPublication {
                 items,
-                debug: self.state.debug_items.clone(),
+                debug: self
+                    .state
+                    .debug_items
+                    .iter()
+                    .filter(|item| presentation.open(world.world, item.entity))
+                    .cloned()
+                    .collect(),
                 lights,
                 state: self.state.render_state,
             },

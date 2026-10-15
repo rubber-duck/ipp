@@ -15,8 +15,8 @@ import {
   insertComponent,
   aliasId,
   successfulBatch,
-} from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
-import { declarePlot } from "../../../examples/world-gallery/worlds/charts/shared/declare-plot.js";
+} from "../../../examples/demos/scenes/charts/shared/commands.js";
+import { declarePlot } from "../../../examples/demos/scenes/charts/shared/declare-plot.js";
 import { check } from "../../harness/page/checks.js";
 
 interface Frame {

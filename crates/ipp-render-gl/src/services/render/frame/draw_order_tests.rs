@@ -36,7 +36,10 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
     let published: Vec<_> = items
         .iter()
         .map(|item| ipp_core::systems::render::PublishedRenderItem {
-            item: *item,
+            item: ipp_core::RenderItem {
+                custom_material: customs.contains_key(&item.entity),
+                ..*item
+            },
             incarnation: 1,
             custom: None,
             palette: None,
@@ -59,7 +62,14 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
         .iter()
         .map(|(entity, custom)| {
             (
-                crate::services::render::test_support::test_entity(entity.to_bits()),
+                crate::services::render::materials::custom_material::CustomMaterialKey {
+                    entity: crate::services::render::test_support::test_entity(entity.to_bits()),
+                    mesh: ipp_core::MeshKey {
+                        asset: 1,
+                        variant: 0,
+                    },
+                    component: ipp_core::ComponentValue::MESH_INSTANCE,
+                },
                 custom.clone(),
             )
         })
@@ -88,6 +98,69 @@ fn custom(shader: u64, alpha_mode: u32) -> PreparedCustomMaterial {
     custom.key.asset = shader;
     custom.material.alpha_mode = alpha_mode;
     custom
+}
+
+#[test]
+fn same_entity_material_candidates_keep_geometry_and_component_lifetimes_separate() {
+    use crate::services::render::outputs::scene::SceneItem;
+    use ipp_core::systems::plot::{PlotMeshVariant, PlotPreparedGeometry, PlotPublishedMesh};
+    use ipp_core::systems::render::PublishedRenderItem;
+    let ordinary = PublishedRenderItem {
+        item: RenderItem {
+            custom_material: true,
+            ..item(12, 0.0)
+        },
+        incarnation: 1,
+        custom: None,
+        palette: None,
+    };
+    let plot = PlotPublishedMesh {
+        render: PublishedRenderItem {
+            item: RenderItem {
+                mesh: MeshKey {
+                    asset: 0,
+                    variant: 0,
+                },
+                ..ordinary.item
+            },
+            ..ordinary.clone()
+        },
+        geometry: std::sync::Arc::new(PlotPreparedGeometry::default()),
+        mesh_index: 0,
+        variant: PlotMeshVariant::Data,
+    };
+    let entity = crate::services::render::test_support::test_entity(ordinary.item.entity.to_bits());
+    let target = ipp_core::systems::canvas::CanvasTarget {
+        entity: ordinary.item.entity,
+        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        incarnation: 1,
+    };
+    let mesh_item = SceneItem {
+        entity,
+        value: ordinary.item,
+        published: &ordinary,
+        derived: None,
+    };
+    let plot_item = SceneItem {
+        entity,
+        value: plot.render.item,
+        published: &plot.render,
+        derived: Some((target, &plot)),
+    };
+    let ordinary_key = mesh_item.custom_material_key();
+    let plot_key = plot_item.custom_material_key();
+    assert_ne!(ordinary_key, plot_key);
+    let candidates = BTreeMap::from([(plot_key, custom(7, 0))]);
+    assert!(!candidates.contains_key(&ordinary_key));
+    assert_eq!(candidates.get(&plot_key).unwrap().key.asset, 7);
+    let mut replacement = plot_item;
+    replacement.entity.incarnation += 1;
+    assert!(!candidates.contains_key(&replacement.custom_material_key()));
+    let mut another_component = replacement;
+    another_component.entity = entity;
+    another_component.derived.as_mut().unwrap().0.component =
+        ipp_core::ComponentValue::PLOT_GRID_BARS3D;
+    assert!(!candidates.contains_key(&another_component.custom_material_key()));
 }
 
 #[test]

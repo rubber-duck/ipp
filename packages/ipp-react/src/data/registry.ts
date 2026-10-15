@@ -17,6 +17,7 @@ export class ReactDataSourceRegistry {
   private readonly entries = new Map<string, Entry>();
   private desired = new Map<string, DataSourceDescription>();
   private readonly listeners = new Set<(state: ReactDataSourceState) => void>();
+  private readonly snapshotListeners = new Set<() => void>();
   private closed = false;
 
   constructor(
@@ -33,7 +34,7 @@ export class ReactDataSourceRegistry {
   }
 
   get(name: string): ReactDataSourceState | undefined {
-    return this.entries.get(name)?.state;
+    return this.closed ? undefined : this.entries.get(name)?.state;
   }
 
   subscribe(listener: (state: ReactDataSourceState) => void): () => void {
@@ -43,7 +44,25 @@ export class ReactDataSourceRegistry {
     };
   }
 
+  subscribeSnapshot(listener: () => void): () => void {
+    this.snapshotListeners.add(listener);
+    return () => {
+      this.snapshotListeners.delete(listener);
+    };
+  }
+
+  private changedSnapshot(): void {
+    for (const listener of this.snapshotListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.report(error);
+      }
+    }
+  }
+
   private publish(entry: Entry): void {
+    this.changedSnapshot();
     if (this.closed) return;
     for (const listener of this.listeners) {
       try {
@@ -83,6 +102,7 @@ export class ReactDataSourceRegistry {
     if (props.ownership === "producer" && entry.producer)
       await props.datasets.release(entry.producer);
     this.entries.delete(name);
+    this.changedSnapshot();
   }
 
   /** Prepare declarations before authoring bindings; no samples are sent here. */
@@ -161,6 +181,8 @@ export class ReactDataSourceRegistry {
 
   close(): void {
     this.closed = true;
+    this.changedSnapshot();
+    this.snapshotListeners.clear();
     this.listeners.clear();
   }
 

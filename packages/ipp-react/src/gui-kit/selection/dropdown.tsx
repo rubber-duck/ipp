@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A dropdown: a trigger showing the selected option's label, or a
  * placeholder, and the option list it opens below itself. The selected
@@ -27,7 +28,7 @@ export interface DropdownProps extends ChoiceProps, OverlayOpenProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
-  readonly id: string;
+  readonly id?: string;
   readonly options: readonly SelectOption[];
   /** Shown in the neutral tone while nothing is selected. */
   readonly placeholder?: string;
@@ -36,7 +37,7 @@ export interface DropdownProps extends ChoiceProps, OverlayOpenProps {
   readonly disabled?: boolean;
   /** Rows the list shows before it scrolls; six by default. */
   readonly maxRows?: number;
-  /** Layout of the trigger, such as its `width`; 240 at the `em` by default. */
+  /** Explicit trigger layout; inside a Form its default width fills the field. */
   readonly layout?: GuiKitLayout;
 }
 
@@ -56,7 +57,7 @@ export function useSelection({ value, defaultValue, onChange }: ChoiceProps) {
 }
 
 export function Dropdown({
-  id,
+  id: providedId,
   layer = 0,
   options,
   placeholder = "Select",
@@ -66,6 +67,7 @@ export function Dropdown({
   layout,
   ...state
 }: DropdownProps) {
+  const id = useEntityId(providedId);
   const overlay = useOverlayOpen(state);
   const selection = useSelection(state);
   const selected = options.find((option) => option.key === selection.current);
@@ -91,6 +93,7 @@ export function Dropdown({
       <SelectList
         id={`${id}/list`}
         open={overlay.open}
+        controlled={overlay.controlled}
         onVisibleChange={overlay.onVisibleChange}
       >
         <OptionList

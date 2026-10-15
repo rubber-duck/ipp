@@ -535,7 +535,7 @@ function items(probes: Probes) {
   );
   probes.near(
     "row above the revealed row",
-    probes.mean([x + 6, y - 34, 12, 8]),
+    probes.mean([x + 4, y - 20, 6, 6]),
     LANGUAGE.surface,
     4,
   );
@@ -559,7 +559,7 @@ function checkboxes(probes: Probes) {
   const unchecked = BOXES.unchecked;
   probes.near(
     "unchecked fill",
-    probes.mean([unchecked[0] + 6, unchecked[1] + 6, 20, 20]),
+    probes.mean([unchecked[0] + 8, unchecked[1] + 8, 8, 8]),
     LANGUAGE.surface,
     4,
   );
@@ -681,9 +681,9 @@ function sliders(probes: Probes) {
   ];
   const rail = ([x, y, width, height]: Rect): Rect => [
     x + width - 22,
-    y + height / 2 - 2,
+    y + height / 2 - 1,
     16,
-    4,
+    2,
   ];
   const above = (rect: Rect): Rect => {
     const [x, y, edge] = thumb(rect);
@@ -706,8 +706,8 @@ function sliders(probes: Probes) {
     LANGUAGE.accent,
     30,
   );
-  // The rail is one bar, 8 units: its fill reaches 2.5 units above its
-  // centre, inside its 1.25-unit line, and 5.5 above it is page.
+  // The compact rail is six units thick, including its 1.25-unit border.
+  // Sample inside the fill and beyond the complete stroke independently.
   const railTop = (offset: number): Rect => [
     idle[0] + idle[2] - 20,
     idle[1] + idle[3] / 2 - offset,
@@ -716,11 +716,11 @@ function sliders(probes: Probes) {
   ];
   probes.near(
     "idle rail thickness",
-    probes.mean(railTop(2.4)),
+    probes.mean(railTop(1.2)),
     railOver(LANGUAGE.page),
     6,
   );
-  probes.near("idle rail edge", probes.mean(railTop(5.6)), LANGUAGE.page, 6);
+  probes.near("idle rail edge", probes.mean(railTop(4.6)), LANGUAGE.page, 6);
 
   // Dragged: the thumb fills with the accent; the value stays lit.
   const dragging = SLIDERS.dragging;
@@ -761,7 +761,7 @@ function sliders(probes: Probes) {
  * A vertical slider's parts at `k` times the language's sizes: the square
  * thumb is three quarters of the control's width and travels by its centre
  * from half a thumb above the bottom at the minimum to half a thumb below the
- * top at the maximum; the rail is one bar (8) wide and the fill one bar wide.
+ * top at the maximum; the rail and fill are six units wide.
  */
 function verticalParts([x, y, width, height]: Rect, k: number) {
   const edge = 0.75 * width;
@@ -774,9 +774,9 @@ function verticalParts([x, y, width, height]: Rect, k: number) {
     at,
     /** A strip down the rail's middle between two heights. */
     rail: (top: number, bottom: number): Rect => [
-      centre - 2 * k,
+      centre - k,
       top,
-      4 * k,
+      2 * k,
       bottom - top,
     ],
     /** The thumb's interior around its centre at a fraction. */
@@ -824,8 +824,7 @@ function verticalSliders(probes: Probes) {
     railOver(LANGUAGE.page),
     6,
   );
-  // The rail is one bar wide: inside its line it is rail 1.8 units right of
-  // its centre, and 5.4 to the right it is page.
+  // Sample inside the six-unit rail fill, then beyond its border.
   const across = (offset: number): Rect => [
     idle.centre + offset * k,
     top + 6 * k,
@@ -834,11 +833,11 @@ function verticalSliders(probes: Probes) {
   ];
   probes.near(
     "idle rail thickness",
-    probes.mean(across(1.8)),
+    probes.mean(across(0.8)),
     railOver(LANGUAGE.page),
     6,
   );
-  probes.near("idle rail edge", probes.mean(across(5.4)), LANGUAGE.page, 6);
+  probes.near("idle rail edge", probes.mean(across(4.4)), LANGUAGE.page, 6);
   probes.near(
     "idle thumb",
     probes.mean(idle.thumb(VERTICAL_VALUE)),
@@ -979,7 +978,7 @@ function bipolarSliders(probes: Probes) {
 
 /**
  * A dial's geometry at `k` times the language's sizes, in the square at the
- * top of its housing: a tick ring half an em inside it, ticks 4 long, a
+ * top of its housing: a tick ring six units inside it, ticks 4 long, a
  * quarter-em gap, then a value arc 4 thick whose centre line the track and
  * the pointer's outer end share. Values run clockwise over 270 degrees from
  * half past seven.
@@ -987,7 +986,7 @@ function bipolarSliders(probes: Probes) {
 function dialParts(rect: Rect, k: number) {
   const em = 16 * k;
   const centre = [rect[0] + rect[2] / 2, rect[1] + rect[2] / 2] as const;
-  const ticks = rect[2] / 2 - em / 2;
+  const ticks = rect[2] / 2 - 6 * k;
   const ring = ticks - 4 * k - em / 4 - 2 * k;
   /** The point at a value fraction and a radius. */
   const at = (fraction: number, radius: number) => {
@@ -1011,8 +1010,8 @@ function dialParts(rect: Rect, k: number) {
     tick: (fraction: number) => spot(at(fraction, ticks - 2 * k)),
     /** On the pointer, at 0.7 of the ring's radius. */
     pointer: (fraction: number) => spot(at(fraction, 0.7 * ring), 0.75),
-    /** The housing's interior around the dial's centre. */
-    middle: spot(centre, 2),
+    /** Quiet housing below the inset numeric readout. */
+    middle: spot([centre[0], centre[1] + 12 * k], 2),
   };
 }
 
@@ -1158,9 +1157,9 @@ function dials(probes: Probes) {
 }
 
 function textInputs(probes: Probes) {
-  /** The line: one em (16) in from the left, centred vertically. */
+  /** The line starts at the twelve-unit inset, centred vertically. */
   const line = ([x, y, , height]: Rect): Rect => [
-    x + 16,
+    x + 12,
     y + height / 2 - 8,
     120,
     16,
@@ -1186,10 +1185,10 @@ function textInputs(probes: Probes) {
     40,
   );
   probes.within(
-    "idle text starts one em in",
+    "idle text starts at the twelve-unit inset",
     text && text[0] - idle[0],
-    16,
-    19,
+    12,
+    15,
   );
   probes.within(
     "idle text centred down",
@@ -1245,29 +1244,29 @@ function textInputs(probes: Probes) {
 
 /**
  * A numeric field with step parts: its decrement and increment parts are the
- * squares of its height at its ends, divided from the number by the idle
+ * seven-eighths of its height wide at its ends, divided from the number by the idle
  * line, with a minus and a plus in content text centred in them.
  */
 function steppers(probes: Probes) {
   /** A step part's centre region, where its mark's strokes cross. */
   const mark = ([x, y, width, height]: Rect, index: 0 | 1): Rect => [
-    x + (index ? width - height : 0) + height / 2 - 2,
+    x + (index ? width - height * 0.875 : 0) + (height * 0.875) / 2 - 2,
     y + height / 2 - 2,
     4,
     4,
   ];
   /** The separator on a step part's inner side, at mid-height. */
   const separator = ([x, y, width, height]: Rect, index: 0 | 1): Rect => [
-    x + (index ? width - height : height) - 1.5,
+    x + (index ? width - height * 0.875 : height * 0.875) - 1.5,
     y + height / 2 - 3,
     3,
     6,
   ];
   /** The number's area between the parts. */
   const number = ([x, y, width, height]: Rect): Rect => [
-    x + height + 2,
+    x + height * 0.875 + 2,
     y + 2,
-    width - 2 * height - 4,
+    width - 2 * height * 0.875 - 4,
     height - 4,
   ];
   const idle = STEPPERS.idle;
@@ -1374,21 +1373,21 @@ function steppers(probes: Probes) {
 }
 
 /**
- * Default bars of a 228 x 80 frame at the 16-unit body type: half an em (8)
- * thick, one thickness in from the right side and half of one from the ends;
+ * Default bars of a 228 x 80 frame at the 16-unit body type: six units
+ * thick and inset from the right side, with four-unit end insets;
  * the thumb travels the track without its pointed ends and is at least two
  * thicknesses long.
  */
-const BAR = { thickness: 8, inset: 8, end: 4 } as const;
+const BAR = { thickness: 6, inset: 6, end: 4 } as const;
 const FRAME_SIZE = [228, 80] as const;
 const TRACK_LEFT = FRAME_SIZE[0] - BAR.inset - BAR.thickness;
 const TRAVEL = FRAME_SIZE[1] - 2 * BAR.end - BAR.thickness;
-const VIEWPORT = 70;
-const ROW_HEIGHT = 24;
+const VIEWPORT = 58;
+const ROW_HEIGHT = 20;
 
 /** A strip down the middle of the bar between `from` and `to`. */
 function bar([x, y]: Rect, from: number, to: number): Rect {
-  return [x + TRACK_LEFT + BAR.thickness / 2 - 2, y + from, 4, to - from];
+  return [x + TRACK_LEFT + BAR.thickness / 2 - 1, y + from, 2, to - from];
 }
 
 function thumbSpan(content: number, offset: number): [number, number] {
@@ -1421,7 +1420,7 @@ function scrollFrame(probes: Probes, name: string, frame: Rect) {
   // The track's top tip: its centre line is lit, its corner is cut away.
   probes.near(
     `${name} track tip cut`,
-    probes.mean([x + TRACK_LEFT + 0.5, y + BAR.end + 0.75, 1, 1]),
+    probes.mean([x + TRACK_LEFT, y + BAR.end, 0.5, 0.5]),
     LANGUAGE.surface,
     6,
   );

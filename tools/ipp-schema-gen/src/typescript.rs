@@ -31,8 +31,6 @@ pub(super) fn render(export: Export) -> Result<String, String> {
         pointer,
         components,
         paint_keys,
-        skin_looks,
-        skin_tokens,
         row_limits,
         wire,
     } = export;
@@ -64,7 +62,7 @@ function freezeContract<T>(value: T): T {\n\
     }
     out.push_str("} as const);\n");
 
-    crate::paint_keys::render(&mut out, &paint_keys, &skin_looks, &skin_tokens);
+    crate::paint_keys::render(&mut out, &paint_keys);
     out.push_str("export const components = freezeContract({\n");
 
     for c in &components {

@@ -488,7 +488,7 @@ fn native_edits_preserve_graphemes_provisional_text_and_exact_replacement_fences
     let (mut host, _) = host();
     let world = world(&mut host);
     let (root, root_entity) = canvas(&mut host, world);
-    let entity = create(
+    let entity = create_painted(
         &mut host,
         world,
         vec![
@@ -668,7 +668,7 @@ fn rejected_stale_native_edit_keeps_focus_for_the_next_tab() {
     let (mut host, _) = host();
     let world = world(&mut host);
     let (root, root_entity) = canvas(&mut host, world);
-    let text = create(
+    let text = create_painted(
         &mut host,
         world,
         vec![
@@ -768,7 +768,7 @@ fn native_edit_for_an_earlier_focus_is_rejected_without_moving_focus() {
     let world = world(&mut host);
     let (root, root_entity) = canvas(&mut host, world);
     let text = |host: &mut HostRuntime| {
-        create(
+        create_painted(
             host,
             world,
             vec![
@@ -980,7 +980,7 @@ fn pointer_focus_omits_ring_and_keyboard_focus_reveals_it_without_value_change()
     use crate::systems::canvas::{CanvasPaintEntry, CanvasPart, CanvasPublication};
     let (mut host, _) = host();
     let world = world(&mut host);
-    let entity = create(
+    let entity = create_painted(
         &mut host,
         world,
         vec![
@@ -1427,7 +1427,7 @@ fn wheel_burst_consumes_current_offsets_at_each_ordered_mutation() {
     use crate::systems::gui::test_support::GuiTestValue;
     let (mut host, _) = host();
     let world = world(&mut host);
-    let entity = create(
+    let entity = create_painted(
         &mut host,
         world,
         vec![
@@ -1500,7 +1500,7 @@ fn wheel_burst_consumes_current_offsets_at_each_ordered_mutation() {
 #[test]
 fn focused_pending_and_applied_receipts_continue_across_publications() {
     let mut scene = nested_scroll_scene(5.0);
-    let entity = create(
+    let entity = create_painted(
         &mut scene.host,
         scene.root.world(),
         vec![
@@ -1622,7 +1622,7 @@ fn slider_key_burst_uses_each_applied_predecessor_without_predicted_values() {
     use crate::components::{GuiLayout, GuiSlider};
     let (mut host, _) = host();
     let world = world(&mut host);
-    let entity = create(
+    let entity = create_painted(
         &mut host,
         world,
         vec![
@@ -1700,7 +1700,7 @@ fn ordinary_scroll_thumb_uses_published_geometry_and_preserves_grab_offset() {
     use crate::components::{GuiLayout, GuiVirtualList};
     let (mut host, _) = host();
     let world = world(&mut host);
-    let entity = create(
+    let entity = create_painted(
         &mut host,
         world,
         vec![
@@ -1794,7 +1794,7 @@ fn tab_enters_published_tree_order_then_wraps_inside_exact_focus_scope() {
     let (mut host, _) = host();
     let world = world(&mut host);
     let (root, root_entity) = canvas(&mut host, world);
-    let scope = create(
+    let scope = create_painted(
         &mut host,
         world,
         vec![ComponentValue::GuiBehavior(GuiBehavior {
@@ -1805,7 +1805,7 @@ fn tab_enters_published_tree_order_then_wraps_inside_exact_focus_scope() {
     );
     let mut targets = Vec::new();
     for parent in [scope, scope, root_entity] {
-        targets.push(create(
+        targets.push(create_painted(
             &mut host,
             world,
             vec![

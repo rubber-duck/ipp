@@ -1,14 +1,18 @@
 //! Worker timers only wake owned Host tasks; callbacks never access Host/World state.
 
+use std::{cell::RefCell, collections::BTreeMap, task::Waker};
+
+#[cfg(feature = "render")]
 use std::{
-    cell::RefCell,
-    collections::BTreeMap,
     future::Future,
     pin::Pin,
-    task::{Context, Poll, Waker},
+    task::{Context, Poll},
     time::Duration,
 };
 
+// GPU export waits use timers; headless distributions keep the callback ABI
+// but never create timer futures.
+#[cfg(feature = "render")]
 #[link(wasm_import_module = "ipp_tasks")]
 unsafe extern "C" {
     fn timer_start(id: u64, milliseconds: u32);
@@ -23,6 +27,7 @@ struct TimerWaiter {
 
 #[derive(Default)]
 struct Timers {
+    #[cfg(feature = "render")]
     next: u64,
     waiters: BTreeMap<u64, TimerWaiter>,
 }
@@ -31,11 +36,13 @@ thread_local! {
     static TIMERS: RefCell<Timers> = RefCell::new(Timers::default());
 }
 
+#[cfg(feature = "render")]
 pub(crate) struct BrowserTaskTimer {
     milliseconds: u32,
     id: Option<u64>,
 }
 
+#[cfg(feature = "render")]
 impl BrowserTaskTimer {
     pub(crate) fn new(duration: Duration) -> Self {
         Self {
@@ -45,6 +52,7 @@ impl BrowserTaskTimer {
     }
 }
 
+#[cfg(feature = "render")]
 impl Future for BrowserTaskTimer {
     type Output = ();
 
@@ -93,6 +101,7 @@ impl Future for BrowserTaskTimer {
     }
 }
 
+#[cfg(feature = "render")]
 impl Drop for BrowserTaskTimer {
     fn drop(&mut self) {
         if let Some(id) = self.id {

@@ -266,6 +266,7 @@ fn validate_paint<D: RenderDevice>(
     paint::check_paint_body(body).map_err(RenderError::RenderDevice)?;
     let source = CanvasPaintSource {
         body: body.into(),
+        features: definition.recipe.features,
         parameters: definition
             .parameters
             .iter()

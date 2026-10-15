@@ -85,17 +85,17 @@ const open = (name: Name): Rect => [
 function Destination({
   id,
   at,
-  defaultText,
+  defaultInputValue,
   loading,
   control,
 }: {
   readonly id: string;
   readonly at: Point;
-  readonly defaultText?: string;
+  readonly defaultInputValue?: string;
   readonly loading?: boolean;
   readonly control: GuiControlRef;
 }) {
-  const [text, setText] = useState(defaultText ?? "");
+  const [text, setText] = useState(defaultInputValue ?? "");
   const typed = text.trim().toLowerCase();
   const suggestions =
     typed === ""
@@ -109,7 +109,7 @@ function Destination({
       placeholder="Destination"
       suggestions={suggestions}
       onInputChange={setText}
-      {...(defaultText === undefined ? {} : { defaultText })}
+      {...(defaultInputValue === undefined ? {} : { defaultInputValue })}
       {...(loading ? { loading: "Loading…" } : {})}
       ref={control}
       layout={layout}
@@ -165,7 +165,7 @@ export default defineSpecimen({
         <Destination
           id="auto-accepted"
           at={FIELDS.accepted.at}
-          defaultText="Alpha Station"
+          defaultInputValue="Alpha Station"
           control={lab.control("accepted")}
         />
       </GuiKit>

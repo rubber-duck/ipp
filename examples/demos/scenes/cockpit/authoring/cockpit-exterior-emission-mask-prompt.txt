@@ -1,0 +1,7 @@
+Use case: precise-object-edit.
+Asset type: registered RGB emission-selection texture, NOT concept art.
+Image 1 is the lit planet and starfield EDIT TARGET. Create a PURE BLACK background mask at identical 1671x941 dimensions and exact pixel registration. Retain ONLY three emitted light categories from the source, coded into separate primary-color channels:
+RED channel ONLY: warm city light points and luminous city road networks on the planet. Encode their original brightness as pure red intensity (R,0,0). No land, ocean, clouds, reflected sun or sun disk.
+GREEN channel ONLY: the thin atmospheric glow following the exact curved diagonal planet limb. Encode the glow falloff as pure green intensity (0,G,0), including its narrow feathered outer halo. No thick solid green planet and no cloud features.
+BLUE channel ONLY: individual star points outside the planet, at their exact original positions and sizes, encode brightness as pure blue (0,0,B). No Milky Way/nebula diffuse cloud texture.
+All other pixels exactly black. No white cores: even the brightest city must remain red, brightest atmosphere green and brightest star blue. No magenta/cyan/yellow except unavoidable overlapping categories. Preserve relative brightness and small natural halos so additive reconstruction can look convincing. Do NOT invent lights, move edges, alter framing, add labels, make a collage or a diagram. No cockpit. This is an animation mask overlaid exactly over the source.

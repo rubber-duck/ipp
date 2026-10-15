@@ -437,6 +437,8 @@ fn scroll_theme_and_focus_changes_advance_the_canvas_paint_revision() {
             ..sized(100.0, 50.0)
         },
     );
+    panel.skin(scroll, "scroll");
+    panel.skin(control, "button");
     panel.frame();
     let initial = panel.output();
 

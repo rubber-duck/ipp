@@ -493,6 +493,17 @@ pub trait RenderDevice: 'static {
         Err(RenderError::RenderDevice("gui batches unavailable".into()))
     }
 
+    /// Select one authored paint and parameter block for the next analytic path.
+    fn set_surface_paint(
+        &mut self,
+        _program: &Self::Program,
+        _lanes: [f32; 4],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "analytic paints unavailable".into(),
+        ))
+    }
+
     /// Upload `blocks` into `program`'s `u_paint_blocks` array from its first
     /// vector: the custom paint parameters of the canvas whose GUI batches it
     /// draws next. Callers pass at most
@@ -570,6 +581,18 @@ pub trait RenderDevice: 'static {
 
     /// Upload only retained attribute streams and triangle indices.
     fn create_mesh(&mut self, asset: &ipp_core::MeshAsset) -> Result<Self::Mesh, RenderError>;
+
+    /// Replace the index order of a private retained mesh without changing its
+    /// vertex streams or index count. The device copies the slice synchronously.
+    fn reorder_mesh_indices(
+        &mut self,
+        _mesh: &Self::Mesh,
+        _indices: &[u16],
+    ) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "mesh index ordering unavailable".into(),
+        ))
+    }
 
     /// Upload top-left-first packed RGBA8 pixels with sRGB color and linear straight alpha.
     fn create_texture(

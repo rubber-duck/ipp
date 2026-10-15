@@ -1,0 +1,26 @@
+Use case: ui-mockup / natural glass component design reference.
+
+Create one polished, high-resolution LANDSCAPE UI component reference sheet, approximately 3:2 aspect ratio. This is a new concept atlas derived from the supplied real shader prototype, not a screenshot recreation.
+
+INPUT ROLES:
+Image 1 is the actual approved frontal glass material render: CLEAR, FROSTED and SMOKED buttons. It defines the geometry, palette, material restraint and natural sheet-of-glass character.
+Image 2 shows the same prototype at an oblique viewing angle. Use the rendered three buttons in the middle as optical reference: partial silvery perimeter highlights, soft face reflections, transparent depth. Ignore all surrounding webpage text, HTML controls and browser presentation.
+Treat these as the authoritative style references. Expand this exact material family to practical UI components. Do not bring back a neon sci-fi aesthetic.
+
+MATERIAL:
+Thin precision-cut sheets of natural glass with flat faces, modest softly rounded corners and a softly polished rolled perimeter. Physically convincing transparent dielectric surface: soft broad studio-window reflections, restrained specular glints at grazing edges, subtle darker rear edges and contact shadows giving just a little thickness. Edge definition must arise from light bending/reflection through rounded glass, never a uniformly stroked outline. Reflections vary smoothly around the perimeter and across the face, with some edge stretches fading away. Glass must be visibly material, not plain translucent CSS rectangles.
+Three related finishes: clear transmits underlying dark surface; frosted lightly scatters and has softly misted interiors; smoked absorbs more light and remains deep transparent charcoal. Neutral silver highlights with only a very slight cool blue-green tint. Keep the approved dark charcoal/blue-green background and cool near-white typography. Active controls may carry a small, restrained sea-glass tint.
+Keep controls thin and usable, not bulbous jelly, thick acrylic blocks, chrome metal, gemstones or decorative crystals. No cut-off corners, corner triangles, corner shards, etched circuit patterns, neon turquoise outlines, glowing halos, flames, rainbow sheen or chromatic dispersion. No heavy blur. Text and small symbols remain crisp.
+
+COMPOSITION:
+A meticulously spaced, front-on flat component atlas on one continuous dark background with a very faint broad diagonal light variation visible through glass. All components share the same soft upper-left studio light. Generous padding, aligned rows, clear visual hierarchy and comfortable negative space. Make the glass details large enough to inspect. Use a restrained compact technical sans/monospaced typography related to the reference, readable minimal labels only. No lorem ipsum or marketing paragraphs. Main small heading: "GLASS / COMPONENT STUDY". Secondary line: "Clear · Frosted · Smoked".
+Do not frame every section inside another card. Do not render a whole dashboard, window chrome, perspective arrangement or exploded view.
+
+Show five balanced horizontal groups with a handful of substantial components in each:
+1. BUTTONS: five equally sized rounded-rectangle buttons with label "Action"; small captions above "Rest", "Hover", "Pressed", "Focus", "Disabled". The hover shows a clearer shifted studio highlight; pressed feels slightly settled with changed reflection; focus uses a restrained localized optical rim cue; disabled is dimmer but still readable. No electric-cyan filled slab.
+2. CHOICES: two rounded pill switches off/on, unchecked and checked rounded-square checkboxes, two radios, and one compact three-way segmented control labeled "Day", "Week", "Month". Selection feels like a thin sliding frosted-glass insert within a shared smoked-glass bed. Native-looking simple checkmarks and circular radio centers.
+3. INPUTS: a search field with a small magnifier and text "Search", a focused text field with text "Project name" and a delicate caret, a dropdown with label "Clear glass" and simple chevron. Thick enough for comfortable internal padding; tasteful optical perimeter cues.
+4. VALUES: two horizontal sliders with small polished glass thumbs, one single-value and one range; a restrained progress bar labeled "64%"; three small status chips with readable labels "Ready", "Paused", "Offline". Filled portions subdued icy teal inside smoked glass, never neon.
+5. SURFACES: a compact rounded glass card with title "Surface", a simple two-line content hierarchy and small action; alongside it a three-tab panel labeled "Overview", "Activity", "Settings" with one selected tab and a small amount of content; a small frosted tooltip reading "Adjust value". Tab selection and body must join cleanly into one integrated component, no doubled strokes or detached baseline. Keep nested surfaces from looking like stacked outlined boxes.
+
+The result should feel like a carefully art-directed premium design-system reference made from the approved natural-glass prototype. Prioritize material quality, component geometry, spacing and consistent lighting over adding more controls.

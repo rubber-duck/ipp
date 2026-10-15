@@ -19,6 +19,7 @@ const { positionals, values } = parseArgs({
     world: { type: "string", default: "world.ipp" },
     "clips-only": { type: "boolean", default: false },
     native: { type: "boolean", default: false },
+    system: { type: "string", multiple: true, default: [] },
   },
 });
 if (
@@ -27,7 +28,7 @@ if (
   !/^[a-zA-Z0-9_.-]+\.ipp$/.test(values.world)
 )
   throw new Error(
-    "Expected EXPORT_DIR OUTPUT_DIR [--namespace NAME] [--world FILE.ipp] [--clips-only] [--native]",
+    "Expected EXPORT_DIR OUTPUT_DIR [--namespace NAME] [--world FILE.ipp] [--clips-only] [--native] [--system NAME]",
   );
 const [input, output] = positionals.map((path) => resolve(path));
 await mkdir(output, { recursive: true });
@@ -123,6 +124,7 @@ try {
       source,
       namespace: values.namespace,
       clipsOnly: values["clips-only"],
+      additionalSystems: values.system,
       output,
       origin: `http://127.0.0.1:${server.address().port}`,
     });
@@ -134,7 +136,7 @@ try {
     });
     await page.goto(`http://127.0.0.1:${server.address().port}/`);
     result = await page.evaluate(
-      async ({ source, namespace, clipsOnly }) => {
+      async ({ source, namespace, clipsOnly, additionalSystems }) => {
         const contract = await import("/runtime/generated.js");
         const { importBlenderScene } = await import("/import.js");
         const prefix = `https://${namespace}.ipp.invalid/`;
@@ -181,7 +183,7 @@ try {
                 return prefix + (await response.text());
               },
             },
-            { symbolicId: namespace, clipsOnly },
+            { symbolicId: namespace, clipsOnly, additionalSystems },
           );
           console.info("World saved");
           return { ...result, bytes: Array.from(result.bytes) };
@@ -202,6 +204,7 @@ try {
         source,
         namespace: values.namespace,
         clipsOnly: values["clips-only"],
+        additionalSystems: values.system,
       },
     );
   }

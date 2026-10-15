@@ -141,6 +141,7 @@ pub(in crate::world) struct GuiMotionValues {
     pub border_color: [f32; 4],
     pub border_width: f32,
     pub glow_intensity: f32,
+    pub paint_data: [f32; 4],
 }
 
 const COLOR: u8 = 1;
@@ -150,6 +151,7 @@ const ALIGN_X: u8 = 1 << 3;
 const BORDER_COLOR: u8 = 1 << 4;
 const BORDER_WIDTH: u8 = 1 << 5;
 const GLOW_INTENSITY: u8 = 1 << 6;
+const PAINT_DATA: u8 = 1 << 7;
 
 impl GuiMotionValues {
     /// The animated values of `style` and the mask of those it sets.
@@ -167,6 +169,7 @@ impl GuiMotionValues {
         flag(style.border_color.is_some(), BORDER_COLOR);
         flag(style.border_width.is_some(), BORDER_WIDTH);
         flag(style.glow_intensity.is_some(), GLOW_INTENSITY);
+        flag(style.paint_data.is_some(), PAINT_DATA);
         (
             Self {
                 color: style.color.unwrap_or([1.0; 4]),
@@ -176,6 +179,7 @@ impl GuiMotionValues {
                 border_color: style.border_color.unwrap_or([0.0; 4]),
                 border_width: style.border_width.unwrap_or(0.0),
                 glow_intensity: style.glow_intensity.unwrap_or(0.0),
+                paint_data: style.paint_data.unwrap_or([0.0; 4]),
             },
             present,
         )
@@ -196,12 +200,16 @@ impl GuiMotionValues {
             border_color: lanes(self.border_color, to.border_color),
             border_width: lerp(self.border_width, to.border_width),
             glow_intensity: lerp(self.glow_intensity, to.glow_intensity),
+            paint_data: lanes(self.paint_data, to.paint_data),
         }
     }
 
     /// Write the `present` values into `style`.
     fn apply(&self, present: u8, style: &mut GuiPartStyle) {
         let set = |bit: u8| present & bit != 0;
+        if set(PAINT_DATA) {
+            style.paint_data = Some(self.paint_data);
+        }
         if set(COLOR) {
             style.color = Some(self.color);
         }

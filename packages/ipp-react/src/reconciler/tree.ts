@@ -1,3 +1,4 @@
+import { RESOURCES_HOST_TYPE } from "../resources.js";
 import {
   DATA_SOURCE_HOST_TYPE,
   type DataSourceDescription,
@@ -63,6 +64,7 @@ import {
   ENTITY_LINK_HOST_TYPE,
   type ReactWorldComponentType,
 } from "../components.js";
+
 import {
   Copied,
   resolvedFields,
@@ -77,10 +79,20 @@ import {
   sameShape,
   type ComponentShape,
 } from "./tree-equality.js";
+/** Components whose provider declarations yield to explicit appearance on the entity. */
+const skinFallbackHosts = new Set([
+  "ipp-gui-skin",
+  "ipp-canvas-paint",
+  "ipp-custom-material",
+  "ipp-plot-callout-style",
+  "ipp-plot-callout-paint",
+]);
+
 export type ReactWorldElementType =
   | typeof DATA_SOURCE_HOST_TYPE
   | typeof ATTACHED_WORLD_HOST_TYPE
   | typeof ANIMATION_HOST_TYPE
+  | typeof RESOURCES_HOST_TYPE
   | typeof CHILDREN_HOST_TYPE
   | typeof ENTITY_LINK_HOST_TYPE
   | typeof ENTITY_HOST_TYPE
@@ -154,7 +166,8 @@ export interface ReactComponentDescription {
   readonly fields: ReadonlyMap<number, ReactWorldFieldValue>;
   readonly properties?: Readonly<Record<string, ReactWorldDynamicValue>>;
   /** Set exactly on GUI control components. */
-  readonly control?: true;
+  readonly managedGate?: true;
+  readonly control?: true | undefined;
   readonly controlRef?: GuiControlRef | undefined;
   /**
    * The callbacks of a control or a Behavior, always present on one, whose
@@ -242,6 +255,8 @@ interface DescribedTree {
 }
 
 export class ReactWorldTree {
+  private readonly retainedGates = new Set<number>();
+  private readonly hiddenInstances = new WeakSet<ReactWorldInstance>();
   children: ReactWorldInstance[] = [];
   /** A commit inserted, removed, hid or revealed an instance. */
   private structural = true;
@@ -390,6 +405,7 @@ export class ReactWorldTree {
             "looping",
             "transition",
             "autoPlay",
+            "playing",
             "onPlaybackEvent",
             "mailbox",
           ].includes(key)
@@ -445,6 +461,12 @@ export class ReactWorldTree {
       for (const key of ["onAction", "onActionCapture"] as const)
         if (props[key] !== undefined && typeof props[key] !== "function")
           throw new Error(`${key} must be a callback`);
+      return;
+    }
+    if (type === RESOURCES_HOST_TYPE) {
+      for (const key of Object.keys(props))
+        if (key !== "children")
+          throw new Error(`Unsupported Resources prop: ${key}`);
       return;
     }
     if (type === CHILDREN_HOST_TYPE) {
@@ -524,7 +546,7 @@ export class ReactWorldTree {
       }
     }
     if (props.controlRef !== undefined) {
-      if (!guiControlNames.has(name))
+      if (!guiControlNames.has(name) && name !== "GuiBehavior")
         throw new Error("Only controls accept control refs");
       validateControlRef(props.controlRef);
       if (
@@ -535,6 +557,14 @@ export class ReactWorldTree {
       if (props.controlRef) this.requireLifecyclePublisher("Control refs");
     }
     for (const key of Object.keys(props)) {
+      // React controls author a fallback reference, resolved before submission.
+      // This is declaration metadata, never a runtime component field.
+      if (
+        ((skinFallbackHosts.has(type) && key === "skinFallback") ||
+          (name === "GuiFont" && key === "fontFallback")) &&
+        props[key] === true
+      )
+        continue;
       if (
         [
           "ref",
@@ -625,6 +655,7 @@ export class ReactWorldTree {
       isAsset(type) ||
       isShader(type) ||
       type === ENTITY_HOST_TYPE ||
+      type === RESOURCES_HOST_TYPE ||
       type === CHILDREN_HOST_TYPE ||
       type === ENTITY_LINK_HOST_TYPE ||
       !Object.hasOwn(componentNames, type)
@@ -757,7 +788,7 @@ export class ReactWorldTree {
             ...(control
               ? { control: true as const, controlRef, controlListeners }
               : controlListeners
-                ? { controlListeners }
+                ? { controlRef, controlListeners }
                 : {}),
             ...(structure!.properties
               ? { properties: structure!.properties }
@@ -836,6 +867,8 @@ export class ReactWorldTree {
                   "fields",
                   "properties",
                   "controlRef",
+                  "fontFallback",
+                  "skinFallback",
                   ...controlCallbackNames,
                 ].includes(name) &&
                 !Object.hasOwn(descriptor.fields, name),
@@ -1015,6 +1048,12 @@ export class ReactWorldTree {
     const touchedAssets = new Set<ReactWorldInstance>();
     let revised = false;
     for (const instance of this.touched) {
+      if (
+        instance.type === "ipp-gui-font" ||
+        instance.type === "ipp-presentation-gate" ||
+        this.hiddenInstances.has(instance)
+      )
+        return undefined;
       const role = described.roles.get(instance);
       // A hidden or removed instance is not described.
       if (!role) continue;
@@ -1157,20 +1196,35 @@ export class ReactWorldTree {
   private describeAll(): ReactWorldDescription {
     const roles = new Map<ReactWorldInstance, InstanceRole>();
     const attachments: AttachedWorldDescription[] = [];
+    const explicitSkins = new Set<string>();
+    const skinOwners = new Map<number, string>();
     const pending = this.children.toReversed().map((instance) => ({
       instance,
       hidden: false,
+      entity: undefined as string | undefined,
     }));
     while (pending.length) {
-      const { instance, hidden } = pending.pop()!;
+      const { instance, hidden, entity } = pending.pop()!;
       const suspended = hidden || instance.hidden;
+      const owner =
+        instance.type === ENTITY_HOST_TYPE
+          ? ((instance.props.id ?? instance.props.bindTo) as string)
+          : entity;
+      if (instance.type === ENTITY_HOST_TYPE && owner)
+        skinOwners.set(instance.identity, owner);
+      if (
+        owner &&
+        skinFallbackHosts.has(instance.type) &&
+        !instance.props.skinFallback
+      )
+        explicitSkins.add(`${owner}:${instance.type}`);
       if (instance.type === ATTACHED_WORLD_HOST_TYPE) {
         commitCounters.described++;
         roles.set(instance, { kind: "attachment", index: attachments.length });
         attachments.push(this.describeAttachment(instance, suspended));
       } else
         for (const child of instance.children.toReversed())
-          pending.push({ instance: child, hidden: suspended });
+          pending.push({ instance: child, hidden: suspended, entity: owner });
     }
     const dataSources: DataSourceDescription[] = [];
     const sourceNames = new Set<string>();
@@ -1184,6 +1238,7 @@ export class ReactWorldTree {
       import("@ipp/client").AnimationClipSource
     >();
     const entities: ReactEntityDescription[] = [];
+    const hiddenEntities = new Map<number, boolean>();
     const components: ReactComponentDescription[] = [];
     const shapes: ComponentShape[] = [];
     const unresolvedLinks: (Omit<
@@ -1201,8 +1256,23 @@ export class ReactWorldTree {
       instance: ReactWorldInstance,
       parent?: number,
       hierarchyParent?: number,
+      inheritedHidden = false,
     ): void => {
-      if (instance.hidden) return;
+      const hidden = inheritedHidden || instance.hidden;
+      if (hidden) this.hiddenInstances.add(instance);
+      else this.hiddenInstances.delete(instance);
+      if (
+        instance.hidden &&
+        !inheritedHidden &&
+        parent !== undefined &&
+        instance.type !== ENTITY_HOST_TYPE &&
+        instance.type !== RESOURCES_HOST_TYPE &&
+        !isAsset(instance.type) &&
+        instance.type !== ATTACHED_WORLD_HOST_TYPE
+      )
+        throw new Error(
+          "Suspense requires a complete Entity presentation boundary; partial-owner hiding is unsupported",
+        );
       if (instance.type === ATTACHED_WORLD_HOST_TYPE) {
         return;
       }
@@ -1231,7 +1301,7 @@ export class ReactWorldTree {
           ),
         });
         for (const child of instance.children)
-          visit(child, parent, hierarchyParent);
+          visit(child, parent, hierarchyParent, hidden);
         return;
       }
       if (instance.type === ANIMATION_HOST_TYPE) {
@@ -1257,12 +1327,30 @@ export class ReactWorldTree {
         assets.push(description);
         if (instance.type === ASSET_HOST_TYPE)
           for (const child of instance.children)
-            visit(child, parent, hierarchyParent);
+            visit(child, parent, hierarchyParent, hidden);
         return;
       }
       if (isShader(instance.type)) {
         this.validateOnce(instance);
         throw new Error("Shader declarations must be children of ShaderAsset");
+      }
+      if (instance.type === RESOURCES_HOST_TYPE) {
+        this.validateOnce(instance);
+        roles.set(instance, { kind: "placement" });
+        for (const child of instance.children) {
+          if (
+            child.type !== ENTITY_HOST_TYPE &&
+            child.type !== RESOURCES_HOST_TYPE &&
+            !isAsset(child.type) &&
+            child.type !== DATA_SOURCE_HOST_TYPE &&
+            child.type !== ATTACHED_WORLD_HOST_TYPE
+          )
+            throw new Error(
+              "Resources must contain explicit Entity or resource declarations",
+            );
+          visit(child, parent, undefined, hidden);
+        }
+        return;
       }
       if (hierarchyParent !== undefined && instance.type !== ENTITY_HOST_TYPE)
         throw new Error("Children must contain Entity declarations");
@@ -1272,7 +1360,10 @@ export class ReactWorldTree {
           throw new Error("Children must be inside an Entity");
         roles.set(instance, { kind: "placement" });
         for (const child of instance.children) {
-          if (child.hidden) continue;
+          if (child.type === RESOURCES_HOST_TYPE) {
+            visit(child, parent, undefined, hidden);
+            continue;
+          }
           if (child.type !== ENTITY_HOST_TYPE)
             throw new Error("Children must contain Entity declarations");
           const preceding = precedingChildren.get(parent);
@@ -1285,14 +1376,21 @@ export class ReactWorldTree {
           };
           unresolvedLinks.push(link);
           precedingChildren.set(parent, link);
-          visit(child, parent, parent);
+          visit(child, parent, parent, hidden);
         }
         return;
       }
       if (instance.type === ENTITY_HOST_TYPE) {
         roles.set(instance, { kind: "entity", index: entities.length });
-        entities.push(this.describeEntity(instance, parent));
-        for (const child of instance.children) visit(child, instance.identity);
+        const entity = this.describeEntity(instance, parent);
+        entities.push(
+          hidden
+            ? { ...entity, onAction: undefined, onActionCapture: undefined }
+            : entity,
+        );
+        hiddenEntities.set(instance.identity, hidden);
+        for (const child of instance.children)
+          visit(child, instance.identity, undefined, hidden);
         return;
       }
       if (instance.type === ENTITY_LINK_HOST_TYPE) {
@@ -1314,6 +1412,12 @@ export class ReactWorldTree {
           `${componentNames[instance.type]} must be inside an Entity`,
         );
       }
+      if (
+        skinFallbackHosts.has(instance.type) &&
+        props.skinFallback &&
+        explicitSkins.has(`${skinOwners.get(parent)}:${instance.type}`)
+      )
+        return;
       const { description, structure } = this.describeComponent(
         instance,
         parent,
@@ -1323,10 +1427,19 @@ export class ReactWorldTree {
           throw new Error(
             "Component children must be Asset declarations; shader stages require ShaderAsset",
           );
-        visit(child, parent);
+        visit(child, parent, undefined, hidden);
       }
       roles.set(instance, { kind: "component", index: components.length });
-      components.push(description);
+      components.push(
+        hidden
+          ? {
+              ...description,
+              control: undefined,
+              controlRef: undefined,
+              controlListeners: undefined,
+            }
+          : description,
+      );
       shapes.push(structure);
     };
     for (const child of this.children) visit(child);
@@ -1458,6 +1571,127 @@ export class ReactWorldTree {
             : link.before,
       };
     });
+
+    // Font fallback is contextual declaration metadata, not a second field store.
+    // Resolve declared native ancestry; JSX entity nesting alone has no link.
+    const explicitFonts = new Set<string>();
+    const fallbackFonts = new Set<number>();
+    for (const [instance, role] of roles) {
+      if (role.kind !== "component" || instance.type !== "ipp-gui-font")
+        continue;
+      const component = components[role.index]!;
+      if (instance.props.fontFallback) fallbackFonts.add(component.identity);
+      else explicitFonts.add(symbols.get(component.entity)!);
+    }
+    const nativeParents = new Map<string, string>();
+    for (const link of links) {
+      if (link.parent && typeof link.parent === "object")
+        nativeParents.set(
+          symbols.get(link.entity)!,
+          symbols.get(link.parent.entity)!,
+        );
+    }
+    const covered = (entity: number): boolean => {
+      let symbol: string | undefined = symbols.get(entity);
+      const visited = new Set<string>();
+      while (symbol && !visited.has(symbol)) {
+        if (explicitFonts.has(symbol)) return true;
+        visited.add(symbol);
+        symbol = nativeParents.get(symbol);
+      }
+      return false;
+    };
+    const filtered = components.filter(
+      (component) =>
+        !fallbackFonts.has(component.identity) || !covered(component.entity),
+    );
+    if (filtered.length !== components.length) {
+      components.splice(0, components.length, ...filtered);
+      const indices = new Map(
+        components.map((component, index) => [component.identity, index]),
+      );
+      for (const [instance, role] of roles) {
+        if (role.kind !== "component") continue;
+        const index = indices.get(instance.identity);
+        if (index === undefined) roles.delete(instance);
+        else roles.set(instance, { kind: "component", index });
+      }
+    }
+
+    const hiddenSymbols = new Set(
+      entities
+        .filter((entity) => hiddenEntities.get(entity.identity))
+        .map((entity) => entity.symbolicId),
+    );
+    const nativeHiddenAncestor = (symbol: string): boolean => {
+      const visited = new Set<string>();
+      let parent = nativeParents.get(symbol);
+      while (parent && !visited.has(parent)) {
+        if (hiddenSymbols.has(parent)) return true;
+        visited.add(parent);
+        parent = nativeParents.get(parent);
+      }
+      return false;
+    };
+    const gate = this.components.PresentationGate;
+    const gateDeclarations = new Map<
+      string,
+      { component: ReactComponentDescription; index: number }[]
+    >();
+    if (gate)
+      for (const [index, component] of components.entries()) {
+        if (component.component !== gate.id) continue;
+        const symbol = symbols.get(component.entity)!;
+        const entries = gateDeclarations.get(symbol) ?? [];
+        entries.push({ component, index });
+        gateDeclarations.set(symbol, entries);
+      }
+    for (const entity of entities) {
+      const hidden =
+        hiddenEntities.get(entity.identity)! &&
+        !nativeHiddenAncestor(entity.symbolicId);
+      if (hidden) this.retainedGates.add(entity.identity);
+      if (!this.retainedGates.has(entity.identity)) continue;
+      if (!gate)
+        throw new Error(
+          "Retained presentation requires PresentationGate support",
+        );
+      const matches = gateDeclarations.get(entity.symbolicId) ?? [];
+      if (matches.length) {
+        for (const { component, index } of matches)
+          components[index] = {
+            ...component,
+            fields: new Map([
+              ...component.fields,
+              [
+                gate.fields.open!.offset,
+                hidden
+                  ? { kind: "bool", value: false }
+                  : (component.fields.get(gate.fields.open!.offset) ?? {
+                      kind: "bool",
+                      value: true,
+                    }),
+              ],
+            ]),
+          };
+      } else {
+        if (entity.kind === "bound")
+          throw new Error(
+            "Suspense on bindTo requires an explicit PresentationGate boundary",
+          );
+        components.push({
+          identity: -entity.identity,
+          entity: entity.identity,
+          component: gate.id,
+          managedGate: true,
+          fields: new Map([
+            [gate.fields.open!.offset, { kind: "bool", value: !hidden }],
+          ]),
+        });
+      }
+    }
+    for (const identity of this.retainedGates)
+      if (!hiddenEntities.has(identity)) this.retainedGates.delete(identity);
 
     const resources = resourceSignature(assets, animations, dataSources);
     const previous = this.described;

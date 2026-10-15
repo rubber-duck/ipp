@@ -1,28 +1,17 @@
 {
   "compilerOptions": {
     "target": "ES2023",
-    "lib": [
-      "ES2024",
-      "DOM"
-    ],
+    "lib": ["ES2024", "DOM"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "paths": {
-      "@ipp/client": [
-        "./packages/ipp-client/src/index.ts"
-      ],
-      "@ipp/client/testing": [
-        "./packages/ipp-client/src/testing.ts"
-      ],
-      "@ipp/client/diagnostics": [
-        "./packages/ipp-client/src/diagnostics.ts"
-      ],
+      "@ipp/client": ["./packages/ipp-client/src/index.ts"],
+      "@ipp/client/testing": ["./packages/ipp-client/src/testing.ts"],
+      "@ipp/client/diagnostics": ["./packages/ipp-client/src/diagnostics.ts"],
       "@ipp/gui-authoring-contract": [
         "./target/react-gui-contract/generated.d.ts"
       ],
-      "@ipp/host-contract": [
-        "./target/react-gui-contract/generated.d.ts"
-      ],
+      "@ipp/host-contract": ["./target/react-gui-contract/generated.d.ts"],
       "@ipp/gui-stress-contract": [
         "./target/gui-stress-contract/generated.d.ts"
       ]
@@ -39,9 +28,7 @@
     "noUnusedParameters": true,
     "useUnknownInCatchVariables": true,
     "verbatimModuleSyntax": true,
-    "types": [
-      "node"
-    ],
+    "types": ["node"],
     "jsx": "react-jsx"
   },
   "include": [
@@ -58,8 +45,5 @@
     "integrations/blender/client/**/*.ts",
     "crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts"
   ],
-  "exclude": [
-    "dist",
-    "node_modules"
-  ]
+  "exclude": ["dist", "node_modules"]
 }

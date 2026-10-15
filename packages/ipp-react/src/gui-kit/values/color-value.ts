@@ -17,9 +17,11 @@
  * colour's hue, and for black its saturation too, so the hue rail and the
  * field's marker do not jump when a colour passes through them.
  */
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useRef } from "react";
+import { useComposedControlRef } from "../../gui/control-refs.js";
 import type { GuiControlEvent, GuiHsva } from "../../gui/callbacks.js";
 import type { GuiControlHandle, GuiControlRef } from "../../gui/control-ref.js";
+import { useValueSynchronization } from "./value-synchronization.js";
 import type { GuiKitColor } from "../kit.js";
 
 /** A colour's sRGB bytes, 0 to 255, and its coverage alpha, 0 to 1. */
@@ -179,7 +181,7 @@ export interface ColorValue {
     readonly value: number;
     readonly alpha: number;
     readonly onColorCommit: (event: GuiControlEvent<GuiHsva>) => void;
-    readonly ref: (handle: GuiControlHandle | null) => void;
+    readonly ref: GuiControlRef;
   };
   /**
    * Set a colour entered in the picker, such as a typed hex or a preset: the
@@ -193,8 +195,9 @@ export interface ColorValue {
  * `defaultValue`, reported to `onChange` as the runtime commits it, from the
  * control's drags and keys and from the picker's own entries. The control
  * declares its channels once, when it mounts; a later colour the runtime did
- * not report is the application's and is set with the control's value
- * action, one write of all four channels, and not reported back. `ref` also
+ * not report is the application's. Conditional channel writes restore that
+ * intent against the actual observed tuple; only acknowledged echoes are
+ * suppressed. Explicit entries still use the native atomic colour action. `ref` also
  * receives the control's handle.
  */
 export function useColorValue(
@@ -203,63 +206,49 @@ export function useColorValue(
   onChange: ((value: GuiHsva) => void) | undefined,
   ref: GuiControlRef | undefined,
 ): ColorValue {
-  const [own, setOwn] = useState(defaultValue);
-  const current = value ?? own;
-  const [mounted] = useState(current);
-  // The colour the runtime holds as far as the picker knows: the last one
-  // reported or the application's last write.
-  const held = useRef(current);
   const handle = useRef<GuiControlHandle | null>(null);
-  // A write waiting for the handle, which publishes after the declaration.
-  const waiting = useRef<GuiHsva | undefined>(undefined);
-  const outer = useRef(ref);
-  outer.current = ref;
-
-  const set = (color: GuiHsva) => {
-    const target = handle.current;
-    if (!target) {
-      waiting.current = color;
-      return;
-    }
-    waiting.current = undefined;
-    const { hue, saturation, value: level, alpha } = color;
-    void target
-      .action({ kind: "color", value: [hue, saturation, level, alpha] })
-      .catch(() => {});
-  };
-
-  // A colour the runtime did not report is the application's: set it.
-  const key = value && JSON.stringify(stored(value));
-  useEffect(() => {
-    if (value === undefined || sameColor(value, held.current)) return;
-    held.current = value;
-    set(value);
-    // The key carries the channels; a new object of the same colour is no change.
-  }, [key]);
-
-  const [attach] = useState(() => (next: GuiControlHandle | null) => {
-    handle.current = next;
-    const user = outer.current;
-    if (typeof user === "function") user(next);
-    else if (user) (user as RefObject<GuiControlHandle | null>).current = next;
-    if (next && waiting.current) set(waiting.current);
+  const synchronization = useValueSynchronization({
+    value,
+    defaultValue,
+    onChange,
+    same: sameColor,
+    identity: () => handle.current,
+    write: async (from, to, context) => {
+      const target = handle.current;
+      if (!target) return;
+      let intermediate = from;
+      for (const field of ["hue", "saturation", "value", "alpha"] as const) {
+        if (!context.isCurrent()) return;
+        if (Math.fround(from[field]) === Math.fround(to[field])) continue;
+        const candidate = { ...intermediate, [field]: to[field] };
+        const accepted = await context.trackEcho(candidate, () =>
+          target.compareAndSet(field, from[field], to[field]),
+        );
+        if (!accepted) return;
+        intermediate = candidate;
+      }
+    },
   });
-
+  const attach = useComposedControlRef(
+    handle,
+    ref,
+    synchronization.notifyReady,
+  );
   return {
-    current,
+    current: synchronization.current,
     control: {
-      ...mounted,
-      // Retained declarations call the latest render's callbacks.
+      ...synchronization.initial,
       onColorCommit: (event) => {
-        if (sameColor(event.value, held.current)) return;
-        held.current = event.value;
-        if (value === undefined) setOwn(event.value);
-        onChange?.(event.value);
+        synchronization.observe(event.value, event);
       },
       ref: attach,
     },
     enter(color) {
-      if (!sameColor(color, held.current)) set(color);
+      if (sameColor(color, synchronization.current)) return;
+      const { hue, saturation, value: level, alpha } = color;
+      void handle.current
+        ?.action({ kind: "color", value: [hue, saturation, level, alpha] })
+        .catch(() => {});
     },
   };
 }

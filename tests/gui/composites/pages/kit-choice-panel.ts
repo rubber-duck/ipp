@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import type { GuiPhysicalKey } from "@ipp/client";
 import { createElement as h } from "react";
 import {
@@ -58,7 +59,12 @@ export function kitChoicePanel(origin: readonly [number, number]) {
       await root.render(
         h(
           GuiKit,
-          { contract, font, fontSize: FONT_SIZE },
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font,
+            fontSize: FONT_SIZE,
+          },
           h(
             Entity,
             { id: "kit-root" },

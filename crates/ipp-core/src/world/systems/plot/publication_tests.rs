@@ -27,6 +27,7 @@ fn chart() -> PlotPublishedChart {
         meshes: vec![PlotPublishedMesh {
             geometry,
             mesh_index: 0,
+            variant: PlotMeshVariant::Default,
             render: PublishedRenderItem {
                 item: RenderItem {
                     particle: None,
@@ -58,6 +59,7 @@ fn chart() -> PlotPublishedChart {
             },
         }],
         planes: Arc::from([]),
+        callout_paint: None,
     }
 }
 

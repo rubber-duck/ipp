@@ -109,6 +109,7 @@ fn navigation(
         bytes.extend(pair.0.to_le_bytes());
         bytes.extend(pair.1.to_le_bytes());
     }
+    bytes.extend(0u32.to_le_bytes());
     bytes.extend(2u32.to_le_bytes());
     bytes.extend(std::f32::consts::LN_2.to_le_bytes());
     bytes.extend(0f32.to_le_bytes());

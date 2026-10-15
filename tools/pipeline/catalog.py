@@ -91,6 +91,9 @@ REGRESSION_GROUPS = {
             "test:plots:dense-browser",
             "test:plots:views-browser",
             "test:plots:3d-browser",
+            "test:plots:glass-2d-browser",
+            "test:plots:glass-3d-browser",
+            "test:plots:glass-lifecycle-browser",
             "test:plots:axis-browser",
             "test:plots:axis-gating-browser",
             "test:plots:percentage-browser",
@@ -98,6 +101,8 @@ REGRESSION_GROUPS = {
             "test:react-gui-authoring:projected-advanced-webgl",
             "test:react-gui-authoring:projected-transitions-webgl",
             "test:react-gui-authoring:projected-recovery-webgl",
+            "test:react-gui-authoring:sliders-webgl",
+            "test:react-gui-authoring:slider-wheel-webgl",
             "test:presentation:webgl",
             "test:presentation:webgl-production",
             "test:presentation:diagnostics",
@@ -112,24 +117,28 @@ REGRESSION_GROUPS = {
             "gui-local",
             "gui-motion",
             "gui-default-skin",
+            "gui-glass-skin",
             "output-inclusion",
             "react-gui-authoring",
             "retained-gui",
             "surface-cache",
             "gui-stress",
         ),
+        steps=(
+            "test:plots:glass-2d-native",
+            "test:plots:glass-2d-browser",
+            "test:plots:glass-3d-native",
+            "test:plots:glass-3d-browser",
+            "test:plots:glass-lifecycle-native",
+            "test:plots:glass-lifecycle-browser",
+        ),
     ),
     "gallery": RegressionGroup(
-        "Published gallery and interactive GUI, camera, particle and platformer demos",
+        "Shared demo application, published assets and native scenes",
         (
             "gallery-site",
-            "gallery-gui",
-            "gallery-gui-camera",
-            "gallery-particles",
-            "gallery-charts",
-            "gallery-chart-input",
-            "gallery-chart-changes",
-            "gallery-platformer",
+            "gallery-browser",
+            "gallery-cockpit",
             "native-gallery",
         ),
         steps=("test:gallery-trace:exporter", "test:gallery-trace:browser"),
@@ -153,10 +162,15 @@ REGRESSION_GROUPS = {
             "test:react-gui-authoring:projected-advanced-gles",
             "test:react-gui-authoring:projected-transitions-gles",
             "test:react-gui-authoring:projected-recovery-gles",
+            "test:react-gui-authoring:sliders-gles",
+            "test:react-gui-authoring:slider-wheel-gles",
             "test:plots:native",
             "test:plots:dense-native",
             "test:plots:views-native",
             "test:plots:3d-native",
+            "test:plots:glass-2d-native",
+            "test:plots:glass-3d-native",
+            "test:plots:glass-lifecycle-native",
             "test:plots:axis-native",
             "test:plots:axis-gating-native",
             "test:plots:percentage-native",
@@ -251,6 +265,9 @@ PRODUCT_SCRIPTS = {
     "gui-default-skin-fixtures": ProductScript(
         "tests/gui/default-skin/build.mjs", "target/gui-default-skin"
     ),
+    "gui-glass-skin-fixtures": ProductScript(
+        "tests/gui/glass-skin/build.mjs", "target/gui-glass-skin"
+    ),
     "gui-stress-fixtures": ProductScript(
         "tools/products/gui-stress-fixtures.mjs", "target/gui-stress"
     ),
@@ -259,6 +276,9 @@ PRODUCT_SCRIPTS = {
     ),
     "render-fixtures": ProductScript(
         "tools/products/render-fixtures.mjs", "target/render-fixtures"
+    ),
+    "demos-drawings": ProductScript(
+        "tools/assets/demos_drawings.py", "target/demos-drawings", runner="python"
     ),
     "gallery-assets": ProductScript(
         "tools/products/gallery.mjs", "target/gallery-assets", ("assets",)
@@ -432,6 +452,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     build(
+        "gui-glass-skin-fixtures",
+        ("react-gui-authoring",),
+        ("target/gui-glass-skin",),
+        ("node", "npm"),
+    )
+    build(
         "gui-stress-fixtures",
         ("react", "native"),
         ("target/gui-stress", "target/gui-stress-contract"),
@@ -459,6 +485,17 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     build(
+        "demos-drawings",
+        (),
+        ("target/demos-drawings",),
+        ("python-tools",),
+        source_roots=(
+            "tools/assets/demos_drawings.py",
+            "tools/assets/convert_surface_asset.py",
+            "examples/demos/assets/drawings/",
+        ),
+    )
+    build(
         "gallery-assets",
         ("builtin-exporter",),
         ("target/gallery-assets",),
@@ -470,8 +507,10 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "browser:render",
             "react",
             "gallery-assets",
-            "gallery-gui-assets",
+            "font-assets",
             "gallery-platformer-assets",
+            "demos-cockpit-assets",
+            "demos-drawings",
         ),
         ("target/gallery-build",),
         ("node", "npm"),
@@ -484,7 +523,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build(
         "gallery-fixtures",
-        ("gallery", "browser:headless"),
+        ("browser:render", "react", "gallery-assets", "browser:headless"),
         ("target/gallery-fixtures",),
         ("node", "npm"),
     )
@@ -521,12 +560,6 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("python-tools",),
     )
     build(
-        "gallery-gui-assets",
-        ("font-assets",),
-        ("target/gallery-gui-assets",),
-        ("python-tools", "blender"),
-    )
-    build(
         "gallery-platformer-assets",
         ("browser:render",),
         ("target/gallery-platformer-assets",),
@@ -536,6 +569,18 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "gallery-platformer-native-assets",
         ("native",),
         ("target/gallery-platformer-native-assets",),
+        ("python-tools", "blender", "node", "npm"),
+    )
+    build(
+        "demos-cockpit-assets",
+        ("browser:render",),
+        ("target/demos-cockpit-assets",),
+        ("python-tools", "blender", "node", "npm", "browser"),
+    )
+    build(
+        "demos-cockpit-native-assets",
+        ("native",),
+        ("target/demos-cockpit-native-assets",),
         ("python-tools", "blender", "node", "npm"),
     )
     build(

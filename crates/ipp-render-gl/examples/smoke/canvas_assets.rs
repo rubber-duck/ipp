@@ -18,6 +18,7 @@ pub fn run<D: RenderDevice>(
     fonts: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::panel())?;
     let child = host.create_world(Default::default(), &super::selection::panel())?;
@@ -141,7 +142,7 @@ pub fn run<D: RenderDevice>(
             .root_output(root.world().id())
             .map(|(output, _, publication)| (output, publication));
         renderer.prepare(&mut host, selected)?;
-        host.progress_assets();
+        super::task_scheduler::progress(&mut host);
         if keys.iter().all(|key| {
             host.asset_resources()
                 .get(*key)

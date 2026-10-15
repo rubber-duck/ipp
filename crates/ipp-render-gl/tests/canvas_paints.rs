@@ -254,6 +254,37 @@ fn a_property_write_uploads_parameters_without_geometry() {
 }
 
 #[test]
+fn independent_assets_with_the_same_paint_reuse_the_program_and_keep_their_values() {
+    let mut scene = PaintScene::new();
+    let source = scene.source("first", scanlines());
+    let first = scene.painted(0.1, &source, &[("spacing", 1.0)]);
+    scene.render();
+    let builds = scene.renderer.canvas_program_builds();
+
+    let mut instances = vec![first];
+    for index in 2..=CANVAS_PAINT_SLOTS + 4 {
+        let source = scene.source(&format!("copy-{index}"), scanlines());
+        instances.push(scene.painted(0.05 * index as f32, &source, &[("spacing", index as f32)]));
+    }
+    scene.render();
+    assert_eq!(scene.renderer.canvas_program_builds(), builds);
+    for (index, entity) in instances.iter().enumerate() {
+        assert_eq!(scene.reason(*entity), None);
+        assert!(
+            scene
+                .last_blocks()
+                .contains(&[(index + 1) as f32, 0.0, 0.0, 0.0])
+        );
+    }
+
+    scene.set(first, "spacing", 32.0);
+    scene.render();
+    assert_eq!(scene.renderer.canvas_program_builds(), builds);
+    assert!(scene.last_blocks().contains(&[32.0, 0.0, 0.0, 0.0]));
+    assert!(scene.last_blocks().contains(&[2.0, 0.0, 0.0, 0.0]));
+}
+
+#[test]
 fn unusable_paints_draw_their_colour_and_say_why() {
     let mut scene = PaintScene::new();
     *scene.state.fail_program_containing.borrow_mut() = Some("BROKEN".into());
@@ -347,16 +378,17 @@ fn a_ninth_paint_in_one_frame_finds_no_slot() {
 #[test]
 fn an_instance_beyond_the_parameter_array_falls_back() {
     let mut scene = PaintScene::new();
-    // Each wide instance takes most of the array; the second has no room.
+    // Distinct wide values each take most of the array; the second has no room.
     let names: Vec<String> = (0..100).map(|index| format!("p{index:03}")).collect();
     let parameters: Vec<_> = names
         .iter()
         .map(|name| (name.as_str(), ShaderParameterKind::F32))
         .collect();
     let values: Vec<_> = names.iter().map(|name| (name.as_str(), 1.0)).collect();
+    let other_values: Vec<_> = names.iter().map(|name| (name.as_str(), 2.0)).collect();
     let wide = scene.source("wide", definition("return color;", &parameters));
     let first = scene.painted(0.6, &wide, &values);
-    let second = scene.painted(0.7, &wide, &values);
+    let second = scene.painted(0.7, &wide, &other_values);
     scene.render();
 
     assert_eq!(scene.reason(first), None);

@@ -1,0 +1,21 @@
+{
+  "purpose": "Generated UI component concepts derived from the approved natural glass optical prototype; design reference, not implemented components.",
+  "generator": "built-in image_gen.imagegen",
+  "task": "ipp-gku1",
+  "prototypeTask": "ipp-uco2",
+  "prompt": "prompt.txt",
+  "inputs": [
+    {
+      "file": "input-frontal.png",
+      "source": "target/shared-host-captures/ipp-uco2-context/frontal.png",
+      "sha256": "3c408ba60f95aff01044922a98c1735df0b57791386934d1215a333e0c74d92c"
+    },
+    {
+      "file": "input-angle.png",
+      "source": "target/glass-optical-preview-angle.png",
+      "sha256": "034dde752c8b753f3efd1b137119ee79447e6f44e0917471196ac19ba3f6d54f"
+    }
+  ],
+  "output": "components.png",
+  "style": "Natural thin glass sheets; clear, frosted and smoked; rounded polished optical edges; restrained reflections."
+}

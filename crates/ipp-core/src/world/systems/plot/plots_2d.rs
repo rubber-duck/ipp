@@ -19,7 +19,6 @@ use crate::{
         formats::drawing::FillRule,
         formats::quadratic::{QuadraticContour, QuadraticSegment},
     },
-    systems::gui::presentation::looks::{GuiSkinTokenValue, gui_skin_tokens},
 };
 
 const CURVE_ERROR: f32 = 0.2;
@@ -47,6 +46,7 @@ pub fn prepare_line(
     chart: &PlotLine2d,
     frame: &PlotFrame2d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let series = samples(&chart.series, input, false)?;
     let (min, max) = ranges(frame, &series, false);
@@ -69,7 +69,7 @@ pub fn prepare_line(
             let mut color = run[0].color;
             for index in 0..points.len().saturating_sub(1) {
                 if run[index].color != color {
-                    emit_path(&mut geometry, std::mem::take(&mut contours), color);
+                    emit_data_path(&mut geometry, std::mem::take(&mut contours), color);
                     color = run[index].color;
                 }
                 let a = points[index];
@@ -90,7 +90,7 @@ pub fn prepare_line(
                     stroke_segment(a, b, chart.line_width, mapping.rect, &mut contours);
                 }
             }
-            emit_path(&mut geometry, contours, color);
+            emit_data_path(&mut geometry, contours, color);
 
             for (sample, point) in run.iter().zip(points) {
                 if !inside(point, mapping.rect) {
@@ -98,7 +98,7 @@ pub fn prepare_line(
                 }
                 let radius = chart.marker_size / 2.0;
                 if radius > 0.0 {
-                    emit_path(&mut geometry, vec![circle(point, radius)], sample.color);
+                    emit_data_path(&mut geometry, vec![circle(point, radius)], sample.color);
                 }
                 geometry.hits.push(PlotHit {
                     row: sample.row,
@@ -117,7 +117,7 @@ pub fn prepare_line(
             }
         }
     }
-    labels(&mut geometry, frame, &chart.labels, &anchors)?;
+    labels(&mut geometry, frame, &chart.labels, &anchors, callout)?;
     Ok(geometry)
 }
 
@@ -128,6 +128,7 @@ pub fn prepare_bars(
     chart: &PlotBars2d,
     frame: &PlotFrame2d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let series = samples(&chart.series, input, false)?;
     let highlighted = highlighted_rows(&chart.labels)?;
@@ -157,7 +158,7 @@ pub fn prepare_bars(
             if rect[0] >= rect[2] || rect[1] >= rect[3] {
                 continue;
             }
-            push_box(
+            push_data_box(
                 &mut geometry,
                 [rect[0], rect[1]],
                 [rect[2] - rect[0], rect[3] - rect[1]],
@@ -180,7 +181,7 @@ pub fn prepare_bars(
                         &mut contours,
                     );
                 }
-                emit_path(&mut geometry, contours, token_color("error"));
+                emit_path(&mut geometry, contours, frame.highlight_color());
             }
             geometry.hits.push(PlotHit {
                 row: sample.row,
@@ -202,7 +203,7 @@ pub fn prepare_bars(
             );
         }
     }
-    labels(&mut geometry, frame, &chart.labels, &anchors)?;
+    labels(&mut geometry, frame, &chart.labels, &anchors, callout)?;
     Ok(geometry)
 }
 
@@ -212,6 +213,7 @@ pub fn prepare_pie(
     chart: &PlotPie2d,
     frame: &PlotFrame2d,
     input: &PlotPreparedInput<'_>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
     let series = samples(&chart.series, input, true)?;
     let highlighted = highlighted_rows(&chart.labels)?;
@@ -245,7 +247,7 @@ pub fn prepare_pie(
             (sample.point[1] / total * f64::from(TAU)) as f32
         };
         let contour = sector(center, inner, radius, start, sweep);
-        emit_path(&mut geometry, vec![contour], sample.color);
+        emit_data_path(&mut geometry, vec![contour], sample.color);
         if highlighted.contains(&row_key(sample.row)) {
             let half_width = frame.line_width.max(2.0) / 2.0;
             let mut contours = vec![sector(
@@ -275,7 +277,7 @@ pub fn prepare_pie(
                     );
                 }
             }
-            emit_path(&mut geometry, contours, token_color("error"));
+            emit_path(&mut geometry, contours, frame.highlight_color());
         }
         geometry.hits.push(PlotHit {
             row: sample.row,
@@ -297,7 +299,7 @@ pub fn prepare_pie(
         );
         start += sweep;
     }
-    labels(&mut geometry, frame, &chart.labels, &anchors)?;
+    labels(&mut geometry, frame, &chart.labels, &anchors, callout)?;
     Ok(geometry)
 }
 
@@ -563,10 +565,10 @@ fn labels(
     frame: &PlotFrame2d,
     labels: &Rows<PlotLabelRow>,
     anchors: &BTreeMap<(u32, u64), Anchor>,
+    callout: Option<&PlotCalloutStyle>,
 ) -> Result<(), ErrorReason> {
-    // The shared magenta hue marks authored chart selection, as in the reference.
-    let highlight = token_color("error");
-    let page = token_color("page");
+    let highlight = frame.highlight_color();
+    let page = [0.0, 0.0, 0.0, 1.0];
     for (_, label) in labels.iter() {
         let row = PlotRowIdentity {
             series: label.series,
@@ -597,8 +599,19 @@ fn labels(
         if label.text.is_empty() {
             continue;
         }
-        let width = label.text.chars().count() as f32 * frame.font_size * 0.62 + 16.0;
-        let height = frame.font_size + 12.0;
+        let padding = callout.map_or([8.0, 6.0], |style| {
+            [
+                style.padding_x * frame.font_size,
+                style.padding_y * frame.font_size,
+            ]
+        });
+        let extent = super::callout::text_extent(&label.text, frame.font_size);
+        let width = extent[0] + padding[0] * 2.0;
+        let height = callout.map_or(frame.font_size + 12.0, |_| extent[1] + padding[1] * 2.0);
+        let leader_color = callout.map_or(color, PlotCalloutStyle::leader_color);
+        let leader_width = callout.map_or(frame.line_width, |style| {
+            style.leader_width * frame.font_size
+        });
         let origin = [
             anchor.point[0] + label.offset[0],
             anchor.point[1] + label.offset[1],
@@ -624,29 +637,44 @@ fn labels(
             ];
             let mut contours = Vec::new();
             let rect = [0.0, 0.0, frame.width, frame.height];
-            stroke_segment(anchor.point, elbow, frame.line_width, rect, &mut contours);
-            stroke_segment(elbow, end, frame.line_width, rect, &mut contours);
-            emit_path(geometry, contours, color);
+            stroke_segment(anchor.point, elbow, leader_width, rect, &mut contours);
+            stroke_segment(elbow, end, leader_width, rect, &mut contours);
+            emit_path(geometry, contours, leader_color);
         }
-        // Paired 45-degree cuts repeat the native technical control language.
-        let outer = cut_box(origin, [width, height], 4.0);
-        emit_path(geometry, vec![outer], color);
-        let inset = frame.line_width.max(1.0);
-        emit_path(
-            geometry,
-            vec![cut_box(
-                [origin[0] + inset, origin[1] + inset],
-                [width - inset * 2.0, height - inset * 2.0],
-                3.0,
-            )],
-            page,
-        );
+        if let Some(style) = callout {
+            let part = geometry.canvas.len() as u32;
+            geometry.canvas.push(PlotPrimitive {
+                data_mark: false,
+                part,
+                position: origin,
+                color: style.color(),
+                kind: PlotPrimitiveKind::CalloutBox {
+                    size: [width, height],
+                    radius: style.radius * frame.font_size,
+                    border_width: style.border_width * frame.font_size,
+                },
+            });
+        } else {
+            // Paired 45-degree cuts repeat the native technical control language.
+            let outer = cut_box(origin, [width, height], 4.0);
+            emit_path(geometry, vec![outer], color);
+            let inset = frame.line_width.max(1.0);
+            emit_path(
+                geometry,
+                vec![cut_box(
+                    [origin[0] + inset, origin[1] + inset],
+                    [width - inset * 2.0, height - inset * 2.0],
+                    3.0,
+                )],
+                page,
+            );
+        }
         push_text(
             geometry,
-            [origin[0] + 8.0, origin[1] + 6.0],
+            [origin[0] + padding[0], origin[1] + padding[1]],
             label.text.clone(),
             frame.font_size,
-            color,
+            callout.map_or(color, PlotCalloutStyle::text_color),
         );
     }
     Ok(())
@@ -664,16 +692,6 @@ fn highlighted_rows(labels: &Rows<PlotLabelRow>) -> Result<BTreeSet<(u32, u64)>,
         .collect()
 }
 
-fn token_color(name: &str) -> [f32; 4] {
-    gui_skin_tokens()
-        .iter()
-        .find_map(|token| match token.value {
-            GuiSkinTokenValue::Color(color) if token.name == name => Some(color),
-            _ => None,
-        })
-        .expect("maintained GUI palette colour")
-}
-
 fn cut_box(origin: [f32; 2], size: [f32; 2], cut: f32) -> QuadraticContour {
     let [x, y] = origin;
     let [w, h] = size;
@@ -685,6 +703,29 @@ fn cut_box(origin: [f32; 2], size: [f32; 2], cut: f32) -> QuadraticContour {
         [x, y + h],
         [x, y + cut],
     ])
+}
+
+fn push_data_box(
+    geometry: &mut PlotPreparedGeometry,
+    position: [f32; 2],
+    size: [f32; 2],
+    color: [f32; 4],
+) {
+    push_box(geometry, position, size, color);
+    geometry.canvas.last_mut().expect("inserted mark").data_mark = true;
+}
+
+fn emit_data_path(
+    geometry: &mut PlotPreparedGeometry,
+    contours: Vec<QuadraticContour>,
+    color: [f32; 4],
+) {
+    if contours.is_empty() {
+        return;
+    }
+
+    emit_path(geometry, contours, color);
+    geometry.canvas.last_mut().expect("inserted mark").data_mark = true;
 }
 
 fn push_box(

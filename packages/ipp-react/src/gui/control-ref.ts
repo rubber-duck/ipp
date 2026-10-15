@@ -12,6 +12,10 @@ import type {
  */
 export interface GuiControlHandle {
   readonly target: GuiTarget;
+  /** Focus this control, or one of its native parts, after acknowledgement. */
+  focus(part?: number): Promise<BatchOutcome>;
+  /** Release logical focus through the native input system. */
+  blur(): Promise<BatchOutcome>;
   /** The control component's current fields, by field name. */
   read(): Promise<Readonly<Record<string, ComponentFieldValue>>>;
   /**

@@ -29,6 +29,8 @@ pub struct PlotPath {
 /// One compact plane-local paint item. Parts are stable within this component.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlotPrimitive {
+    /// Whether this data mark opts into its chart entity's authored paint.
+    pub data_mark: bool,
     /// Retained part identity, unrelated to painter order.
     pub part: u32,
     /// Local origin in top-left/Y-down plane coordinates.
@@ -43,6 +45,12 @@ pub struct PlotPrimitive {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum PlotPrimitiveKind {
+    /// Shared callout paint, separate from the data-mark material.
+    CalloutBox {
+        size: [f32; 2],
+        radius: f32,
+        border_width: f32,
+    },
     /// Existing retained Canvas box pipeline.
     Box {
         size: [f32; 2],
@@ -70,10 +78,39 @@ pub struct PlotMesh {
     pub colors: Vec<[f32; 3]>,
     /// Per-vertex local normals; empty selects unlit geometry.
     pub normals: Vec<[f32; 3]>,
+    /// Optional unshaded data-mark streams; ordinary/default geometry remains unchanged.
+    pub material: Option<PlotMeshMaterial>,
     /// Counter-clockwise triangles.
     pub indices: Vec<u16>,
     /// Straight linear material multiplier; alpha determines ordinary transparency.
     pub color: [f32; 4],
+}
+
+/// Derived body shading streams sharing the original positions and topology.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlotMeshMaterial {
+    /// Unshaded per-vertex linear row colour, including interpolation on surfaces.
+    pub colors: Vec<[f32; 3]>,
+    /// Outward local face normals.
+    pub normals: Vec<[f32; 3]>,
+    /// Whole-face coordinates: rectangle 0..1, triangle X+2, radial cap X+4.
+    pub uvs: Vec<[f32; 2]>,
+    /// Data-body triangles eligible for the sibling custom material.
+    pub data_indices: Vec<u16>,
+    /// Ordinary edge/highlight triangles that keep their baked appearance.
+    pub decoration_indices: Vec<u16>,
+}
+
+/// Immutable selection of a derived mesh's original or material topology.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PlotMeshVariant {
+    /// Complete original geometry and baked colours.
+    #[default]
+    Default,
+    /// Data marks; renderer selects raw streams only for a usable custom candidate.
+    Data,
+    /// Original decoration geometry, independent of material availability.
+    Decoration,
 }
 
 /// View orientation for immutable physical plane paint.
@@ -234,6 +271,7 @@ impl Default for PlotMesh {
             positions: Vec::new(),
             colors: Vec::new(),
             normals: Vec::new(),
+            material: None,
             indices: Vec::new(),
             color: [1.0; 4],
         }
@@ -241,9 +279,16 @@ impl Default for PlotMesh {
 }
 
 impl PlotPrimitive {
+    /// Opt this data mark into the chart entity's paint without changing its geometry.
+    pub fn with_data_paint(mut self) -> Self {
+        self.data_mark = true;
+        self
+    }
+
     /// A filled local box using the ordinary Canvas shape pipeline.
     pub fn box_fill(part: u32, position: [f32; 2], size: [f32; 2], color: [f32; 4]) -> Self {
         Self {
+            data_mark: false,
             part,
             position,
             color,
@@ -258,6 +303,7 @@ impl PlotPrimitive {
     /// A generated analytic contour in top-left/Y-down local coordinates.
     pub fn path(part: u32, path: PlotPath, color: [f32; 4]) -> Self {
         Self {
+            data_mark: false,
             part,
             position: [0.0; 2],
             color,
@@ -274,6 +320,7 @@ impl PlotPrimitive {
         color: [f32; 4],
     ) -> Self {
         Self {
+            data_mark: false,
             part,
             position,
             color,
@@ -296,6 +343,8 @@ pub struct PlotPublishedChart {
     pub model: [f32; 16],
     /// Prepared scene meshes through the ordinary material/draw contract.
     pub meshes: Vec<PlotPublishedMesh>,
+    /// Shared panel shader, independent of data-mark materials.
+    pub callout_paint: Option<crate::systems::canvas::CanvasPaintInstance>,
     /// Prepared shared plane paint (font glyphs included).
     pub planes: Arc<[PlotPublishedPlane]>,
 }
@@ -309,6 +358,8 @@ pub struct PlotPublishedMesh {
     pub geometry: Arc<PlotPreparedGeometry>,
     /// Mesh ordinal in the immutable complete local result.
     pub mesh_index: usize,
+    /// Captured topology selection; no shader identities enter local geometry.
+    pub variant: PlotMeshVariant,
 }
 
 // Every mesh chunk retains the same complete chart geometry. Comparing the
@@ -321,11 +372,13 @@ fn same_geometry(left: &Arc<PlotPreparedGeometry>, right: &Arc<PlotPreparedGeome
 impl PartialEq for PlotPublishedChart {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
+            && self.callout_paint == other.callout_paint
             && self.model == other.model
             && same_geometry(&self.geometry, &other.geometry)
             && self.meshes.len() == other.meshes.len()
             && self.meshes.iter().zip(&other.meshes).all(|(left, right)| {
                 left.mesh_index == right.mesh_index
+                    && left.variant == right.variant
                     && left.render == right.render
                     && ((Arc::ptr_eq(&left.geometry, &self.geometry)
                         && Arc::ptr_eq(&right.geometry, &other.geometry))
@@ -338,6 +391,7 @@ impl PartialEq for PlotPublishedChart {
 impl PartialEq for PlotPublishedMesh {
     fn eq(&self, other: &Self) -> bool {
         self.mesh_index == other.mesh_index
+            && self.variant == other.variant
             && self.render == other.render
             && same_geometry(&self.geometry, &other.geometry)
     }
@@ -385,7 +439,11 @@ impl PlotSystem {
         let _trace = crate::profiling::CpuTraceScope::new("PlotSystem.publish");
         use crate::systems::render::{PbrMaterial, PublishedRenderItem, RenderItem, UnlitMaterial};
         let mut charts = Vec::with_capacity(self.state.charts.len());
+        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
         for chart in self.state.charts.values() {
+            if !presentation.open(world.world, chart.target.entity) {
+                continue;
+            }
             for resource in chart
                 .canvas
                 .iter()
@@ -417,59 +475,92 @@ impl PlotSystem {
                 .transform(chart.target.entity.index() as usize)
                 .copied()
                 .unwrap_or_default();
+            let custom =
+                crate::systems::render::publish_custom_material(world, chart.target.entity, output);
             let meshes = chart
                 .geometry
                 .meshes
                 .iter()
                 .enumerate()
-                .map(|(mesh_index, mesh)| PlotPublishedMesh {
-                    render: PublishedRenderItem {
-                        item: RenderItem {
-                            particle: None,
-                            solid_fallback: false,
-                            custom_material: false,
-                            normals: !mesh.normals.is_empty(),
-                            texture_weights: false,
-                            skinned: false,
-                            entity: chart.target.entity,
-                            transform,
-                            model,
-                            normal,
-                            material: UnlitMaterial {
-                                r: mesh.color[0],
-                                g: mesh.color[1],
-                                b: mesh.color[2],
+                .flat_map(|(mesh_index, mesh)| {
+                    let custom = &custom;
+                    let variants = if custom.is_some() && mesh.material.is_some() {
+                        vec![PlotMeshVariant::Data, PlotMeshVariant::Decoration]
+                    } else {
+                        vec![PlotMeshVariant::Default]
+                    };
+                    variants
+                        .into_iter()
+                        .filter(move |variant| match (variant, &mesh.material) {
+                            (PlotMeshVariant::Data, Some(material)) => {
+                                !material.data_indices.is_empty()
+                            }
+                            (PlotMeshVariant::Decoration, Some(material)) => {
+                                !material.decoration_indices.is_empty()
+                            }
+                            _ => true,
+                        })
+                        .map(move |variant| PlotPublishedMesh {
+                            render: PublishedRenderItem {
+                                item: RenderItem {
+                                    particle: None,
+                                    solid_fallback: false,
+                                    custom_material: variant == PlotMeshVariant::Data,
+                                    normals: variant == PlotMeshVariant::Data
+                                        || !mesh.normals.is_empty(),
+                                    texture_weights: false,
+                                    skinned: false,
+                                    entity: chart.target.entity,
+                                    transform,
+                                    model,
+                                    normal,
+                                    material: UnlitMaterial {
+                                        r: mesh.color[0],
+                                        g: mesh.color[1],
+                                        b: mesh.color[2],
+                                    },
+                                    pbr: (!mesh.normals.is_empty()).then_some(PbrMaterial {
+                                        r: mesh.color[0],
+                                        g: mesh.color[1],
+                                        b: mesh.color[2],
+                                        metallic: 0.0,
+                                        roughness: 0.6,
+                                        receive_shadows: false,
+                                        cast_shadows: false,
+                                    }),
+                                    mesh: crate::MeshKey {
+                                        asset: 0,
+                                        variant: mesh.part,
+                                    },
+                                    pose: None,
+                                    texture: None,
+                                },
+                                incarnation: chart.target.incarnation,
+                                custom: (variant == PlotMeshVariant::Data)
+                                    .then(|| custom.clone())
+                                    .flatten(),
+                                palette: None,
                             },
-                            pbr: (!mesh.normals.is_empty()).then_some(PbrMaterial {
-                                r: mesh.color[0],
-                                g: mesh.color[1],
-                                b: mesh.color[2],
-                                metallic: 0.0,
-                                roughness: 0.6,
-                                receive_shadows: false,
-                                cast_shadows: false,
-                            }),
-                            mesh: crate::MeshKey {
-                                asset: 0,
-                                variant: mesh.part,
-                            },
-                            pose: None,
-                            texture: None,
-                        },
-                        incarnation: chart.target.incarnation,
-                        custom: None,
-                        palette: None,
-                    },
-                    geometry: chart.geometry.clone(),
-                    mesh_index,
+                            geometry: chart.geometry.clone(),
+                            mesh_index,
+                            variant,
+                        })
                 })
                 .collect();
+            let callout_paint = super::callout::paint_target(world.world, chart.target.entity)
+                .and_then(|target| {
+                    super::callout::paint_instance(world.world, world.asset_resources(), target)
+                });
+            if let Some(shader) = callout_paint.as_ref().and_then(|paint| paint.shader) {
+                output.retain(shader);
+            }
             charts.push(PlotPublishedChart {
                 target: chart.target,
                 geometry: chart.geometry.clone(),
                 model,
                 meshes,
                 planes: chart.planes.clone(),
+                callout_paint,
             });
         }
         output.chunk(

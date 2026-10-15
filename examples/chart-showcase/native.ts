@@ -1,3 +1,4 @@
+import { cybertronTokens } from "@ipp/react/gui-cybertron";
 /** Load with the shared native Host; captures are actual composed runtime output. */
 import { canvasOutput } from "@ipp/client";
 import { defineClient } from "../../tools/shared-host/client.js";
@@ -9,7 +10,7 @@ import {
   PLOT_2D_EXTENT,
   type Plot2dContract,
   type Plot2dScene,
-} from "../world-gallery/worlds/charts2d/content.js";
+} from "../demos/scenes/charts2d/content.js";
 import {
   openPlot3d,
   readyPlot3d,
@@ -18,12 +19,12 @@ import {
   closePlot3d,
   type Plot3dContract,
   type Plot3dScene,
-} from "../world-gallery/worlds/charts3d/content.js";
+} from "../demos/scenes/charts3d/content.js";
 import {
   openPlot3dSheet,
   closePlot3dSheet,
   type Plot3dSheet,
-} from "../world-gallery/worlds/charts3d/sheet.js";
+} from "../demos/scenes/charts3d/sheet.js";
 
 interface Study {
   readonly flat: Plot2dScene;
@@ -43,7 +44,7 @@ export default defineClient<Study>({
       spatial = await openPlot3d(context.host, contract, font, context.name);
       const sheet = await openPlot3dSheet(
         spatial,
-        contract.GUI_SKIN_TOKENS,
+        cybertronTokens,
         font,
         context.name,
       );

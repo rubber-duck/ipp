@@ -50,6 +50,8 @@ export interface AnimationProps {
     easing?: AnimationTransitionEasing;
     startTime?: AnimationTransitionStartTime;
   };
+  /** Live playback intent; changes enqueue native play/pause controls. */
+  playing?: boolean;
   autoPlay?: boolean;
   onPlaybackEvent?: (event: AnimationPlaybackEvent) => void;
 }
@@ -123,6 +125,7 @@ export interface AnimationDescription {
     easing: AnimationTransitionEasing;
     startTime: AnimationTransitionStartTime;
   };
+  playing?: boolean;
   autoPlay: boolean;
   onPlaybackEvent?: ((event: AnimationPlaybackEvent) => void) | undefined;
 }

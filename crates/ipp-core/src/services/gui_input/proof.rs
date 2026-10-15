@@ -213,6 +213,13 @@ fn live_policy(world: SystemWorldView<'_>, entity: crate::EntityId) -> Result<()
             return Err(GuiInputError::StalePath);
         }
 
+        if let Some(ComponentValue::PresentationGate(gate)) =
+            world.effective_component(entity, ComponentValue::PRESENTATION_GATE)
+            && !gate.open
+        {
+            return Err(GuiInputError::StalePath);
+        }
+
         if let Some(ComponentValue::GuiBehavior(behavior)) =
             world.effective_component(entity, ComponentValue::GUI_BEHAVIOR)
             && (!behavior.enabled || !behavior.visible)

@@ -238,7 +238,9 @@ impl SystemFactory for GuiSystemFactory {
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
         let mut capabilities = crate::systems::SystemCapabilities::new(
             [
+                ComponentValue::PRESENTATION_GATE,
                 ComponentValue::GUI_BEHAVIOR,
+                ComponentValue::GUI_METRICS,
                 ComponentValue::GUI_VIRTUAL_ITEM,
                 ComponentValue::GUI_GROUP,
             ],
@@ -282,7 +284,7 @@ impl SystemFactory for GuiSystemFactory {
             .components
             .push(crate::systems::SystemCapability::requiring(
                 ComponentValue::GUI_THEME_MOTION,
-                [crate::systems::animation::AnimationSystem::ID],
+                [],
             ));
         capabilities
     }
@@ -371,7 +373,10 @@ impl System for GuiSystem {
             {
                 continue;
             }
-            if component == ComponentValue::GUI_BEHAVIOR {
+            if matches!(
+                component,
+                ComponentValue::GUI_BEHAVIOR | ComponentValue::PRESENTATION_GATE
+            ) {
                 self.local.policy_changed(entity);
             }
             self.motion.component_changed(entity, component);
@@ -425,7 +430,23 @@ impl System for GuiSystem {
         &mut self,
         context: &mut crate::systems::SystemOperationContext<'_>,
     ) -> Result<(), ErrorReason> {
-        super::local::composites::group::keep_exclusive_selection(context)
+        super::local::composites::group::keep_exclusive_selection(context)?;
+        let mut roots: std::collections::BTreeSet<_> = context
+            .changed_components()
+            .filter_map(|(entity, component)| {
+                (component == ComponentValue::PRESENTATION_GATE).then_some(entity)
+            })
+            .collect();
+        roots.extend(context.changed_entity_links());
+        if !roots.is_empty() {
+            super::local::refresh_eligibility(
+                &mut context.world_data.components,
+                &context.staged.entities_state,
+                &roots,
+                &mut self.local.eligibility_changed,
+            );
+        }
+        Ok(())
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {

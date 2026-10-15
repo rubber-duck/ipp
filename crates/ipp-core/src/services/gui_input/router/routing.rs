@@ -936,17 +936,35 @@ impl GuiInputRouter {
                 delta,
                 shift,
             } => {
-                // Over the focused value control the wheel steps its value,
-                // so an unfocused one never takes the wheel from scrolling:
-                // a slider's anywhere over it, a colour control's focused
-                // rail only over that rail. Anything else, including a failed
-                // hit, scrolls as before.
+                let over = hit(host, query, point, &context.blockers)?;
+                if let Some(target) = &over {
+                    delivery.wheel_hit(super::GuiRoutingHit {
+                        target: target.control.record.target,
+                        path: &target.path,
+                    })?;
+                }
+                // Sliders and dials take wheel input at the pointer without
+                // moving keyboard focus. A range chooses its pointed/nearest
+                // thumb, independently of the thumb keyboard focus names.
+                if let Some(target) = over
+                    .clone()
+                    .filter(|target| target.control.slider.is_some())
+                    && let Some(steps) = wheel_steps(delta)
+                {
+                    let target = self.pointed_part(host, context, query, target, point, true)?;
+                    self.step_value(host, context, &target, steps, shift, delivery)?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: target.control.record.target,
+                    });
+                }
+                // Other value controls retain focus-gated wheel handling:
+                // numeric fields and only a colour control's focused rail.
                 if let Some(focus) = context
                     .focus
                     .clone()
                     .filter(|focus| focus.control.color.is_some() && focus.focus_part() > 0)
                     && let Some(steps) = wheel_steps(delta)
-                    && let Some(over) = hit(host, query, point, &context.blockers).ok().flatten()
+                    && let Some(over) = over.clone()
                     && over.control.record.target == focus.control.record.target
                     && over.path == focus.path
                     && self
@@ -966,13 +984,10 @@ impl GuiInputRouter {
                     .clone()
                     .filter(|focus| focus.control.steps_value())
                     && let Some(steps) = wheel_steps(delta)
-                    && hit(host, query, point, &context.blockers)
-                        .ok()
-                        .flatten()
-                        .is_some_and(|target| {
-                            target.control.record.target == focus.control.record.target
-                                && target.path == focus.path
-                        })
+                    && over.as_ref().is_some_and(|target| {
+                        target.control.record.target == focus.control.record.target
+                            && target.path == focus.path
+                    })
                 {
                     self.step_value(host, context, &focus, steps, shift, delivery)?;
                     return Ok(GuiRoutingDisposition::Routed {

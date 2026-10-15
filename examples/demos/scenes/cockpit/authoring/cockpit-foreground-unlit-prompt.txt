@@ -1,0 +1,5 @@
+Use case: background-extraction.
+Asset type: transparent cockpit foreground texture for fixed-camera compositing.
+Image 1 is the EDIT TARGET, a cockpit with its artificial lamps switched off. Remove ONLY the exterior background visible through ALL windows, including planet, stars, space, sun, nebula, and their glow. Those window regions must become genuinely transparent alpha, not black fill or a checkerboard painted into pixels.
+Preserve ALL cockpit foreground pixels exactly at their original 1671x941 coordinates: white window pillars and sill, dark seals, integrated dashboard shell, recessed screen beds, dial bodies and their existing dim face detail, foreground lower corners. Keep every artificial cabin/dashboard lamp OFF as in input. Preserve physically baked shading on the ship surfaces. The window aperture edge must be clean and antialiased without remnants of blue planet glow or black fringe.
+Do not redesign, move, rescale, relight, sharpen or crop the cockpit. No new GUI or text. Retain the full original frame, identical layout and perspective; only background removal. Output actual RGBA transparency where the planet and starfield used to be.

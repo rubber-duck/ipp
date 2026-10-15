@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A menu: the command rows of a light overlay, such as a context menu or an
  * overflow menu. Each row is a Button that takes no focus, with an optional
@@ -17,7 +18,7 @@
  * `MENU_MIN_WIDTH`; rows are the language's row height inside a half-inset
  * margin.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Behavior, Group, Layout, Style, Text } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -52,7 +53,7 @@ export interface MenuProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
-  readonly id: string;
+  readonly id?: string;
   readonly items: readonly MenuItem[];
   /** The open state of the overlay holding the menu, which activation closes. */
   readonly overlay?: OverlayOpen;
@@ -92,13 +93,14 @@ function geometry(kit: GuiKitScope, items: readonly MenuItem[]) {
 }
 
 export function Menu({
-  id,
+  id: providedId,
   layer = 0,
   items,
   overlay,
   onSelect,
   layout,
 }: MenuProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit, items);
   // Separators span the rows' width between their half-inset margins.
@@ -112,6 +114,7 @@ export function Menu({
   };
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -142,7 +145,7 @@ export function Menu({
 }
 
 function MenuRow({
-  id,
+  id: providedId,
   item,
   icons,
   divided,
@@ -157,6 +160,7 @@ function MenuRow({
   readonly separator: number;
   readonly onPress: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const gap = kit.unit(t.inset / 2);
@@ -176,6 +180,7 @@ function MenuRow({
         />
       )}
       <Entity id={id}>
+        <PresentationGate open />
         <Layout
           kind={LAYOUT_ROW}
           height={kit.unit(t.row)}
@@ -195,6 +200,7 @@ function MenuRow({
           <Strut id={`${id}/strut`} height={kit.unit(t.row)} />
           {icons && (
             <Entity id={`${id}/icon`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_LEAF} width={kit.unit(t.icon)} align_y={0} />
               <Style
                 red={color[0]}

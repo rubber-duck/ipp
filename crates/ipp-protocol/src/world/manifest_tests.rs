@@ -154,6 +154,7 @@ fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
                     ("tag", ManifestValue::Tag("REQUEST_CAMERA_NAVIGATE")),
                     ("binding", navigation_binding_fixture()),
                     ("publication", source()),
+                    ("path", ManifestValue::List(Vec::new())),
                     ("kind", ManifestValue::U32(kind)),
                     ("first", ManifestValue::F32(first)),
                     ("second", ManifestValue::F32(second)),
@@ -165,6 +166,7 @@ fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
             assert_eq!(
                 decoded.body,
                 RequestBody::CameraNavigate(view_queries::CameraNavigateRequest {
+                    path: Vec::new(),
                     binding,
                     publication,
                     motion
@@ -206,16 +208,90 @@ fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
                 .unwrap()
                 .body,
             RequestBody::GeometryPickQuery(view_queries::GeometryPickQuery {
-                view: view_queries::ViewQueryTarget::BoundView {
-                    binding,
-                    publication
-                },
+                view: view_queries::ViewQueryTarget::Root(
+                    view_queries::RootViewQueryTarget::BoundView {
+                        binding,
+                        publication
+                    }
+                ),
                 x: 0.25,
                 y: 0.75,
                 include_view_plane: true,
             })
         );
     }
+    let path = vec![view_queries::CameraAttachmentReference {
+        parent: crate::references::WorldReference {
+            id: 11,
+            incarnation: 12,
+        },
+        anchor: 21,
+        incarnation: 22,
+        revision: 23,
+    }];
+    let reference = manifest_layout(
+        "camera-attachment-reference",
+        [
+            (
+                "parent",
+                manifest_layout(
+                    "world-reference",
+                    [
+                        ("id", ManifestValue::U64(11)),
+                        ("incarnation", ManifestValue::U64(12)),
+                    ],
+                ),
+            ),
+            ("anchor", ManifestValue::U64(21)),
+            ("incarnation", ManifestValue::U64(22)),
+            ("revision", ManifestValue::U64(23)),
+        ],
+    );
+    let fixture = ManifestFixture::new(
+        "request-geometry-pick",
+        [
+            ("session", ManifestValue::U64(7)),
+            ("request_id", ManifestValue::U64(37)),
+            ("tag", ManifestValue::Tag("REQUEST_GEOMETRY_PICK")),
+            (
+                "view",
+                manifest_layout(
+                    "view-camera",
+                    [
+                        ("tag", ManifestValue::Tag("VIEW_CAMERA")),
+                        (
+                            "root",
+                            manifest_layout(
+                                "view-bound",
+                                [
+                                    ("tag", ManifestValue::Tag("VIEW_BOUND")),
+                                    ("binding", navigation_binding_fixture()),
+                                    ("publication", ManifestValue::None),
+                                ],
+                            ),
+                        ),
+                        ("path", ManifestValue::List(vec![reference])),
+                    ],
+                ),
+            ),
+            ("x", ManifestValue::F32(0.5)),
+            ("y", ManifestValue::F32(0.5)),
+            ("include_view_plane", ManifestValue::Bool(true)),
+        ],
+    );
+    let bytes = encode_manifest_fixture(&fixture, covered);
+    let decoded = decode_request(&bytes, 7).unwrap();
+    let RequestBody::GeometryPickQuery(query) = decoded.body else {
+        panic!("pick request");
+    };
+    let view_queries::ViewQueryTarget::CameraView {
+        path: decoded_path,
+        ..
+    } = query.view
+    else {
+        panic!("camera view");
+    };
+    assert_eq!(decoded_path, path);
 }
 
 #[derive(Debug)]

@@ -1,9 +1,10 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A data grid: a composition, not a control. A header row of small accent
  * labels, with the sort marker after one of them, then data rows of the row
  * height in body text, numbers aligned to the end of their cells, and a
  * footer line such as a row count. Quiet lines separate the columns and the
- * rows, so the data reads first. The grid has no frame or top line of its
+ * rows, so the data reads first. The default grid has no frame or top line of its
  * own: in a panel, the header's division runs along its top.
  *
  * Each data row is a docked Button that paints nothing at rest: pressing it
@@ -27,7 +28,7 @@
  * container. Without rows the body shows the empty state.
  */
 import { useCallback, type ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button, TextInput } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { ScrollView, VirtualList } from "../../gui/scroll.js";
@@ -35,6 +36,7 @@ import { Skin } from "../../gui/theme.js";
 import type { GuiContextMenuEvent } from "../../gui/callbacks.js";
 import type { GuiControlHandle, GuiControlRef } from "../../gui/control-ref.js";
 import { EmptyState } from "../feedback/empty-state.js";
+import { usePanelSurface } from "./panel.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
 import {
   LAYOUT_COLUMN,
@@ -78,7 +80,7 @@ export interface DataGridSort {
 interface DataGridCommonProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly columns: readonly DataGridColumn[];
   readonly sort?: DataGridSort;
   /** Key of the selected row. */
@@ -142,15 +144,17 @@ function geometry(kit: GuiKitScope, scrolling: boolean) {
 
 export function DataGrid(props: DataGridProps) {
   const {
-    id,
+    id: providedId,
     layer = 0,
     columns,
     footer,
     emptyText = "No records",
     layout,
   } = props;
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
+  const parentSurface = usePanelSurface();
   const virtual = "rowCount" in props;
   const count = virtual ? props.rowCount : props.rows.length;
   const scrolling = count > 0 && (virtual || !!props.scroll);
@@ -167,6 +171,7 @@ export function DataGrid(props: DataGridProps) {
   const rowProps = { grid: props, kit, g };
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -176,12 +181,15 @@ export function DataGrid(props: DataGridProps) {
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
+      <Skin theme={kit.theme(parentSurface ? "gridBody" : "gridFrame")} />
       <Children>
         <Entity id={`${id}/table`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_STACK} flex={1} />
           <Children>
             <ColumnLines id={`${id}/lines`} columns={columns} kit={kit} g={g} />
             <Entity id={`${id}/header`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_STACK} height={g.row} />
               <Children>
                 <Cells
@@ -218,7 +226,7 @@ export function DataGrid(props: DataGridProps) {
         {footer !== undefined && (
           <Row
             id={`${id}/footer`}
-            height={t.denseRow}
+            height={kit.unit(t.denseRow)}
             layout={{ padding_left: g.gutter + g.inset }}
           >
             <TextLine id={`${id}/footer/text`} text={footer} size="small" />
@@ -243,7 +251,7 @@ interface RowContext {
  * the last unless a scroll bar's column follows.
  */
 function ColumnLines({
-  id,
+  id: providedId,
   columns,
   kit,
   g,
@@ -253,16 +261,20 @@ function ColumnLines({
   readonly kit: GuiKitScope;
   readonly g: Geometry;
 }) {
+  const id = useEntityId(providedId);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_ROW} padding_left={g.gutter} padding_right={g.bar} />
       <Children>
         {columns.map((column, index) => (
           <Entity key={column.key} id={`${id}/${column.key}`}>
+            <PresentationGate open />
             <Layout kind={LAYOUT_ROW} {...columnSize(kit, column)} />
             {(index < columns.length - 1 || g.bar > 0) && (
               <Children>
                 <Entity id={`${id}/${column.key}/space`}>
+                  <PresentationGate open />
                   <Layout kind={LAYOUT_ROW} flex={1} />
                 </Entity>
                 <Separator
@@ -282,7 +294,7 @@ function ColumnLines({
 
 /** The body: every row, scrolled rows, a virtual list or the empty state. */
 function Body({
-  id,
+  id: providedId,
   count,
   emptyText,
   grid,
@@ -293,6 +305,7 @@ function Body({
   readonly count: number;
   readonly emptyText: string;
 }) {
+  const id = useEntityId(providedId);
   // The body keeps its entity as rows come and go, and a declaration writes
   // only the fields it names, so every form of the body names its padding:
   // rows replacing the empty state must not keep its inset.
@@ -306,6 +319,7 @@ function Body({
   if (count === 0)
     return (
       <Entity id={id}>
+        <PresentationGate open />
         <Layout
           kind={LAYOUT_COLUMN}
           {...place}
@@ -328,6 +342,7 @@ function Body({
   if ("rowCount" in grid)
     return (
       <Entity id={id}>
+        <PresentationGate open />
         <Layout kind={LAYOUT_STACK} {...place} {...flush} />
         <Skin theme={kit.theme("gridBody")} />
         <VirtualList
@@ -349,18 +364,21 @@ function Body({
     );
   const rows = grid.rows.map((row) => (
     <Entity key={row.key} id={`${grid.id}/row/${row.key}`}>
+      <PresentationGate open />
       <GridRow id={`${grid.id}/row/${row.key}`} row={row} {...rowContext} />
     </Entity>
   ));
   if (!grid.scroll)
     return (
       <Entity id={id}>
+        <PresentationGate open />
         <Layout kind={LAYOUT_COLUMN} {...place} {...flush} />
         <Children>{rows}</Children>
       </Entity>
     );
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_STACK} {...place} {...flush} />
       <Skin theme={kit.theme("gridBody")} />
       <ScrollView
@@ -369,6 +387,7 @@ function Body({
       />
       <Children>
         <Entity id={`${id}/rows`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_COLUMN} padding_right={g.bar} />
           <Children>{rows}</Children>
         </Entity>
@@ -382,12 +401,13 @@ function Body({
  * and the quiet line along its bottom.
  */
 function GridRow({
-  id,
+  id: providedId,
   row,
   grid,
   kit,
   g,
 }: RowContext & { readonly id: string; readonly row: DataGridRow }) {
+  const id = useEntityId(providedId);
   const { selected, onRowPress, onRowContextMenu, focusableRows = true } = grid;
   return (
     <>
@@ -430,7 +450,7 @@ function GridRow({
  * editing cell holds the editor instead of its text.
  */
 function Cells({
-  id,
+  id: providedId,
   row,
   header = false,
   trailing,
@@ -444,12 +464,14 @@ function Cells({
   /** Space after the last column: the scroll bar's column, where the row spans it. */
   readonly trailing: number;
 }) {
+  const id = useEntityId(providedId);
   const { columns, sort, focusedCell, editingCell } = grid;
   const at = (cell: DataGridCell | undefined, column: DataGridColumn) =>
     !header && cell?.row === row.key && cell.column === column.key;
   return (
     <>
       <Entity id={`${id}/cells`}>
+        <PresentationGate open />
         <Layout
           kind={LAYOUT_ROW}
           padding_left={g.gutter}
@@ -464,6 +486,7 @@ function Cells({
             const sorted = header && sort?.column === column.key;
             return (
               <Entity key={column.key} id={cell}>
+                <PresentationGate open />
                 <Layout kind={LAYOUT_STACK} {...columnSize(kit, column)} />
                 <Children>
                   {at(editingCell, column) ? (
@@ -510,6 +533,7 @@ function Cells({
                   {at(focusedCell, column) && (
                     // The focus edge is centred on the cell's four lines.
                     <Entity id={`${cell}/focus`}>
+                      <PresentationGate open />
                       <Layout
                         kind={LAYOUT_STACK}
                         margin_left={-g.lit / 2}
@@ -540,7 +564,7 @@ function Cells({
  * square text input look; it takes focus when its control is published.
  */
 function CellEditor({
-  id,
+  id: providedId,
   text,
   onSubmit,
 }: {
@@ -548,12 +572,14 @@ function CellEditor({
   readonly text: string;
   readonly onSubmit: (text: string) => void;
 }): ReactNode {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const focus = useCallback((handle: GuiControlHandle | null) => {
     void handle?.action({ kind: "focus" }).catch(() => {});
   }, []);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_STACK} />
       <Skin theme={kit.theme("cellEditor")} />
       <TextInput

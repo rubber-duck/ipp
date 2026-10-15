@@ -18,6 +18,7 @@ import {
 import {
   Style,
   Layout,
+  Metrics,
   Theme,
   Skin,
   Button,
@@ -39,6 +40,9 @@ export { guiLayerTransitions } from "../scenarios/gui-layer-transitions.js";
 export { guiLayers } from "../scenarios/gui-layers.js";
 export { guiOverlays } from "../scenarios/gui-overlays.js";
 export { guiProjectedAdvanced } from "../scenarios/gui-projected-advanced.js";
+export { guiWidgets } from "../scenarios/gui-widgets.js";
+export { guiPresentationRetention } from "../scenarios/gui-presentation-retention.js";
+export { guiFieldObservation } from "../scenarios/gui-field-observation.js";
 export { guiProjectedSurfaces } from "../scenarios/gui-projected-surfaces.js";
 
 export interface GuiPaintAssets {
@@ -448,6 +452,7 @@ export async function guiPaint(
             ))}
             <Entity id="shape-check">
               <Layout width={40} height={40} align_x={-1} align_y={-1} />
+              <Metrics checkbox_ratio={0.5} />
               <Style x={8} y={56} />
               <Skin theme="theme-check" />
               <Checkbox label="" checked />
@@ -912,8 +917,8 @@ export async function guiPaint(
    * skin rows on entities that are not controls: saturation-value fields of two
    * hues, the second with a border, cut corners and glow; a vertical hue rail with
    * red at its bottom and a horizontal one with red at its left; an alpha rail from
-   * transparent at its bottom to opaque at its top over a checker; a checker of the
-   * absent colours under a transparent fill; a checker whose cells are smaller
+   * transparent at its bottom to opaque at its top over a checker; an authored grey
+   * checker under a transparent fill; a checker whose cells are smaller
    * than a pixel; and a translucent swatch over a checker. Expected colours come
    * from the textbook HSV model and the sRGB transfer function evaluated at each
    * sampled pixel's centre, independently of the runtime. Returns the largest
@@ -1019,7 +1024,12 @@ export async function guiPaint(
         [
           "checker",
           [136, 96, 24, 24],
-          { color: [0, 0, 0, 0], checker_size: 6 },
+          {
+            color: [0, 0, 0, 0],
+            checker_size: 6,
+            checker_color0: rgba(0xcccccc),
+            checker_color1: rgba(0x999999),
+          },
         ],
         [
           "fine-checker",
@@ -1154,7 +1164,7 @@ export async function guiPaint(
       probes.push({
         surface: "checker",
         point: [136 + cellX * 6 + 3, 96 + cellY * 6 + 3],
-        // The absent colours: sRGB #CCCCCC on the corner cell, #999999 beside it.
+        // Authored sRGB #CCCCCC on the corner cell, #999999 beside it.
         expected: () =>
           (cellX + cellY) % 2 ? [153, 153, 153] : [204, 204, 204],
         tolerance: 2,
@@ -1416,9 +1426,9 @@ export async function guiPaint(
     const listScene = (count: number) => (
       <Entity id="scroll-pixels">
         <Layout width={56} height={40} />
-        {/* A plain black list: the rows drop the default look's frame line
-            and corner cuts, which would reach the checked rows and cut away
-            most of a 2-unit thumb. */}
+        {/* Explicit black viewport and cyan thumb, with its native travel
+            and minimum length authored independently of a client skin. */}
+        <Metrics scroll_tip_ratio={0.5} scroll_min_thumb_ratio={2} />
         <Skin
           parts={contract.GuiSkin.encodeParts({
             nextSlot: 2,
@@ -1436,6 +1446,7 @@ export async function guiPaint(
                 1,
                 {
                   part: contract.guiPaintPartIndex({ part: "scrollThumbY" }),
+                  color: [0, 1, 1, 1],
                   corner_cut: [0, 0, 0, 0],
                 },
               ],
@@ -1486,7 +1497,7 @@ export async function guiPaint(
         });
         const rowsMatch = rows.every(Boolean);
         // The thumb travels the 38 units between the track's pointed ends,
-        // at least two thicknesses long, in the default look's cyan.
+        // at least two thicknesses long, in the authored cyan.
         const thumbLength = Math.max(4, (38 * 40) / (count * 8));
         const thumbCenter =
           count > 5
@@ -1671,3 +1682,7 @@ export async function guiPaint(
     await host.destroyWorld(world);
   }
 }
+
+export { guiSliderDrags } from "../scenarios/gui-slider-drags.js";
+
+export { guiSliderWheel } from "../scenarios/gui-slider-wheel.js";

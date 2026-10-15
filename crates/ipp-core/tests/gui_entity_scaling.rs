@@ -8,7 +8,7 @@
 
 mod support;
 
-use ipp_core::components::{GuiCheckbox, GuiLayout};
+use ipp_core::components::{GuiCheckbox, GuiLayout, GuiMetrics, GuiSkin};
 use ipp_core::systems::canvas::{CanvasBox, CanvasStyle};
 use ipp_core::systems::gui::layout::{GuiEntityLayoutWork, MAX_LAYOUT_DEPTH};
 use ipp_core::systems::gui::local::GuiLocalAction;
@@ -65,7 +65,23 @@ fn build(shape: Shape, size: usize) -> (GuiPanel, EntityId) {
     let mut panel = GuiPanel::new(column());
     let root = panel.root_entity;
     let half = panel.node(root, column());
-    let mut operations = Vec::with_capacity(size * 5);
+    let mut operations = Vec::with_capacity(size * 6 + 2);
+    if shape == Shape::Flat {
+        // Share explicit appearance without adding layout nodes or changing
+        // the authored leaf dimensions used by this scaling fixture.
+        let (theme, _, _) = support::skin_fixture::theme("checkbox");
+        operations.extend([
+            Command::insert_value(EntityRef::Handle(root), ComponentValue::GuiTheme(theme)),
+            Command::insert_value(
+                EntityRef::Handle(root),
+                ComponentValue::GuiMetrics(GuiMetrics {
+                    checkbox_ratio: 0.5,
+                    icon_ratio: 0.55,
+                    ..Default::default()
+                }),
+            ),
+        ]);
+    }
     for index in 0..size {
         let alias = index as u32 + 1;
         let entity = EntityRef::Alias(alias);
@@ -83,6 +99,10 @@ fn build(shape: Shape, size: usize) -> (GuiPanel, EntityId) {
         let values = match shape {
             Shape::Flat => vec![
                 ComponentValue::GuiCheckbox(GuiCheckbox::default()),
+                ComponentValue::GuiSkin(GuiSkin {
+                    theme: root,
+                    ..Default::default()
+                }),
                 ComponentValue::GuiLayout(GuiLayout {
                     width: 10.0,
                     height: 1.0,

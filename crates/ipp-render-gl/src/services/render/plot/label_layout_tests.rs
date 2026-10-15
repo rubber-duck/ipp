@@ -157,6 +157,7 @@ fn history_is_weak_source_qualified_and_resets_on_viewport_change() {
         primitives: Arc::from([]),
     };
     let plane = ScenePlotPlane {
+        callout_paint: None,
         entity: crate::services::render::outputs::scene::RenderEntity {
             world,
             entity,
@@ -183,6 +184,7 @@ fn history_is_weak_source_qualified_and_resets_on_viewport_change() {
     assert!(state.arrange(std::slice::from_ref(&plane), IDENTITY, viewport)[0].model[12] > 0.0);
     let replacement = Arc::new(PlotPreparedGeometry::default());
     let replacement_plane = ScenePlotPlane {
+        callout_paint: None,
         geometry: &replacement,
         ..plane
     };
@@ -292,6 +294,7 @@ fn offscreen_ink_keeps_its_station_and_cannot_displace_visible_labels() {
         ..label.clone()
     };
     let scene_plane = |plane| ScenePlotPlane {
+        callout_paint: None,
         entity: crate::services::render::outputs::scene::RenderEntity {
             world,
             entity,
@@ -510,6 +513,7 @@ fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
                 model[12] *= chart[0];
                 model[13] = plane.model[12] * chart[1];
                 ScenePlotPlane {
+                    callout_paint: None,
                     entity: crate::services::render::outputs::scene::RenderEntity {
                         world,
                         entity,
@@ -621,6 +625,7 @@ fn moving_face_lane_stays_beside_its_axis_instead_of_the_enclosure_hull() {
         primitives: Arc::from([]),
     };
     let plane = ScenePlotPlane {
+        callout_paint: None,
         entity: crate::services::render::outputs::scene::RenderEntity {
             world,
             entity,

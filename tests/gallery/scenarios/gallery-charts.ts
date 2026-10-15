@@ -6,7 +6,9 @@ import {
   type DataBindingPage,
   type Inspection,
   type RootBinding,
+  type OutputReference,
   type WorldReference,
+  type CameraAttachmentReference,
 } from "@ipp/client";
 
 export interface ChartPose {
@@ -25,6 +27,8 @@ export interface GalleryChartsState {
   session: bigint;
   selectedSystems: readonly string[];
   presentation: RootBinding | null;
+  cameraOutput: OutputReference;
+  cameraPath: readonly CameraAttachmentReference[];
   ring: { center: readonly number[]; radius: number };
   camera: {
     entity: bigint;
@@ -41,6 +45,7 @@ export interface GalleryChartsState {
     time: number;
     state: string;
     startTime: number;
+    worldTime: number;
   };
   input: {
     camera: ChartInputLane;
@@ -66,6 +71,7 @@ export interface GalleryChartsState {
     inspection: Inspection;
     anchor: bigint | null;
     surface: null | {
+      attachment: CameraAttachmentReference | null;
       anchor: bigint;
       component: "CylinderSurface";
       width: number;
@@ -84,6 +90,7 @@ export interface GalleryChartsState {
     }[];
     focusBounds: { min: readonly number[]; max: readonly number[] };
     legend: {
+      facing: bigint | null;
       id: string;
       world: WorldReference;
       session: bigint;
@@ -301,7 +308,7 @@ function legendPoint(
       aspect,
     );
   const anchor = state.world.entities
-    .find((entity) => entity.id === legend.anchor)
+    .find((entity) => entity.id === legend.facing)
     ?.components.find((component) => "qx" in component.fields)?.fields;
   chartCheck(
     anchor,
@@ -470,14 +477,18 @@ export function assertChartLegendState(state: GalleryChartsState) {
       const anchor = state.world.entities.find(
           (entity) => entity.id === legend.anchor,
         ),
-        transform = anchor?.components.find(
+        facing = state.world.entities.find(
+          (entity) => entity.id === legend.facing,
+        ),
+        transform = facing?.components.find(
           (component) => "qx" in component.fields,
         )?.fields,
         surface = anchor?.components.find(
           (component) => component.component === 25,
         )?.fields;
       chartCheck(
-        anchor?.link.parent === chart.entity &&
+        anchor?.link.parent === legend.facing &&
+          facing?.link.parent === chart.entity &&
           transform &&
           surface &&
           Math.abs(Number(transform.x) - 11.9) < 0.00001 &&
@@ -1061,11 +1072,38 @@ function footprintClearance(
 function samePresentation(a: GalleryChartsState, b: GalleryChartsState) {
   const left = a.presentation,
     right = b.presentation;
+  const camera = a.cameraOutput,
+    nextCamera = b.cameraOutput;
+  const kind = a.cameraPath.length ? "canvas" : "camera";
   return (
-    left?.output.kind === "camera" &&
-    right?.output.kind === "camera" &&
-    left.output.entity === right.output.entity &&
-    left.output.incarnation === right.output.incarnation &&
+    left?.output.kind === kind &&
+    right?.output.kind === kind &&
+    left.output.world.id === right.output.world.id &&
+    left.output.world.incarnation === right.output.world.incarnation &&
+    left.viewport.width === right.viewport.width &&
+    left.viewport.height === right.viewport.height &&
+    left.viewport.devicePixelRatio === right.viewport.devicePixelRatio &&
+    camera.kind === "camera" &&
+    nextCamera.kind === "camera" &&
+    camera.entity === a.camera.entity &&
+    nextCamera.entity === b.camera.entity &&
+    camera.entity === nextCamera.entity &&
+    camera.incarnation === nextCamera.incarnation &&
+    camera.world.id === a.worldReference.id &&
+    camera.world.incarnation === a.worldReference.incarnation &&
+    camera.world.id === nextCamera.world.id &&
+    camera.world.incarnation === nextCamera.world.incarnation &&
+    a.cameraPath.length === b.cameraPath.length &&
+    a.cameraPath.every((hop, index) => {
+      const next = b.cameraPath[index]!;
+      return (
+        hop.parent.id === next.parent.id &&
+        hop.parent.incarnation === next.parent.incarnation &&
+        hop.anchor === next.anchor &&
+        hop.incarnation === next.incarnation &&
+        hop.revision === next.revision
+      );
+    }) &&
     left.generation.host === right.generation.host &&
     left.generation.serial === right.generation.serial
   );
@@ -1194,7 +1232,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       (chart) =>
         chart.world.id === initial.worldReference.id && chart.anchor === null,
     ),
-    "Volumetric charts remain in the root World",
+    "Volumetric charts remain in the child Camera World",
   );
   chartCheck(
     initial.charts.every((chart) =>
@@ -1263,7 +1301,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     );
     chartCheck(
       samePresentation(initial, next),
-      "Center turns retain the camera output and root binding",
+      "Center turns retain the root Canvas binding, child Camera output and attachment path",
     );
     await driver.record(`ring-center-turn-${index}`, next);
     turned = next;
@@ -1296,7 +1334,11 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
   );
   chartCheck(
     Math.abs(
-      clock.focus!.time - focus.time - (clock.world.time - middle.world.time),
+      clock.focus!.time -
+        Math.min(
+          focus.duration,
+          focus.time + clock.focus!.worldTime - focus.worldTime,
+        ),
     ) < 0.1,
     "Focus duration follows the Host World clock",
   );
@@ -1369,7 +1411,7 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
     chartCheck(
       current.session === initial.session &&
         current.worldReference.id === initial.worldReference.id,
-      "Focusing preserves the root camera World and session",
+      "Focusing preserves the child Camera World and session",
     );
     const focused = await driver.capture(`charts-focus-${id}`);
     const measurement = assertFocusedChartImage(focused, id);
@@ -1847,6 +1889,51 @@ export function baselineSingleRowPointer(
   );
 }
 
+export function assertChartPickPath(state: GalleryChartsState, row: ChartRow) {
+  const chart = state.charts.find((chart) => chart.id === row.chart);
+  chartCheck(chart, "Picked row belongs to an authored chart");
+  const leaf = chart.surface?.attachment;
+  chartCheck(
+    !chart.surface || leaf,
+    "Canvas chart has an acknowledged attachment receipt",
+  );
+  const expected = [...state.cameraPath, ...(leaf ? [leaf] : [])];
+  chartCheck(
+    row.path.length === expected.length,
+    "Picked row retains every composed attachment hop",
+  );
+  expected.forEach((hop, index) => {
+    const actual = row.path[index] as { world: WorldReference; anchor: bigint };
+    chartCheck(
+      actual.world.id === hop.parent.id &&
+        actual.world.incarnation === hop.parent.incarnation &&
+        actual.anchor === hop.anchor,
+      `Picked row hop ${index} matches the acknowledged ancestor World and Surface anchor`,
+    );
+  });
+  if (state.cameraPath.length) {
+    const root = state.cameraPath[0]!.parent;
+    chartCheck(
+      root.id === state.presentation?.output.world.id &&
+        root.incarnation === state.presentation.output.world.incarnation,
+      "Picked path starts in the presented application World",
+    );
+  }
+  if (leaf)
+    chartCheck(
+      leaf.parent.id === state.worldReference.id &&
+        leaf.parent.incarnation === state.worldReference.incarnation &&
+        leaf.anchor === chart.anchor,
+      "Canvas hop begins at its authored Surface in the camera World",
+    );
+  chartCheck(
+    row.world.id === chart.world.id &&
+      row.world.incarnation === chart.world.incarnation &&
+      row.entity === chart.entity,
+    "Picked path ends at the exact chart World and entity",
+  );
+}
+
 export async function exerciseChartRow(
   driver: GalleryChartsDriver,
   aspect: number,
@@ -1869,11 +1956,11 @@ export async function exerciseChartRow(
   chartCheck(
     String(selected.selection.world.id) ===
       String(state.charts.find((chart) => chart.id === "bars")!.world.id) &&
-      selected.selection.path.length === 1 &&
       selected.selection.entity ===
         state.charts.find((chart) => chart.id === "bars")!.entity,
     "Native selection targets the Canvas chart with its World-qualified path",
   );
+  assertChartPickPath(selected, selected.selection);
   await driver.record("charts-source-row", { point, hovered, selected });
   await driver.capture("charts-selected-source-row");
   await exerciseChartFeedbackEdits(driver, aspect);
@@ -1894,11 +1981,10 @@ export async function exerciseChartRow(
     "Volumetric selection preserves source row six",
   );
   chartCheck(
-    String(gridSelected.selection.world.id) ===
-      String(grid.worldReference.id) &&
-      gridSelected.selection.path.length === 0,
-    "Spatial row selection belongs to the camera World with no Surface path",
+    String(gridSelected.selection.world.id) === String(grid.worldReference.id),
+    "Spatial row selection belongs to the camera World",
   );
+  assertChartPickPath(gridSelected, gridSelected.selection);
   await driver.capture("charts-selected-volumetric-row");
   await driver.record("charts-volumetric-row", {
     gridPoint,
@@ -1931,10 +2017,10 @@ export async function exerciseChartRow(
   chartCheck(
     rotatedSelection.selection?.chart === "single-row" &&
       String(rotatedSelection.selection.rowId) === "2" &&
-      rotatedSelection.selection.world.id === rotated.worldReference.id &&
-      rotatedSelection.selection.path.length === 0,
+      rotatedSelection.selection.world.id === rotated.worldReference.id,
     "Rotated spatial selection preserves its source row and root World",
   );
+  assertChartPickPath(rotatedSelection, rotatedSelection.selection);
   await driver.record("ring-rotated-spatial-row", {
     rotatedPoint,
     rotatedHover,

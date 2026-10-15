@@ -1,14 +1,8 @@
 /**
- * The skin's lengths the specimens place their content with: the idle line,
- * control sizes, the content inset, row heights and the type scale, in units
- * of the controls sheet (sheet a), read from the design language's tokens
- * that the connected runtime exports (`GUI_SKIN_TOKENS`, written once in the
- * core's built-in looks). Specimens import these instead of measuring their
- * own; colours come from `palette.ts`. The rules that use them are in the
- * README's "Design language" section; the looks built from them are the
- * runtime's built-in looks and the GUI kit's themes.
+ * Cybertron lengths for specimen placement, shared with the client skin.
+ * Colours come from palette.ts; the skin-lab README describes the visual rules.
  */
-import { GUI_SKIN_TOKENS as T } from "@ipp/host-contract";
+import { cybertronTokens as T } from "@ipp/react/gui-cybertron";
 
 /** Every idle line: frames, separators, grid lines and rail outlines. */
 export const LINE = T.lineWidth;

@@ -43,7 +43,7 @@ fn asset(kind: crate::services::asset_management::AssetTypeId) -> Option<AssetSo
 fn paint_rows_expose_the_appearance_properties_in_part_property_order_then_the_key() {
     let layout = GuiPaintPart::LAYOUT;
     let appearance = GuiPartProperty::ALL;
-    assert_eq!(appearance.len(), 32);
+    assert_eq!(appearance.len(), 35);
     assert_eq!(layout.property_count(), appearance.len() as u32 + 1);
     for property in appearance {
         let lane = &layout.properties[property.index() as usize];
@@ -51,7 +51,7 @@ fn paint_rows_expose_the_appearance_properties_in_part_property_order_then_the_k
         assert_eq!(lane.kind, property.kind());
         assert!(lane.optional, "{property:?}");
     }
-    let key = &layout.properties[32];
+    let key = &layout.properties[35];
     assert_eq!(key.name, "part");
     assert!(!key.optional);
 }

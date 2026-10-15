@@ -80,7 +80,11 @@ impl GeometrySystem {
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
         let mut entities = Vec::new();
+        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
         for (&entity, record) in &world.world.state.entities {
+            if !presentation.open(world.world, entity) {
+                continue;
+            }
             let bounding_incarnation = record
                 .input(ComponentValue::BOUNDING_GEOMETRY)
                 .map(|input| input.incarnation);

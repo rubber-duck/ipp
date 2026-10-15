@@ -168,6 +168,7 @@ export default defineSpecimen({
         />
         <Panel
           id="panel"
+          padding={0}
           layout={{
             ...placed(PANEL_AT, u(PANEL.width)),
             height: u(PANEL.height),
@@ -277,6 +278,7 @@ export default defineSpecimen({
         })}
         <Panel
           id="title-bar"
+          padding={0}
           minimized
           layout={placed(TITLE_BAR.at, u(TITLE_BAR.width))}
         >

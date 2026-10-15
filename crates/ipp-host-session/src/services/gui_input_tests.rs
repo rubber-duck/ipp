@@ -244,3 +244,46 @@ fn replacement_releases_queued_payloads_before_binding_the_new_context() {
     assert!(host.tick_worlds(0.0).unwrap().is_empty());
     assert!(control_replies(&mut host).is_empty());
 }
+
+#[test]
+fn wheel_terminal_reports_fresh_hit_without_prior_pointer_motion() {
+    let (mut host, view, reference) = ordinary();
+    let context = acquire(&mut host, view);
+    for (request, point, expected) in [(101, [0.1, 0.1], true), (102, [0.9, 0.9], false)] {
+        physical(
+            &mut host,
+            request,
+            GuiPhysicalRequest::Event {
+                context,
+                input: GuiPhysicalInput::Wheel {
+                    point,
+                    delta: [0.0, 1.0],
+                    shift: false,
+                },
+            },
+        );
+        host.tick_worlds(0.0).unwrap();
+        let reply = control_replies(&mut host)
+            .into_iter()
+            .find(|reply| reply.request_id == request)
+            .unwrap();
+        let HostResponseBody::GuiInput(GuiPhysicalResponse::Routed {
+            hit,
+            applied,
+            rejected,
+            cancelled,
+            ..
+        }) = reply.body
+        else {
+            panic!("wheel terminal");
+        };
+        assert_eq!((applied, rejected, cancelled), (0, 0, 0));
+        assert_eq!(hit.is_some(), expected);
+        if let Some(hit) = hit {
+            assert_eq!(hit.target.world, reference.into());
+            assert_eq!(hit.target.component, ComponentValue::GUI_BUTTON);
+            assert!(hit.target.incarnation > 0);
+            assert!(hit.path.is_empty());
+        }
+    }
+}

@@ -49,7 +49,7 @@ fn item(
     control: ComponentValue,
     behavior: ComponentValue,
 ) -> EntityId {
-    create(
+    create_painted(
         host,
         world,
         vec![control, behavior, sized(0, 1.0, 1.0)],
@@ -98,7 +98,7 @@ fn group(
     } else {
         1.0
     };
-    create(
+    create_painted(
         host,
         world,
         vec![
@@ -504,7 +504,7 @@ fn a_nested_group_owns_its_items_and_its_own_tab_stop() {
     let (mut host, _) = host();
     let world = world(&mut host);
     let (root, root_entity) = canvas_root(&mut host, world, 4.0, 4.0);
-    let outer = create(
+    let outer = create_painted(
         &mut host,
         world,
         vec![
@@ -544,7 +544,7 @@ fn a_slider_and_a_text_input_in_a_group_keep_their_own_keys() {
     let (mut host, _) = host();
     let world = world(&mut host);
     let (root, root_entity) = canvas_root(&mut host, world, 4.0, 6.0);
-    let group = create(
+    let group = create_painted(
         &mut host,
         world,
         vec![
@@ -666,7 +666,7 @@ fn option_list_of(selection: u32, selected: Option<usize>, of_trigger: bool) -> 
         behavior(true, true, true),
     );
     let trigger = focusable(&mut host, world, root_entity, false);
-    let group = create(
+    let group = create_painted(
         &mut host,
         world,
         vec![
@@ -916,7 +916,7 @@ fn only_a_group_in_the_topmost_open_overlay_takes_keys() {
     let (mut rig, list) = option_list(GUI_GROUP_SELECT_NONE, None);
 
     // A light overlay without a group opens above the option list.
-    let above = create(
+    let above = create_painted(
         &mut rig.host,
         list.world,
         vec![overlay(), raised(2), sized(0, 1.0, 1.0)],
@@ -943,7 +943,7 @@ fn only_a_group_in_the_topmost_open_overlay_takes_keys() {
     // A manual overlay, such as a toast stack, and a hint above it leave the
     // keys with the option list.
     for mode in [GuiOverlay::MODE_MANUAL, GuiOverlay::MODE_HINT] {
-        let other = create(
+        let other = create_painted(
             &mut rig.host,
             list.world,
             vec![overlay_in(mode), raised(3), sized(0, 1.0, 1.0)],

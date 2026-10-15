@@ -164,9 +164,24 @@ pub enum GuiRoutingDisposition {
     Unhandled,
 }
 
+/// Fresh eligible control selected for one wheel dispatch, before consumption.
+/// This borrowed observation never changes hover, keyboard focus or capture.
+pub struct GuiRoutingHit<'a> {
+    /// Exact World, entity and control component lifetime.
+    pub target: GuiEntityTarget,
+    /// Exact attachment producer path from the presented root to the control.
+    pub path: &'a [crate::WorldAttachmentToken],
+}
+
 /// Each child permit belongs to the one already-reserved physical request.
 /// The adapter aggregates its terminal prefix without a second effect queue.
 pub trait GuiRoutingDelivery {
+    /// Retain optional per-request hit metadata before admitting wheel actions.
+    /// Implementations reserve reply capacity before copying the borrowed path.
+    fn wheel_hit(&mut self, _hit: GuiRoutingHit<'_>) -> Result<(), GuiInputError> {
+        Ok(())
+    }
+
     /// Reserve a child terminal before accepting its command. No World is borrowed.
     fn command(&mut self) -> Result<Box<dyn GuiDeliveryPermit>, GuiInputError>;
 }

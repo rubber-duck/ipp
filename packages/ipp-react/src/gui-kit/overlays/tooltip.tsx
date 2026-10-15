@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A tooltip: one or two lines of small text on the small floating surface,
  * a hint overlay of the control it explains. Declare it inside that
@@ -20,14 +21,20 @@ export interface TooltipProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the tooltip; its lines extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** One or two lines of text. */
   readonly text: string | readonly string[];
   /** The control's side it opens on; above it by default. */
   readonly side?: "top" | "bottom" | "left" | "right";
 }
 
-export function Tooltip({ id, layer = 0, text, side = "top" }: TooltipProps) {
+export function Tooltip({
+  id: providedId,
+  layer = 0,
+  text,
+  side = "top",
+}: TooltipProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const lines = typeof text === "string" ? [text] : text;
@@ -62,7 +69,11 @@ export function Tooltip({ id, layer = 0, text, side = "top" }: TooltipProps) {
       }}
     >
       {lines.map((line, index) => (
-        <Row key={index} id={`${id}/line/${index}`} height={t.denseRow}>
+        <Row
+          key={index}
+          id={`${id}/line/${index}`}
+          height={kit.unit(t.denseRow)}
+        >
           <TextLine id={`${id}/line/${index}/text`} text={line} size="small" />
         </Row>
       ))}

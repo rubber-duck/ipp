@@ -56,11 +56,15 @@ export interface IppCanvasProps
     signal: AbortSignal,
     host: CanvasHost,
   ) => void | Promise<void>;
+  /** Physical resolution multiplier; logical CSS coordinates stay unchanged. */
+  readonly renderScale?: number;
   readonly width?: number;
   readonly height?: number;
   readonly canvasProps?: CanvasProps;
   readonly guiInput?: Omit<CanvasGuiInputOptions, "onError">;
   readonly onReady?: (handle: IppCanvasHandle) => void;
+  /** Drain application-owned children after input closes and before this session closes. */
+  readonly beforeClose?: (handle: IppCanvasHandle) => void | Promise<void>;
   readonly onViewChange?: (view: PresentationView | null) => void;
   readonly onError?: (error: Error) => void;
 }
@@ -119,11 +123,13 @@ export function IppCanvas({
   world,
   output,
   initialize,
+  renderScale = 1,
   width = 640,
   height = 480,
   canvasProps,
   guiInput,
   onReady,
+  beforeClose,
   onViewChange,
   onError,
   children,
@@ -131,6 +137,8 @@ export function IppCanvas({
 }: IppCanvasProps) {
   if (![width, height].every((value) => Number.isFinite(value) && value > 0))
     throw new RangeError("Canvas CSS dimensions must be positive and finite");
+  if (!Number.isFinite(renderScale) || renderScale <= 0)
+    throw new RangeError("Canvas render scale must be positive and finite");
   const configuration = attachmentIdentity({
     runtime,
     source: sourceIdentity(world),
@@ -144,7 +152,13 @@ export function IppCanvas({
     surface: CanvasRenderSurface;
     error: Error;
   }>();
-  const callbacks = useRef({ initialize, onReady, onViewChange, onError });
+  const callbacks = useRef({
+    initialize,
+    onReady,
+    beforeClose,
+    onViewChange,
+    onError,
+  });
   const inputs = useRef({ runtime, world, output, guiInput });
   const activeInput = useRef<
     | {
@@ -155,7 +169,13 @@ export function IppCanvas({
   >(undefined);
   const dimensions = useRef<CanvasSize>({ width, height, devicePixelRatio: 1 });
   useLayoutEffect(() => {
-    callbacks.current = { initialize, onReady, onViewChange, onError };
+    callbacks.current = {
+      initialize,
+      onReady,
+      beforeClose,
+      onViewChange,
+      onError,
+    };
     inputs.current = { runtime, world, output, guiInput };
     const active = activeInput.current;
     if (active)
@@ -191,14 +211,38 @@ export function IppCanvas({
       if (observer) notify(() => observer(error), console.error);
       else console.error(error);
     };
+    let applicationCleanup: Promise<void> | undefined;
     const close = async (): Promise<void> => {
       if (activeInput.current?.owner === input) activeInput.current = undefined;
+      const handle = session;
+      const failures: unknown[] = [];
       try {
         await input?.close();
-      } finally {
-        if (session) await session.close();
-        else await lifetime?.close();
+      } catch (error) {
+        failures.push(error);
       }
+      if (handle) {
+        if (!applicationCleanup) {
+          const callback = callbacks.current.beforeClose;
+          applicationCleanup = Promise.resolve().then(() => callback?.(handle));
+        }
+        try {
+          await applicationCleanup;
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      try {
+        if (handle) await handle.close();
+        else await lifetime?.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length)
+        throw new AggregateError(
+          failures,
+          "Canvas application/session cleanup failed",
+        );
     };
     const work = (async () => {
       const { runtime: configuration, world: source } = inputs.current;
@@ -303,7 +347,7 @@ export function IppCanvas({
       dimensions.current = {
         width: cssWidth,
         height: cssHeight,
-        devicePixelRatio: window.devicePixelRatio,
+        devicePixelRatio: window.devicePixelRatio * renderScale,
       };
       if (session)
         void session
@@ -344,7 +388,7 @@ export function IppCanvas({
       unsubscribe?.();
       detach();
     };
-  }, [surface, session, width, height, outputIdentity]);
+  }, [surface, session, width, height, outputIdentity, renderScale]);
 
   if (error?.surface === surface && surface?.configuration === configuration)
     throw error!.error;

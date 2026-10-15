@@ -11,7 +11,18 @@
  */
 import type { Client, HostClientBase } from "@ipp/client";
 import type { GuiKitContract } from "@ipp/react/gui-kit";
-import { createElement } from "react";
+import { createElement, Fragment } from "react";
+import { Entity, ShaderAsset, PaintShader, assetRef } from "@ipp/react";
+import { Fill } from "../../skin-lab/kit.js";
+import {
+  Button,
+  Slider,
+  Layout,
+  Metrics,
+  Paint,
+  Skin,
+  Theme,
+} from "@ipp/react/gui";
 import type { RgbaImage } from "../../../../tools/shared-host/images.js";
 import {
   SpecimenSession,
@@ -378,7 +389,176 @@ export async function panelPaints(
     thirdCapture(second, third, results);
     if (first.width !== EXTENT[0] * CAPTURE_SCALE)
       probe(results, "capture extent", false, `${first.width}`);
+    await sharedPartPaints(host, contract, font, present, capture, results);
     return { results, assets };
+  } finally {
+    await session.close();
+  }
+}
+
+/** Shared paint on native box parts, including original coordinates outside coverage. */
+async function sharedPartPaints(
+  host: HostClientBase<Client>,
+  contract: ThemeContract & GuiKitContract,
+  font: Uint8Array<ArrayBuffer>,
+  present: Present,
+  capture: (image: PanelPaintCapture) => Promise<void>,
+  results: ProbeResult[],
+): Promise<void> {
+  const keyed = (part: string, state: string | null = null) =>
+    contract.GUI_PAINT_PART_KEYS.find(
+      (key) => key.part === part && key.state === state && key.variant === null,
+    )!.index;
+  const parts = contract.GuiTheme.encodeParts({
+    nextSlot: 4,
+    rows: new Map<number, { part: number } & Record<string, unknown>>([
+      [
+        0,
+        {
+          part: keyed("background"),
+          paint: true,
+          paint_data: [0.2, 0.1, 0.3, 1],
+          outset: [4, 4],
+          border_width: 0,
+          glow_intensity: 0,
+          corner_cut: [0, 0, 0, 0],
+        },
+      ],
+      [
+        1,
+        {
+          part: keyed("background", "hovered"),
+          paint_data: [0.7, 0.2, 0.1, 1],
+        },
+      ],
+      [
+        2,
+        {
+          part: keyed("fill"),
+          paint: true,
+          paint_data: [0.8, 0.1, 0.1, 1],
+          border_width: 0,
+        },
+      ],
+      [
+        3,
+        {
+          part: keyed("icon"),
+          paint: true,
+          paint_data: [0.1, 0.8, 0.1, 1],
+          border_width: 0,
+          corner_cut: [0, 0, 0, 0],
+        },
+      ],
+    ]),
+  });
+  const specimen = defineSpecimen({
+    extent: [200, 80],
+    states: [
+      { name: "idle", cell: [0, 0, 200, 80] },
+      {
+        name: "hover",
+        cell: [0, 0, 200, 80],
+        pin: [{ kind: "hover", at: [30, 30] }],
+      },
+    ],
+    render: () =>
+      createElement(
+        Fragment,
+        null,
+        createElement(Fill, {
+          id: "page",
+          rect: [0, 0, 200, 80],
+          color: [0, 0, 0, 1],
+        }),
+        createElement(
+          Entity,
+          { id: "parts/theme" },
+          createElement(ShaderAsset, {
+            id: "parts/paint",
+            recipe: {},
+            parameters: {},
+            children: createElement(PaintShader, {
+              children:
+                "if (position.x < 0.0 || position.y < 0.0 || position.x > size.x || position.y > size.y) return vec4(0.0, 0.0, 1.0, 1.0); return vec4(data.rgb, 1.0);",
+            }),
+          }),
+          createElement(Paint, { source: assetRef("parts/paint") }),
+          createElement(Theme, { parts }),
+          createElement(Metrics, { thumb_ratio: 0.75, rail_thickness: 7 }),
+        ),
+        createElement(
+          Entity,
+          { id: "parts/button" },
+          createElement(Layout, {
+            width: 40,
+            height: 20,
+            margin_left: 20,
+            margin_top: 20,
+            align_x: -1,
+            align_y: -1,
+          }),
+          createElement(Button),
+          createElement(Skin, { theme: "parts/theme" }),
+        ),
+        createElement(
+          Entity,
+          { id: "parts/slider" },
+          createElement(Layout, {
+            width: 80,
+            height: 20,
+            margin_left: 100,
+            margin_top: 20,
+            align_x: -1,
+            align_y: -1,
+          }),
+          createElement(Slider, { value: 0.5 }),
+          createElement(Skin, { theme: "parts/theme" }),
+        ),
+      ),
+  });
+  const session = await SpecimenSession.open({
+    host,
+    contract,
+    font,
+    specimen,
+    themes: {},
+    world: "gui-default-skin/shared-part-paints",
+  });
+  try {
+    const asset = await session.assetSettled("parts/paint");
+    probe(
+      results,
+      "shared part paint loads",
+      asset.status === "loaded",
+      JSON.stringify(asset),
+    );
+    const idle = (await session.capture(present, ["idle"])).image;
+    await capture({ name: "shared-part-paints-idle", image: idle });
+    const hovered = (await session.capture(present, ["hover"])).image;
+    await capture({ name: "shared-part-paints-hover", image: hovered });
+    const before = pixel(idle, 30, 30);
+    const after = pixel(hovered, 30, 30);
+    probe(
+      results,
+      "native hover changes shared per-part data",
+      after[0] > before[0] + 70 && before[2] > after[2],
+      JSON.stringify({ before, after }),
+    );
+    const margin = pixel(idle, 18, 30);
+    probe(
+      results,
+      "paint outset preserves original coordinates",
+      margin[2] > 240 && margin[0] < 15 && margin[1] < 15,
+      JSON.stringify(margin),
+    );
+    const thumb = pixel(idle, 140, 30);
+    probe(
+      results,
+      "native slider thumb uses its shared part paint",
+      thumb[1] > thumb[0] + 100 && thumb[1] > thumb[2] + 100,
+      JSON.stringify(thumb),
+    );
   } finally {
     await session.close();
   }

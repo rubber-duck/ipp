@@ -43,7 +43,7 @@ fn panel(width: f32, height: f32, root: GuiLayout) -> GuiPanel {
 }
 
 fn scroll_view(panel: &mut GuiPanel, parent: EntityId, axis: u32, layout: GuiLayout) -> EntityId {
-    panel.create(
+    let entity = panel.create(
         Some(parent),
         vec![
             ComponentValue::GuiScrollView(GuiScrollView {
@@ -52,7 +52,9 @@ fn scroll_view(panel: &mut GuiPanel, parent: EntityId, axis: u32, layout: GuiLay
             }),
             ComponentValue::GuiLayout(layout),
         ],
-    )
+    );
+    panel.skin(entity, "scroll");
+    entity
 }
 
 /// A ScrollView whose bars are `thickness` thick, flush with its sides and ends.
@@ -63,7 +65,7 @@ fn flush_scroll_view(
     layout: GuiLayout,
     thickness: f32,
 ) -> EntityId {
-    panel.create(
+    let entity = panel.create(
         Some(parent),
         vec![
             ComponentValue::GuiScrollView(GuiScrollView {
@@ -75,7 +77,9 @@ fn flush_scroll_view(
             }),
             ComponentValue::GuiLayout(layout),
         ],
-    )
+    );
+    panel.skin(entity, "scroll");
+    entity
 }
 
 fn scroll_hit(view: &CanvasPublication, entity: EntityId, kind: CanvasHitKind) -> Option<[f32; 4]> {
@@ -105,6 +109,298 @@ fn scroll_to(panel: &mut GuiPanel, entity: EntityId, offset: [f32; 2]) {
     panel.frame();
     panel.frame();
     assert_eq!(position(panel, entity).offset, offset);
+}
+
+#[test]
+fn fitted_scroll_axes_follow_short_content_and_leave_unfitted_axes_filled() {
+    for axis in 0..=2 {
+        let mut panel = panel(400.0, 300.0, container(3));
+        let root = panel.root_entity;
+        let scroll = scroll_view(
+            &mut panel,
+            root,
+            axis,
+            GuiLayout {
+                fit_width: axis != 1,
+                fit_height: axis != 0,
+                ..Default::default()
+            },
+        );
+        let content = panel.button(scroll, sized(100.0, 60.0));
+        panel.frame();
+        let expected = [
+            if axis == 1 {
+                400.0
+            } else {
+                100.0
+            },
+            if axis == 0 {
+                300.0
+            } else {
+                60.0
+            },
+        ];
+        assert_eq!(panel.layout(scroll).size, expected);
+        assert_eq!(panel.scroll(scroll).viewport, expected);
+        assert_eq!(panel.scroll(scroll).capacity, [0.0; 2]);
+        assert_near(
+            &bounds(&panel.output(), content),
+            &rect(0.0, 0.0, 100.0, 60.0),
+        );
+
+        panel.queue_set(
+            content,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, width),
+            FieldValue::F32(600.0),
+        );
+        panel.queue_set(
+            content,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, height),
+            FieldValue::F32(500.0),
+        );
+        panel.frame();
+        assert_eq!(panel.layout(scroll).size, [400.0, 300.0]);
+        assert_eq!(
+            panel.scroll(scroll).capacity,
+            [
+                if axis == 1 {
+                    0.0
+                } else {
+                    200.0
+                },
+                if axis == 0 {
+                    0.0
+                } else {
+                    200.0
+                }
+            ]
+        );
+    }
+}
+
+#[test]
+fn fitted_scroll_includes_padding_once_and_applies_outer_minimum_and_maximum() {
+    let mut panel = panel(400.0, 300.0, container(3));
+    let root = panel.root_entity;
+    let scroll = scroll_view(
+        &mut panel,
+        root,
+        2,
+        GuiLayout {
+            fit_width: true,
+            fit_height: true,
+            min_width: 140.0,
+            max_height: 150.0,
+            padding_top: 10.0,
+            padding_right: 15.0,
+            padding_bottom: 20.0,
+            padding_left: 25.0,
+            ..Default::default()
+        },
+    );
+    let content = panel.button(scroll, sized(60.0, 200.0));
+    panel.frame();
+    assert_eq!(panel.layout(scroll).size, [140.0, 150.0]);
+    let fields = panel.scroll(scroll);
+    assert_eq!(fields.viewport, [100.0, 120.0]);
+    assert_eq!(fields.content, [60.0, 200.0]);
+    assert_eq!(fields.capacity, [0.0, 80.0]);
+    assert_near(
+        &bounds(&panel.output(), content),
+        &rect(25.0, 10.0, 60.0, 200.0),
+    );
+    scroll_to(&mut panel, scroll, [0.0, 80.0]);
+    assert_near(
+        &bounds(&panel.output(), content),
+        &rect(25.0, -70.0, 60.0, 200.0),
+    );
+
+    panel.set(
+        content,
+        ComponentValue::GUI_LAYOUT,
+        offset_of!(GuiLayout, height),
+        FieldValue::F32(50.0),
+    );
+    panel.frame();
+    assert_eq!(panel.layout(scroll).size, [140.0, 80.0]);
+    assert_eq!(panel.scroll(scroll).viewport, [100.0, 50.0]);
+    assert_eq!(panel.scroll(scroll).offset, [0.0; 2]);
+}
+
+#[test]
+fn fitted_scroll_reveals_focus_using_its_bounded_padded_viewport() {
+    let mut panel = panel(400.0, 300.0, container(3));
+    let root = panel.root_entity;
+    let scroll = scroll_view(
+        &mut panel,
+        root,
+        1,
+        GuiLayout {
+            width: 200.0,
+            fit_height: true,
+            max_height: 100.0,
+            padding_top: 10.0,
+            padding_bottom: 10.0,
+            ..Default::default()
+        },
+    );
+    let content = panel.node(scroll, container(2));
+    let rows: Vec<_> = (0..5)
+        .map(|_| panel.button(content, sized(200.0, 40.0)))
+        .collect();
+    panel.frame();
+    assert_eq!(panel.scroll(scroll).viewport, [200.0, 80.0]);
+    panel.act(rows[4], GuiLocalAction::Focus(0));
+    panel.frame();
+    assert!(panel.snapshot(rows[4]).focused);
+    assert_eq!(panel.scroll(scroll).offset, [0.0, 120.0]);
+    assert_near(
+        &bounds(&panel.output(), rows[4]),
+        &rect(0.0, 50.0, 200.0, 40.0),
+    );
+}
+
+#[test]
+fn fitted_scroll_clamps_on_resize_and_shrink_without_restoring_discarded_offsets() {
+    let mut panel = panel(400.0, 300.0, container(3));
+    let root = panel.root_entity;
+    let scroll = scroll_view(
+        &mut panel,
+        root,
+        1,
+        GuiLayout {
+            fit_height: true,
+            ..Default::default()
+        },
+    );
+    let content = panel.button(scroll, sized(400.0, 500.0));
+    panel.frame();
+    assert_eq!(panel.scroll(scroll).viewport, [400.0, 300.0]);
+    scroll_to(&mut panel, scroll, [0.0, 200.0]);
+
+    panel.set(
+        root,
+        ComponentValue::GUI_LAYOUT,
+        offset_of!(GuiLayout, height),
+        FieldValue::F32(200.0),
+    );
+    panel.frame();
+    assert_eq!(panel.scroll(scroll).viewport, [400.0, 200.0]);
+    assert_eq!(panel.scroll(scroll).offset, [0.0, 200.0]);
+
+    panel.set(
+        content,
+        ComponentValue::GUI_LAYOUT,
+        offset_of!(GuiLayout, height),
+        FieldValue::F32(60.0),
+    );
+    panel.frame();
+    assert_eq!(panel.layout(scroll).size, [400.0, 60.0]);
+    assert_eq!(panel.scroll(scroll).viewport, [400.0, 60.0]);
+    assert_eq!(panel.scroll(scroll).offset, [0.0; 2]);
+    assert_eq!(panel.scroll(scroll).capacity, [0.0; 2]);
+
+    panel.set(
+        content,
+        ComponentValue::GUI_LAYOUT,
+        offset_of!(GuiLayout, height),
+        FieldValue::F32(500.0),
+    );
+    panel.frame();
+    assert_eq!(panel.scroll(scroll).viewport, [400.0, 200.0]);
+    assert_eq!(panel.scroll(scroll).offset, [0.0; 2]);
+    panel.frame();
+    assert_eq!(panel.work().reflows, 0);
+}
+
+#[test]
+fn explicit_scroll_extents_and_flex_allocation_take_precedence_over_fitting() {
+    for layout in [
+        GuiLayout {
+            fit_width: true,
+            fit_height: true,
+            ..sized(200.0, 150.0)
+        },
+        GuiLayout {
+            fit_height: true,
+            flex: 1.0,
+            ..sized(200.0, -1.0)
+        },
+    ] {
+        let mut panel = panel(400.0, 200.0, container(2));
+        let root = panel.root_entity;
+        panel.node(root, sized(200.0, 50.0));
+        let scroll = scroll_view(&mut panel, root, 1, layout);
+        panel.button(scroll, sized(200.0, 60.0));
+        panel.frame();
+        assert_eq!(panel.layout(scroll).size, [200.0, 150.0]);
+        assert_eq!(panel.scroll(scroll).viewport, [200.0, 150.0]);
+    }
+}
+
+#[test]
+fn fitted_virtual_list_uses_estimated_and_measured_extent_for_viewport_and_range() {
+    let mut panel = panel(400.0, 300.0, container(3));
+    let root = panel.root_entity;
+    let list = panel.create(
+        Some(root),
+        vec![
+            ComponentValue::GuiVirtualList(GuiVirtualList {
+                item_count: 3,
+                item_extent: 20.0,
+                overscan: 0,
+                ..Default::default()
+            }),
+            ComponentValue::GuiLayout(GuiLayout {
+                fit_height: true,
+                max_height: 100.0,
+                ..Default::default()
+            }),
+        ],
+    );
+    panel.create(
+        Some(list),
+        vec![
+            ComponentValue::GuiVirtualItem(GuiVirtualItem {
+                index: 1,
+            }),
+            ComponentValue::GuiLayout(sized(400.0, 40.0)),
+        ],
+    );
+    panel.frame();
+    let fields = panel.scroll(list);
+    assert_eq!(panel.layout(list).size, [400.0, 80.0]);
+    assert_eq!(fields.viewport, [400.0, 80.0]);
+    assert_eq!(fields.content, [400.0, 80.0]);
+    assert_eq!((fields.first, fields.last), (0, 3));
+
+    panel.set(
+        list,
+        ComponentValue::GUI_VIRTUAL_LIST,
+        offset_of!(GuiVirtualList, item_count),
+        FieldValue::U32(10),
+    );
+    panel.frame();
+    let fields = panel.scroll(list);
+    assert_eq!(fields.viewport, [400.0, 100.0]);
+    assert_eq!(fields.content, [400.0, 220.0]);
+    assert_eq!(fields.capacity, [0.0, 120.0]);
+    assert_eq!((fields.first, fields.last), (0, 4));
+
+    scroll_to(&mut panel, list, [0.0, 120.0]);
+    panel.set(
+        list,
+        ComponentValue::GUI_VIRTUAL_LIST,
+        offset_of!(GuiVirtualList, item_count),
+        FieldValue::U32(0),
+    );
+    panel.frame();
+    let fields = panel.scroll(list);
+    assert_eq!(fields.viewport, [400.0, 0.0]);
+    assert_eq!(fields.offset, [0.0; 2]);
+    assert_eq!((fields.first, fields.last), (0, 0));
 }
 
 /// Outer 400 x 300 ScrollView with flush 15-thick bars over an explicit `content`
@@ -241,6 +537,8 @@ fn scroll_bars_paint_above_the_scrolled_subtree_and_below_later_siblings() {
     let scroll = flush_scroll_view(&mut panel, root, 1, sized(400.0, 200.0), 10.0);
     let content = panel.button(scroll, sized(400.0, 300.0));
     let later = panel.button(root, sized(400.0, 50.0));
+    panel.skin(content, "button");
+    panel.skin(later, "button");
     panel.frame();
     scroll_to(&mut panel, scroll, [0.0, 100.0]);
     let view = panel.output();
@@ -438,6 +736,7 @@ fn virtual_list_extent_follows_its_count_with_a_minimum_thumb_and_clipped_realiz
             ComponentValue::GuiLayout(sized(1000.0, 600.0)),
         ],
     );
+    panel.skin(list, "scroll");
     panel.frame();
     panel.frame();
     let geometry = panel.scroll(list);

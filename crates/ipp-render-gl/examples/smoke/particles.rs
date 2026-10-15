@@ -238,7 +238,7 @@ pub fn run<D: RenderDevice>(
     let mut ready = None;
     for _ in 0..8 {
         let stats = super::world::render_host_frame(renderer, &mut host, world_id, WIDTH, HEIGHT)?;
-        if renderer.custom_material_diagnostics().is_empty() {
+        if stats.draw_calls > 0 && renderer.custom_material_diagnostics().is_empty() {
             ready = Some(stats);
             break;
         }

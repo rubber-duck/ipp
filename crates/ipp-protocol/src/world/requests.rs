@@ -518,6 +518,7 @@ pub fn decode_world_request(
         REQUEST_CAMERA_NAVIGATE => {
             let binding = r.root_binding()?;
             let publication = r.view_source()?;
+            let path = r.camera_path()?;
             let kind = r.u32()?;
             let first = r.f32()?;
             let second = r.f32()?;
@@ -537,6 +538,7 @@ pub fn decode_world_request(
                 _ => return Err(ProtocolError::Malformed("camera motion").into()),
             };
             RequestBody::CameraNavigate(CameraNavigateRequest {
+                path,
                 binding,
                 publication,
                 motion,

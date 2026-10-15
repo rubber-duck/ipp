@@ -199,7 +199,11 @@ impl CameraSystem {
         world: &WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
+        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
         for &entity in world.world.state.entities.keys() {
+            if !presentation.open(world.world, entity) {
+                continue;
+            }
             let Some(projection) = world.world.components.camera(entity.index() as usize) else {
                 continue;
             };

@@ -41,7 +41,7 @@ Use `ipp-browser-env` before the importer where Chromium requires the repository
 
 The output includes content-addressed assets, `world.ipp` and `manifest.json` with camera, ambient fill and reusable clips. `--world FILE.ipp` selects the filename; `--clips-only` leaves playback controller creation to the receiving application. The saved World and encoded clips must match the receiving target contract.
 
-Runtime references use `https://NAME.ipp.invalid/`; configure the browser Host's `resourceUrls` mapping to the deployed asset directory before loading. World saving itself preserves references and does not bundle or relocate data. The [hierarchy gallery](../world-gallery/README.md#rebuilding-the-saved-scene) demonstrates this publication path.
+Runtime references use `https://NAME.ipp.invalid/`; configure the browser Host's `resourceUrls` mapping to the deployed asset directory before loading. World saving itself preserves references and does not bundle or relocate data. The [hierarchy gallery](../demos/scenes/platformer/README.md) demonstrates this publication path.
 
 Loading returns a World graph: open its root for authoring, resolve the manifest camera in that World, then bind and select its camera output on the Host surface. The [disk test page](../../tests/blender/pages/blender-disk.ts) demonstrates playback, fenced captures and cleanup of the selected view, binding, sessions and created Worlds.
 

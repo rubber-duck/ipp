@@ -1,4 +1,8 @@
 import {
+  cybertronLooks,
+  cybertronControlMetrics,
+} from "../../../../packages/ipp-react/src/gui-cybertron.js";
+import {
   CanvasWorld,
   Children,
   Entity,
@@ -18,6 +22,7 @@ import {
   Style,
   Text,
   Theme,
+  Metrics,
 } from "@ipp/react/gui";
 import type {
   GuiInputRoutingOutcome,
@@ -80,7 +85,11 @@ interface PanelPartTable {
 
 /** Target-generated part-row encoders; layouts belong to the running build. */
 interface PanelContract {
-  guiPaintPartIndex(key: { part: "background" }): number;
+  guiPaintPartIndex(key: {
+    part: string;
+    state?: string;
+    variant?: string;
+  }): number;
   GuiTheme: { encodeParts(table: PanelPartTable): Uint8Array<ArrayBuffer> };
   GuiSkin: { encodeParts(table: PanelPartTable): Uint8Array<ArrayBuffer> };
 }
@@ -305,9 +314,14 @@ async function renderPanel() {
     nextSlot: 1,
     rows: new Map([[0, { part: background, color: fill }]]),
   });
-  // The checkbox keeps its default look with round corners: cached and
+  // The checkbox explicitly selects Cybertron with round corners: cached and
   // direct images antialias the inner corner of a square stroke differently,
   // at one pixel by more than the cache comparison's tolerance.
+  const checkbox = cybertronLooks(contract).checkbox;
+  const checkboxParts = contract.GuiTheme.encodeParts({
+    nextSlot: checkbox.parts.length,
+    rows: new Map(checkbox.parts.map((row, slot) => [slot, row])),
+  });
   const rounded = contract.GuiSkin.encodeParts({
     nextSlot: 1,
     rows: new Map([
@@ -340,6 +354,10 @@ async function renderPanel() {
         unitsPerMetre={panelDensity}
         onReady={observeCanvas}
       >
+        <Entity id="checkbox-theme">
+          <Theme parts={checkboxParts} em={checkbox.em} />
+          <Metrics {...cybertronControlMetrics("checkbox")} />
+        </Entity>
         <Entity id="panel-theme">
           <Theme parts={theme} />
         </Entity>
@@ -381,7 +399,7 @@ async function renderPanel() {
                     {config.control ? (
                       <Entity key="control" id="control">
                         <Layout width={0.5} height={1.2} {...TOP_LEFT} />
-                        <Skin parts={rounded} />
+                        <Skin theme="checkbox-theme" parts={rounded} />
                         <Checkbox />
                       </Entity>
                     ) : null}

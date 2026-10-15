@@ -119,9 +119,10 @@ impl GuiSliderGeometry {
         slider: &super::super::local::GuiSlider,
         value: f32,
         size: [f32; 2],
+        thumb_ratio: f32,
     ) -> Option<Self> {
         let axis = slider.rail_axis();
-        let rail = super::super::slider_rail([0.0, 0.0, size[0], size[1]], axis)?;
+        let rail = super::super::slider_rail([0.0, 0.0, size[0], size[1]], axis, thumb_ratio)?;
         let thumb_rect = rail.thumb_rect(slider.fraction(value))?;
         let range = match slider.range {
             true => Some(GuiSliderRange {
@@ -278,9 +279,8 @@ impl GuiControlObservation {
         Some(hit)
     }
 
-    /// Whether this control holds a scalar value that arrow keys step, and
-    /// that the wheel steps while the control holds focus: the slider in
-    /// every presentation.
+    /// Whether this control holds a scalar value that arrows or the wheel
+    /// can step. Routing applies the control's pointer/focus policy.
     pub fn steps_value(&self) -> bool {
         matches!(self.record.value, GuiRoutingValue::Scalar(_))
     }

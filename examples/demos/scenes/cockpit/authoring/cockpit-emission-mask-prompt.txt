@@ -1,0 +1,9 @@
+Use case: precise-object-edit.
+Asset type: precisely registered RGB emission CONTROL MASK for a game shader, not a beauty render.
+Image 1 is the original illuminated cockpit cleanplate; Image 2 is its lights-off base. Produce ONE full-frame image with the same camera, aspect and pixel alignment. Completely opaque PURE BLACK background, including sky, stars, planet, walls, floor, all non-emitting surfaces, empty display beds and all printed/engraved details.
+Show only the exact artificial light apertures from Image 1, using these pure channel colors:
+RED CHANNEL (pure red, no green/blue): white cabin lamps in the long left/right window-frame strips, rear horizontal rail lights, tiny sill lamps, and strips on angled supports immediately above dashboard.
+GREEN CHANNEL (pure green, no red/blue): the dashboard's central horizontal white lamp and the white vertical indicator slivers near the outer embedded dark screens.
+BLUE CHANNEL (pure blue, no red/green): the small cyan rectangular buttons along both curved dashboard banks, their small cyan indicator buttons, and the cyan luminous arcs/segments on all three circular dial rings.
+For each aperture reproduce its exact outline, perspective, location and emission falloff from Image1. Bright luminous cores should reach full channel intensity; preserve narrow antialiased edges and subtle short glow in that SAME channel only. Keep every other pixel pure black. Do not include ambient reflection or metallic engraved rings as lights. Do not include stars or the blue planet rim. No outlines of the cockpit, no text, no diagram labels, no grids, no side-by-side comparison.
+The RGB colors encode separately animatable lighting classes. Precise registration is essential. Do not move, widen or invent any emitter. One mask image, same wide composition as both inputs.

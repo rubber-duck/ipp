@@ -1,7 +1,10 @@
 /** Caller-authored color keys, composed from ordinary Canvas declarations. */
 import type { AssetReference } from "../assets/declarations.js";
+import { createElement, useContext } from "react";
+import { AttachmentContext } from "../composition/attached-world.js";
+import { PlotSkinContext } from "./skin-context.js";
 import { Children, Entity } from "../components.js";
-import { Box, Style, Text } from "../gui/components.js";
+import { Box, Paint, Style, Text } from "../gui/components.js";
 
 /** Straight linear RGBA, with each channel in 0..1 like CanvasStyle. */
 export type PlotLegendColor = readonly [number, number, number, number];
@@ -247,7 +250,7 @@ export function plotLegendPlacement({
  * with its own CanvasWorld. This component creates no Worlds, assets or observers.
  */
 export function PlotLegend(props: PlotLegendProps) {
-  const { id, font, title, entries, scale, x = 0, y = 0, layer = 0 } = props;
+  const { id, title, entries, x = 0, y = 0, layer = 0 } = props;
   const g = legendGeometry(props);
   if (!id) throw new Error("Plot legend needs a nonempty id");
   if (
@@ -261,7 +264,22 @@ export function PlotLegend(props: PlotLegendProps) {
       "Plot legend position must be finite and layer a nonnegative u32",
     );
   if (entries?.length === 0 && !title) return null;
-  const textColor = props.textColor ?? DEFAULT_TEXT;
+  return <LegendContent props={props} geometry={g} />;
+}
+
+function LegendContent({
+  props,
+  geometry: g,
+}: {
+  props: PlotLegendProps;
+  geometry: ReturnType<typeof legendGeometry>;
+}) {
+  const context = useContext(PlotSkinContext);
+  const container = useContext(AttachmentContext);
+  const appearance =
+    context?.container === container ? context?.appearance?.legend : undefined;
+  const { id, font, title, entries, scale, x = 0, y = 0, layer = 0 } = props;
+  const textColor = props.textColor ?? appearance?.textColor ?? DEFAULT_TEXT;
   const start = g.padding + g.titleRows * g.rowHeight;
   const text = (
     name: string,
@@ -304,7 +322,15 @@ export function PlotLegend(props: PlotLegendProps) {
         blue={color[2]}
         alpha={color[3]}
       />
-      <Box width={width} height={height} />
+      <Box
+        width={width}
+        height={height}
+        radius_x={!scale && appearance ? g.swatch * 0.18 : 0}
+        radius_y={!scale && appearance ? g.swatch * 0.18 : 0}
+      />
+      {!scale &&
+        appearance?.swatchPaint &&
+        createElement(Paint, appearance.swatchPaint)}
     </Entity>
   );
   const innerWidth = g.width - 2 * g.padding;
@@ -327,7 +353,26 @@ export function PlotLegend(props: PlotLegendProps) {
         clip_max_y={g.height}
       />
       <Children>
+        {appearance?.paint && (
+          <Entity id={`${id}/sheet`}>
+            <Box width={g.width} height={g.height} />
+            {createElement(Paint, appearance.paint)}
+          </Entity>
+        )}
         {title && text(`${id}/title`, title, g.padding, g.padding, innerWidth)}
+        {title && appearance && (
+          <Entity id={`${id}/divider`}>
+            <Style
+              x={g.padding}
+              y={start - 2}
+              red={textColor[0]}
+              green={textColor[1]}
+              blue={textColor[2]}
+              alpha={0.13}
+            />
+            <Box width={innerWidth} height={0.6} />
+          </Entity>
+        )}
         {entries?.map((entry, index) => {
           const entryId = `${id}/entry/${encodeURIComponent(entry.id)}`;
           const top = start + index * g.rowHeight;
@@ -346,7 +391,7 @@ export function PlotLegend(props: PlotLegendProps) {
                   `${entryId}/label`,
                   entry.label,
                   g.padding + g.swatch + g.gap,
-                  top,
+                  top + (g.rowHeight - g.fontSize) / 2,
                   innerWidth - g.swatch - g.gap,
                 )}
               </Children>

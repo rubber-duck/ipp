@@ -117,7 +117,7 @@ export function describeAnimation(
     )
   )
     throw new Error("Invalid Animation transition start time");
-  for (const key of ["looping", "autoPlay"] as const)
+  for (const key of ["looping", "autoPlay", "playing"] as const)
     if (props[key] !== undefined && typeof props[key] !== "boolean")
       throw new Error(`Animation ${key} must be boolean`);
   return {
@@ -138,6 +138,7 @@ export function describeAnimation(
                 : structuredClone(props.transition.startTime),
           },
         }),
+    ...(props.playing === undefined ? {} : { playing: props.playing }),
     autoPlay: props.autoPlay ?? false,
     onPlaybackEvent: props.onPlaybackEvent,
   };

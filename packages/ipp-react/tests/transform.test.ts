@@ -102,3 +102,25 @@ test("Transform rejects invalid Euler inputs instead of coercing them", () => {
     }
   }
 });
+
+test("Transform tuples expand without mutating authored inputs", () => {
+  const position = [2, 3, 4] as const;
+  const result = Transform({
+    position,
+    rotation: [0, 0, Math.PI / 2],
+    scale: 2,
+  });
+  assert.deepEqual([result.props.x, result.props.y, result.props.z], position);
+  assert.deepEqual(
+    [result.props.sx, result.props.sy, result.props.sz],
+    [2, 2, 2],
+  );
+  assert.deepEqual(
+    rotateQuaternion(result.props, [1, 0, 0]).map((v) => Math.round(v)),
+    [0, 1, 0],
+  );
+  assert.throws(() => Transform({ position, x: 1 }), /cannot mix/);
+  assert.throws(() => Transform({ rotation: [0, 0, 0], qw: 1 }), /cannot mix/);
+  assert.throws(() => Transform({ scale: Infinity }), /finite/);
+  assert.throws(() => Transform({ position: [] as never }), /finite/);
+});

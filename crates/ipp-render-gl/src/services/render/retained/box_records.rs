@@ -6,8 +6,8 @@ use std::hash::Hasher;
 use super::super::canvas::paint::GuiPaintLanes;
 use super::records::{GuiRecord, GuiShapeRecord};
 use ipp_core::systems::canvas::{
-    CanvasBoxShape, CanvasClip, CanvasPrimitiveStyle, CanvasShapeChecker, CanvasShapeFill,
-    CanvasShapeGlow,
+    CanvasBoxSection, CanvasBoxShape, CanvasClip, CanvasPrimitiveStyle, CanvasShapeChecker,
+    CanvasShapeFill, CanvasShapeGlow,
 };
 
 /// Exterior margin in logical units that generated box geometry adds beyond paint.
@@ -63,6 +63,11 @@ pub const GUI_PAINT_STROKE: f32 = 16.0;
 ///
 /// `surface_gui.frag` declares the same value.
 pub const GUI_PAINT_ARC: f32 = 32.0;
+
+/// High paint bits pin section edges against vertex antialias expansion.
+/// Four bits follow [min_x, min_y, max_x, max_y]; the low lanes retain paint/shape.
+/// Both GUI shaders decode the same stride without another vertex attribute.
+pub const GUI_SECTION_FLAGS: f32 = 64.0;
 
 /// How far beyond a 45-degree cut a border of unit width reaches along each edge:
 /// the inset cut meets the inset edge `(sqrt(2) - 1)` widths past the cut's end.
@@ -157,13 +162,21 @@ pub(crate) fn painted_box_records(
         // applies to the result, and the part rectangle in the shape's own units.
         CanvasShapeFill::Paint {
             color,
+            bounds,
             ..
         } => match paint {
             Some(lanes) => (
                 GUI_FILL_PAINT,
                 tint(*color),
                 [lanes.packed(), style.opacity, scale[0], scale[1]],
-                [0.0, 0.0, size[0], size[1]],
+                bounds.map_or([0.0, 0.0, size[0], size[1]], |bounds| {
+                    [
+                        bounds[0] * scale[0],
+                        bounds[1] * scale[1],
+                        bounds[2],
+                        bounds[3],
+                    ]
+                }),
             ),
             None => solid(color),
         },
@@ -285,9 +298,17 @@ pub(crate) fn painted_box_records(
         material_params: [fill_type, glow_inner_radius, glow_radius, glow_falloff],
         glow_color: tint(glow_color),
         clip,
+        paint_data: match fill {
+            CanvasShapeFill::Paint {
+                data,
+                ..
+            } => *data,
+            _ => [0.0; 4],
+        },
     };
     match *shape {
         CanvasBoxShape::Rect {
+            section,
             corner_cut,
             corner_accent,
             corner_accent_width,
@@ -327,7 +348,7 @@ pub(crate) fn painted_box_records(
             };
             let transparent = checker.is_none()
                 && matches!(fill, CanvasShapeFill::Solid(color) if color[3] <= 0.0 || style.opacity <= 0.0);
-            outline_records(&record, transparent)
+            section_records(outline_records(&record, transparent), section, pos, scale)
         }
         CanvasBoxShape::Stroke {
             segments,
@@ -339,6 +360,49 @@ pub(crate) fn painted_box_records(
             dash_duty,
         } => arc_records(&record, start, sweep, dashes, dash_duty),
     }
+}
+
+/// Trim coverage geometry, not the contour or its ordinary clip. Adjacent
+/// sections share exact raster edges, so translucency is composited once there.
+fn section_records(
+    mut records: Vec<GuiShapeRecord>,
+    section: Option<CanvasBoxSection>,
+    position: [f32; 2],
+    scale: [f32; 2],
+) -> Vec<GuiShapeRecord> {
+    let Some(section) = section else {
+        return records;
+    };
+    let local_edge = section.edge as usize;
+    let axis = local_edge % 2;
+    let edge = (local_edge
+        + if scale[axis] < 0.0 {
+            2
+        } else {
+            0
+        })
+        % 4;
+    let mut bounds = [
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+        f32::INFINITY,
+        f32::INFINITY,
+    ];
+    bounds[edge] = position[axis] + section.position * scale[axis];
+    records.retain_mut(|record| {
+        let Some(rect) = clipped_bounds(record.rect, bounds) else {
+            return false;
+        };
+        let flags = if rect[edge] == bounds[edge] {
+            1u32 << edge
+        } else {
+            0
+        };
+        record.rect = rect;
+        record.material_params[0] += flags as f32 * GUI_SECTION_FLAGS;
+        true
+    });
+    records
 }
 
 /// The record `lanes` covering the axis-aligned rectangle from `[x0, y0]` to
@@ -943,10 +1007,14 @@ pub(super) fn hash_painted_box_inputs(
         }
         CanvasShapeFill::Paint {
             color,
+            data,
+            bounds,
             ..
         } => {
             lanes(&[GUI_FILL_PAINT]);
             lanes(color);
+            lanes(data);
+            lanes(&bounds.unwrap_or([0.0, 0.0, size[0], size[1]]));
             lanes(&paint.map_or([-1.0], |lanes| [lanes.packed()]));
         }
     }
@@ -962,12 +1030,20 @@ pub(super) fn hash_painted_box_inputs(
 
     match shape {
         CanvasBoxShape::Rect {
+            section,
             corner_cut,
             corner_accent,
             corner_accent_width,
             checker,
         } => {
             lanes(&[0.0]);
+            match section {
+                Some(section) => {
+                    lanes(&[1.0]);
+                    lanes(&[section.edge as u8 as f32, section.position]);
+                }
+                None => lanes(&[0.0]),
+            }
             lanes(corner_cut);
             lanes(corner_accent);
             lanes(&[*corner_accent_width]);

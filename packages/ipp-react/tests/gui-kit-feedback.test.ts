@@ -201,7 +201,7 @@ const NONE = [0, 0, 0, 0];
 test("ProgressBar fills the reported fraction and labels each outcome", async () => {
   const { world, draw } = await render(upload({ value: 0.656 }));
   assert.equal(world.fields("upload", "GuiLayout").get("height"), 24 + 4 + 32);
-  assert.equal(world.skin("upload/frame"), "frame");
+  assert.equal(world.skin("upload/frame"), "progressFrame");
   // The frame holds the track in its clearance: a stack of its own, so
   // alignment in it stays inside the clearance.
   const frame = world.fields("upload/frame", "GuiLayout");
@@ -680,10 +680,7 @@ test("CircularProgress draws the reported fraction from twelve o'clock and its o
   assert.ok(
     Math.abs((caption.get("width") as number) - (9 * 0.54 * 16 + 0.16)) < 1e-9,
   );
-  assert.deepEqual(world.children("upload/caption"), [
-    "upload/caption/strut",
-    "upload/label",
-  ]);
+  assert.deepEqual(world.children("upload/caption"), ["upload/label"]);
   assert.equal(
     world.fields("upload/label", "CanvasText").get("text"),
     "Uploading",
@@ -808,10 +805,7 @@ test("a ring of unknown total turns the spinner's quarter and shows no percentag
   assert.deepEqual(skinRows(world, "upload/ring"), ring(8, 1));
   assert.deepEqual(world.children("upload/ring"), ["upload/value"]);
   assert.deepEqual(skinRows(world, "upload/value"), ring(8, 0.25));
-  assert.deepEqual(world.children("upload/caption"), [
-    "upload/caption/strut",
-    "upload/label",
-  ]);
+  assert.deepEqual(world.children("upload/caption"), ["upload/label"]);
   assertTurning(world);
 
   await draw(ringProgress({ label: "Scanning", size: "small" }), {

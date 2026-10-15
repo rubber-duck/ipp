@@ -11,11 +11,6 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 pub const WIDTH: u32 = 320;
 pub const HEIGHT: u32 = 240;
-pub(crate) const KEY: ipp_core::MeshKey = ipp_core::MeshKey {
-    asset: 1,
-
-    variant: 0,
-};
 pub(crate) const MATERIAL: [f32; 3] = [0.25, 0.5, 0.75];
 const BACKGROUND: [u8; 4] = [10, 14, 20, 255];
 
@@ -667,8 +662,10 @@ pub(crate) fn render_host_frame<D: RenderDevice>(
     width: u32,
     height: u32,
 ) -> std::result::Result<crate::smoke::frame_stats::FrameStats, String> {
+    let tasks = super::task_scheduler::SmokeAssetTasks::for_host(host);
     let mut uploaded = 0u32;
     for _ in 0..8 {
+        tasks.poll_ready();
         let frame = host.frame(0.0).map_err(|error| error.to_string())?;
         for report in frame.worlds.values() {
             report.as_ref().map_err(|error| error.to_string())?;
@@ -686,6 +683,9 @@ pub(crate) fn render_host_frame<D: RenderDevice>(
                     .map(|(output, _, publication)| (output, publication)),
             )
             .map_err(|error| error.to_string())?;
+        tasks.poll_ready();
+        host.progress_assets();
+        tasks.poll_ready();
         host.progress_assets();
         let mut stats = renderer
             .draw_stats(host, id, width, height)
@@ -714,6 +714,7 @@ pub fn multiple_worlds<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = ipp_core::HostRuntime::new();
+    super::task_scheduler::SmokeAssetTasks::for_host(&mut host);
     renderer.install(&mut host)?;
     let mut worlds = Vec::new();
     for x in [-1.5, 1.5] {
@@ -748,19 +749,10 @@ pub fn multiple_worlds<D: RenderDevice>(
         )?;
         worlds.push(world.id());
     }
-    host.progress_assets();
+    super::task_scheduler::progress(&mut host);
     let requests = host.take_resource_requests();
     assert_eq!(requests.len(), 1, "one acquisition for both worlds");
     host.complete_resource(requests[0].id, Ok(mesh.to_vec()))?;
-    for _ in 0..16 {
-        host.progress_assets();
-        for &id in &worlds {
-            host.world_mut(id).unwrap().step(0.0)?;
-        }
-        if host.world_mut(worlds[0]).unwrap().render_items().len() == 1 {
-            break;
-        }
-    }
     let resource = host.world_mut(worlds[0]).unwrap().resource_snapshots()[0].id;
     assert_eq!(
         host.world_mut(worlds[1]).unwrap().resource_snapshots()[0].id,
@@ -769,12 +761,7 @@ pub fn multiple_worlds<D: RenderDevice>(
     let mut captures = Vec::new();
     host.frame(0.0)?;
     for (index, &id) in worlds.iter().enumerate() {
-        let selected = host
-            .root_output(id)
-            .map(|(output, _, publication)| (output, publication));
-        renderer.prepare(&mut host, selected)?;
-        host.progress_assets();
-        let stats = renderer.draw_stats(&host, id, WIDTH, HEIGHT)?;
+        let stats = deliver_to_host(renderer, &mut host, id, mesh, None)?;
         assert_eq!(stats.draw_calls, 1);
         if index == 1 {
             assert_eq!(
@@ -792,7 +779,7 @@ pub fn multiple_worlds<D: RenderDevice>(
         "independent world transforms must produce distinct frames"
     );
     host.destroy_world(worlds[0]);
-    host.progress_assets();
+    super::task_scheduler::progress(&mut host);
     host.frame(0.0)?;
     assert_eq!(
         host.world_mut(worlds[1]).unwrap().resource_snapshots()[0].id,

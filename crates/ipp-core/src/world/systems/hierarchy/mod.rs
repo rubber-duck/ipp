@@ -1,7 +1,10 @@
 //! Explicit object relationships and affine propagation. See README.md for contracts.
 
 mod component;
-pub use component::ParentJoint;
+pub use component::{ParentJoint, PresentationGate};
+
+mod presentation;
+pub(crate) use presentation::PresentationEligibility;
 
 use crate::math::CameraAffineTransform;
 use crate::systems::{self, geometry::GeometryShapeTransform};

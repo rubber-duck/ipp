@@ -1,7 +1,7 @@
 //! Ordinary control paint and immutable observations joined to completed Canvas output.
 //! Compact theme/part rows remain typed authoring values, never a second entity tree.
 //! Each control part resolves property by property from its skin's override row, its
-//! theme's rows and finally the built-in default look of its kind ([`looks`]).
+//! theme's rows. Only an authored row or explicit control paint enables a part.
 //!
 //! A skinned entity that is not a control paints only its Background part, from the
 //! same rows, during the same Canvas walk; it has no states, focus or hit, and is
@@ -22,8 +22,9 @@
 //! this presentation chunk or a selected root.
 
 mod component;
+mod metrics;
+pub use metrics::GuiMetrics;
 mod contract;
-pub mod looks;
 pub(in crate::world::systems::gui) mod measurement;
 pub(in crate::world::systems::gui) mod paint;
 mod part_style;
@@ -33,7 +34,6 @@ mod retained;
 
 pub use component::{GUI_DEFAULT_FONT_SIZE, GuiFont, GuiPaintPart, GuiSkin, GuiTheme};
 pub(crate) use contract::write_paint_contract;
-pub use looks::{GuiSkinLook, gui_skin_looks};
 pub(in crate::world::systems) use paint::{GuiPaintedControl, control_paint, skinned_background};
 pub use part_style::{GuiPartStyle, GuiSkinState};
 pub use parts::{GUI_BASE_PARTS, GuiPartId, GuiPartProperty, GuiPartVariant, GuiPrimitivePart};

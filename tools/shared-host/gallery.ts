@@ -1,3 +1,8 @@
+import {
+  DemoApplication,
+  DEMO_SYSTEMS,
+  DEMO_FONT,
+} from "../../examples/demos/application.js";
 /** Shared gallery scenes mounted through the persistent development Host. */
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -9,9 +14,7 @@ import type {
   PresentationFrameOptions,
   PresentationViewport,
   RootBinding,
-  WorldGraphLoadResult,
-  WorldGraphLoadError,
-  WorldLoadOptions,
+  GuiPhysicalInput,
   WorldReference,
 } from "@ipp/client";
 import { CanvasWorldSession } from "@ipp/react/canvas";
@@ -20,8 +23,7 @@ import type {
   GalleryOptions,
   GalleryResource,
   GallerySceneDefinition,
-  GallerySceneMount,
-} from "../../examples/world-gallery/shared/scene.js";
+} from "../../examples/demos/shared/scene.js";
 import {
   defineClient,
   type ClientContext,
@@ -30,7 +32,7 @@ import {
 import { image } from "./presentation.js";
 
 export const GALLERY_ASSET_PREFIX = "ipp-gallery://assets/";
-export const GALLERY_REGISTRY = "examples/world-gallery/scene-registry.ts";
+export const GALLERY_REGISTRY = "examples/demos/scene-registry.ts";
 
 /** Local reads and immutable, session-owned resources for a scene mount. */
 class NativeGalleryAssets implements GalleryAssets {
@@ -49,7 +51,13 @@ class NativeGalleryAssets implements GalleryAssets {
       /^gallery-platformer-assets\//,
       "gallery-platformer-native-assets/",
     );
-    const file = resolve(this.root, targetPath);
+    const file = resolve(
+      this.root,
+      targetPath.replace(
+        /^demos-cockpit-assets\//,
+        "demos-cockpit-native-assets/",
+      ),
+    );
     if (file !== this.root && !file.startsWith(this.root + sep))
       throw new Error(`Gallery asset escapes its target directory: ${path}`);
     return file;
@@ -110,6 +118,8 @@ class NativeGalleryAssets implements GalleryAssets {
 /** Scene controllers observe actual frames through the Host-wide presentation lock. */
 class NativeCanvasSession extends CanvasWorldSession {
   private binding: RootBinding | undefined;
+  private presented: import("@ipp/client").PresentationView | null = null;
+  private selected: import("@ipp/client").PresentationView | null = null;
   private resolveBinding!: (binding: RootBinding) => void;
   private rejectBinding!: (error: Error) => void;
   private readonly pendingBinding: Promise<RootBinding>;
@@ -131,24 +141,70 @@ class NativeCanvasSession extends CanvasWorldSession {
     this.resolveBinding(binding);
   }
 
+  override get view() {
+    return this.presented;
+  }
+
   override get viewport(): PresentationViewport | null {
     return this.binding?.viewport ?? null;
   }
 
+  /** Keep observers on the exact selected view while the shared capture lock is held. */
+  async withPresentation<T>(
+    operation: (view: import("@ipp/client").PresentationView) => Promise<T>,
+  ): Promise<T> {
+    if (this.selected) return operation(this.selected);
+    const binding = this.binding ?? (await this.pendingBinding);
+    return this.context.present(binding, async (view) => {
+      this.presented = view;
+      this.selected = view;
+      try {
+        return await operation(view);
+      } finally {
+        this.selected = null;
+      }
+    });
+  }
+
   override async frame(options: PresentationFrameOptions = {}) {
     await this.flush();
-    const binding = await this.pendingBinding;
-    return this.context.present(binding, (view) =>
+    return this.withPresentation((view) =>
       this.host.presentation.frame(view, options),
     );
   }
 
   override async capture(options: PresentationFrameOptions = {}) {
     await this.flush();
-    const binding = await this.pendingBinding;
-    return this.context.present(binding, (view) =>
+    return this.withPresentation((view) =>
       this.host.presentation.capture(view, options),
     );
+  }
+
+  async input(
+    inputs: readonly GuiPhysicalInput[],
+    application: DemoApplication,
+  ) {
+    return this.withPresentation(async (view) => {
+      await this.host.presentation.frame(view, {
+        afterOutputs: application.frameOutputs,
+      });
+      const input = await this.host.input.open(view);
+      const outcomes = [];
+      try {
+        for (const command of inputs) {
+          const outcome = await input.send(command);
+          outcomes.push(outcome);
+          await application.handlePhysicalInput(command, outcome);
+          await this.flush();
+          await this.host.presentation.frame(view, {
+            afterOutputs: application.frameOutputs,
+          });
+        }
+      } finally {
+        await input.close();
+      }
+      return outcomes;
+    });
   }
 
   override async close() {
@@ -163,7 +219,7 @@ class NativeCanvasSession extends CanvasWorldSession {
 
 interface MountedScene {
   readonly definition: GallerySceneDefinition;
-  readonly scene: GallerySceneMount;
+  readonly scene: DemoApplication;
   readonly canvas: NativeCanvasSession;
   readonly client: Client;
   readonly worlds: readonly WorldReference[];
@@ -196,9 +252,9 @@ function definition(loaded: LoadedModule, id: string): GallerySceneDefinition {
 
 async function cleanup(mounted: MountedScene) {
   mounted.lifetime.abort(new Error("Gallery scene disposed"));
+  await mounted.scene.dispose();
   const failures: unknown[] = [];
   for (const close of [
-    () => mounted.scene.dispose(),
     () => mounted.canvas.close(),
     () => mounted.assets.close(),
     () => mounted.client.close(),
@@ -218,6 +274,7 @@ async function cleanup(mounted: MountedScene) {
 
 export class NativeGallerySession {
   private mounted: MountedScene | undefined;
+  private loaded: LoadedModule | undefined;
   private identity = "";
   private generation = 0;
   private tail: Promise<unknown> = Promise.resolve();
@@ -239,117 +296,99 @@ export class NativeGallerySession {
 
   async open() {
     if (
-      this.id === "platformer" &&
-      !this.context.assetPrefixes?.includes("https://platformer.ipp.invalid/")
+      (this.id === "platformer" || this.id === "cockpit") &&
+      !this.context.assetPrefixes?.includes(`https://${this.id}.ipp.invalid/`)
     )
       throw new Error(
-        "Platformer requires its saved asset namespace. Ask the Host owner to restart with: node tools/shared-host/shared-host.mjs host start --gallery",
+        `${this.id} requires its saved asset namespace. Ask the Host owner to restart with: node tools/shared-host/shared-host.mjs host start --gallery`,
       );
     const loaded = (await this.context.load(this.module))!;
+    this.loaded = loaded;
     this.mounted = await this.mount(definition(loaded, this.id));
     this.identity = loaded.identity;
   }
 
   private async mount(scene: GallerySceneDefinition): Promise<MountedScene> {
     const lifetime = new AbortController();
-    const timer = setTimeout(
-      () =>
-        lifetime.abort(
-          new Error("Gallery readiness timed out after 60 seconds"),
-        ),
-      60_000,
-    );
-    const worldSource = scene.world(new NativeGalleryAssets(this.assetRoot));
     const worlds: WorldReference[] = [];
-    let client: Client | undefined;
-    let canvas: NativeCanvasSession | undefined;
-    let assets: NativeGalleryAssets | undefined;
-    let mounted: GallerySceneMount | undefined;
+    let client: Client | undefined,
+      canvas: NativeCanvasSession | undefined,
+      assets: NativeGalleryAssets | undefined,
+      application: DemoApplication | undefined;
     try {
-      const name = `gallery/${this.context.name}/${++this.generation}`;
-      if (worldSource.create) {
-        const world = await this.context.host.createWorld({
-          ...worldSource.create,
-          temporary: true,
-          symbolicId: name,
-        });
-        worlds.push(world.reference);
-      } else {
-        const host = this.context.host as typeof this.context.host & {
-          loadWorld(
-            bytes: Uint8Array,
-            options: WorldLoadOptions,
-          ): Promise<WorldGraphLoadResult>;
-        };
-        if (!host.loadWorld)
-          throw new Error("This Host has no saved World support");
-        const bytes = await new NativeGalleryAssets(this.assetRoot).readBytes(
-          worldSource.load.url,
-          lifetime.signal,
-        );
-        const graph = await host.loadWorld(bytes, {
-          ...worldSource.load.options,
-          symbolicId: name,
-          signal: lifetime.signal,
-          worldNames: (graph) =>
-            new Map(
-              graph.nodes.map((node) => [
-                node.id,
-                node.id === graph.root ? name : `${name}/${node.id}`,
-              ]),
-            ),
-        });
-        worlds.push(
-          graph.root,
-          ...[...graph.created.values()].filter(
-            (world) => world.id !== graph.root.id,
-          ),
-        );
-      }
-      lifetime.signal.throwIfAborted();
-      client = await this.context.host.openWorld(worlds[0]!);
+      const name = `demos/${this.context.name}/${++this.generation}`;
+      const root = await this.context.host.createWorld({
+        selectedSystems: DEMO_SYSTEMS,
+        temporary: true,
+        symbolicId: name,
+        canvas: {
+          extent: [
+            this.viewport.width / this.viewport.devicePixelRatio,
+            this.viewport.height / this.viewport.devicePixelRatio,
+          ],
+          unitsPerMetre: 1,
+        },
+      });
+      worlds.push(root.reference);
+      client = await this.context.host.openWorld(root.reference);
       canvas = new NativeCanvasSession(this.context, client);
       assets = new NativeGalleryAssets(
         this.assetRoot,
         client as AssetWorldClient,
       );
-      await assets.prepare(scene.resources ?? [], lifetime.signal);
-      await scene.initialize?.(
-        client,
-        lifetime.signal,
-        this.context.host,
-        assets,
-      );
-      mounted = await scene.mount(
+      await assets.prepare([{ kind: 17, path: DEMO_FONT }], lifetime.signal);
+      const output = (await import("@ipp/client")).canvasOutput(root.reference);
+      canvas.bind(await this.context.host.setRootOutput(output, this.viewport));
+      const Application = (this.loaded?.module.DemoApplication ??
+        DemoApplication) as typeof DemoApplication;
+      application = new Application(
         {
           canvas,
           assets,
           contract: this.context.contract,
           signal: lifetime.signal,
+          assetsFor: (child) =>
+            new NativeGalleryAssets(this.assetRoot, child as AssetWorldClient),
+          sceneDefinition: (id) =>
+            this.loaded ? definition(this.loaded, id) : scene,
+          sceneDefinitions: (this.loaded?.module.GALLERY_SCENE_DEFINITIONS as
+            | readonly GallerySceneDefinition[]
+            | undefined) ?? [scene],
+          renderScaleChanged: async (scale) => {
+            canvas!.bind(
+              await this.context.host.setRootOutput(output, {
+                ...this.viewport,
+                width: Math.round(this.viewport.width * scale),
+                height: Math.round(this.viewport.height * scale),
+                devicePixelRatio: this.viewport.devicePixelRatio * scale,
+              }),
+            );
+            await application!.resize(canvas!.viewport!);
+          },
         },
-        { ...scene.defaultOptions, ...this.options },
+        {
+          scene: scene.id,
+          options: this.options,
+          ...(typeof this.options.renderScale === "number"
+            ? { renderScale: this.options.renderScale }
+            : {}),
+          ...(this.options.skin === "glass" || this.options.skin === "cybertron"
+            ? { skin: this.options.skin }
+            : {}),
+        },
       );
-      canvas.bind(
-        await this.context.host.setRootOutput(mounted.output, this.viewport),
-      );
-      await mounted.resize?.(this.viewport);
-      lifetime.signal.throwIfAborted();
-      await Promise.race([
-        mounted.ready,
-        new Promise<never>((_, reject) => {
-          lifetime.signal.addEventListener(
-            "abort",
-            () => reject(lifetime.signal.reason),
-            { once: true },
-          );
-        }),
-      ]);
-      lifetime.signal.throwIfAborted();
+      await application.resize(this.viewport);
+      await application.ready;
+      if (
+        typeof this.options.renderScale === "number" &&
+        this.options.renderScale !== 1
+      )
+        await application.action("renderScale", this.options.renderScale);
       await canvas.flush();
-      this.options = mounted.options;
+      this.options = application.options;
       return {
         definition: scene,
-        scene: mounted,
+        scene: application,
         canvas,
         client,
         worlds,
@@ -358,17 +397,9 @@ export class NativeGallerySession {
       };
     } catch (error) {
       lifetime.abort(error);
-      // Generated Host clients load their own support classes; compare the public
-      // error identity across that module boundary and retain exact cleanup handles.
-      const loadError = error as Partial<WorldGraphLoadError> | undefined;
-      if (
-        loadError?.name === "WorldGraphLoadError" &&
-        loadError.pendingCleanup instanceof Map
-      )
-        worlds.push(...loadError.pendingCleanup.values());
       const failures: unknown[] = [error];
       for (const close of [
-        () => mounted?.dispose(),
+        () => application?.dispose(),
         () => canvas?.close(),
         () => assets?.close(),
         () => client?.close(),
@@ -376,16 +407,20 @@ export class NativeGallerySession {
       ]) {
         try {
           await close();
-        } catch (cleanup) {
-          failures.push(cleanup);
+        } catch (failure) {
+          failures.push(failure);
         }
       }
       throw failures.length === 1
         ? error
-        : new AggregateError(failures, "Gallery mounting failed");
-    } finally {
-      clearTimeout(timer);
+        : new AggregateError(failures, "Demo application mounting failed");
     }
+  }
+
+  present<T>(
+    operation: (view: import("@ipp/client").PresentationView) => Promise<T>,
+  ) {
+    return this.requireMounted().canvas.withPresentation(operation);
   }
 
   capture() {
@@ -393,12 +428,12 @@ export class NativeGallerySession {
       const mounted = this.requireMounted();
       await mounted.scene.ready;
       const captured = await mounted.canvas.capture({
-        afterOutputs: [mounted.scene.output],
+        afterOutputs: mounted.scene.frameOutputs,
       });
       return {
         images: { [this.id]: image(captured) },
         report: {
-          scene: this.id,
+          scene: mounted.scene.sceneId,
           generation: this.generation,
           sequence: captured.sequence,
           viewport: this.viewport,
@@ -417,13 +452,14 @@ export class NativeGallerySession {
         );
         if (!next)
           return { report: { reloaded: false, generation: this.generation } };
-        const selected = definition(next, this.id);
         const previous = this.mounted;
+        const selected = definition(next, previous?.scene.sceneId ?? this.id);
         if (previous) {
           this.options = previous.scene.options;
           await cleanup(previous);
         }
         this.mounted = undefined;
+        this.loaded = next;
         this.mounted = await this.mount(selected);
         this.identity = next.identity;
         return {
@@ -446,6 +482,16 @@ export class NativeGallerySession {
       if (command === "action") {
         const [name, ...payload] = args;
         if (!name) throw new Error("Action needs its scene action name");
+        if (name === "physicalInput") {
+          const inputs = JSON.parse(payload.join(" ")) as GuiPhysicalInput[];
+          for (const input of inputs)
+            if ("pointer" in input) input.pointer = BigInt(input.pointer);
+          return {
+            report: {
+              outcomes: await mounted.canvas.input(inputs, mounted.scene),
+            },
+          };
+        }
         return {
           report: await mounted.scene.action(
             name,
@@ -461,10 +507,15 @@ export class NativeGallerySession {
             options: mounted.scene.options,
             actions: mounted.definition.actions,
             state: await mounted.scene.inspect(),
+            application: await mounted.scene.inspectApplication(),
           },
         };
       throw new Error(`Unknown gallery command ${command}`);
     });
+  }
+
+  get application(): DemoApplication {
+    return this.requireMounted().scene;
   }
 
   private requireMounted(): MountedScene {

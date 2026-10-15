@@ -22,7 +22,7 @@ import {
   type CanvasRuntimeConfiguration,
   type IppCanvasHandle,
 } from "@ipp/react/web";
-import { ReadyGeometry } from "../../../examples/world-gallery/shared/ready-geometry.js";
+import { ReadyGeometry } from "../../../examples/demos/shared/ready-geometry.js";
 import { createFixtureCamera } from "../../fixtures/cameras.js";
 import {
   compareImages,

@@ -96,6 +96,9 @@ fn paint_example() -> Vec<u8> {
     let mut base = GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap();
     base.color = Some([0.25, 0.5, 0.75, 1.0]);
     base.glow_inner_radius = Some(3.0);
+    base.paint = Some(true);
+    base.paint_data = Some([0.25, 0.5, 0.75, 1.0]);
+    base.outset = Some([2.0, -1.0]);
     base.corner_cut = Some([4.0, 0.0, 4.0, 0.0]);
     base.corner_accent = Some([0.0, 8.0, 0.0, 8.0]);
     base.corner_accent_width = Some(2.0);

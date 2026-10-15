@@ -1,3 +1,5 @@
+import type { ValueChangeHandler } from "./value-synchronization.js";
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A slider with its caption, a formatted readout of its value with units,
  * optional captions of its minimum and maximum and an optional scale. The
@@ -18,7 +20,7 @@
  *
  * End captions are shown by default unless a scale labels the ends.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
 import {
@@ -53,8 +55,8 @@ export interface LabelledSliderProps extends SliderCompositeProps {
   readonly value?: number;
   /** The initial value while `value` is omitted; the origin, or the minimum. */
   readonly defaultValue?: number;
-  /** The runtime committed a new value. */
-  readonly onChange?: (value: number) => void;
+  /** The runtime committed a new value; return async acceptance before convergence. */
+  readonly onChange?: ValueChangeHandler<number>;
   /** The value the fill runs from, such as zero on a bipolar slider. */
   readonly origin?: number;
   /** Along a vertical rail, minimum at the bottom. */
@@ -72,7 +74,7 @@ export interface LabelledSliderProps extends SliderCompositeProps {
 
 export function LabelledSlider(props: LabelledSliderProps) {
   const {
-    id,
+    id: providedId,
     layer = 0,
     label,
     min,
@@ -91,6 +93,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
     layout,
     ref,
   } = props;
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const g = railGeometry(kit);
@@ -146,6 +149,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0) + 1;
     return (
       <Entity id={id}>
+        <PresentationGate open />
         <Style layer={layer} />
         <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
         <Font source={kit.font} font_size={kit.fontSize} />
@@ -162,10 +166,12 @@ export function LabelledSlider(props: LabelledSliderProps) {
             />
           )}
           <Entity id={`${id}/track`}>
+            <PresentationGate open />
             <Layout kind={LAYOUT_STACK} height={rail} />
             <Children>
               {/* The rail centred: the scale's reach past it takes no room. */}
               <Entity id={`${id}/rail`}>
+                <PresentationGate open />
                 <Layout
                   kind={LAYOUT_STACK}
                   width={box}
@@ -199,15 +205,23 @@ export function LabelledSlider(props: LabelledSliderProps) {
   }
 
   const box = Math.max(g.depth, scaleExtent ?? 0);
+  const gap = layout?.gap ?? kit.spacing.label;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
-      <Layout kind={LAYOUT_COLUMN} height={g.row + box} {...layout} />
+      <Layout
+        kind={LAYOUT_COLUMN}
+        height={g.row + gap + box}
+        gap={gap}
+        {...layout}
+      />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
-        <Row id={`${id}/header`} height={t.denseRow}>
+        <Row id={`${id}/header`} height={kit.unit(t.denseRow)}>
           {label === undefined ? (
             <Entity id={`${id}/space`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_LEAF} flex={1} />
             </Entity>
           ) : (
@@ -221,6 +235,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
           <TextLine id={`${id}/readout`} text={readout} tone={tones.readout} />
         </Row>
         <Entity id={`${id}/rail-row`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_ROW} height={box} />
           <Children>
             {bounds && (
@@ -231,6 +246,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
               />
             )}
             <Entity id={`${id}/rail`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_STACK} height={box} flex={1} />
               <Children>
                 {scaleOf}

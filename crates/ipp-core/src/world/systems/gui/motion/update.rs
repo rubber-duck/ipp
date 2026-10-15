@@ -7,7 +7,6 @@ use crate::systems::gui::local::controls::identity::{
     GuiControl, eligibility, entity_control, focus_parts,
 };
 use crate::systems::gui::local::{GUI_MAX_FOCUS_PARTS, GuiBehavior, GuiControlKind};
-use crate::systems::gui::presentation::looks::{GuiSkinLook, control_look};
 use crate::systems::gui::presentation::paint::{
     appearance, control_variant, explicit_unchecked, inherited_font_size,
 };
@@ -606,8 +605,6 @@ fn behavior_mut(world: &mut WorldSimulationState, entity: EntityId) -> Option<&m
 /// What a control's parts resolve their appearance and timing from.
 struct GuiMotionSources<'a> {
     kind: GuiControlKind,
-    /// The control's default look: its kind's, or the dial's.
-    look: &'static GuiSkinLook,
     skin: Option<&'a GuiSkin>,
     theme: Option<&'a GuiTheme>,
     motion: Option<&'a super::GuiThemeMotion>,
@@ -624,7 +621,6 @@ impl<'a> GuiMotionSources<'a> {
             .filter(|theme| theme.to_bits() != 0 && world.state.entities.contains_key(theme));
         Self {
             kind: control.kind,
-            look: control_look(world, control),
             skin,
             theme: theme.and_then(|theme| world.components.gui_theme(theme.index() as usize)),
             motion: theme
@@ -636,7 +632,6 @@ impl<'a> GuiMotionSources<'a> {
     fn rows(&self) -> GuiMotionRows<'a> {
         GuiMotionRows {
             theme: self.motion,
-            look: &self.look.motion,
         }
     }
 
@@ -647,7 +642,6 @@ impl<'a> GuiMotionSources<'a> {
         let mut style = appearance(
             self.skin,
             self.theme,
-            self.look,
             self.font_size,
             part,
             key.state,
@@ -657,7 +651,7 @@ impl<'a> GuiMotionSources<'a> {
             GuiPrimitivePart::Icon => {
                 self.kind == GuiControlKind::Checkbox
                     && key.variant == Some(GuiPartVariant::Unchecked)
-                    && !explicit_unchecked(self.theme, self.kind, key.state)
+                    && !explicit_unchecked(self.theme, key.state)
             }
             GuiPrimitivePart::FocusRing => !key.focused,
             _ => false,

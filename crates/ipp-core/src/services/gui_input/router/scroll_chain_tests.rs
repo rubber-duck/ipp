@@ -20,7 +20,7 @@ fn node(
 ) -> EntityId {
     let mut values = vec![sized(kind, size[0], size[1])];
     values.extend(extra);
-    create(host, world, values, Some(parent))
+    create_painted(host, world, values, Some(parent))
 }
 
 /// Bar thickness at this fixture's ten-unit scale; bars sit flush with the

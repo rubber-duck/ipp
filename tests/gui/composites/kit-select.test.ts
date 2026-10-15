@@ -3,8 +3,35 @@ import {
   accentPixels,
   compositeTests,
   json,
+  type CompositeImage,
 } from "./support/composite-tests.js";
 import type { prepare } from "./pages/kit-select.js";
+
+/** No inner border or corner notch where the native solid surfaces join. */
+function checkJoinedOutline(image: CompositeImage, bounds: readonly number[]) {
+  const [left, top, width, height] = bounds as readonly [
+    number,
+    number,
+    number,
+    number,
+  ];
+  const seam = Math.round(top + height);
+  for (const x of [
+    Math.ceil(left + 2),
+    Math.floor(left + width / 2),
+    Math.floor(left + width - 3),
+  ]) {
+    const reference = ((seam - 3) * image.width + x) * 4;
+    for (let y = seam - 1; y <= seam + 1; y++) {
+      const at = (y * image.width + x) * 4;
+      for (let c = 0; c < 3; c++)
+        check(
+          Math.abs(image.pixels[at + c]! - image.pixels[reference + c]!) < 8,
+          `Connected Cybertron surface at ${x},${y}: channel ${c}`,
+        );
+    }
+  }
+}
 
 compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
   const { page, step } = run;
@@ -19,6 +46,10 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
     const list = ["sel-dropdown/list"];
     await page.mouse.click(...(await selectAt("sel-dropdown")));
     await step("expectSelect", { open: list, focus: "sel-dropdown" });
+    checkJoinedOutline(
+      await run.capture("kit-dropdown-connected"),
+      await step("selectBounds", "sel-dropdown"),
+    );
     await page.keyboard.press("Escape");
     const dropdownEscape = await step("expectSelect", {
       open: [],

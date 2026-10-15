@@ -84,6 +84,7 @@ fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
             ..PlotFrame2d::default()
         },
         &input,
+        None,
     )
     .unwrap();
     let paths: Vec<_> = output

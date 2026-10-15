@@ -78,6 +78,7 @@ impl Scene {
                 ComponentValue::GuiLayout(sized(16.0, 16.0)),
             ],
         );
+        panel.skin(checkbox, "checkbox");
         let mut paint = CanvasPaint {
             source: "paint:///scope".into(),
             ..Default::default()

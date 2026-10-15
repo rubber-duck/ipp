@@ -1,3 +1,5 @@
+import { kitThemes, type GuiKitRecipeInputs } from "../src/gui-kit/themes.js";
+import type { GuiSkinDefinition } from "../src/gui/skin-types.js";
 /**
  * Shared harness of the GUI kit declaration tests (`gui-kit-*.test.ts`): a
  * recording World that acknowledges every batch at once, the tokens, parts
@@ -29,12 +31,9 @@ import {
 } from "@ipp/client";
 import { Children, Entity, createRoot } from "../src/index.js";
 import type { ReactWorldClient } from "../src/reconciler/world-client.js";
+import { componentContract } from "../src/components.js";
 import { guiComponentContract } from "../src/gui/fields.js";
-import {
-  GuiKit,
-  type GuiKitContract,
-  type GuiKitTokens,
-} from "../src/gui-kit.js";
+import { GuiKit, type GuiKitTokens } from "../src/gui-kit.js";
 
 type Color = readonly [number, number, number, number];
 
@@ -135,7 +134,17 @@ const SCROLL_VIEW_STATE = Object.fromEntries(
 
 /** Component descriptors: every GUI component, fields eight bytes apart. */
 export const DESCRIPTORS = Object.fromEntries(
-  Object.entries(guiComponentContract).map(([name, definition], index) => [
+  Object.entries({
+    ...guiComponentContract,
+    PresentationGate: componentContract.PresentationGate,
+    PlotFrame2d: componentContract.PlotFrame2d,
+    PlotFrame3d: componentContract.PlotFrame3d,
+    PlotBars2d: componentContract.PlotBars2d,
+    PlotGridBars3d: componentContract.PlotGridBars3d,
+    CustomMaterial: componentContract.CustomMaterial,
+    PlotCalloutStyle: componentContract.PlotCalloutStyle,
+    PlotCalloutPaint: componentContract.PlotCalloutPaint,
+  }).map(([name, definition], index) => [
     name,
     {
       id: index + 1,
@@ -163,11 +172,11 @@ export const DESCRIPTORS = Object.fromEntries(
 ) as ReactWorldClient["components"];
 
 /** A generated contract stand-in whose theme encoder writes JSON rows. */
-export function contract(): GuiKitContract {
+export function contract(): GuiKitRecipeInputs {
   const layout = DESCRIPTORS.GuiLayout!;
   return {
-    GUI_SKIN_TOKENS: TOKENS,
-    GUI_SKIN_LOOKS: {
+    tokens: TOKENS,
+    looks: {
       button: { em: 16, parts: [] },
       checkbox: { em: 16, parts: [CHECK_MARK] },
       amber: {
@@ -221,6 +230,12 @@ export function contract(): GuiKitContract {
       PART[part as keyof typeof PART] +
       (state ? STATE[state as keyof typeof STATE] : 0) +
       (variant === "checked" ? CHECKED : 0),
+    GuiThemeMotion: {
+      encodeParts: ({ nextSlot, rows }) =>
+        new TextEncoder().encode(
+          JSON.stringify({ nextSlot, rows: [...rows] }),
+        ) as Uint8Array<ArrayBuffer>,
+    },
     GuiTheme: {
       encodeParts: ({ nextSlot, rows }) =>
         new TextEncoder().encode(
@@ -246,6 +261,28 @@ export function contract(): GuiKitContract {
         new TextEncoder().encode(
           JSON.stringify({ nextSlot, rows: [...rows] }),
         ) as Uint8Array<ArrayBuffer>,
+    },
+  };
+}
+
+/** Explicit minimal appearance used by composition tests; no runtime skin fallback. */
+export function skinFixture(inputs = contract()): GuiSkinDefinition {
+  const themes = kitThemes(inputs);
+  return {
+    tokens: inputs.tokens,
+    themes,
+    kit: Object.fromEntries(
+      Object.keys(themes).map((name) => [name, name]),
+    ) as GuiSkinDefinition["kit"],
+    controls: {
+      button: "secondary",
+      checkbox: "check",
+      switch: "check",
+      slider: "frame",
+      dial: "frame",
+      textInput: "cellEditor",
+      scroll: "frame",
+      color: "frame",
     },
   };
 }
@@ -339,7 +376,9 @@ export class KitWorld
     };
     const value = (field: FieldValue): unknown =>
       field.kind === "entity"
-        ? resolve(field.value)
+        ? field.value.kind === "handle" && field.value.id === 0n
+          ? 0n
+          : resolve(field.value)
         : field.kind === "unset"
           ? undefined
           : field.value;
@@ -546,6 +585,7 @@ export class KitWorld
     effect: GuiObservedEffect["effect"],
     control: "GuiButton" | "GuiTextInput" = "GuiButton",
     tick = 1n,
+    ancestry: readonly string[] = [symbol],
   ): void {
     const entity = [...this.ids].find(([, name]) => name === symbol)?.[0];
     assert.ok(entity !== undefined, `no entity ${symbol}`);
@@ -563,7 +603,9 @@ export class KitWorld
           },
           source: "semantic",
           tick,
-          ancestry: [entity],
+          ancestry: ancestry.map(
+            (name) => [...this.ids].find(([, symbol]) => symbol === name)![0],
+          ),
           effect,
         });
   }
@@ -594,12 +636,14 @@ export class KitWorld
     symbol: string,
     control:
       | "GuiButton"
+      | "GuiCheckbox"
       | "GuiScrollView"
       | "GuiBehavior"
       | "GuiTextInput"
       | "GuiSlider"
       | "GuiColor",
     given: Readonly<Record<string, unknown>>,
+    committed = true,
   ): void {
     const fields =
       control === "GuiTextInput"
@@ -607,6 +651,10 @@ export class KitWorld
         : given;
     const entity = [...this.ids].find(([, name]) => name === symbol)?.[0];
     const descriptor = DESCRIPTORS[control]!;
+    const stored = this.fields(symbol, control);
+    if (committed)
+      for (const [name, value] of Object.entries(fields))
+        stored.set(name, value);
     const watched = this.watchedValues.filter(
       (entry) => entry.entity === entity && entry.component === descriptor.id,
     );
@@ -633,13 +681,45 @@ export class KitWorld
   ): Promise<LifecycleTargetWatch> {
     const generation = this.next++;
     targets.forEach((selection, index) => {
-      if (listener && selection.target.kind === "value")
+      if (listener && selection.target.kind === "value") {
         this.watchedValues.push({
           listener,
           member: { output: 5n, generation: generation * 100n + BigInt(index) },
           entity: selection.target.entity,
           component: selection.target.component,
         });
+        const target = selection.target;
+        const symbol = this.ids.get(target.entity)!;
+        const [component, descriptor] = Object.entries(DESCRIPTORS).find(
+          ([, descriptor]) => descriptor.id === target.component,
+        )!;
+        const fields = this.fields(symbol, component);
+        listener({
+          kind: "value",
+          world: this.worldReference,
+          output: 5n,
+          member: { output: 5n, generation: generation * 100n + BigInt(index) },
+          tick: 0n,
+          values: target.fields.map((offset) => {
+            const [name, field] = Object.entries(descriptor.fields).find(
+              ([, field]) => field.offset === offset,
+            )!;
+            const fallback =
+              field.kind === FieldKind.Bool
+                ? name === "visible" || name === "enabled"
+                : field.kind === FieldKind.String
+                  ? ""
+                  : 0;
+            return {
+              offset,
+              value: (fields.get(name) ?? fallback) as
+                | boolean
+                | number
+                | string,
+            };
+          }),
+        } as LifecycleWatchEvent);
+      }
     });
     return {
       world: this.worldReference,
@@ -725,6 +805,8 @@ export async function render(
         GuiKit,
         {
           contract: contract(),
+          id: "ipp-kit",
+          skin: skinFixture(),
           font: FONT,
           fontSize,
           ...(options.reducedMotion === undefined

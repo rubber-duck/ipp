@@ -1,16 +1,4 @@
 {
-  "dist/tests/gallery/gallery-chart-changes.test.js": {
-    "builds": ["typescript", "gallery-fixtures"],
-    "requirements": ["node", "npm", "browser"]
-  },
-  "dist/tests/gallery/gallery-chart-input.test.js": {
-    "builds": ["typescript", "gallery-fixtures"],
-    "requirements": ["node", "npm", "browser"]
-  },
-  "dist/tests/gallery/gallery-charts.test.js": {
-    "builds": ["typescript", "gallery-fixtures"],
-    "requirements": ["node", "npm", "browser"]
-  },
   "dist/tests/runtime/scaling.native.test.js": {
     "builds": [
       "typescript",
@@ -290,17 +278,6 @@
       "browser"
     ]
   },
-  "dist/tests/gallery/gallery-animation.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
   "dist/tests/runtime/hierarchy.test.js": {
     "builds": [
       "typescript",
@@ -327,39 +304,6 @@
       "typescript",
       "browser:render",
       "browser:render-instrumentation"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-picking.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-navigation.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-dragging.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
     ],
     "requirements": [
       "node",
@@ -479,6 +423,10 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-react/tests/gui-kit-controlled-values.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
   "dist/packages/ipp-react/tests/gui-kit-selection.test.js": {
     "builds": [
       "typescript"
@@ -555,51 +503,7 @@
       "npm"
     ]
   },
-  "dist/tests/gallery/viewer.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
   "dist/tests/rendering/ready-geometry.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-particles.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-gui-camera.test.js": {
-    "builds": [
-      "typescript",
-      "gallery-fixtures"
-    ],
-    "requirements": [
-      "node",
-      "npm",
-      "browser"
-    ]
-  },
-  "dist/tests/gallery/gallery-platformer.test.js": {
     "builds": [
       "typescript",
       "gallery-fixtures"
@@ -786,6 +690,81 @@
       "react-fixtures",
       "surface-assets",
       "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/packages/ipp-react/tests/entity-links.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/transform.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/plot-rows.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-refs.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/plot-skin.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/skin-provider-composition.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/gui-kit-widgets.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/world-scope.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/packages/ipp-react/tests/commit-scope.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
+  "dist/tests/gallery/render-scale.browser.test.js": {
+    "builds": ["typescript", "gallery", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
+  },
+  "dist/tests/gallery/application.browser.test.js": {
+    "builds": [
+      "typescript",
+      "gallery",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/rendering/composed-camera.browser.test.js": {
+    "builds": [
+      "typescript",
+      "browser:render"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/gallery/chart-programs.browser.test.js": {
+    "builds": [
+      "typescript",
+      "gallery",
+      "gallery-fixtures"
     ],
     "requirements": [
       "node",

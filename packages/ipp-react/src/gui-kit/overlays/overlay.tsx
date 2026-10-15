@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * What the kit's overlays share: semantic priority bands, a client
  * open state kept in step with the runtime, and the floating surface that
@@ -11,16 +12,20 @@
  * through `onVisibleChange`, so the next opening is a change the client
  * declares again.
  */
-import { useRef, useState, type ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
 import {
-  Behavior,
-  Font,
-  Layout,
-  Overlay,
-  Style,
-} from "../../gui/components.js";
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { PresentationGate, Children, Entity } from "../../components.js";
+import { Font, Layout, Overlay, Style } from "../../gui/components.js";
+import { useComposedControlRef } from "../../gui/control-refs.js";
+import type { GuiControlHandle } from "../../gui/control-ref.js";
+import { useValueSynchronization } from "../values/value-synchronization.js";
 import { Skin } from "../../gui/theme.js";
+import { BehaviorWithRef } from "../../gui/behavior-ref.js";
 import type {
   GuiControlEvent,
   GuiVisibleChangeListener,
@@ -83,6 +88,8 @@ export interface OverlayOpenProps {
 
 /** A light or modal overlay's open state as a client keeps it. */
 export interface OverlayOpen {
+  /** Whether open intent belongs to the application rather than the adapter. */
+  readonly controlled: boolean;
   /**
    * Whether it is open as far as this client knows, ahead of its renders, so
    * a second press dispatched before the first one's render sees it closed.
@@ -122,20 +129,31 @@ export function useOverlayOpen({
   // A change the client did not set itself, such as a controlled `open`,
   // starts over too.
   const rendered = useRef(current);
-  if (rendered.current !== current) {
-    rendered.current = current;
-    latest.current = current;
-    shown.current = undefined;
-  }
+  useLayoutEffect(() => {
+    if (rendered.current !== current) {
+      rendered.current = current;
+      latest.current = current;
+      shown.current = undefined;
+      setOwn(current);
+    }
+  }, [current]);
 
   const set = (next: boolean) => {
     if (next === latest.current) return;
     latest.current = next;
     shown.current = undefined;
-    if (open === undefined) setOwn(next);
+    setOwn(next);
     onOpenChange?.(next);
   };
+  useEffect(() => {
+    if (open !== undefined && latest.current !== open) {
+      latest.current = open;
+      shown.current = undefined;
+      setOwn(open);
+    }
+  }, [open, own]);
   return {
+    controlled: open !== undefined,
     get open() {
       return latest.current;
     },
@@ -144,14 +162,25 @@ export function useOverlayOpen({
     onVisibleChange: (event: GuiControlEvent<boolean>) => {
       const { entity } = event.target;
       if (event.value) shown.current = latest.current ? entity : undefined;
-      else if (shown.current === entity) set(false);
+      else if (
+        shown.current === entity ||
+        (open !== undefined &&
+          shown.current === undefined &&
+          latest.current &&
+          !event.initial)
+      )
+        set(false);
     },
   };
 }
 
 export interface FloatingProps {
+  /** Share a touching anchor's background paint coordinates without raising its surface. */
+  readonly joinAnchor?: boolean;
+  /** Restore application open intent after native closes; adapters pass their ownership. */
+  readonly controlled?: boolean;
   /** Symbolic id of the overlay entity. */
-  readonly id: string;
+  readonly id?: string;
   /** Below its parent's box by default. */
   readonly side?: GuiKitOverlaySide;
   /** At the start of that side by default. */
@@ -181,7 +210,7 @@ export interface FloatingProps {
  * `Children` and a top-level one outside any `Children`.
  */
 export function Floating({
-  id,
+  id: providedId,
   side = "bottom",
   align = "start",
   mode,
@@ -191,26 +220,65 @@ export function Floating({
   onVisibleChange,
   offset,
   small = false,
+  joinAnchor = false,
   layout,
   children,
+  controlled = false,
 }: FloatingProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const line = kit.unit(kit.tokens.lineWidth);
+  const handle = useRef<GuiControlHandle | null>(null);
+  type Visibility = {
+    readonly visible: boolean;
+    readonly event?: GuiControlEvent<boolean>;
+  };
+  const synchronization = useValueSynchronization<Visibility>({
+    value: controlled ? { visible: open } : undefined,
+    defaultValue: { visible: open },
+    same: (left, right) => left.visible === right.visible,
+    onChange: (next) => {
+      if (next.event) onVisibleChange?.(next.event);
+    },
+    identity: () => handle.current,
+    write: async (from, to, context) => {
+      const target = handle.current;
+      if (!target) return;
+      await context.trackEcho({ visible: to.visible }, () =>
+        target.compareAndSet("visible", from.visible, to.visible),
+      );
+    },
+  });
+  const attach = useComposedControlRef(
+    handle,
+    undefined,
+    synchronization.notifyReady,
+  );
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Overlay
         side={OVERLAY_SIDE[side]}
         align={OVERLAY_ALIGN[align]}
         mode={OVERLAY_MODE[mode]}
         band={GUI_KIT_OVERLAY_BANDS[band]}
+        join_anchor={joinAnchor}
       />
       <Style
         layer={layer}
         {...(offset ? { x: offset[0], y: offset[1] } : {})}
       />
-      <Behavior
-        visible={open}
-        {...(onVisibleChange ? { onVisibleChange } : {})}
+      <BehaviorWithRef
+        visible={controlled ? synchronization.initial.visible : open}
+        controlRef={attach}
+        onVisibleChange={(event) => {
+          if (controlled) {
+            // The seed establishes a target without public notification.
+            // All later own-write echoes remain suppressed.
+            if (event.initial) onVisibleChange?.(event);
+            synchronization.observe({ visible: event.value, event }, event);
+          } else onVisibleChange?.(event);
+        }}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Layout

@@ -110,6 +110,7 @@ export default defineSpecimen({
           />
           <Panel
             id="panel"
+            padding={0}
             layout={{
               ...placed(PANEL_AT, u(PANEL.width)),
               height: u(PANEL.height),

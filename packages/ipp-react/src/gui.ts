@@ -42,3 +42,7 @@ export type {
   GuiRangeChangeListener,
   GuiScrollListener,
 } from "./gui/callbacks.js";
+
+export { SkinProvider, type SkinProviderProps } from "./gui/skin-provider.js";
+export type { GuiSkinDefinition, GuiSkinTheme } from "./gui/skin-types.js";
+export type { NativeControlSkinProps } from "./gui/native-skin.js";

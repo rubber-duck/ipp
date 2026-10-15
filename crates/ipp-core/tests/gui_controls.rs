@@ -379,12 +379,15 @@ fn value_replacement_updates_visual_parts_and_input_revision_not_layout_or_prior
         root,
         ComponentValue::GuiCheckbox(GuiCheckbox::default()),
     );
+
+    support::gui_panel::skin(&mut host, world, checkbox, "checkbox");
     let slider = control(
         &mut host,
         world,
         root,
         ComponentValue::GuiSlider(GuiSlider::default()),
     );
+    support::gui_panel::skin(&mut host, world, slider, "slider");
     frame(&mut host);
     let (before, semantics) = output(&host, root);
     replace(&mut host, world, checkbox, ControlValue::Bool(true));
@@ -637,6 +640,8 @@ fn labels_use_ordinary_font_demand_and_retain_glyphs_across_visual_only_changes(
             ..Default::default()
         }),
     );
+
+    support::gui_panel::skin(&mut host, world, entity, "button");
     frame(&mut host);
     let mut requests = Vec::new();
     for _ in 0..8 {
@@ -776,7 +781,7 @@ fn checkbox_base_icon_is_checked_only_while_plain_button_icon_stays_visible() {
     });
     frame(&mut host);
     let (canvas, _) = output(&host, root);
-    assert_eq!(canvas.entries.len(), 3);
+    assert_eq!(canvas.entries.len(), 1);
     assert_eq!(canvas.hits.len(), 2);
     assert_eq!(host.world_mut(world).unwrap().entities().len(), 4);
     assert_eq!(
@@ -796,7 +801,7 @@ fn checkbox_base_icon_is_checked_only_while_plain_button_icon_stays_visible() {
         unreachable!()
     };
     assert_eq!(*fill, CanvasShapeFill::Solid([1.0; 4]));
-    assert_eq!(checked.entries.len(), 4);
+    assert_eq!(checked.entries.len(), 2);
     replace(&mut host, world, entities[0], ControlValue::Bool(false));
     frame(&mut host);
     let (unchecked, _) = output(&host, root);
@@ -889,12 +894,11 @@ fn checkbox_unchecked_variant_requires_exact_state_and_accepts_color_or_opacity(
                     1.0
                 }
             );
-            // An opacity-only row fades the default look's dark check mark
-            // (sRGB #00131c).
+            // An opacity-only row uses the explicitly enabled primitive's neutral colour.
             assert_eq!(
                 *fill,
                 CanvasShapeFill::Solid(if opacity_only {
-                    [0.0, 0.006_512_090_6, 0.011_612_245, 1.0]
+                    [1.0; 4]
                 } else {
                     [0.3, 0.7, 0.2, 1.0]
                 })
@@ -1050,6 +1054,13 @@ fn checkbox_indicator_centers_wide_square_and_tall_controls_before_visual_mappin
             vec![
                 Command::insert_value(
                     EntityRef::Handle(entity),
+                    ComponentValue::GuiMetrics(ipp_core::components::GuiMetrics {
+                        checkbox_ratio: 0.5,
+                        ..Default::default()
+                    }),
+                ),
+                Command::insert_value(
+                    EntityRef::Handle(entity),
                     ComponentValue::GuiLayout(GuiLayout {
                         width: extent[0],
                         height: extent[1],
@@ -1140,6 +1151,8 @@ fn slider_semantic_rail_matches_painted_thumb_under_signed_visual_mapping() {
             ..Default::default()
         }),
     );
+
+    support::gui_panel::skin(&mut host, world, entity, "slider");
     apply(
         &mut host,
         world,
@@ -1198,6 +1211,8 @@ fn slider_range_that_excludes_its_value_presents_a_clamped_thumb_and_keeps_the_v
             ..Default::default()
         }),
     );
+
+    support::gui_panel::skin(&mut host, world, entity, "slider");
     frame(&mut host);
 
     // The 50 x 20 rail carries a 15 x 15 thumb whose centre travels from 7.5
@@ -1307,7 +1322,7 @@ fn upright_slider(
     slider: GuiSlider,
 ) -> EntityId {
     let parent = support::top_level_root(host, root.world().id());
-    create(
+    let entity = create(
         host,
         world,
         vec![
@@ -1319,7 +1334,9 @@ fn upright_slider(
             }),
         ],
         Some(parent),
-    )
+    );
+    support::gui_panel::skin(host, world, entity, "slider");
+    entity
 }
 
 #[test]
@@ -1418,6 +1435,8 @@ fn an_unsized_slider_measures_along_its_axis_and_remeasures_when_it_turns() {
         ],
         Some(parent),
     );
+
+    support::gui_panel::skin(&mut host, world, entity, "slider");
     frame(&mut host);
     let size = |host: &HostRuntime| {
         let (_, semantics) = output(host, root);
@@ -1747,6 +1766,8 @@ fn a_scrolling_axis_keeps_its_bar_over_fitting_content_without_input() {
         root,
         ComponentValue::GuiScrollView(Default::default()),
     );
+
+    support::gui_panel::skin(&mut host, world, view, "scroll");
     frame(&mut host);
     // The vertical view keeps its default track while its content fits; the
     // track's disabled state hides the thumb (opacity 0) and the other axis
@@ -1800,6 +1821,23 @@ fn a_scrolling_axis_keeps_its_bar_over_fitting_content_without_input() {
             EntityRef::Handle(view),
             ComponentValue::GuiSkin(GuiSkin {
                 theme,
+                ..Default::default()
+            }),
+        )],
+    )
+    .result
+    .unwrap();
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(view),
+            ComponentValue::GuiMetrics(ipp_core::components::GuiMetrics {
+                scroll_thickness: 8.0,
+                scroll_inset: 8.0,
+                scroll_end_inset: 4.0,
+                scroll_tip_ratio: 0.5,
+                scroll_min_thumb_ratio: 2.0,
                 ..Default::default()
             }),
         )],

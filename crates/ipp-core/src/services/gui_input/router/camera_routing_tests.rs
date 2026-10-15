@@ -491,3 +491,49 @@ fn captured_input_preserves_geometry_edits_but_rejects_flat_provider_replacement
         rig.finish();
     }
 }
+
+#[test]
+fn wheel_hit_uses_the_fresh_exact_surface_path_without_pointer_hover() {
+    let (mut rig, near, far) = near_and_far(Camera::default(), at(0.0, 0.0, 5.0), checkbox());
+    let expected = rig.snapshot(near.world(), near.controls[0]).target;
+    assert_eq!(
+        rig.send(wheel([0.5, 0.5], [0.0, 1.0])),
+        GuiRoutingDisposition::Unhandled
+    );
+    let (target, path) = rig.ledger.borrow_mut().wheel_hits.pop().unwrap();
+    assert_eq!(target, expected);
+    assert_eq!(path.len(), 1);
+    assert_eq!(path[0].parent(), rig.root.world());
+    assert_eq!(path[0].anchor(), near.anchor);
+    assert_eq!(path[0].child(), Some(near.world()));
+    assert!(
+        !rig.snapshot(near.world(), near.controls[0])
+            .interaction
+            .hovered
+    );
+    let first = path[0].identity();
+    apply(
+        &mut rig.host,
+        rig.root.world(),
+        vec![Command::Delete {
+            entity: EntityRef::Handle(near.anchor),
+        }],
+    );
+    rig.frame();
+    assert_eq!(
+        rig.send(wheel([0.5, 0.5], [0.0, 1.0])),
+        GuiRoutingDisposition::Unhandled
+    );
+    let (target, path) = rig.ledger.borrow_mut().wheel_hits.pop().unwrap();
+    assert_eq!(target.world, far.world());
+    assert_eq!(path[0].anchor(), far.anchor);
+    assert_ne!(path[0].identity(), first);
+    assert!(
+        !rig.snapshot(far.world(), far.controls[0])
+            .interaction
+            .hovered
+    );
+    rig.send(wheel([0.99, 0.99], [0.0, 1.0]));
+    assert!(rig.ledger.borrow().wheel_hits.is_empty());
+    rig.finish();
+}

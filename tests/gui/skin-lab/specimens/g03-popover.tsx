@@ -114,7 +114,7 @@ function Content({
   );
   return (
     <>
-      <Row id={`${name}-caption`} height={DENSE_ROW}>
+      <Row id={`${name}-caption`} height={u(DENSE_ROW)}>
         <TextLine id={`${name}-caption/text`} text="Label" />
       </Row>
       <Entity id={`${name}-field`}>
@@ -123,7 +123,7 @@ function Content({
       </Entity>
       <Row
         id={`${name}-scan`}
-        height={CONTROL_HEIGHT}
+        height={u(CONTROL_HEIGHT)}
         layout={{ margin_top: u(INSET / 2) }}
       >
         <Entity id={`${name}-scan/box`}>

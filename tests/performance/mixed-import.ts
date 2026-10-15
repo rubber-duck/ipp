@@ -12,7 +12,7 @@ import type {
 } from "@ipp/client";
 import { runNativeEnvironment } from "../harness/native.js";
 import { successfulBatch } from "../fixtures/commands.js";
-import { createCubeMesh } from "../../examples/world-gallery/assets/cube-mesh.js";
+import { createCubeMesh } from "../../examples/demos/assets/cube-mesh.js";
 import { AnimationFixture } from "../fixtures/animation.js";
 import {
   CONSTRAINTS,

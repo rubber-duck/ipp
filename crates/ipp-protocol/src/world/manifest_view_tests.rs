@@ -152,17 +152,19 @@ pub(super) fn requests(covered: &mut BTreeSet<&'static str>) {
     let (host, revision) = view.publication.identity();
     for historical in [false, true] {
         let target = if historical {
-            view_queries::ViewQueryTarget::PublicationView {
-                output: view.output.into(),
-                host,
-                revision,
-                viewport: viewport(),
-            }
+            view_queries::ViewQueryTarget::Root(
+                view_queries::RootViewQueryTarget::PublicationView {
+                    output: view.output.into(),
+                    host,
+                    revision,
+                    viewport: viewport(),
+                },
+            )
         } else {
-            view_queries::ViewQueryTarget::RootView {
+            view_queries::ViewQueryTarget::Root(view_queries::RootViewQueryTarget::RootView {
                 output: view.output.into(),
                 expected_viewport: viewport(),
-            }
+            })
         };
         for projection in [false, true] {
             let encoded_view = if historical {
@@ -220,14 +222,14 @@ pub(super) fn requests(covered: &mut BTreeSet<&'static str>) {
             let decoded = decode_request(&encode_manifest_fixture(&fixture, covered), 7).unwrap();
             let expected = if projection {
                 RequestBody::CameraProjectQuery(view_queries::CameraProjectQuery {
-                    view: target,
+                    view: target.clone(),
                     x: 0.25,
                     y: 0.75,
                     plane,
                 })
             } else {
                 RequestBody::GeometryPickQuery(view_queries::GeometryPickQuery {
-                    view: target,
+                    view: target.clone(),
                     x: 0.25,
                     y: 0.75,
                     include_view_plane: true,
@@ -283,10 +285,10 @@ pub(super) fn requests(covered: &mut BTreeSet<&'static str>) {
     };
     assert_eq!(
         decoded.view,
-        view_queries::ViewQueryTarget::RootView {
+        view_queries::ViewQueryTarget::Root(view_queries::RootViewQueryTarget::RootView {
             output: crate::references::OutputReference::canvas(view.output.world().into()),
             expected_viewport: viewport()
-        }
+        })
     );
 }
 

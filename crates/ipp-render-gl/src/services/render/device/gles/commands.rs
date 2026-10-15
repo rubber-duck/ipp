@@ -363,6 +363,17 @@ impl RenderDevice for GlesRenderDevice {
         self.delete_gui_batch(batch);
     }
 
+    fn set_surface_paint(
+        &mut self,
+        program: &Self::Program,
+        lanes: [f32; 4],
+    ) -> Result<(), RenderError> {
+        self.use_program(program.id);
+        let location = self.surface_location(program, c"u_path_paint");
+        self.program_vec4(program, location, &lanes);
+        self.check_draw()
+    }
+
     fn set_gui_paint_blocks(
         &mut self,
         program: &Self::Program,
@@ -615,6 +626,31 @@ impl RenderDevice for GlesRenderDevice {
             return Err(error);
         }
         Ok(mesh)
+    }
+
+    fn reorder_mesh_indices(
+        &mut self,
+        mesh: &GlesRenderMesh,
+        indices: &[u16],
+    ) -> Result<(), RenderError> {
+        if indices.len() != mesh.indices as usize {
+            return Err(RenderError::RenderDevice("mesh index count changed".into()));
+        }
+
+        // SAFETY: This context owns the live mesh and its index allocation. GL
+        // copies the immutable slice synchronously, retaining no CPU pointer;
+        // the count check keeps the write inside the existing allocation.
+        unsafe {
+            self.bind_vertex_array(mesh.vao);
+            self.gl.bind_buffer(ELEMENT_ARRAY_BUFFER, mesh.buffers[1]);
+            self.gl.buffer_sub_data(
+                ELEMENT_ARRAY_BUFFER,
+                0,
+                std::mem::size_of_val(indices) as isize,
+                indices.as_ptr().cast(),
+            );
+        }
+        self.check()
     }
 
     fn create_texture(

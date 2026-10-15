@@ -40,13 +40,16 @@ class PlanningTests(unittest.TestCase):
             ("build", "gallery"),
             ("dev", "gallery"),
             ("test", "gallery-site"),
-            ("test", "gallery-platformer"),
-            ("test", "gallery-gui"),
+            ("test", "gallery-browser"),
         ):
             with self.subTest(command=command, target=target):
                 selected = plan(command, target)
                 ids = [task.id for task in selected.tasks]
-                for asset in ("gallery-platformer-assets", "gallery-gui-assets"):
+                for asset in (
+                    "gallery-platformer-assets",
+                    "demos-cockpit-assets",
+                    "demos-drawings",
+                ):
                     self.assertEqual(ids.count(f"build:{asset}"), 1)
                     self.assertLess(
                         ids.index(f"build:{asset}"), ids.index("build:gallery")
@@ -71,10 +74,7 @@ class PlanningTests(unittest.TestCase):
                 selected = plan(command, target)
                 ids = [task.id for task in selected.tasks]
                 self.assertEqual(ids.count("build:font-assets"), 1)
-                for consumer in (
-                    "build:surface-assets",
-                    "build:gallery-gui-assets",
-                ):
+                for consumer in ("build:surface-assets",):
                     if consumer in ids:
                         self.assertLess(
                             ids.index("build:font-assets"), ids.index(consumer)
@@ -413,9 +413,7 @@ class PlanningTests(unittest.TestCase):
             if task.id.startswith("build:browser:")
         }
         # Only the GPU recovery scenario needs the instrumentation build.
-        self.assertEqual(
-            distributions, {"headless", "render", "render-instrumentation"}
-        )
+        self.assertEqual(distributions, {"render", "render-instrumentation"})
         worlds = plan("test", "worlds")
         self.assertFalse(
             any(task.id.startswith("build:browser:") for task in worlds.tasks)

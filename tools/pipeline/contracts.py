@@ -62,6 +62,8 @@ COMPONENTS = [
     "CylinderSurface",
     "SphereSurface",
     "CanvasLayerTransition",
+    "GuiMetrics",
+    "PresentationGate",
     "BufferDataSourceBinding",
     "StreamingDataSourceBinding",
     "PlotFrame2d",
@@ -73,6 +75,8 @@ COMPONENTS = [
     "PlotHeightSurface3d",
     "PlotPoints3d",
     "PlotPie3d",
+    "PlotCalloutStyle",
+    "PlotCalloutPaint",
 ]
 
 

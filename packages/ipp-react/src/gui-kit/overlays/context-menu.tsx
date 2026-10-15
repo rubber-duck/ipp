@@ -17,8 +17,9 @@
  * runtime also closes it when the focused target goes away, since focus then
  * leaves it. A command reports the target its request named.
  */
+import { useEntityId } from "../../scope/identity.js";
 import { useEffect, useRef, useState } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style } from "../../gui/components.js";
 import type {
   GuiContextMenuEvent,
@@ -80,7 +81,7 @@ export interface ContextMenuProps<Target> {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the menu's anchor; its surface and rows extend it. */
-  readonly id: string;
+  readonly id?: string;
   readonly menu: ContextMenuState<Target>;
   /** The commands for the request's target. */
   readonly items: readonly MenuItem[];
@@ -91,13 +92,14 @@ export interface ContextMenuProps<Target> {
 }
 
 export function ContextMenu<Target>({
-  id,
+  id: providedId,
   layer = 0,
   menu,
   items,
   onSelect,
   layout,
 }: ContextMenuProps<Target>) {
+  const id = useEntityId(providedId);
   const { request, overlay } = menu;
   // The anchor stays where it was while the menu closes.
   const point = useRef(request?.point ?? ([0, 0] as const));
@@ -116,12 +118,14 @@ export function ContextMenu<Target>({
   );
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} x={point.current[0]} y={point.current[1]} />
       <Children>
         <Floating
           id={`${id}/surface`}
           mode="light"
           open={overlay.open}
+          controlled={overlay.controlled}
           onVisibleChange={overlay.onVisibleChange}
         >
           {request && (

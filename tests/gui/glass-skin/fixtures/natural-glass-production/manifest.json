@@ -1,0 +1,12 @@
+{
+  "generator": "built-in image_gen",
+  "date": "2026-10-12",
+  "prompt": "prompt.txt",
+  "output": "components.png",
+  "inputs": [
+    "input-production-study.png",
+    "../natural-glass-concept/components.png"
+  ],
+  "scope": "Production GUI controls and composites. Visual guidance only; no generated texture is used by the runtime.",
+  "interpretation": "Natural dielectric sheets and flat connected state regions. Existing component semantics, labels, content and layout stay native; generated decorative content does not define functionality."
+}

@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import { createElement as h } from "react";
 import {
   Children,
@@ -70,7 +71,12 @@ export function kitValuesPanel(origin: readonly [number, number]) {
       await root.render(
         h(
           GuiKit,
-          { contract, font, fontSize: FONT_SIZE },
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font,
+            fontSize: FONT_SIZE,
+          },
           h(
             Entity,
             { id: "values-root" },

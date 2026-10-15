@@ -40,6 +40,7 @@ flat in vec4 v_corner_accent; // box: accent span per corner [tl, tr, br, bl], o
 flat in vec4 v_color0; // straight linear start/solid RGBA; colour fields: tint and opacity
 flat in vec4 v_color1; // straight linear end RGBA; saturation-value: [hue, 0, 0, 0]
 flat in vec4 v_border_color; // straight linear border RGBA
+flat in vec4 v_paint_data;
 flat in vec4 v_gradient_coords; // linear and hue: [start.xy, end.xy], radial: [center.xy, radius, 0.0], saturation-value: part rectangle [min.xy, max.xy]
 flat in vec4 v_material_params; // paint (fill type, +8 checker, +16 stroke, +32 arc), glow_inner_radius, glow_radius, glow_falloff
 flat in vec4 v_glow_color; // straight linear glow RGB; alpha times intensity
@@ -466,7 +467,7 @@ void arc_coverage(out float outer, out float shape_cov) {
 // The paint guide, CANVAS_PAINTS.md, owns the function interface.
 // CANVAS_PAINTS
 #ifndef IPP_CANVAS_PAINTS
-vec4 ipp_canvas_paint(int slot, int block, vec2 position, vec2 size, vec4 color, float edge) {
+vec4 ipp_canvas_paint(int slot, int block, vec2 position, vec2 size, vec4 color, float edge, vec4 data, vec2 canvasPosition) {
     return color;
 }
 #endif
@@ -489,7 +490,8 @@ vec4 paint_fill(vec2 local, float outer) {
         (local - v_gradient_coords.xy) / scale,
         v_gradient_coords.zw,
         v_color0,
-        outer / max(abs(scale.x), abs(scale.y))
+        outer / max(abs(scale.x), abs(scale.y)),
+        v_paint_data, v_surface_position
     );
     color = clamp(color, 0.0, 1.0);
     return vec4(color.rgb, color.a * v_color1.y);
@@ -590,7 +592,7 @@ void main() {
     vec2 clip_inside = min(v_surface_position - v_clip.xy, v_clip.zw - v_surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
 
-    vec4 color = shape_color(v_material_params.x);
+    vec4 color = shape_color(mod(v_material_params.x, 64.0));
     float out_alpha = color.a * clip_coverage;
     if (out_alpha <= 0.0) discard;
 

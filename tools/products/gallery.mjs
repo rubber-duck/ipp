@@ -27,6 +27,8 @@ await mkdir(output, { recursive: true });
 
 const platformerAssets = resolve(workspace, "target/gallery-platformer-assets");
 const platformerWorld = resolve(platformerAssets, "platformer.ipp");
+const cockpitAssets = resolve(workspace, "target/demos-cockpit-assets");
+const cockpitWorld = resolve(cockpitAssets, "cockpit.ipp");
 const renderContract = resolve(
   workspace,
   process.env.IPP_BROWSER_DISTRIBUTION ?? "target/browser-build/render",
@@ -74,15 +76,16 @@ async function validateWorldContract(path, label, contract) {
   if (worldHash !== targetHash) {
     const hash = (value) => `0x${value.toString(16).padStart(16, "0")}`;
     throw new Error(
-      `${label} target contract mismatch (${hash(worldHash)} != ${hash(targetHash)}). Rebuild gallery-platformer-assets; do not patch serialized headers.`,
+      `${label} target contract mismatch (${hash(worldHash)} != ${hash(targetHash)}). Rebuild the corresponding asset product; do not patch serialized headers.`,
     );
   }
 }
 
 async function validatePlatformerAssets() {
-  const [manifest, catalog, route] = await Promise.all(
-    ["manifest.json", "catalog.json", "route.json"].map(async (name) =>
-      JSON.parse(await readFile(resolve(platformerAssets, name), "utf8")),
+  const [manifest, catalog, route, poses] = await Promise.all(
+    ["manifest.json", "catalog.json", "route.json", "pose-origins.json"].map(
+      async (name) =>
+        JSON.parse(await readFile(resolve(platformerAssets, name), "utf8")),
     ),
   );
   const expectedClips = [
@@ -114,6 +117,16 @@ async function validatePlatformerAssets() {
         `Platformer route is missing ${mode} locomotion metadata`,
       );
   }
+  if (
+    poses.version !== 1 ||
+    poses.baseline?.length !== 23 ||
+    !["walk", "run", "crawl"].every(
+      (mode) => poses.origins?.[mode]?.length === 23,
+    )
+  )
+    throw new Error(
+      "Platformer pose origins must match the exported medium rig",
+    );
   await Promise.all(
     Object.entries(catalog).map(async ([name, entry]) => {
       const payload = await readFile(resolve(platformerAssets, name));
@@ -139,12 +152,13 @@ async function validateSavedWorldContracts() {
       contract,
     ),
     validatePlatformerAssets(),
+    validateWorldContract(cockpitWorld, "Generated cockpit World", contract),
   ]);
 }
 
 if (selection === "assets") {
   const meshModule = await loadFixtureGenerators(
-    resolve(workspace, "examples/world-gallery/assets/cube-mesh.ts"),
+    resolve(workspace, "examples/demos/assets/cube-mesh.ts"),
   );
   const mesh = Buffer.from(meshModule.createCubeMesh());
   await writeFile(resolve(output, "cube.mesh"), mesh);
@@ -194,8 +208,8 @@ if (selection === "assets") {
       resolve(output, "fixture-production.js"),
     ),
     bundleGallery(
-      resolve(workspace, "tests/gallery/pages/viewer.ts"),
-      resolve(output, "viewer-browser-helper.js"),
+      resolve(workspace, "tests/gallery/pages/application.ts"),
+      resolve(output, "application-browser-helper.js"),
     ),
     ...["development", "production"].map((mode) =>
       bundleGallery(
@@ -220,7 +234,7 @@ if (selection === "assets") {
     [
       "fixture.js",
       "fixture-production.js",
-      "viewer-browser-helper.js",
+      "application-browser-helper.js",
       "ready-geometry-development.js",
       "ready-geometry-production.js",
       "replacement.mesh",
@@ -234,12 +248,12 @@ if (selection === "assets") {
 } else {
   await validateSavedWorldContracts();
   await bundleGallery(
-    resolve(workspace, "examples/world-gallery/main.tsx"),
-    resolve(output, "world-gallery.js"),
+    resolve(workspace, "examples/demos/main.tsx"),
+    resolve(output, "demos.js"),
   );
 
   const artifacts = await Promise.all([
-    artifact(resolve(output, "world-gallery.js")),
+    artifact(resolve(output, "demos.js")),
     ...["cube.mesh", "spot-marker.mesh", "sun-marker.mesh"].map((name) =>
       artifact(resolve(workspace, "target/gallery-assets", name)),
     ),
@@ -247,13 +261,18 @@ if (selection === "assets") {
     artifact(resolve(platformerAssets, "manifest.json")),
     artifact(resolve(platformerAssets, "catalog.json")),
     artifact(resolve(platformerAssets, "route.json")),
+    artifact(resolve(platformerAssets, "pose-origins.json")),
+    artifact(cockpitWorld),
+    artifact(resolve(cockpitAssets, "manifest.json")),
+    artifact(resolve(cockpitAssets, "catalog.json")),
+    artifact(resolve(workspace, "target/demos-drawings/assets.json")),
   ]);
   await writeFile(
     resolve(output, "application-report.json"),
     `${JSON.stringify(
       {
         scope:
-          "React DOM controls and React scenes to generated client to WASM to Rust WebGL",
+          "Native GUI application and React scenes to generated client to WASM to Rust WebGL",
         mesh: { format: "IPPM", version: 1, vertices: 24, indices: 36 },
         artifacts,
       },

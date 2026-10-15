@@ -2,7 +2,7 @@
 
 [Plot declarations](declarations.ts) author the ordinary Plot components; [core Plot source](../../../../crates/ipp-core/src/world/systems/plot/component.rs) owns their semantics. Select `ipp.plot`, `ipp.data-bindings` and the appropriate Canvas or scene Systems when creating the World. Put one buffer or streaming binding, one frame and one chart on the same Entity. Frames are auxiliary presentation; Rust prepares all chart geometry.
 
-Pass the generated module for the receiving Host as `contract`. The wrappers use its component descriptors and row encoder, so no client code supplies field offsets or packs a row table. Use `PlotLine2d`, `PlotBars2d`, `PlotPie2d`, `PlotGridBars3d`, `PlotHeightSurface3d`, `PlotPoints3d` or `PlotPie3d` with `PlotFrame2d` or `PlotFrame3d`. Line interpolation is `"straight"` or `"smooth"`.
+The wrappers resolve the receiving World's contract, or accept its generated module explicitly as `contract`. They use its component descriptors and row encoder, so no client code supplies field offsets or packs a row table. Use `PlotLine2d`, `PlotBars2d`, `PlotPie2d`, `PlotGridBars3d`, `PlotHeightSurface3d`, `PlotPoints3d` or `PlotPie3d` with `PlotFrame2d` or `PlotFrame3d`. Line interpolation is `"straight"` or `"smooth"`.
 
 ```tsx
 import * as contract from "./generated.js";
@@ -39,6 +39,10 @@ import {
 Omitting `series`, `labels` or a component prop preserves its last authored field value. Supply an empty table with its existing `nextSlot` to remove live rows. Replacing a table is a complete field write. Column parameter animation uses the existing `Animation` declarations and `AnimationHandle` playback/seek methods; Hosts still own their clocks.
 
 ## Value changes and axis placement
+
+Chart declarations inherit optional paint, material and frame defaults from the nearest same-World `SkinProvider`. Camera-only Worlds can use `PlotSkinProvider` without GUI or Canvas. Glass shares the [GUI optical material](../gui-glass/README.md#native-charts); Cybertron restores its original frame colours and outlines. Explicit frame fields and paint, material or callout declarations override the skin regardless of JSX order. Set `skin={false}` on a chart or frame to disable inheritance entirely. Skin changes preserve native entities, source rows and picking.
+
+`PlotLegend` also resolves its sheet, swatch finish and text palette from that context. Put a provider in the legend's own Canvas World when it is on a separate Surface. Logical sizing remains caller-authored through `plotLegendSize`; continuous colour scales retain their exact unpainted bands.
 
 Import `fixed` from `@ipp/react` and set a column's `interpolation: fixed(25)` to move existing displayed values toward new projections at up to 25 units per Host second. The [binding declarations](../data/declarations.ts) apply the rate separately to each numeric lane, retarget from the displayed value and stop work when settled. Raw data remains unchanged, while chart geometry, picking and `bindingView` share the interpolated result. Replacement sources or definitions initialize immediately. Under the default `interpolationKey="identity"`, new rows also initialize immediately, so append-only stream rows never borrow the previous row's value; keep it for rolling series whose positions advance with each arrival. Under `interpolationKey="position"`, which suits a windowed stream whose snapshots replace a fixed set of bars, cells or slices, each slot that persists in the binding's view moves from its displayed value toward the row now occupying it, while slots that appear initialize immediately. Set `interpolation: null` to return to immediate updates; omitting it preserves the authored setting.
 
@@ -91,3 +95,5 @@ For a 3D chart, derive the size in metres from the Canvas logical size and densi
 The legend creates no Worlds, assets, subscriptions or animation controllers. Supply a font in the containing root's asset scope. Removing its declarations deletes their ordinary entities; unmount follows the root contract and preserves authored state. A caller-owned `CanvasWorld` retains its existing creation and removal rules.
 
 The [chart showcase](../../../../examples/chart-showcase/README.md) uses these declarations with actual Data Service sources and native rendering. The maintained [React Plot scenario](../../../../tests/data/scenarios/react-plots.ts) supplies source, parameter-animation and completed-frame assertions for the combined Plot integration suite.
+
+`PlotCalloutStyle` also resolves from `PlotSkinProvider`, separately from mark paint/material. Its padding, radius and leader width use the frame font as their unit; its independent `PlotCalloutPaint` takes ordinary dynamic shader props. Explicit low-level callout styles can use the same Canvas paint source as GUI panels, with native label placement and no child World.

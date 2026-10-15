@@ -11,5 +11,5 @@
       "@ipp/host-contract": ["../../target/browser-build/render-instrumentation/generated.d.ts"]
     }
   },
-  "include": ["gallery-gui-trace.ts", "../gallery/pages/viewer.ts"]
+  "include": ["gallery-gui-trace.ts", "../gallery/pages/application.ts", "../../examples/glsl.d.ts"]
 }

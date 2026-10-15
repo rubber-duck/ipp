@@ -8,6 +8,6 @@
 import type { SkinThemes } from "../theme.js";
 
 export const themes: SkinThemes = {
-  default: [],
+  default: { look: "button" },
   amber: { look: "amber" },
 };

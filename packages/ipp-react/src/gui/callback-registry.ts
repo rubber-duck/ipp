@@ -329,12 +329,14 @@ export class ReactGuiCallbacks {
       }
     }
     const key = valueKey(value);
+    const initial = !keys.has(controlValueCallback[value.kind]);
+    const propagationInitial = !keys.has(ACTION);
     const own = changed(controlValueCallback[value.kind], key);
     const propagate = changed(ACTION, key);
     if (!own && !propagate) return;
-    const event = Object.freeze({ target, tick, value });
+    const event = Object.freeze({ target, tick, value, initial });
     dispatchGuiAction(
-      { ...event, kind: "value" },
+      { ...event, initial: propagationInitial, kind: "value" },
       own
         ? [
             () =>

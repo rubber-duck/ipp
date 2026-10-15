@@ -58,6 +58,8 @@ unsafe extern "C" {
         weightptr: *const u8,
     ) -> u32;
 
+    pub(super) fn reorder_mesh_indices(mesh: u32, indices: *const u16, count: usize) -> u32;
+
     pub(super) fn create_texture(width: u32, height: u32, pixels: *const u8, bytes: usize) -> u32;
 
     pub(super) fn upload_texture_rows(
@@ -252,6 +254,8 @@ unsafe extern "C" {
     ) -> u32;
 
     pub(super) fn delete_gui_batch(batch_handle: u32);
+
+    pub(super) fn set_surface_paint(program: u32, lanes: *const f32) -> u32;
 
     pub(super) fn set_gui_paint_blocks(program: u32, blocks: *const f32, count: u32) -> u32;
 

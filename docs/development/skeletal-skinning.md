@@ -75,7 +75,7 @@ Use [native context setup](../../crates/ipp-render-gl/README.md#native-host-bind
 
 ## Gallery beam
 
-The [gallery beam fixture](../../examples/world-gallery/worlds/lighting/animation-assets.ts) supplies a closed solid mesh with normals and blended weights for PBR/shadow evidence. [Fixture checks](../../tests/rendering/fixtures.test.ts) verify its geometry, and [gallery tests](../../tests/gallery/gallery-animation.test.ts) capture deformation and independent playback/cleanup. The analytic flat strip remains a separate fixture.
+The [gallery beam fixture](../../examples/demos/scenes/lighting/animation-assets.ts) supplies a closed solid mesh with normals and blended weights for PBR/shadow evidence. [Fixture checks](../../tests/rendering/fixtures.test.ts) verify its geometry, and [gallery tests](../../tests/gallery/native-gallery.test.ts) capture deformation and independent playback/cleanup. The analytic flat strip remains a separate fixture.
 
 ## Lighting integration
 

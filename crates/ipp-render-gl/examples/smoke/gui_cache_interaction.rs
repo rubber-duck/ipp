@@ -381,6 +381,7 @@ impl Scene {
         let mut factories = compiled_system_factories();
         factories.push(Arc::new(FaultFactory(enabled.clone())));
         let mut host = HostRuntime::with_system_factories(factories)?;
+        let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
         renderer.install(&mut host)?;
         let parent = host.create_world(
             Default::default(),
@@ -486,7 +487,7 @@ impl Scene {
         assert!(report.worlds.values().all(std::result::Result::is_ok));
         let publication = self.host.root_output(self.root.world().id()).unwrap().2;
         renderer.prepare(&mut self.host, Some((self.root, publication)))?;
-        self.host.progress_assets();
+        super::task_scheduler::progress(&mut self.host);
         let summary = renderer.draw(&self.host, self.root, publication, VIEW, self.time)?;
         assert_eq!(summary.failed_draw_calls, 0);
         assert!(!summary.invalid_camera);

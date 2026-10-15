@@ -8,7 +8,7 @@ import type {
 import {
   componentFields,
   successfulBatch,
-} from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
+} from "../../../examples/demos/scenes/charts/shared/commands.js";
 import {
   openWorkload,
   sample,

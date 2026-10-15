@@ -361,7 +361,7 @@ test("a 100000-item VirtualList scrolls, clips and restores through a real worke
             { canvas: canvas.transferControlToOffscreen() },
           );
           try {
-            return await exerciseGuiVirtualList(host);
+            return await exerciseGuiVirtualList(host, contract);
           } finally {
             await host.close();
           }
@@ -382,6 +382,7 @@ type GuiInputPage = typeof globalThis & {
       close(): Promise<void>;
     };
     font: ArrayBuffer;
+    contract: import("./scenarios/gui-lifecycle.js").GuiContract;
   };
 };
 
@@ -432,7 +433,12 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
             urls.wasm,
             { canvas: canvas.transferControlToOffscreen() },
           );
-          (globalThis as GuiInputPage).guiInput = { scenario, host, font };
+          (globalThis as GuiInputPage).guiInput = {
+            scenario,
+            host,
+            font,
+            contract,
+          };
           return Object.keys(
             scenario.GUI_INPUT_PARTS,
           ) as GuiInputScenario.GuiInputPart[];
@@ -443,9 +449,10 @@ test("GUI pointer, keyboard and text input routes through a real worker connecti
           const result = await env.execute(`gui input ${part}`, {}, () =>
             env.page.evaluate(
               (part: GuiInputScenario.GuiInputPart): Promise<unknown> => {
-                const { scenario, host, font } = (globalThis as GuiInputPage)
-                  .guiInput!;
-                return scenario.GUI_INPUT_PARTS[part](host, font);
+                const { scenario, host, font, contract } = (
+                  globalThis as GuiInputPage
+                ).guiInput!;
+                return scenario.GUI_INPUT_PARTS[part](host, font, contract);
               },
               part,
             ),

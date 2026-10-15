@@ -1,0 +1,14 @@
+{
+  "generator": "built-in image_gen",
+  "task": "ipp-vsea",
+  "acceptedForImplementation": "ipp-sg08",
+  "reference": "reference.png",
+  "sha256": "b653fef6c396f86b6b4bc2f60f9349fa7abed8507bdfe54edd7a6ce51af92f29",
+  "prompt": "prompt.txt",
+  "inputs": [
+    "target/glass-reimagine-ipp-vsea/glass-workspace-current.png",
+    "target/glass-reimagine-ipp-vsea/glass-settings-current.png"
+  ],
+  "excluded": "Invented Fire Pulse lock and disabled-state redesign. Keep actual application semantics.",
+  "purpose": "Material and component design reference, not a pixel-identical layout or runtime image asset."
+}

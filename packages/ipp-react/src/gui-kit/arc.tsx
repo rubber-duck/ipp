@@ -1,3 +1,4 @@
+import { useEntityId } from "../scope/identity.js";
 /**
  * Rings of the kit: the arc shape painted by a skinned entity that is not a
  * control. Its part row paints a ring sector centred in the entity's box, the
@@ -12,7 +13,7 @@
  * turn's return from one turn to none shows no jump.
  */
 import type { ReactNode } from "react";
-import { Children, Entity } from "../components.js";
+import { PresentationGate, Children, Entity } from "../components.js";
 import { Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
@@ -24,7 +25,7 @@ import type { KitThemeName } from "./themes.js";
 export const TURNING_SWEEP = 0.25;
 
 export interface ArcProps {
-  readonly id: string;
+  readonly id?: string;
   readonly theme: KitThemeName;
   /** Outer diameter at the tokens' `em`. */
   readonly size: number;
@@ -45,7 +46,7 @@ export interface ArcProps {
 
 /** A ring sector `size` across, centred in its container by default. */
 export function Arc({
-  id,
+  id: providedId,
   theme,
   size,
   thickness,
@@ -56,6 +57,7 @@ export function Arc({
   layout,
   children,
 }: ArcProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const parts = useOwnRow({
     border_width: kit.unit(thickness),
@@ -66,6 +68,7 @@ export function Arc({
   });
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_STACK}
         width={kit.unit(size)}

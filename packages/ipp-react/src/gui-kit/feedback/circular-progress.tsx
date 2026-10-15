@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Measured completion of a task as a ring: a quiet track and a lit arc from
  * twelve o'clock clockwise through the reported fraction, never ahead of it,
@@ -20,7 +21,7 @@
  * fixed-height column as wide as the wider of its ring and caption, which it
  * centres on each other.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Arc, TURNING_SWEEP } from "../arc.js";
 import { LEAD } from "../row-motion.js";
@@ -44,7 +45,7 @@ export type CircularProgressSize = "large" | "small";
 export interface CircularProgressProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The task, such as Uploading. */
   readonly label: string;
   /** Reported completion in 0..1; omit it while the total is unknown. */
@@ -100,7 +101,7 @@ const OUTCOMES: Readonly<
 };
 
 export function CircularProgress({
-  id,
+  id: providedId,
   layer = 0,
   label,
   value,
@@ -109,6 +110,7 @@ export function CircularProgress({
   size = "large",
   layout,
 }: CircularProgressProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const { diameter, thickness, symbol, readout } = SIZES[size];
@@ -156,6 +158,7 @@ export function CircularProgress({
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -207,7 +210,7 @@ export function CircularProgress({
         </Arc>
         <Row
           id={`${id}/caption`}
-          height={t.denseRow}
+          height={kit.unit(t.denseRow)}
           layout={{
             width: caption,
             align_x: 0,

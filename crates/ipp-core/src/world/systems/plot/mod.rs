@@ -1,6 +1,7 @@
 //! Plot consumes completed entity-local bindings and publishes compact retained geometry.
 //! Authored components remain the sole values; System state contains derived geometry only.
 
+pub(in crate::world::systems) mod callout;
 mod component;
 mod frame_mapping;
 mod picking;
@@ -14,6 +15,7 @@ mod update;
 pub mod plots_2d;
 pub mod plots_3d;
 
+pub use callout::{PlotCalloutPaint, PlotCalloutStyle};
 pub use component::*;
 pub use frame_mapping::{PlotFrameMapping2d, PlotFrameMapping3d};
 pub use picking::{PlotCanvasHit, PlotRayHit};

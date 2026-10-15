@@ -1,4 +1,7 @@
-import { createElement } from "react";
+import {
+  useNativeControl,
+  type NativeControlSkinProps,
+} from "./native-skin.js";
 import {
   componentContract,
   type ComponentFields,
@@ -20,6 +23,7 @@ import type {
 } from "./callbacks.js";
 
 export type ButtonProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiButton"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -31,13 +35,14 @@ export type ButtonProps = ComponentProps &
 
 export function Button(props: ButtonProps) {
   const { ref, ...fields } = props;
-  return createElement(componentContract.GuiButton.host, {
+  return useNativeControl(componentContract.GuiButton.host, "button", {
     ...fields,
     controlRef: ref,
   });
 }
 
 export type CheckboxProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiCheckbox"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -47,7 +52,7 @@ export type CheckboxProps = ComponentProps &
 
 export function Checkbox(props: CheckboxProps) {
   const { ref, ...fields } = props;
-  return createElement(componentContract.GuiCheckbox.host, {
+  return useNativeControl(componentContract.GuiCheckbox.host, "checkbox", {
     ...fields,
     controlRef: ref,
   });
@@ -65,6 +70,7 @@ export function Checkbox(props: CheckboxProps) {
  * Each thumb is a focus part, so `onFocusChange` names the focused thumb.
  */
 export type SliderProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiSlider"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -74,10 +80,14 @@ export type SliderProps = ComponentProps &
 
 export function Slider(props: SliderProps) {
   const { ref, ...fields } = props;
-  return createElement(componentContract.GuiSlider.host, {
-    ...fields,
-    controlRef: ref,
-  });
+  return useNativeControl(
+    componentContract.GuiSlider.host,
+    props.axis === 2 ? "dial" : "slider",
+    {
+      ...fields,
+      controlRef: ref,
+    },
+  );
 }
 
 /**
@@ -92,6 +102,7 @@ export function Slider(props: SliderProps) {
  * while held, each disabled at its bound.
  */
 export type TextInputProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiTextInput"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -105,7 +116,7 @@ export type TextInputProps = ComponentProps &
 
 export function TextInput(props: TextInputProps) {
   const { ref, ...fields } = props;
-  return createElement(componentContract.GuiTextInput.host, {
+  return useNativeControl(componentContract.GuiTextInput.host, "textInput", {
     ...fields,
     controlRef: ref,
   });
@@ -130,6 +141,7 @@ export function TextInput(props: TextInputProps) {
  * ```
  */
 export type ColorProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiColor"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -139,7 +151,7 @@ export type ColorProps = ComponentProps &
 
 export function Color(props: ColorProps) {
   const { ref, ...fields } = props;
-  return createElement(componentContract.GuiColor.host, {
+  return useNativeControl(componentContract.GuiColor.host, "color", {
     ...fields,
     controlRef: ref,
   });

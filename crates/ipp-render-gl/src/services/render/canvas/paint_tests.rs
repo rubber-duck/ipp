@@ -8,6 +8,7 @@ use ipp_core::services::asset_management::formats::shader::ShaderParameterKind a
 fn source(body: &str, parameters: &[(&str, Kind)]) -> CanvasPaintSource {
     CanvasPaintSource {
         body: body.into(),
+        features: 0,
         parameters: parameters
             .iter()
             .map(|(name, kind)| (name.to_string(), *kind))
@@ -82,7 +83,7 @@ fn a_paint_function_reads_its_parameters_from_its_block() {
     assert!(text.contains("#define p_offset (u_paint_blocks[ipp_block + 1].xy)\n"));
     assert!(text.contains("#define p_tint (u_paint_blocks[ipp_block + 2])\n"));
     assert!(text.contains(
-        "vec4 ipp_paint_3(vec2 position, vec2 size, vec4 color, float edge, int ipp_block) {\nreturn color * p_tint * p_gain;\n}\n"
+        "vec4 ipp_paint_3(vec2 position, vec2 size, vec4 color, float edge, vec4 data, int ipp_block, vec2 ipp_canvas) {\nreturn color * p_tint * p_gain;\n}\n"
     ));
     // The macros end with the function, so another paint may reuse the names.
     assert!(text.ends_with("#undef p_gain\n#undef p_offset\n#undef p_tint\n"));
@@ -109,16 +110,12 @@ fn the_canvas_program_is_the_static_source_until_a_paint_is_admitted() {
     let generated = canvas_fragment_source([(1, &first), (3, &third)].into_iter());
     assert!(!generated.contains(PAINT_PLACEHOLDER));
     assert!(generated.contains("#define IPP_CANVAS_PAINTS 1\n"));
-    assert!(
-        generated.contains(
-            "    if (slot == 1) return ipp_paint_1(position, size, color, edge, block);\n"
-        )
-    );
-    assert!(
-        generated.contains(
-            "    if (slot == 3) return ipp_paint_3(position, size, color, edge, block);\n"
-        )
-    );
+    assert!(generated.contains(
+        "    if (slot == 1) return ipp_paint_1(position, size, color, edge, data, block, canvasPosition);\n"
+    ));
+    assert!(generated.contains(
+        "    if (slot == 3) return ipp_paint_3(position, size, color, edge, data, block, canvasPosition);\n"
+    ));
     // The generated dispatch replaces the static one, which stays behind its guard.
     let generated_at = generated.find("#define IPP_CANVAS_PAINTS").unwrap();
     let static_at = generated.find("#ifndef IPP_CANVAS_PAINTS").unwrap();
@@ -134,34 +131,67 @@ fn programs() -> CanvasPaintPrograms<crate::PlatformRenderDevice> {
 #[test]
 fn paints_keep_their_slots_until_a_new_paint_needs_one_drawn_before_this_frame() {
     let mut programs = programs();
-    let paint = source("return color;", &[]);
+    let paint = |slot| source(&format!("return color * {slot}.0;"), &[]);
     programs.begin_frame();
     for slot in 1..=CANVAS_PAINT_SLOTS as u32 {
-        assert_eq!(programs.admit(key(slot), &paint), Ok(slot));
+        assert_eq!(programs.admit(key(slot), &paint(slot)), Ok(slot));
     }
     assert!(programs.stale);
     // Readmitting is free; a ninth paint drawn in the same frame finds no slot.
-    assert_eq!(programs.admit(key(4), &paint), Ok(4));
+    assert_eq!(programs.admit(key(4), &paint(4)), Ok(4));
     assert_eq!(
-        programs.admit(key(9), &paint),
+        programs.admit(key(9), &paint(9)),
         Err(CanvasPaintFallbackReason::SlotLimit)
     );
 
     // In the next frame the paint drawn least recently gives up its slot.
     programs.begin_frame();
     for slot in 2..=CANVAS_PAINT_SLOTS as u32 {
-        assert_eq!(programs.admit(key(slot), &paint), Ok(slot));
+        assert_eq!(programs.admit(key(slot), &paint(slot)), Ok(slot));
     }
-    assert_eq!(programs.admit(key(9), &paint), Ok(1));
+    assert_eq!(programs.admit(key(9), &paint(9)), Ok(1));
     assert_eq!(
-        programs.admit(key(1), &paint),
+        programs.admit(key(1), &paint(1)),
         Err(CanvasPaintFallbackReason::SlotLimit)
     );
 
     // A rejected paint stays rejected.
-    programs.rejected.insert(key(20), "conflict".into());
+    programs
+        .rejected
+        .insert(key(20), (paint(20), "conflict".into()));
     assert_eq!(
-        programs.admit(key(20), &paint),
+        programs.admit(key(20), &paint(20)),
+        Err(CanvasPaintFallbackReason::Program("conflict".into()))
+    );
+}
+
+#[test]
+fn identical_paint_assets_share_slots_but_recipe_and_parameter_layouts_do_not() {
+    let mut programs = programs();
+    let paint = source("return color;", &[]);
+    programs.begin_frame();
+    for asset in 1..=32 {
+        assert_eq!(programs.admit(key(asset), &paint), Ok(1));
+    }
+    assert_eq!(programs.added.len(), 1);
+    programs.stale = false;
+    programs.begin_frame();
+    assert_eq!(programs.admit(key(33), &paint), Ok(1));
+    assert!(
+        !programs.stale,
+        "An identical body must not rebuild the program"
+    );
+
+    let mut presented = paint.clone();
+    presented.features = 64;
+    assert_eq!(programs.admit(key(34), &presented), Ok(2));
+    let parameterized = source("return color;", &[("tint", Kind::Vec4)]);
+    assert_eq!(programs.admit(key(35), &parameterized), Ok(3));
+    programs
+        .rejected
+        .insert(key(36), (parameterized.clone(), "conflict".into()));
+    assert_eq!(
+        programs.admit(key(37), &parameterized),
         Err(CanvasPaintFallbackReason::Program("conflict".into()))
     );
 }
@@ -241,17 +271,22 @@ fn an_instance_that_cannot_paint_reports_why_and_takes_no_block() {
         .collect();
     let wide = CanvasPaintSource {
         body: "return color;".into(),
+        features: 0,
         parameters: names.iter().map(|name| (name.clone(), Kind::F32)).collect(),
     };
     let wide_values: Vec<_> = names
         .iter()
         .map(|name| (name.as_str(), DynamicValue::F32(1.0)))
         .collect();
+    let distinct_wide_values: Vec<_> = names
+        .iter()
+        .map(|name| (name.as_str(), DynamicValue::F32(2.0)))
+        .collect();
     let paints = [
         instance(1, &[("spacing", DynamicValue::Vec2([1.0, 2.0]))]),
         instance(2, &[]),
         instance(3, &wide_values),
-        instance(4, &wide_values),
+        instance(4, &distinct_wide_values),
         instance(5, &[("spacing", DynamicValue::F32(1.0))]),
     ];
     let mut blocks = CanvasPaintBlocks::default();
@@ -281,4 +316,78 @@ fn an_instance_that_cannot_paint_reports_why_and_takes_no_block() {
     assert_eq!(first_fit(&[(0, 10), (12, 4)], 3), Some(16));
     assert_eq!(first_fit(&[(0, CANVAS_PAINT_VECTORS as u32)], 1), None);
     assert_eq!(first_fit(&[(0, CANVAS_PAINT_VECTORS as u32)], 0), Some(0));
+}
+
+#[test]
+fn shared_parameter_blocks_split_without_mutating_other_paints() {
+    let paint = source("return color;", &[("gain", Kind::F32)]);
+    let mut blocks = CanvasPaintBlocks::default();
+    let same: Vec<_> = (1..=200)
+        .map(|id| instance(id, &[("gain", DynamicValue::F32(1.0))]))
+        .collect();
+    blocks.prepare(
+        &same,
+        |_| Ok((0, &paint)),
+        |_, reason| assert_eq!(reason, None),
+    );
+    assert_eq!(blocks.values, [[1.0, 0.0, 0.0, 0.0]]);
+    assert!(
+        same.iter()
+            .all(|p| blocks.lanes(p.target).unwrap().block == 0)
+    );
+
+    let mut changed = same.clone();
+    changed[0] = instance(1, &[("gain", DynamicValue::F32(2.0))]);
+    blocks.prepare(
+        &changed,
+        |_| Ok((0, &paint)),
+        |_, reason| assert_eq!(reason, None),
+    );
+    assert_eq!(blocks.lanes(target(2)).unwrap().block, 0);
+    let split = blocks.lanes(target(1)).unwrap().block as usize;
+    assert_ne!(split, 0);
+    assert_eq!(blocks.values[0][0], 1.0);
+    assert_eq!(blocks.values[split][0], 2.0);
+    assert!(blocks.lanes_changed());
+
+    let revision = blocks.revision;
+    blocks.prepare(&changed, |_| Ok((0, &paint)), |_, _| {});
+    assert!(!blocks.lanes_changed());
+    assert_eq!(revision, blocks.revision);
+
+    // Removing the original group leaves the survivor's lane stable.
+    blocks.prepare(&changed[..1], |_| Ok((0, &paint)), |_, _| {});
+    assert_eq!(blocks.lanes(target(1)).unwrap().block as usize, split);
+    assert_eq!(blocks.lanes(target(2)), None);
+
+    // Converging independently edited instances shares storage again.
+    blocks.prepare(
+        &same,
+        |_| Ok((0, &paint)),
+        |_, reason| assert_eq!(reason, None),
+    );
+    assert!(
+        same.iter()
+            .all(|p| blocks.lanes(p.target) == blocks.lanes(target(1)))
+    );
+}
+
+#[test]
+fn presentation_context_is_explicit_and_light_opt_in_is_per_recipe() {
+    let body = "return vec4(viewDirection, 1);";
+    let mut paint = source(body, &[]);
+    let plain = validation_sources(&paint).1;
+    assert!(!plain.contains("uniform vec4 u_camera"));
+
+    paint.features = 64;
+    let presented = validation_sources(&paint).1;
+    assert!(presented.contains("uniform vec4 u_camera"));
+    assert!(presented.contains("int sceneLightCount = 0;"));
+    assert!(presented.contains("#define sceneLightRadiance(i) vec3(0)"));
+
+    paint.features |= 8;
+    let lit = validation_sources(&paint).1;
+    assert!(lit.contains("int sceneLightCount = u_light_count;"));
+    assert!(lit.contains("#define sceneLightRadiance(i) ippPaintLightRadiance(i, ipp_canvas)"));
+    assert!(lit.contains("#undef sceneLightRadiance"));
 }

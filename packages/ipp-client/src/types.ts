@@ -281,7 +281,7 @@ export interface ViewViewport {
   devicePixelRatio: number;
 }
 /** Historical CPU access never authorizes presentation or input. */
-export type ViewQueryTarget =
+export type RootViewQueryTarget =
   | { kind: "bound"; binding: RootBinding; publication?: PublicationReference }
   | { kind: "root"; output: OutputReference; expectedViewport: ViewViewport }
   | {
@@ -289,6 +289,21 @@ export type ViewQueryTarget =
       output: OutputReference;
       publication: PublicationReference;
       viewport: ViewViewport;
+    };
+/** Exact acknowledged attachment producer write, available in AttachmentReceipt. */
+export interface CameraAttachmentReference {
+  parent: WorldReference;
+  anchor: bigint;
+  incarnation: bigint;
+  revision: bigint;
+}
+/** Coordinates in an explicit child Camera; root targets never infer a child. */
+export type ViewQueryTarget =
+  | RootViewQueryTarget
+  | {
+      kind: "camera";
+      root: RootViewQueryTarget;
+      path: readonly CameraAttachmentReference[];
     };
 /** Exact completed inputs used for a successful query, not a presentation fence. */
 export interface ViewDescriptor {
@@ -325,12 +340,14 @@ export type CameraViewMotion =
   | { kind: "pan"; x: number; y: number }
   | { kind: "zoom"; amount: number };
 
-/** Correlated root Camera mutation, fenced by binding generation and available source. */
+/** Correlated explicit Camera mutation, fenced by root, attachment and producer identities. */
 export interface CameraNavigateRequest {
   binding: RootBinding;
   /** Omit for current completed state; an explicit source never falls back to latest. */
   publication?: PublicationReference;
   motion: CameraViewMotion;
+  /** Exact root-to-Camera producer path; omitted selects the root Camera. */
+  path?: readonly CameraAttachmentReference[];
 }
 export type CameraProjectResultPayload = {
   type: "CameraProjectResultEvent";

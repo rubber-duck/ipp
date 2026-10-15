@@ -12,6 +12,7 @@ import test from "node:test";
 import { createElement as h } from "react";
 import { Entity } from "../src/index.js";
 import {
+  Column,
   Knob,
   LabelledSlider,
   NumericStepper,
@@ -161,10 +162,9 @@ test("LabelledSlider: caption and readout above a rail between its end captions"
   const g = rail(32);
   const layout = world.fields("gain", "GuiLayout");
   assert.equal(layout.get("kind"), 2);
-  near(layout.get("height"), g.row + g.depth);
+  near(layout.get("height"), g.row + g.gap + g.depth);
   assert.deepEqual(world.children("gain"), ["gain/header", "gain/rail-row"]);
   assert.deepEqual(world.children("gain/header"), [
-    "gain/header/strut",
     "gain/label",
     "gain/readout",
   ]);
@@ -195,7 +195,7 @@ test("LabelledSlider: caption and readout above a rail between its end captions"
   assert.equal(slider.has("origin"), false);
   assert.equal(world.fields("gain/slider", "GuiLayout").get("kind"), 3);
   near(world.fields("gain/slider", "GuiLayout").get("height"), g.depth);
-  assert.equal(world.entity("gain/slider").components.has("GuiSkin"), false);
+  assert.equal(world.skin("gain/slider"), "frame");
   const behavior = world.fields("gain/slider", "GuiBehavior");
   assert.equal(behavior.get("semantic_label"), "GAIN");
   assert.equal(behavior.get("enabled"), true);
@@ -210,7 +210,7 @@ test("LabelledSlider: caption and readout above a rail between its end captions"
   await settle(root);
   assert.deepEqual(changes, [70]);
   assert.equal(world.fields("gain/readout", "CanvasText").get("text"), "70%");
-  assert.equal(world.fields("gain/slider", "GuiSlider").get("value"), 65);
+  assert.equal(world.fields("gain/slider", "GuiSlider").get("value"), 70);
   assert.deepEqual(world.compared, []);
 
   // Disabled: the value stays, every text turns neutral.
@@ -275,7 +275,7 @@ test("a vertical LabelledSlider centres its rail, with a signed scale right of i
   );
 });
 
-test("a slider composite reports committed values and writes only the application's own", async () => {
+test("a controlled slider restores rejected edits and suppresses application write echoes", async () => {
   const changes: number[] = [];
   const onChange = (value: number) => changes.push(value);
   const handle: { current: unknown } = { current: null };
@@ -285,8 +285,7 @@ test("a slider composite reports committed values and writes only the applicatio
   await settle(root);
   assert.ok(handle.current, "the composite's ref receives the handle");
 
-  // A drag commits 30: reported, and nothing is written back when the
-  // application follows.
+  // A drag commits 30: it is reported, then unchanged intent restores 20.
   world.value("gain/slider", "GuiSlider", {
     value: 30,
     upper: 0,
@@ -294,16 +293,35 @@ test("a slider composite reports committed values and writes only the applicatio
   });
   await settle(root);
   assert.deepEqual(changes, [30]);
+  world.value("gain/slider", "GuiSlider", {
+    value: 20,
+    upper: 0,
+    range: false,
+  });
+  await settle(root);
   await draw(gain({ value: 30, onChange, ref: handle as never }));
   await settle(root);
-  assert.deepEqual(world.compared, []);
+  assert.deepEqual(world.compared, [
+    ["gain/slider", "value", 20],
+    ["gain/slider", "value", 30],
+  ]);
   assert.equal(world.fields("gain/readout", "CanvasText").get("text"), "30%");
 
+  world.value("gain/slider", "GuiSlider", {
+    value: 30,
+    upper: 0,
+    range: false,
+  });
+  await settle(root);
   // The application's own value, even the one declared at mount, is written
   // by compare-and-set from the reported one; its echo is not reported.
   await draw(gain({ value: 20, onChange, ref: handle as never }));
   await settle(root);
-  assert.deepEqual(world.compared, [["gain/slider", "value", 20]]);
+  assert.deepEqual(world.compared, [
+    ["gain/slider", "value", 20],
+    ["gain/slider", "value", 30],
+    ["gain/slider", "value", 20],
+  ]);
   assert.equal(world.fields("gain/readout", "CanvasText").get("text"), "20%");
   world.value("gain/slider", "GuiSlider", {
     value: 20,
@@ -431,10 +449,14 @@ test("a range's own interval is written one field at a time, never inverted", as
   assert.deepEqual(changes, []);
   // Down below the lower value: the lower value moves first; a value that
   // keeps its upper end writes only the lower one.
+  world.compared.length = 0;
   await draw(distance({ value: [5, 10], onChange }));
+  await settle(root);
+  world.value("dist/slider", "GuiSlider", { value: 5, upper: 10, range: true });
+  await settle(root);
   await draw(distance({ value: [0, 10], onChange }));
   await settle(root);
-  assert.deepEqual(world.compared.slice(2), [
+  assert.deepEqual(world.compared, [
     ["dist/slider", "value", 5],
     ["dist/slider", "upper", 10],
     ["dist/slider", "value", 0],
@@ -481,7 +503,9 @@ test("Knob: the dial's housing holds the readout under the dial and the ends at 
   const layout = world.fields("gain", "GuiLayout");
   assert.equal(layout.get("kind"), 2);
   assert.equal(layout.get("width"), 80);
-  assert.equal(layout.get("height"), 24 + 80 + 24);
+  assert.equal(layout.get("height"), -1);
+  assert.equal(layout.get("fit_height"), true);
+  assert.equal(layout.get("gap"), 8);
   assert.deepEqual(world.children("gain"), ["gain/caption", "gain/dial"]);
   assert.deepEqual(world.tone("gain/label"), TOKENS.accent);
   // The housing is the dial-presented slider, a dense row taller than wide.
@@ -493,7 +517,7 @@ test("Knob: the dial's housing holds the readout under the dial and the ends at 
   const slider = world.fields("gain/dial", "GuiSlider");
   assert.equal(slider.get("axis"), 2);
   assert.equal(slider.get("value"), 65);
-  assert.equal(world.entity("gain/dial").components.has("GuiSkin"), false);
+  assert.equal(world.skin("gain/dial"), "frame");
   assert.deepEqual(world.children("gain/dial"), [
     "gain/min",
     "gain/max",
@@ -541,15 +565,13 @@ test("Knob: the dial's housing holds the readout under the dial and the ends at 
   assert.equal(world.fields("gain/dial", "GuiSlider").get("origin"), 0);
   assert.equal(world.fields("gain/min/text", "CanvasText").get("text"), "-100");
   assert.equal(world.fields("gain/max/text", "CanvasText").get("text"), "+100");
-  // The input's column: a numeric stepper's field and error line.
-  assert.equal(
-    world.fields("gain", "GuiLayout").get("height"),
-    128 + 8 + 40 + 8 + 40,
-  );
+  // Paired content grows naturally when its field adds validation feedback.
+  assert.equal(world.fields("gain", "GuiLayout").get("fit_height"), true);
   assert.deepEqual(world.children("gain/slot"), ["precise"]);
   const input = world.fields("gain/slot", "GuiLayout");
-  assert.equal(input.get("height"), 40 + 8 + 40);
-  assert.equal(input.get("margin_top"), 8);
+  assert.equal(input.get("height"), -1);
+  assert.equal(input.get("fit_height"), true);
+  assert.equal(input.get("margin_top"), 0);
 
   // A larger dial gives longer end captions room.
   await draw(knob({ size: 112, defaultValue: 65 }));
@@ -611,29 +633,25 @@ const exposure = (props: Partial<NumericStepperProps> = {}) =>
     ...props,
   });
 
-test("NumericStepper: caption and range, the numeric field with its unit, and the error line's room", async () => {
+test("NumericStepper: caption and range, compact field and optional validation room", async () => {
   const { world, draw } = await render(exposure(), { fontSize: 32 });
-  // Caption, field and the error line reserved, at twice the design size.
+  // Caption gap and field; valid fields reserve no invisible validation row.
   const root = world.fields("ev", "GuiLayout");
   assert.equal(root.get("kind"), 2);
-  assert.equal(root.get("height"), 2 * (24 + 40 + 8 + 40));
+  assert.equal(root.get("height"), 2 * (24 + 8 + 40));
   assert.deepEqual(world.children("ev"), ["ev/caption", "ev/row"]);
-  assert.deepEqual(world.children("ev/caption"), [
-    "ev/caption/strut",
-    "ev/label",
-    "ev/ends",
-  ]);
+  assert.deepEqual(world.children("ev/caption"), ["ev/label", "ev/ends"]);
   assert.deepEqual(world.tone("ev/label"), TOKENS.accent);
   const ends = world.fields("ev/ends", "CanvasText");
   assert.equal(ends.get("text"), "-4.00 – +4.00 EV");
   assert.equal(ends.get("font_size"), 26);
   assert.deepEqual(world.tone("ev/ends"), TOKENS.neutral);
-  // The runtime's numeric input fills the row beside its unit.
-  assert.deepEqual(world.children("ev/row"), [
-    "ev/row/strut",
-    "ev/field",
-    "ev/units",
-  ]);
+  // The entry and unit share a compact row, even within a wide form.
+  near(
+    world.fields("ev/row", "GuiLayout").get("width"),
+    lineOf("000000", 32) + 2 * (32 + 80) + 16 + lineOf("EV", 32),
+  );
+  assert.deepEqual(world.children("ev/row"), ["ev/field", "ev/units"]);
   const field = world.fields("ev/field", "GuiTextInput");
   assert.deepEqual(
     [
@@ -651,7 +669,7 @@ test("NumericStepper: caption and range, the numeric field with its unit, and th
   const fieldLayout = world.fields("ev/field", "GuiLayout");
   assert.equal(fieldLayout.get("flex"), 1);
   assert.equal(fieldLayout.get("height"), 80);
-  assert.equal(world.entity("ev/field").components.has("GuiSkin"), false);
+  assert.equal(world.skin("ev/field"), "cellEditor");
   const behavior = world.fields("ev/field", "GuiBehavior");
   assert.equal(behavior.get("semantic_label"), "EXPOSURE");
   assert.equal(behavior.get("enabled"), true);
@@ -668,10 +686,7 @@ test("NumericStepper: caption and range, the numeric field with its unit, and th
       disabled: true,
     }),
   );
-  assert.equal(
-    world.fields("ev", "GuiLayout").get("height"),
-    2 * (40 + 8 + 40),
-  );
+  assert.equal(world.fields("ev", "GuiLayout").get("height"), 2 * 40);
   assert.deepEqual(world.children("ev"), ["ev/row"]);
   assert.equal(
     world.fields("ev/field", "GuiTextInput").get("step_parts"),
@@ -679,6 +694,9 @@ test("NumericStepper: caption and range, the numeric field with its unit, and th
   );
   assert.equal(world.fields("ev/field", "GuiBehavior").get("enabled"), false);
   assert.deepEqual(world.tone("ev/units"), TOKENS.neutral);
+  await draw(exposure({ layout: { width: 480 } }));
+  assert.equal(world.fields("ev", "GuiLayout").get("width"), 480);
+  assert.equal(world.fields("ev/row", "GuiLayout").get("width"), -1);
 });
 
 test("a rejected entry shows its error until a later commit, submission, discard or blur", async () => {
@@ -703,9 +721,15 @@ test("a rejected entry shows its error until a later commit, submission, discard
   await reject("abc", 5n);
   assert.equal(shown(), "abc is not a number");
   assert.equal(world.skin("ev/error"), "alertError");
-  assert.equal(world.fields("ev/error", "GuiLayout").get("margin_top"), 8);
+  assert.equal(
+    world.fields("ev/error", "GuiLayout").get("margin_top"),
+    undefined,
+  );
   assert.deepEqual(world.children("ev"), ["ev/caption", "ev/row", "ev/error"]);
-  assert.equal(world.fields("ev", "GuiLayout").get("height"), 24 + 40 + 8 + 40);
+  assert.equal(
+    world.fields("ev", "GuiLayout").get("height"),
+    24 + 8 + 40 + 8 + 40,
+  );
 
   // A commit, here at tick 10, clears it and is reported.
   world.value("ev/field", "GuiTextInput", { numeric: true, value: 2 });
@@ -1115,9 +1139,186 @@ test("ColorPicker entries set the one colour and report what the runtime commits
     picker({ value: MAGENTA_PRESET, onChange: (value) => own.push(value) }),
   );
   await settle(controlled.root);
-  const written = controlled.world.actions.at(-1)!;
-  assert.equal(written[0], "pick/control");
+  const written = controlled.world.compared;
+  assert.ok(written.length > 0);
+  assert.ok(written.every(([symbol]) => symbol === "pick/control"));
+  assert.deepEqual(
+    written.map(([, field]) => field),
+    ["hue", "saturation", "value"],
+  );
   controlled.world.value("pick/control", "GuiColor", { ...MAGENTA_PRESET });
   await settle(controlled.root);
   assert.deepEqual(own, []);
+});
+
+test("ColorPicker removes failed candidates after a partial conditional restore", async () => {
+  const changes: unknown[] = [];
+  const { world, root, draw } = await render(
+    picker({ value: CYAN, onChange: (next) => changes.push(next) }),
+  );
+  await settle(root);
+  const batch = world.batch.bind(world);
+  let writes = 0;
+  world.batch = async (operations) => {
+    if (
+      operations.some(
+        (operation) =>
+          operation.kind === "setFieldIf" &&
+          operation.component === world.components.GuiColor!.id,
+      )
+    ) {
+      writes++;
+      if (writes === 1) return batch(operations);
+      return {
+        ok: false,
+        batchId: 2n,
+        tick: 2n,
+        aliases: [],
+        symbols: [],
+        effects: [],
+        error: { scope: "operation", operation: 0, reason: "ValueMismatch" },
+      };
+    }
+    return batch(operations);
+  };
+  await draw(
+    picker({ value: MAGENTA_PRESET, onChange: (next) => changes.push(next) }),
+  );
+  await settle(root);
+  assert.equal(
+    writes,
+    2,
+    "unchanged refused tuple must not retry continuously",
+  );
+  const candidate = {
+    ...CYAN,
+    hue: MAGENTA_PRESET.hue,
+    saturation: MAGENTA_PRESET.saturation,
+  };
+  world.value("pick/control", "GuiColor", candidate);
+  await settle(root);
+  assert.deepEqual(
+    changes,
+    [candidate],
+    "a real edit matching a refused candidate must remain public",
+  );
+});
+
+test("ColorPicker restores repeated rejected colors and suppresses only acknowledged echoes", async () => {
+  const changes: unknown[] = [];
+  const { world, root } = await render(
+    picker({ value: CYAN, onChange: (next) => changes.push(next) }),
+  );
+  await settle(root);
+  const changed = { ...CYAN, hue: 0.25 };
+  for (let iteration = 0; iteration < 2; iteration++) {
+    world.value("pick/control", "GuiColor", changed);
+    await settle(root);
+    assert.equal(world.fields("pick/control", "GuiColor").get("hue"), CYAN.hue);
+    world.value("pick/control", "GuiColor", CYAN);
+    await settle(root);
+  }
+  assert.deepEqual(changes, [changed, changed]);
+  assert.equal(
+    world.compared.filter(([symbol]) => symbol === "pick/control").length,
+    2,
+  );
+});
+
+test("numeric validation room is opt-in and paired knob content can reflow", async () => {
+  const scene = (reserveErrorSpace: boolean) =>
+    h(Knob, {
+      id: "paired",
+      min: 0,
+      max: 10,
+      children: h(NumericStepper, {
+        id: "paired/input",
+        bounds: false,
+        min: 0,
+        max: 10,
+        reserveErrorSpace,
+      }),
+    });
+  const { world, root, draw } = await render(scene(false));
+  const input = world.entity("paired/input/field");
+  assert.equal(world.fields("paired/input", "GuiLayout").get("height"), 40);
+  world.effect(
+    "paired/input/field",
+    { kind: "rejected", text: "bad" },
+    "GuiTextInput",
+    5n,
+  );
+  await settle(root);
+  assert.ok(world.entities.has("paired/input/error"));
+  assert.equal(
+    world.fields("paired/input", "GuiLayout").get("height"),
+    40 + 8 + 40,
+  );
+  assert.equal(
+    world.fields("paired/slot", "GuiLayout").get("fit_height"),
+    true,
+  );
+  assert.equal(world.fields("paired", "GuiLayout").get("fit_height"), true);
+  await draw(scene(true));
+  assert.equal(
+    world.entity("paired/input/field"),
+    input,
+    "validation policy retains the native input",
+  );
+  world.effect(
+    "paired/input/field",
+    { kind: "discarded", text: "0" },
+    "GuiTextInput",
+    6n,
+  );
+  await settle(root);
+  assert.equal(world.entities.has("paired/input/error"), false);
+  assert.equal(
+    world.fields("paired/input", "GuiLayout").get("height"),
+    40 + 8 + 40,
+    "explicit reservation remains when validation clears",
+  );
+});
+
+test("value composites allocate explicit gaps in logical units and retain height overrides", async () => {
+  const { world, draw } = await render(
+    h(
+      Column,
+      null,
+      exposure({ layout: { gap: 40 }, reserveErrorSpace: true }),
+      gain({ layout: { gap: 40 } }),
+    ),
+    { fontSize: 32 },
+  );
+  assert.equal(
+    world.fields("ev", "GuiLayout").get("height"),
+    48 + 40 + 80 + 40 + 80,
+  );
+  near(
+    world.fields("gain", "GuiLayout").get("height"),
+    rail(32).row + 40 + rail(32).depth,
+  );
+  await draw(
+    h(
+      Column,
+      null,
+      exposure({ layout: { gap: 0 } }),
+      gain({ layout: { gap: 0 } }),
+    ),
+  );
+  assert.equal(world.fields("ev", "GuiLayout").get("height"), 48 + 80);
+  near(
+    world.fields("gain", "GuiLayout").get("height"),
+    rail(32).row + rail(32).depth,
+  );
+  await draw(
+    h(
+      Column,
+      null,
+      exposure({ layout: { gap: 40, height: 400 } }),
+      gain({ layout: { gap: 40, height: 400 } }),
+    ),
+  );
+  assert.equal(world.fields("ev", "GuiLayout").get("height"), 400);
+  assert.equal(world.fields("gain", "GuiLayout").get("height"), 400);
 });

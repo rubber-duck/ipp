@@ -12,7 +12,11 @@ import {
 export async function namedAssets(configuration: ReactRuntimeConfiguration) {
   const { client } = await connect(configuration);
   const {
-    Asset,
+    MeshAsset,
+    useAsset,
+    useEntityId,
+    useField,
+    useWorld,
     AnimationAsset,
     MeshInstance,
     assetRef,
@@ -25,8 +29,38 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     "../support/resource-notification-gate.js"
   );
   const gate = new ResourceNotificationGate();
-  const root = createRoot(gate.wrap(client), { onError() {} });
-  const other = createRoot(client, { onError() {} });
+  const root = createRoot(gate.wrap(client), {
+    onError() {},
+    codecs: {
+      schemaHash: client.schemaHash,
+      mesh: { kind: 1, encode: poseMesh },
+    },
+  });
+  let hookAsset: import("@ipp/react").ReactAssetState | undefined;
+  let hookField: import("@ipp/react").ReactFieldState | undefined;
+  const ids: string[] = [];
+  function Probe() {
+    const scope = useWorld();
+    const id = useEntityId();
+    hookAsset = useAsset("mesh");
+    hookField = useField("asset-target", "Scalar", "value");
+    React.useLayoutEffect(() => {
+      if (ids.at(-1) !== id) ids.push(id);
+    });
+    if (
+      scope.client !== client &&
+      scope.client.schemaHash !== client.schemaHash
+    )
+      throw new Error("Wrong receiving World");
+    return null;
+  }
+  const other = createRoot(client, {
+    onError() {},
+    codecs: {
+      schemaHash: client.schemaHash,
+      mesh: { kind: 1, encode: poseMesh },
+    },
+  });
   const checks: string[] = [];
   const check = (ok: boolean, message: string) => {
     if (!ok) throw new Error(message);
@@ -44,12 +78,7 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     throw new Error(`Asset ${id} did not become ready`);
   };
   const geometry = (weight: number) =>
-    React.createElement(Asset<number>, {
-      id: "mesh",
-      kind: 1,
-      data: weight,
-      encode: poseMesh,
-    });
+    React.createElement(MeshAsset<number>, { id: "mesh", data: weight });
   const scene = (weight: number) =>
     React.createElement(
       React.Fragment,
@@ -66,6 +95,7 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
         React.createElement(MeshInstance, { source: assetRef("mesh") }),
       ),
       geometry(weight),
+      React.createElement(Probe),
     );
   const selection = async () =>
     findEntity(await client.inspect(), "asset-target")!.components.find(
@@ -85,6 +115,22 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     );
     gate.release();
     const first = await wait("mesh");
+    for (
+      let attempt = 0;
+      attempt < 100 && hookField?.status !== "ready";
+      attempt++
+    ) {
+      await client.waitForFrame();
+      await root.flush();
+    }
+    check(
+      hookAsset?.current?.source === first,
+      "asset hook observes acknowledged readiness with scoped mesh encoder",
+    );
+    check(
+      hookField?.status === "ready" && hookField.value === 0,
+      "field hook observes native Scalar value reports",
+    );
     check(
       first.startsWith(`client://${client.session}/`) &&
         first.includes("/mesh#") &&
@@ -122,6 +168,10 @@ export async function namedAssets(configuration: ReactRuntimeConfiguration) {
     gate.hold(() => false);
     await root.render(scene(1));
     const second = await wait("mesh", first);
+    check(
+      ids.length === 1,
+      "generated entity identity survives resource rerenders",
+    );
     gate.release();
     await root.flush();
     check(

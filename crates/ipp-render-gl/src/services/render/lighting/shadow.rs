@@ -3,7 +3,7 @@
 use super::super::assets::loaders::GlMeshData;
 use super::super::frame::scratch::RenderFrameScratch;
 use super::super::materials::shader::RenderShaderConfig;
-use super::super::outputs::scene::{RenderEntity, RenderScene, SceneItem};
+use super::super::outputs::scene::{RenderScene, SceneItem};
 use super::super::service::{prepared_model, prepared_normal};
 use super::super::statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError, RenderService};
@@ -54,7 +54,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &RenderScene<'_>,
         items: &[SceneItem<'_>],
         customs: &BTreeMap<
-            RenderEntity,
+            super::super::materials::custom_material::CustomMaterialKey,
             super::super::materials::custom_material::PreparedCustomMaterial,
         >,
         lighting: &super::selection::PreparedLighting,
@@ -93,7 +93,9 @@ impl<D: RenderDevice> RenderService<D> {
             .shadow_visibility
             .resize(items.len() * frames.len(), true);
         for (item_index, item) in items.iter().enumerate() {
-            let custom = customs.get(&item.entity);
+            let custom = customs
+                .get(&item.custom_material_key())
+                .filter(|_| item.custom_material);
             let casts = custom.map_or_else(
                 || item.pbr.is_some_and(|m| m.cast_shadows),
                 |m| m.material.casts_shadows && m.material.alpha_mode != 2,
@@ -141,7 +143,7 @@ impl<D: RenderDevice> RenderService<D> {
         world: &RenderScene<'_>,
         items: &[SceneItem<'_>],
         customs: &BTreeMap<
-            RenderEntity,
+            super::super::materials::custom_material::CustomMaterialKey,
             super::super::materials::custom_material::PreparedCustomMaterial,
         >,
         view: (usize, &crate::RenderLightingFrame),
@@ -157,13 +159,39 @@ impl<D: RenderDevice> RenderService<D> {
         let grid = frame.shadow_settings[index * 4 + 3] as u32;
         scratch.casters.clear();
         for (item_index, item) in items.iter().enumerate() {
-            let custom = customs.get(&item.entity);
+            let custom = customs
+                .get(&item.custom_material_key())
+                .filter(|_| item.custom_material);
             if !scratch.shadow_visibility[view_index * items.len() + item_index] {
                 continue;
             }
-            let data = world
-                .resource(AssetKey::from_u64(item.mesh.asset))
-                .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
+            let derived = if let Some((target, mesh)) = item.derived {
+                let custom = customs
+                    .get(&item.custom_material_key())
+                    .filter(|_| item.custom_material);
+                let (data, uploaded) = self.generated_meshes.get(
+                    (
+                        item.entity.world,
+                        target,
+                        item.mesh.variant,
+                        mesh.variant,
+                        custom.is_some(),
+                    ),
+                    &mesh.geometry,
+                    mesh.mesh_index,
+                )?;
+                stats.uploaded(uploaded);
+                Some(data)
+            } else {
+                None
+            };
+            let data = derived
+                .as_deref()
+                .or_else(|| {
+                    world
+                        .resource(AssetKey::from_u64(item.mesh.asset))
+                        .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
+                })
                 .ok_or(RenderError::MissingMesh)?;
             let Some(_gpu) = data.gpu()? else {
                 stats.failed_draw();
@@ -205,9 +233,33 @@ impl<D: RenderDevice> RenderService<D> {
                 let config = caster.config;
                 // Assets cannot be invalidated during this immutable World borrow.
                 // Keep GPU Ref guards local to the pass, never in retained scratch.
-                let data = world
-                    .resource(AssetKey::from_u64(item.mesh.asset))
-                    .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
+                let derived = if let Some((target, mesh)) = item.derived {
+                    let custom = customs
+                        .get(&item.custom_material_key())
+                        .filter(|_| item.custom_material);
+                    let (data, uploaded) = self.generated_meshes.get(
+                        (
+                            item.entity.world,
+                            target,
+                            item.mesh.variant,
+                            mesh.variant,
+                            custom.is_some(),
+                        ),
+                        &mesh.geometry,
+                        mesh.mesh_index,
+                    )?;
+                    stats.uploaded(uploaded);
+                    Some(data)
+                } else {
+                    None
+                };
+                let data = derived
+                    .as_deref()
+                    .or_else(|| {
+                        world
+                            .resource(AssetKey::from_u64(item.mesh.asset))
+                            .and_then(|r| r.data()?.as_any().downcast_ref::<GlMeshData<D>>())
+                    })
                     .ok_or(RenderError::MissingMesh)?;
                 let gpu = data.gpu()?.ok_or(RenderError::MissingMesh)?;
                 let target = self.pose_data(world, item)?;
@@ -244,7 +296,9 @@ impl<D: RenderDevice> RenderService<D> {
                     }
                     prepared_model(item)
                 };
-                let custom = customs.get(&item.entity);
+                let custom = customs
+                    .get(&item.custom_material_key())
+                    .filter(|_| item.custom_material);
                 let program = if let Some(custom) = custom {
                     self.upload_custom_material(world, custom, true)?;
                     Self::custom_program(world, custom.key, true)?

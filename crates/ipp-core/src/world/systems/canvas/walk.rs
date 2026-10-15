@@ -170,6 +170,7 @@ struct CanvasWalkFrame {
 
 /// One walk over a range of the canvas's tree order and its output there.
 pub(super) struct CanvasWalk {
+    presentation: crate::systems::hierarchy::PresentationEligibility,
     stack: Vec<CanvasWalkFrame>,
     /// Tree-order output before the walked range.
     base: CanvasWalkMarks,
@@ -197,6 +198,7 @@ impl CanvasWalk {
     /// A walk starting at walk position `first`, whose output follows `base`.
     pub fn at(first: usize, base: CanvasWalkMarks) -> Self {
         Self {
+            presentation: Default::default(),
             stack: Vec::new(),
             base,
             first,
@@ -335,6 +337,11 @@ impl CanvasSystem {
             inherited.clip = canvas_clip;
         }
         let mut placed = inherited.child(world.components.canvas_style(entity.index() as usize));
+        if !walk.presentation.open(world, entity) {
+            placed.available = false;
+            placed.opacity = 0.0;
+            placed.enabled = false;
+        }
         placed.layer = layer;
         placed.priority = priority;
         if gui.is_some()
@@ -570,6 +577,8 @@ impl CanvasSystem {
                 }
                 (None, None, None) => crate::systems::gui::presentation::GuiRoutingValue::None,
             };
+            let metrics =
+                crate::systems::gui::presentation::GuiMetrics::resolve(world, entity, font_size);
             let control = self.state.gui.observation(GuiControlObservation {
                 text: layout
                     .and_then(|view| view.control_labels.get(&entity))
@@ -600,6 +609,7 @@ impl CanvasSystem {
                         slider,
                         slider.value,
                         mapping.size,
+                        metrics.thumb_ratio,
                     )
                 }),
                 number: world
@@ -610,13 +620,16 @@ impl CanvasSystem {
                     })
                     .map(
                         |input| crate::systems::gui::presentation::GuiNumberGeometry {
-                            steps: input
-                                .step_parts
-                                .then(|| controls::number::number_step_rects(mapping.size)),
+                            steps: input.step_parts.then(|| {
+                                controls::number::number_step_rects(
+                                    mapping.size,
+                                    metrics.number_step_ratio,
+                                )
+                            }),
                         },
                     ),
                 color: color.map(|color| {
-                    controls::color::GuiColorLayout::new(mapping.size, font_size, color.alpha_rail)
+                    controls::color::GuiColorLayout::new(mapping.size, &metrics, color.alpha_rail)
                 }),
             });
             observation = Some(control.clone());
@@ -624,14 +637,12 @@ impl CanvasSystem {
             walk.hits.push(hit);
             if available && let Some(primitives) = control_primitives {
                 for primitive in primitives {
-                    let primitive = match paint {
-                        Some(paint)
-                            if primitive.style().identity.part == CanvasPart::Background =>
-                        {
-                            with_paint(primitive, paint)
-                        }
-                        _ => primitive,
-                    };
+                    let primitive = with_joined_background(
+                        primitive,
+                        layout.and_then(|view| view.joined_backgrounds.get(&entity)),
+                        placed,
+                        layout_size,
+                    );
                     if matches!(
                         primitive.style().identity.part,
                         CanvasPart::ScrollTrackX
@@ -676,10 +687,12 @@ impl CanvasSystem {
                 |identity| self.state.gui.retained_resource(identity),
             );
             if let Some(background) = background {
-                let background = match paint {
-                    Some(paint) => with_paint(background, paint),
-                    None => background,
-                };
+                let background = with_joined_background(
+                    background,
+                    layout.and_then(|view| view.joined_backgrounds.get(&entity)),
+                    placed,
+                    layout_size,
+                );
                 walk.entries.push(self.state.gui.primitive(background));
             }
         }
@@ -702,8 +715,38 @@ impl CanvasSystem {
                     layer: style.layer,
                     order: walk.entry_index(),
                 });
+                let marks: std::collections::BTreeSet<_> = geometry
+                    .canvas
+                    .iter()
+                    .filter(|item| item.data_mark)
+                    .map(|item| item.part)
+                    .collect();
+                let callouts: std::collections::BTreeSet<_> = geometry
+                    .canvas
+                    .iter()
+                    .filter(|item| {
+                        matches!(
+                            item.kind,
+                            crate::systems::plot::PlotPrimitiveKind::CalloutBox { .. }
+                        )
+                    })
+                    .map(|item| item.part)
+                    .collect();
+                let callout_paint = crate::systems::plot::callout::paint_target(world, entity);
                 for local in primitives {
                     let mut primitive = local.clone();
+                    if let CanvasPart::Plot(part) = local.style().identity.part
+                        && marks.contains(&part)
+                        && let Some(paint) = paint
+                    {
+                        primitive = with_paint(primitive, paint);
+                    }
+                    if let CanvasPart::Plot(part) = local.style().identity.part
+                        && callouts.contains(&part)
+                        && let Some(paint) = callout_paint
+                    {
+                        primitive = with_paint(primitive, paint);
+                    }
                     let authored = *local.style();
                     let style = primitive.style_mut();
                     *style = content_placement.style(target);
@@ -975,8 +1018,20 @@ impl CanvasGeometry {
 /// `primitive` filled by the custom `paint` when it is a box: the fill becomes the
 /// paint called with the fill's colour, and a checker is left out, since the paint
 /// replaces the fill and the checker beneath it. Other primitives are unchanged.
-fn with_paint(primitive: CanvasPrimitive, paint: CanvasTarget) -> CanvasPrimitive {
+pub(in crate::world::systems) fn with_paint(
+    primitive: CanvasPrimitive,
+    paint: CanvasTarget,
+) -> CanvasPrimitive {
     match primitive {
+        CanvasPrimitive::Path {
+            style,
+            path,
+            ..
+        } => CanvasPrimitive::Path {
+            style,
+            path,
+            paint: Some(paint),
+        },
         CanvasPrimitive::Box {
             style,
             size,
@@ -995,15 +1050,19 @@ fn with_paint(primitive: CanvasPrimitive, paint: CanvasTarget) -> CanvasPrimitiv
             fill: CanvasShapeFill::Paint {
                 color: fill.paint_color(),
                 paint,
+                data: [0.0; 4],
+                bounds: None,
             },
             glow,
             shape: match shape {
                 CanvasBoxShape::Rect {
+                    section,
                     corner_cut,
                     corner_accent,
                     corner_accent_width,
                     ..
                 } => CanvasBoxShape::Rect {
+                    section,
                     corner_cut,
                     corner_accent,
                     corner_accent_width,
@@ -1014,4 +1073,61 @@ fn with_paint(primitive: CanvasPrimitive, paint: CanvasTarget) -> CanvasPrimitiv
         },
         primitive => primitive,
     }
+}
+
+/// Partition one contour without introducing a border or an antialias seam at
+/// the join. Each section keeps its original painter order and input geometry.
+fn with_joined_background(
+    mut primitive: CanvasPrimitive,
+    joined: Option<&[f32; 4]>,
+    placement: Placement,
+    entity_size: Option<[f32; 2]>,
+) -> CanvasPrimitive {
+    if matches!(
+        primitive.style().identity.part,
+        CanvasPart::Background | CanvasPart::FocusRing
+    ) && let (Some(joined), Some(entity_size)) = (joined, entity_size)
+        && let CanvasPrimitive::Box {
+            style,
+            size,
+            fill,
+            shape: CanvasBoxShape::Rect {
+                section,
+                ..
+            },
+            ..
+        } = &mut primitive
+        && style
+            .scale
+            .iter()
+            .zip(placement.scale)
+            .all(|(part, entity)| part * entity > 0.0)
+    {
+        for axis in 0..2 {
+            let ratio = placement.scale[axis] / style.scale[axis];
+            style.position[axis] += joined[axis] * placement.scale[axis];
+            size[axis] += (joined[axis + 2] - entity_size[axis]) * ratio;
+            let origin = (placement.position[axis] - style.position[axis]) / style.scale[axis];
+            if joined[axis] < -1.0e-3 {
+                *section = Some(CanvasBoxSection {
+                    edge: [CanvasBoxEdge::Left, CanvasBoxEdge::Top][axis],
+                    position: origin,
+                });
+            }
+            if joined[axis] + joined[axis + 2] > entity_size[axis] + 1.0e-3 {
+                *section = Some(CanvasBoxSection {
+                    edge: [CanvasBoxEdge::Right, CanvasBoxEdge::Bottom][axis],
+                    position: origin + entity_size[axis] * ratio,
+                });
+            }
+            if let CanvasShapeFill::Paint {
+                bounds: Some(bounds),
+                ..
+            } = fill
+            {
+                bounds[axis + 2] = joined[axis + 2] * ratio;
+            }
+        }
+    }
+    primitive
 }

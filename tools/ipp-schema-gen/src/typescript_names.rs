@@ -122,8 +122,6 @@ const RESERVED: &[&str] = &[
     "WIRE",
     "SCHEMA_HASH",
     "GUI_PAINT_PART_KEYS",
-    "GUI_SKIN_LOOKS",
-    "GUI_SKIN_TOKENS",
     "Entity",
     "__proto__",
     "prototype",

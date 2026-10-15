@@ -24,7 +24,7 @@ use ipp_core::systems::gui::local::{
 use ipp_core::systems::gui::motion::{GuiMotionPart, GuiThemeMotion};
 use ipp_core::systems::gui::presentation::{GuiPaintPart, GuiSkin, GuiTheme};
 use ipp_core::systems::gui::{
-    GuiPartId, GuiPreferencesUpdate, GuiPrimitivePart, GuiSkinState, GuiSystem, gui_skin_looks,
+    GuiPartId, GuiPreferencesUpdate, GuiPrimitivePart, GuiSkinState, GuiSystem,
 };
 use ipp_core::*;
 use std::collections::BTreeMap;
@@ -127,6 +127,7 @@ struct Fixture {
     world: WorldId,
     canvas: EntityId,
     control: EntityId,
+    skin: EntityId,
     output: OutputRef,
     input: GuiInputService,
     session: GuiInputSession,
@@ -192,7 +193,7 @@ fn layout() -> ComponentValue {
 }
 
 impl Fixture {
-    /// An unthemed control in a World that selects AnimationSystem.
+    /// An explicitly skinned control in a World that selects AnimationSystem.
     fn new(control: ComponentValue) -> Self {
         Self::with_systems(&select(&[CAMERA, GUI_LAYOUT, RENDER]), control)
     }
@@ -201,7 +202,31 @@ impl Fixture {
         let mut host = crate::support::task_scheduler::host();
         let world = host.create_world(Default::default(), systems).unwrap();
         let canvas = create(&mut host, world, vec![], None);
-        let control = create(&mut host, world, vec![control, layout()], Some(canvas));
+        let (theme, motion, metrics) =
+            support::skin_fixture::theme(support::skin_fixture::control_name(&control));
+        let theme_entity = create(
+            &mut host,
+            world,
+            vec![
+                ComponentValue::GuiTheme(theme),
+                ComponentValue::GuiThemeMotion(motion),
+                ComponentValue::GuiMetrics(metrics),
+            ],
+            None,
+        );
+        let control = create(
+            &mut host,
+            world,
+            vec![
+                control,
+                layout(),
+                ComponentValue::GuiSkin(GuiSkin {
+                    theme: theme_entity,
+                    ..Default::default()
+                }),
+            ],
+            Some(canvas),
+        );
         let world_ref = host.world_ref(world).unwrap();
         let output = host.canvas_output(world_ref, [200.0, 100.0], 1.0);
         let input = GuiInputService::default();
@@ -211,6 +236,7 @@ impl Fixture {
             world,
             canvas,
             control,
+            skin: theme_entity,
             output,
             input,
             session,
@@ -606,7 +632,7 @@ fn a_checkbox_fills_over_100_ms_and_its_mark_appears_and_disappears_at_once() {
 
 /// The built-in switch look as a client theme, from its exported rows.
 fn switch_theme() -> (GuiTheme, GuiThemeMotion) {
-    let look = gui_skin_looks()
+    let look = support::skin_fixture::gui_skin_looks()
         .iter()
         .find(|look| look.name == "switch")
         .unwrap();
@@ -985,7 +1011,14 @@ fn a_font_change_retargets_a_transition_under_way_and_reaches_settled_controls_w
     let settled = create(
         &mut fixture.host,
         fixture.world,
-        vec![ComponentValue::GuiButton(GuiButton::default()), layout()],
+        vec![
+            ComponentValue::GuiButton(GuiButton::default()),
+            layout(),
+            ComponentValue::GuiSkin(GuiSkin {
+                theme: fixture.skin,
+                ..Default::default()
+            }),
+        ],
         Some(fixture.canvas),
     );
     fixture.frame(0.0);
@@ -1014,7 +1047,10 @@ fn a_font_change_retargets_a_transition_under_way_and_reaches_settled_controls_w
 
 #[test]
 fn a_world_without_animation_paints_the_static_looks_and_snaps() {
-    let systems = select(&[GUI_LAYOUT]);
+    let systems = select(&[
+        GUI_LAYOUT,
+        &[ipp_core::systems::asset_dependencies::AssetDependencySystem::ID],
+    ]);
     let mut fixture =
         Fixture::with_systems(&systems, ComponentValue::GuiButton(GuiButton::default()));
     let mut animated = Fixture::new(ComponentValue::GuiButton(GuiButton::default()));
@@ -1039,7 +1075,7 @@ fn a_world_without_animation_paints_the_static_looks_and_snaps() {
             .is_none()
     );
 
-    // Theme motion rows need the sampler.
+    // Timing rows may be declared without a sampler; transitions remain immediate.
     let theme = create(&mut fixture.host, fixture.world, vec![], None);
     let result = apply(
         &mut fixture.host,
@@ -1049,7 +1085,7 @@ fn a_world_without_animation_paints_the_static_looks_and_snaps() {
             ComponentValue::GuiThemeMotion(GuiThemeMotion::default()),
         )],
     );
-    assert!(result.result.is_err());
+    assert!(result.result.is_ok());
 }
 
 #[test]
@@ -1384,4 +1420,102 @@ fn reduced_motion_is_saved_with_the_world_like_other_system_state() {
     fixture.reduced_motion(true);
     fixture.frame(0.0);
     assert!(restore(&mut fixture, "reduced-copy").reduced_motion);
+}
+
+#[test]
+fn shared_part_data_samples_native_hover_reversals_and_reduced_motion() {
+    let mut fixture = Fixture::new(ComponentValue::GuiButton(GuiButton::default()));
+    let base = GuiPartId::base(GuiPrimitivePart::Background)
+        .index()
+        .unwrap();
+    let hovered = GuiPartId::state(GuiPrimitivePart::Background, GuiSkinState::Hovered)
+        .index()
+        .unwrap();
+    let mut parts = Rows::new();
+    parts
+        .push(GuiPaintPart {
+            part: base,
+            paint: Some(true),
+            paint_data: Some([0.0; 4]),
+            ..Default::default()
+        })
+        .unwrap();
+    parts
+        .push(GuiPaintPart {
+            part: hovered,
+            paint_data: Some([1.0, 0.5, 0.0, 0.0]),
+            ..Default::default()
+        })
+        .unwrap();
+    let mut timing = Rows::new();
+    timing
+        .push(GuiMotionPart {
+            part: base,
+            duration: Some(1.0),
+            easing: Some(0),
+            ..Default::default()
+        })
+        .unwrap();
+    let theme = fixture.theme(
+        GuiTheme {
+            parts,
+            ..Default::default()
+        },
+        Some(GuiThemeMotion {
+            parts: timing,
+        }),
+    );
+    fixture.apply(vec![Command::insert_value(
+        EntityRef::Handle(theme),
+        ComponentValue::CanvasPaint(ipp_core::components::CanvasPaint {
+            source: "paint:///shared".into(),
+            ..Default::default()
+        }),
+    )]);
+    fixture.frame(0.0);
+    let data = |fixture: &Fixture| {
+        let publication = fixture.publication();
+        publication
+            .entries
+            .iter()
+            .find_map(|entry| match entry.as_ref() {
+                CanvasPaintEntry::Primitive {
+                    primitive:
+                        CanvasPrimitive::Box {
+                            style,
+                            fill:
+                                CanvasShapeFill::Paint {
+                                    data,
+                                    paint,
+                                    ..
+                                },
+                            ..
+                        },
+                    ..
+                } if style.identity.target.entity == fixture.control
+                    && style.identity.part == CanvasPart::Background =>
+                {
+                    assert_eq!(paint.entity, theme);
+                    Some(*data)
+                }
+                _ => None,
+            })
+            .expect("painted control")
+    };
+    assert_eq!(data(&fixture), [0.0; 4]);
+    fixture.pointer(GuiInteractionUpdate::Hover(true));
+    fixture.frame(0.0);
+    fixture.frame(0.25);
+    assert_eq!(data(&fixture), [0.25, 0.125, 0.0, 0.0]);
+    fixture.pointer(GuiInteractionUpdate::Hover(false));
+    fixture.frame(0.0);
+    assert_eq!(data(&fixture), [0.25, 0.125, 0.0, 0.0]);
+    fixture.frame(0.5);
+    assert_eq!(data(&fixture), [0.125, 0.0625, 0.0, 0.0]);
+    fixture.reduced_motion(true);
+    fixture.frame(0.0);
+    assert_eq!(data(&fixture), [0.0; 4]);
+    fixture.pointer(GuiInteractionUpdate::Hover(true));
+    fixture.frame(0.0);
+    assert_eq!(data(&fixture), [1.0, 0.5, 0.0, 0.0]);
 }

@@ -16,9 +16,11 @@ import {
   GUI_KIT_ICONS,
   LabelledSeparator,
   Panel,
+  PanelBody,
   PanelFooter,
   PanelHeader,
   SecondaryButton,
+  ScrollArea,
   Separator,
   TextLine,
   WindowControl,
@@ -52,9 +54,12 @@ test("Panel and Separator take the container and line themes", async () => {
   assert.equal(world.skin("section"), "container");
   assert.equal(world.fields("section", "GuiLayout").get("kind"), 2);
   assert.equal(world.fields("section", "GuiLayout").get("width"), 200);
-  // Its parts lie inside its line.
-  assert.equal(world.fields("section", "GuiLayout").get("padding_left"), 1.25);
-  assert.equal(world.fields("section", "GuiLayout").get("padding_right"), 1.25);
+  // Ordinary content starts at the skin's content inset on every side.
+  for (const side of ["left", "right", "top", "bottom"])
+    assert.equal(
+      world.fields("section", "GuiLayout").get(`padding_${side}`),
+      TOKENS.inset,
+    );
   assert.equal(world.fields("section", "GuiFont").get("font_size"), 16);
   assert.deepEqual(world.children("section"), ["rule", "divider"]);
   assert.equal(world.skin("rule"), "rule");
@@ -66,9 +71,141 @@ test("Panel and Separator take the container and line themes", async () => {
     color: TOKENS.page,
     border_width: TOKENS.lineWidth,
     border_color: TOKENS.accent,
-    corner_accent: [8, 8, 8, 8],
-    corner_accent_width: TOKENS.cornerAccentWidth,
   });
+});
+
+test("ScrollArea fits padded content and shares an enclosing Panel surface", async () => {
+  const { world, root, draw } = await render(
+    h(
+      ScrollArea,
+      { id: "area", maxHeight: 240 },
+      h(TextLine, { text: "Short form" }),
+    ),
+  );
+  try {
+    const layout = world.fields("area", "GuiLayout");
+    assert.equal(layout.get("fit_height"), true);
+    assert.equal(layout.get("max_height"), 240);
+    assert.equal(layout.get("clip"), true);
+    assert.equal(world.skin("area"), "frame");
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("gap"),
+      TOKENS.inset,
+    );
+    for (const side of ["left", "right", "top", "bottom"])
+      assert.equal(
+        world.fields("area/body", "GuiLayout").get(`padding_${side}`),
+        TOKENS.inset,
+      );
+    assert.equal(world.fields("area", "GuiScrollView").get("bar_thickness"), 0);
+    world.value("area", "GuiScrollView", {
+      offset_x: 0,
+      offset_y: 0,
+      viewport_x: 200,
+      viewport_y: 240,
+      content_x: 200,
+      content_y: 480,
+      capacity_x: 0,
+      capacity_y: 240,
+    });
+    await settle(root);
+    assert.equal(
+      world.fields("area", "GuiScrollView").get("bar_thickness"),
+      TOKENS.bar,
+    );
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_right"),
+      TOKENS.inset + 3 * TOKENS.bar,
+    );
+    world.value("area", "GuiScrollView", {
+      offset_x: 0,
+      offset_y: 0,
+      viewport_x: 200,
+      viewport_y: 80,
+      content_x: 200,
+      content_y: 80,
+      capacity_x: 0,
+      capacity_y: 0,
+    });
+    await settle(root);
+    assert.equal(world.fields("area", "GuiScrollView").get("bar_thickness"), 0);
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_right"),
+      TOKENS.inset,
+    );
+    await draw(
+      h(
+        Panel,
+        { id: "outer-panel" },
+        h(ScrollArea, { id: "area" }, h(TextLine, { text: "Inside" })),
+      ),
+    );
+    assert.equal(world.skin("area"), "gridBody");
+    assert.equal(world.fields("area/body", "GuiLayout").get("padding_left"), 0);
+    assert.equal(
+      world.fields("outer-panel", "GuiLayout").get("padding_left"),
+      TOKENS.inset,
+    );
+    await draw(
+      h(
+        Panel,
+        { id: "outer-panel", padding: 0 },
+        h(PanelHeader, { title: "Header" }),
+        h(ScrollArea, { id: "area" }, h(TextLine, { text: "Padded body" })),
+      ),
+    );
+    assert.equal(world.skin("area"), "gridBody");
+    for (const side of ["left", "right", "top", "bottom"])
+      assert.equal(
+        world.fields("area/body", "GuiLayout").get(`padding_${side}`),
+        TOKENS.inset,
+      );
+    await draw(
+      h(
+        Panel,
+        {
+          id: "outer-panel",
+          padding: TOKENS.inset / 2,
+          layout: { padding_left: 0 },
+        },
+        h(ScrollArea, { id: "area" }, h(TextLine, { text: "Balanced insets" })),
+      ),
+    );
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_top"),
+      TOKENS.inset / 2,
+    );
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_left"),
+      TOKENS.inset,
+    );
+    await draw(
+      h(
+        ScrollArea,
+        { id: "area", padding: 0, gap: 0, fitHeight: false, framed: false },
+        h(TextLine, { text: "Flush fill" }),
+      ),
+    );
+    assert.equal(world.fields("area", "GuiLayout").get("fit_height"), false);
+    assert.equal(world.fields("area/body", "GuiLayout").get("padding_left"), 0);
+    assert.equal(world.fields("area/body", "GuiLayout").get("gap"), 0);
+    assert.equal(world.skin("area"), "gridBody");
+    await draw(
+      h(ScrollArea, { id: "area" }, h(TextLine, { text: "Defaults restored" })),
+    );
+    assert.equal(world.fields("area", "GuiLayout").get("fit_height"), true);
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_left"),
+      TOKENS.inset,
+    );
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("gap"),
+      TOKENS.inset,
+    );
+    assert.equal(world.skin("area"), "frame");
+  } finally {
+    await root.unmount();
+  }
 });
 
 test("Expander declares its content after its header only while expanded", async () => {
@@ -146,7 +283,12 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   const panel = (minimized: boolean) =>
     h(
       Panel,
-      { id: "monitor", minimized, layout: { width: 400, height: 300 } },
+      {
+        id: "monitor",
+        minimized,
+        padding: 0,
+        layout: { width: 400, height: 300 },
+      },
       h(
         PanelHeader,
         { id: "monitor/header", title: "SIGNAL MONITOR" },
@@ -197,7 +339,7 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   const header = world.fields("monitor/header/row", "GuiLayout");
   assert.equal(header.get("height"), 80);
   assert.equal(header.get("padding_left"), 32);
-  assert.equal(header.get("padding_right"), 16);
+  assert.equal(header.get("padding_right"), 32);
   assert.deepEqual(world.tone("monitor/header/title"), TOKENS.accent);
   assert.equal(
     world.fields("monitor/header/title", "GuiLayout").get("flex"),
@@ -234,7 +376,6 @@ test("Panel parts: a header strip with window controls, a labelled division and 
 
   // A labelled division: a stub, the accent label and the rest of the line.
   assert.deepEqual(world.children("monitor/events"), [
-    "monitor/events/strut",
     "monitor/events/stub",
     "monitor/events/label",
     "monitor/events/line",
@@ -646,4 +787,72 @@ test("DataGrid scrolls, virtualises, edits a cell and shows the empty state", as
     );
     assert.equal(rows.get("margin_top"), 36);
   }
+});
+
+test("padded panel content and explicit framed bodies preserve identities when layout intent changes", async () => {
+  const scene = (framed: boolean) =>
+    h(
+      Panel,
+      {
+        id: "content-panel",
+        width: 320,
+        gap: framed ? 0 : 6,
+        ...(framed
+          ? {
+              padding: 0,
+              height: 140,
+              fitHeight: false,
+              layout: { padding_right: 3 },
+            }
+          : {}),
+      },
+      h(PanelHeader, { id: "content-panel/header", title: "Header" }),
+      h(
+        PanelBody,
+        { id: "content-panel/body", ...(framed ? { padding: 0, gap: 0 } : {}) },
+        h(TextLine, { id: "content-panel/text", text: "Body" }),
+      ),
+    );
+  const { world, draw } = await render(scene(false), { fontSize: 32 });
+  const panel = world.entity("content-panel");
+  const body = world.entity("content-panel/body");
+  const fields = (id: string) => world.fields(id, "GuiLayout");
+  assert.equal(fields("content-panel").get("width"), 320);
+  assert.equal(fields("content-panel").get("fit_height"), true);
+  assert.equal(fields("content-panel").get("height"), -1);
+  assert.equal(fields("content-panel").get("gap"), 6);
+  assert.equal(fields("content-panel/body").get("gap"), TOKENS.inset * 2);
+  assert.deepEqual(world.children("content-panel"), [
+    "content-panel/header",
+    "content-panel/body",
+  ]);
+  assert.deepEqual(world.children("content-panel/body"), [
+    "content-panel/text",
+  ]);
+  for (const id of ["content-panel", "content-panel/body"])
+    for (const side of ["top", "right", "bottom", "left"])
+      assert.equal(fields(id).get(`padding_${side}`), TOKENS.inset * 2);
+  await draw(scene(true));
+  assert.equal(world.entity("content-panel"), panel);
+  assert.equal(world.entity("content-panel/body"), body);
+  assert.equal(fields("content-panel").get("height"), 140);
+  assert.equal(fields("content-panel").get("fit_height"), false);
+  assert.equal(fields("content-panel").get("padding_left"), 0);
+  assert.equal(fields("content-panel").get("padding_top"), 0);
+  assert.equal(
+    fields("content-panel").get("padding_right"),
+    3,
+    "raw per-side padding wins over named zero padding",
+  );
+  assert.equal(fields("content-panel/body").get("padding_left"), 0);
+  assert.equal(fields("content-panel/body").get("gap"), 0);
+  await draw(scene(false));
+  assert.equal(fields("content-panel").get("height"), -1);
+  assert.equal(fields("content-panel").get("fit_height"), true);
+  assert.equal(fields("content-panel").get("padding_right"), TOKENS.inset * 2);
+  assert.equal(
+    fields("content-panel/body").get("padding_left"),
+    TOKENS.inset * 2,
+  );
+  assert.equal(fields("content-panel/body").get("gap"), TOKENS.inset * 2);
 });

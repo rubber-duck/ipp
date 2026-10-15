@@ -5,7 +5,7 @@
  * all four corners; `lit` adds the focus glow around and inside the frame, to
  * show that a paint leaves the frame's glow alone.
  */
-import { GUI_SKIN_TOKENS as T } from "@ipp/host-contract";
+import { cybertronTokens as T } from "@ipp/react/gui-cybertron";
 import type { SkinRow, SkinThemes } from "../theme.js";
 
 const panel: SkinRow = {

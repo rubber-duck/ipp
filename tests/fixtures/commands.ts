@@ -30,7 +30,7 @@ export function componentFields(
       offset: field.offset,
       value:
         value instanceof Uint8Array
-          ? { kind: "bytes", value }
+          ? { kind: field.kind === 8 ? "rows" : "bytes", value }
           : typeof value === "bigint"
             ? { kind: "entity", value: { kind: "handle", id: value } }
             : typeof value === "boolean"

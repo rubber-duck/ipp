@@ -1,7 +1,7 @@
 use super::*;
 use crate::DynamicValue;
 
-const PART_PROPERTIES: [&str; 32] = [
+const PART_PROPERTIES: [&str; 35] = [
     "color",
     "opacity",
     "scale",
@@ -34,6 +34,9 @@ const PART_PROPERTIES: [&str; 32] = [
     "checker_size",
     "checker_color0",
     "checker_color1",
+    "paint",
+    "paint_data",
+    "outset",
 ];
 
 #[test]
@@ -43,7 +46,7 @@ fn part_properties_keep_their_names_and_indices() {
         assert_eq!(GuiPartProperty::from_index(index as u32), Some(property));
         assert_eq!(property.name(), PART_PROPERTIES[index]);
     }
-    assert_eq!(GuiPartProperty::from_index(32), None);
+    assert_eq!(GuiPartProperty::from_index(35), None);
 }
 
 #[test]

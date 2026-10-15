@@ -221,3 +221,83 @@ pub(crate) fn read_control(
         ancestry: ancestry(&simulation.state, entity),
     })
 }
+
+/// Explicit, deliberately simple client skin for input fixtures. Tests own all
+/// geometry; nothing here participates in production component defaults.
+pub(crate) fn input_skin() -> (
+    crate::components::GuiTheme,
+    crate::components::GuiThemeMotion,
+    crate::components::GuiMetrics,
+) {
+    use super::motion::GuiMotionPart;
+    use super::presentation::GuiPaintPart;
+    use super::{GuiPartId, GuiSkinState};
+    use crate::components::rows::Rows;
+    let mut parts = Rows::new();
+    let mut motion = Rows::new();
+    for part in super::GUI_BASE_PARTS {
+        parts
+            .push(GuiPaintPart {
+                color: Some([0.2, 0.3, 0.4, 1.0]),
+                border_width: Some(1.0),
+                ..GuiPaintPart::keyed(GuiPartId::base(part)).unwrap()
+            })
+            .unwrap();
+        parts
+            .push(GuiPaintPart {
+                color: Some([0.4, 0.6, 0.8, 1.0]),
+                ..GuiPaintPart::keyed(GuiPartId::state(part, GuiSkinState::Hovered)).unwrap()
+            })
+            .unwrap();
+        parts
+            .push(GuiPaintPart {
+                color: Some([0.8, 0.9, 1.0, 1.0]),
+                ..GuiPaintPart::keyed(GuiPartId::state(part, GuiSkinState::Pressed)).unwrap()
+            })
+            .unwrap();
+        motion
+            .push(GuiMotionPart {
+                duration: Some(0.08),
+                exit: Some(0.12),
+                ..GuiMotionPart::keyed(GuiPartId::state(part, GuiSkinState::Hovered)).unwrap()
+            })
+            .unwrap();
+    }
+    (
+        crate::components::GuiTheme {
+            em: 16.0,
+            parts,
+        },
+        crate::components::GuiThemeMotion {
+            parts: motion,
+        },
+        crate::components::GuiMetrics {
+            em: 16.0,
+            min_width: 32.0,
+            min_height: 40.0,
+            label_inset: 16.0,
+            label_gap: 8.0,
+            rail_thickness: 8.0,
+            thumb_ratio: 0.75,
+            checkbox_ratio: 0.5,
+            icon_ratio: 0.55,
+            number_step_ratio: 1.0,
+            dial_inset: 8.0,
+            dial_gap: 4.0,
+            caret_width: 1.0,
+            step_mark: 12.0,
+            color_inset: 8.0,
+            color_gap: 16.0,
+            color_rail: 24.0,
+            color_swatch: 24.0,
+            color_field: 144.0,
+            color_marker: 12.0,
+            color_thumb: 8.0,
+            scroll_thickness: 8.0,
+            scroll_inset: 8.0,
+            scroll_end_inset: 4.0,
+            scroll_tip_ratio: 0.5,
+            scroll_min_thumb_ratio: 2.0,
+        },
+    )
+}

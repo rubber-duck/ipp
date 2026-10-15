@@ -1,26 +1,10 @@
-/**
- * The values of the kit's scalar composites, the sliders, knob and numeric
- * stepper, and their text. The runtime owns a control's values: it writes
- * them as drags, keys, the wheel, step parts and committed entries change
- * them, and the composite reports each committed change through `onChange`,
- * from the control's `onScalarCommit`, so its readouts follow the committed
- * values without a tween. A range's two values arrive in one event and are
- * reported once.
- *
- * The control declares its values once, when it mounts, from the values the
- * composite shows then, and never again: a declaration that followed the
- * reported values would write each report back a client round trip later,
- * by which time a drag may have moved on, and the stale write would pull the
- * thumb back. A new `value` the runtime did not report is the application's
- * and is written through the control handle by compare-and-set from the
- * values the runtime last reported, so a drag that moved on in the meantime
- * wins. A range's two fields are written one at a time, the one moving away
- * from the other first, so neither write inverts the range, and the state
- * between the two writes is not reported.
- *
- * Values compare as the runtime stores them, in single precision.
- */
-import { useEffect, useRef, useState, type RefObject } from "react";
+/** Native scalar observations drive the view; controlled edits use acknowledged conditional writes. */
+import { useRef } from "react";
+import {
+  useValueSynchronization,
+  type ValueChangeHandler,
+} from "./value-synchronization.js";
+import { useComposedControlRef } from "../../gui/control-refs.js";
 import type { GuiScalarEvent } from "../../gui/callbacks.js";
 import type { GuiControlHandle, GuiControlRef } from "../../gui/control-ref.js";
 
@@ -36,7 +20,7 @@ export interface ScalarValue {
     readonly value: number;
     readonly upper?: number;
     readonly onScalarCommit: (event: GuiScalarEvent) => void;
-    readonly ref: (handle: GuiControlHandle | null) => void;
+    readonly ref: GuiControlRef;
   };
 }
 
@@ -58,92 +42,60 @@ function same(left: ScalarValues, right: ScalarValues): boolean {
 export function useScalarValue(
   value: ScalarValues | undefined,
   defaultValue: ScalarValues,
-  onChange: ((values: ScalarValues) => void) | undefined,
+  onChange: ValueChangeHandler<ScalarValues> | undefined,
   ref: GuiControlRef | undefined,
 ): ScalarValue {
-  const [own, setOwn] = useState(defaultValue);
-  const current = value ?? own;
-  const [mounted] = useState(current);
-  // The values the runtime holds as far as the composite knows: the last
-  // ones reported or written.
-  const held = useRef(current);
-  // The state between the two writes of a range, which is not reported.
-  const between = useRef<ScalarValues | undefined>(undefined);
   const handle = useRef<GuiControlHandle | null>(null);
-  // A write waiting for the handle, which publishes after the declaration.
-  const waiting = useRef<{ from: ScalarValues; to: ScalarValues } | undefined>(
-    undefined,
-  );
-  const outer = useRef(ref);
-  outer.current = ref;
-
-  const write = (from: ScalarValues, to: ScalarValues) => {
-    const target = handle.current;
-    if (!target) {
-      waiting.current = { from, to };
-      return;
-    }
-    waiting.current = undefined;
-    const set = (field: "value" | "upper", index: number) => {
-      if (Math.fround(from[index]!) === Math.fround(to[index]!)) return false;
-      void target
-        .compareAndSet(field, from[index]!, to[index]!)
-        .catch(() => false);
-      return true;
-    };
-    if (to.length === 1) {
-      set("value", 0);
-      return;
-    }
-    const upperFirst = to[1]! >= from[1]!;
-    const first = upperFirst ? set("upper", 1) : set("value", 0);
-    const second = upperFirst ? set("value", 0) : set("upper", 1);
-    between.current =
-      first && second
-        ? upperFirst
-          ? [from[0]!, to[1]!]
-          : [to[0]!, from[1]!]
-        : undefined;
-  };
-
-  // A value the runtime did not report is the application's: write it.
-  const key = value?.join(" ");
-  useEffect(() => {
-    if (value === undefined || same(value, held.current)) return;
-    const from = held.current;
-    held.current = value;
-    write(from, value);
-    // The key carries the values; a new array of the same values is no change.
-  }, [key]);
-
-  const [attach] = useState(() => (next: GuiControlHandle | null) => {
-    handle.current = next;
-    const user = outer.current;
-    if (typeof user === "function") user(next);
-    else if (user) (user as RefObject<GuiControlHandle | null>).current = next;
-    if (next && waiting.current)
-      write(waiting.current.from, waiting.current.to);
+  const state = useValueSynchronization({
+    value,
+    defaultValue,
+    onChange,
+    same,
+    identity: () => handle.current,
+    write: async (from, to, context) => {
+      const target = handle.current;
+      if (!target || from.length !== to.length) return;
+      let intermediate = from;
+      const fields: readonly (readonly ["value" | "upper", number])[] =
+        to.length === 1
+          ? [["value", 0]]
+          : to[1]! >= from[1]!
+            ? [
+                ["upper", 1],
+                ["value", 0],
+              ]
+            : [
+                ["value", 0],
+                ["upper", 1],
+              ];
+      for (const [field, index] of fields) {
+        if (!context.isCurrent() || handle.current !== target) return;
+        if (Math.fround(from[index]!) === Math.fround(to[index]!)) continue;
+        const candidate = intermediate.map((value, at) =>
+          at === index ? to[index]! : value,
+        );
+        const accepted = await context.trackEcho(candidate, () =>
+          target.compareAndSet(field, from[index]!, to[index]!),
+        );
+        if (!accepted) return;
+        intermediate = candidate;
+      }
+    },
   });
-
-  // Retained declarations call the latest render's callbacks, so this one
-  // sees the current value and listener.
-  const onScalarCommit = (event: GuiScalarEvent) => {
-    const values =
-      event.upper === undefined ? [event.value] : [event.value, event.upper];
-    const step = between.current;
-    between.current = undefined;
-    if (same(values, held.current) || (step && same(values, step))) return;
-    held.current = values;
-    if (value === undefined) setOwn(values);
-    onChange?.(values);
-  };
-
+  const attach = useComposedControlRef(handle, ref, state.notifyReady);
   return {
-    current,
+    current: state.current,
     control: {
-      value: mounted[0]!,
-      ...(mounted.length > 1 ? { upper: mounted[1]! } : {}),
-      onScalarCommit,
+      value: state.initial[0]!,
+      ...(state.initial.length > 1 ? { upper: state.initial[1]! } : {}),
+      onScalarCommit: (event: GuiScalarEvent) => {
+        state.observe(
+          event.upper === undefined
+            ? [event.value]
+            : [event.value, event.upper],
+          event,
+        );
+      },
       ref: attach,
     },
   };

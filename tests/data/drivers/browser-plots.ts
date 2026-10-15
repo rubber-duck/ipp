@@ -9,6 +9,7 @@ import { reactPlots } from "../scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "../scenarios/plot-axis-support.js";
 import { exercisePlotAxisMotion } from "../scenarios/plot-axis-motion.js";
 import { exercisePlotAxisGating } from "../scenarios/plot-axis-gating.js";
+import { exercisePlotGlass } from "../scenarios/plot-glass.js";
 import { exercisePlotPercentage } from "../scenarios/plot-percentage.js";
 import {
   exercisePlotViewPlacement,
@@ -30,6 +31,9 @@ export async function workerPlots(
     origin: string;
   },
   family:
+    | "glass-2d"
+    | "glass-3d"
+    | "glass-lifecycle"
     | "2d"
     | "dense"
     | "3d"
@@ -93,55 +97,59 @@ export async function workerPlots(
       },
       record,
     );
-    return family === "2d"
-      ? await exercisePlot2d(host, contract, font, capture, record)
-      : family === "dense"
-        ? await exerciseDenseLines(host, contract, font, capture, record)
-        : family === "3d"
-          ? await exercisePlot3d(host, contract, font, capture)
-          : family === "percentage"
-            ? await exercisePlotPercentage(
-                host,
-                contract,
-                font,
-                capture,
-                record,
-              )
-            : family === "axis-gating"
-              ? await exercisePlotAxisGating(
+    return family === "glass-2d" ||
+      family === "glass-3d" ||
+      family === "glass-lifecycle"
+      ? await exercisePlotGlass(host, contract, font, capture, record, family)
+      : family === "2d"
+        ? await exercisePlot2d(host, contract, font, capture, record)
+        : family === "dense"
+          ? await exerciseDenseLines(host, contract, font, capture, record)
+          : family === "3d"
+            ? await exercisePlot3d(host, contract, font, capture)
+            : family === "percentage"
+              ? await exercisePlotPercentage(
                   host,
                   contract,
                   font,
                   capture,
                   record,
                 )
-              : family === "axis-motion"
-                ? await exercisePlotAxisMotion(
+              : family === "axis-gating"
+                ? await exercisePlotAxisGating(
                     host,
                     contract,
                     font,
                     capture,
                     record,
                   )
-                : family === "axis"
-                  ? await exercisePlotAxisSupport(
+                : family === "axis-motion"
+                  ? await exercisePlotAxisMotion(
                       host,
                       contract,
                       font,
                       capture,
                       record,
-                      transformed,
                     )
-                  : family === "view"
-                    ? await exercisePlotViewPlacement(
+                  : family === "axis"
+                    ? await exercisePlotAxisSupport(
                         host,
                         contract,
                         font,
                         capture,
                         record,
-                        offscreen,
+                        transformed,
                       )
-                    : await reactPlots(host, contract, font, capture, record);
+                    : family === "view"
+                      ? await exercisePlotViewPlacement(
+                          host,
+                          contract,
+                          font,
+                          capture,
+                          record,
+                          offscreen,
+                        )
+                      : await reactPlots(host, contract, font, capture, record);
   } finally {
     try {
       await connection?.close();

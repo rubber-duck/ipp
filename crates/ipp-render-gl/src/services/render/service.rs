@@ -77,7 +77,7 @@ pub struct RenderService<D: RenderDevice> {
     // device borrows still end before resource invalidation or World mutation.
     pub(super) program_lookup: Vec<Option<AssetKey>>,
     pub(super) custom_materials: BTreeMap<
-        super::outputs::scene::RenderEntity,
+        super::materials::custom_material::CustomMaterialKey,
         super::materials::custom_material::PreparedCustomMaterial,
     >,
     /// Retained custom-material fallbacks, so each changed reason is logged once.
@@ -135,6 +135,10 @@ pub struct RenderService<D: RenderDevice> {
     /// The canvas program drawing GUI boxes, strokes and arcs with their custom
     /// paints, and the paints it holds.
     pub(super) canvas_paints: super::canvas::paint::CanvasPaintPrograms<D>,
+    pub(super) canvas_presentations: std::collections::BTreeMap<
+        ipp_core::OutputRef,
+        std::sync::Arc<super::canvas::presentation::CanvasPresentation>,
+    >,
     /// The static program drawing retained atlas glyphs.
     pub(super) gui_glyph_program: Option<D::Program>,
     /// Canvas entities whose paint draws their colour, with the reason; a changed

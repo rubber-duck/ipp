@@ -1,12 +1,7 @@
 /**
- * The runtime's default GUI look through a real Host: every skin-lab
- * specimen is declared with its theme modules, which leave controls on their
- * default look (the switch and amber variants name the built-in looks), and
- * captured in each of its interaction states with real physical input or
- * semantic actions. The composite of every state's cell is checked by the
- * region probes. The environment supplies the Host connection, the shared
- * font and where images and evidence go; nothing here depends on the process
- * or transport arrangement.
+ * Explicit client Cybertron recipes through a real Host. Each specimen is
+ * captured in native interaction states and checked by independent image probes.
+ * Environment drivers supply the connection, font and artifact destination.
  */
 import type {
   Client,
@@ -71,6 +66,9 @@ const SPECIMENS: readonly (readonly [string, SkinSpecimen])[] = [
   ["e02-bipolar-slider", bipolarSlider],
 ];
 
+/** Independent groups keep full software-rendered coverage within each test budget. */
+export type DefaultSkinRegion = "basic" | "composite" | "paints";
+
 /** One specimen's composite capture as RGBA bytes in base64. */
 export interface DefaultSkinImage {
   readonly name: string;
@@ -100,6 +98,7 @@ export async function defaultSkin(
   contract: ThemeContract & GuiKitContract,
   font: Uint8Array<ArrayBuffer>,
   environment: DefaultSkinEnvironment,
+  region: DefaultSkinRegion,
 ): Promise<Record<string, number>> {
   const present: Present = async <T>(
     binding: RootBinding,
@@ -117,7 +116,13 @@ export async function defaultSkin(
   };
   const failures: string[] = [];
   const passed: Record<string, number> = {};
-  for (const [name, specimen] of SPECIMENS) {
+  const specimens =
+    region === "paints"
+      ? []
+      : SPECIMENS.filter(
+          ([name]) => name.startsWith("a") === (region === "basic"),
+        );
+  for (const [name, specimen] of specimens) {
     const themes = specimen.theme ? THEMES[specimen.theme] : {};
     if (!themes)
       throw new Error(`${name} names unknown theme module ${specimen.theme}`);
@@ -166,52 +171,54 @@ export async function defaultSkin(
       await session.close();
     }
   }
-  // Custom paints on panels: patterns, frames, glow, the fallback of a paint
-  // that does not compile and a property write.
-  const paints = await panelPaints(
-    host,
-    contract,
-    font,
-    present,
-    async ({ name, image }) =>
-      environment.capture({
-        name,
-        width: image.width,
-        height: image.height,
-        rgba: base64(image.pixels),
-      }),
-  );
-  await environment.record({
-    specimen: "p01-panel-paints",
-    assets: paints.assets,
-    results: paints.results,
-  });
-  for (const result of paints.results)
-    if (!result.passed)
-      failures.push(`p01-panel-paints: ${result.name} ${result.detail}`);
-  passed["p01-panel-paints"] = paints.results.filter(
-    (result) => result.passed,
-  ).length;
-  // Text under shapes painted after it: a dialog, a toast, stacked panels and
-  // a raised layer, against the same scene drawn one layer at a time.
-  const overlap = await overlapOrder(
-    host,
-    contract,
-    font,
-    present,
-    async ({ name, image }) =>
-      environment.capture({
-        name,
-        width: image.width,
-        height: image.height,
-        rgba: base64(image.pixels),
-      }),
-  );
-  await environment.record({ specimen: "overlap", results: overlap });
-  for (const result of overlap)
-    if (!result.passed)
-      failures.push(`overlap: ${result.name} ${result.detail}`);
-  passed.overlap = overlap.filter((result) => result.passed).length;
+  if (region === "paints") {
+    // Custom paints on panels: patterns, frames, glow, the fallback of a paint
+    // that does not compile and a property write.
+    const paints = await panelPaints(
+      host,
+      contract,
+      font,
+      present,
+      async ({ name, image }) =>
+        environment.capture({
+          name,
+          width: image.width,
+          height: image.height,
+          rgba: base64(image.pixels),
+        }),
+    );
+    await environment.record({
+      specimen: "p01-panel-paints",
+      assets: paints.assets,
+      results: paints.results,
+    });
+    for (const result of paints.results)
+      if (!result.passed)
+        failures.push(`p01-panel-paints: ${result.name} ${result.detail}`);
+    passed["p01-panel-paints"] = paints.results.filter(
+      (result) => result.passed,
+    ).length;
+    // Text under shapes painted after it: a dialog, a toast, stacked panels and
+    // a raised layer, against the same scene drawn one layer at a time.
+    const overlap = await overlapOrder(
+      host,
+      contract,
+      font,
+      present,
+      async ({ name, image }) =>
+        environment.capture({
+          name,
+          width: image.width,
+          height: image.height,
+          rgba: base64(image.pixels),
+        }),
+    );
+    await environment.record({ specimen: "overlap", results: overlap });
+    for (const result of overlap)
+      if (!result.passed)
+        failures.push(`overlap: ${result.name} ${result.detail}`);
+    passed.overlap = overlap.filter((result) => result.passed).length;
+  }
   if (failures.length)
     throw new Error(`Default skin probes failed:\n${failures.join("\n")}`);
   return passed;

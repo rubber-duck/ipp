@@ -71,6 +71,7 @@ export type {
   GuiPhysicalContextOptions,
   GuiPhysicalKey,
   GuiInputRoutingOutcome,
+  GuiInputHit,
   GuiInputCancellation,
   GuiTextFence,
   GuiNativeTextState,

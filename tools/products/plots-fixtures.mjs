@@ -21,6 +21,10 @@ await bundleBrowser(
     alias: {
       "@ipp/react": resolve("packages/ipp-react/src/index.ts"),
       "@ipp/react/gui": resolve("packages/ipp-react/src/gui.ts"),
+      "@ipp/react/gui-glass": resolve("packages/ipp-react/src/gui-glass.ts"),
+      "@ipp/react/gui-cybertron": resolve(
+        "packages/ipp-react/src/gui-cybertron.ts",
+      ),
     },
   },
 );

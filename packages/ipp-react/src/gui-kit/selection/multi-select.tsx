@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A multi-select: a dropdown whose options toggle. The trigger summarises
  * the selection, the selected labels joined in option order while they fit
@@ -13,7 +14,7 @@
  * `defaultValue`, keys in any order). The summary fits the trigger's
  * explicit `layout.width`, or its default width.
  */
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { GuiKitLayout } from "../layout.js";
 import { useGuiKit } from "../kit.js";
 import { OptionList, type SelectOption } from "./option-list.js";
@@ -25,7 +26,7 @@ export interface MultiSelectProps extends OverlayOpenProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
-  readonly id: string;
+  readonly id?: string;
   readonly options: readonly SelectOption[];
   /** Keys of the selected options, controlled; pair it with `onChange`. */
   readonly value?: readonly string[];
@@ -58,7 +59,7 @@ export function selectionSummary(
 }
 
 export function MultiSelect({
-  id,
+  id: providedId,
   layer = 0,
   options,
   value,
@@ -71,6 +72,7 @@ export function MultiSelect({
   layout,
   ...open
 }: MultiSelectProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const overlay = useOverlayOpen(open);
   const [own, setOwn] = useState(defaultValue);
@@ -78,11 +80,9 @@ export function MultiSelect({
   // The selection as this client last set or rendered it, ahead of its
   // renders, so a second toggle before the first one's render builds on it.
   const latest = useRef(keys);
-  const rendered = useRef(keys);
-  if (rendered.current !== keys) {
-    rendered.current = keys;
+  useLayoutEffect(() => {
     latest.current = keys;
-  }
+  });
   const current = new Set(keys);
   const selected = options.filter((option) => current.has(option.key));
   // Every toggle while the list is open counts: it stays open.
@@ -95,7 +95,7 @@ export function MultiSelect({
       )
       .map((option) => option.key);
     latest.current = next;
-    if (value === undefined) setOwn(next);
+    setOwn(next);
     onChange?.(next);
   };
   const summary = selectionSummary(
@@ -118,6 +118,7 @@ export function MultiSelect({
       <SelectList
         id={`${id}/list`}
         open={overlay.open}
+        controlled={overlay.controlled}
         onVisibleChange={overlay.onVisibleChange}
       >
         <OptionList

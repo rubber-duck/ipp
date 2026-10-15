@@ -8,9 +8,9 @@ import { sampleWorkerAllocations } from "./support/worker-profiling.js";
 import type { AnimationWorldClient } from "@ipp/client";
 import { runBrowserEnvironment } from "../harness/browser.js";
 import {
-  openGallery,
-  galleryEnvironment,
-} from "../gallery/drivers/browser-gallery.js";
+  openApplication,
+  applicationEnvironment,
+} from "../gallery/drivers/browser-application.js";
 
 interface ProfileResult extends ProfileCapture {
   frames: number[][];
@@ -30,7 +30,7 @@ test("platformer profiling preserves state and completed frames", {
   const result = await runBrowserEnvironment(
     "platformer performance",
     {
-      ...galleryEnvironment,
+      ...applicationEnvironment,
       build: {
         name: "render-instrumentation",
         generatedModule: resolve(
@@ -60,7 +60,13 @@ test("platformer profiling preserves state and completed frames", {
           await route.fulfill({ response });
         });
       await environment.page.setViewportSize({ width: 1200, height: 800 });
-      const g = await openGallery(environment);
+      const g = await openApplication(environment);
+      environment.own({
+        close: () =>
+          g.page.evaluate(async () => {
+            await window.ippDemoApplication?.dispose();
+          }),
+      });
       try {
         await g.navigate("platformer");
       } catch (error) {
@@ -75,7 +81,7 @@ test("platformer profiling preserves state and completed frames", {
         throw error;
       }
       await g.waitFor((s) => s.resources.every((r) => r.status === "loaded"));
-      await g.page.locator("#platformer-pause").click();
+      await g.action("playback", false);
       await g.waitFor((s) =>
         s.controllers!.every((c) => c.state !== "playing"),
       );
@@ -83,7 +89,11 @@ test("platformer profiling preserves state and completed frames", {
       // exact same pose while timing without inspection or frame capture.
       const initial = await g.inspect();
       assert.ok(initial.entities.length > 0);
-      assert.equal(initial.controllers!.length, 4);
+      assert.equal(
+        initial.controllers!.length,
+        4,
+        "route, pose origin, gait and facing controllers",
+      );
       const worker = g.page.workers().at(-1)!;
       assert.ok(
         await worker.evaluate(() => "ippProfile" in globalThis),
@@ -124,7 +134,7 @@ test("platformer profiling preserves state and completed frames", {
       assert.ok(before.summary.foregroundPixels > 1000);
       if (playing) {
         await g.page.evaluate(async (ids) => {
-          const client = window.ippWorldCanvas!.client as AnimationWorldClient;
+          const client = window.ippDemoCanvas!.client as AnimationWorldClient;
           for (const id of ids) {
             client.playback(id, { action: "seek", time: 0 });
             client.playback(id, { action: "play" });
@@ -164,7 +174,7 @@ test("platformer profiling preserves state and completed frames", {
           state.controllers!.some((c) => c.state === "playing" && c.time > 0),
         );
         await g.page.evaluate(async (ids) => {
-          const client = window.ippWorldCanvas!.client as AnimationWorldClient;
+          const client = window.ippDemoCanvas!.client as AnimationWorldClient;
           for (const id of ids) client.playback(id, { action: "pause" });
           await client.inspect();
         }, active);

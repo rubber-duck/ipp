@@ -1,3 +1,4 @@
+import { exerciseComposedCamera } from "../rendering/scenarios/composed-camera.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolve } from "node:path";
@@ -9,7 +10,7 @@ import type {
   SystemQuery,
 } from "@ipp/client";
 import { webSocketTransport } from "../../packages/ipp-client/src/transport.js";
-import { installCameraControls } from "../../examples/world-gallery/shared/camera-controls.js";
+import { installCameraControls } from "../../examples/demos/shared/camera-controls.js";
 import { runNativeEnvironment } from "../harness/native.js";
 import {
   aliasId,
@@ -528,6 +529,41 @@ test("generated client and gallery controller keep current-bound gestures usable
         bindingCancellations,
       });
       await host.destroyWorld(world.reference);
+    },
+  );
+});
+
+test("generated client addresses an exact child Camera below a persistent Canvas", {
+  timeout: 60_000,
+}, async (context) => {
+  const contract = await import(
+    pathToFileURL(resolve("target/composed-queries/generated.js")).href
+  );
+  await runNativeEnvironment(
+    "composed-child-camera",
+    {
+      executable: resolve("target/integration-artifacts/native/ipp-server"),
+      schemaArtifact: resolve(
+        "target/integration-artifacts/native/contract.bin",
+      ),
+      workingDirectory: process.cwd(),
+    },
+    context.signal,
+    async (environment) => {
+      const host = (await environment.track(
+        contract.IppHostClient.connectTransport(
+          webSocketTransport(environment.url),
+        ),
+      )) as HostClientBase<PickingWorldClient>;
+      const result = await exerciseComposedCamera(
+        host,
+        contract.encodeBoundingShape,
+      );
+      await environment.evidence.writeJson(
+        "composed-child-camera.json",
+        result,
+      );
+      assert.equal((await host.listWorlds()).length, 0);
     },
   );
 });

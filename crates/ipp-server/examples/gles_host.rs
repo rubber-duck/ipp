@@ -7,7 +7,7 @@
 //! only through `nativePresentationTransport` of `@ipp/client/testing`.
 //!
 //! ```text
-//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY [--io-read PREFIX DIRECTORY]
+//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY [--io-read PREFIX DIRECTORY] [--http-prefix PREFIX]
 //! ```
 //!
 //! Readiness is one stdout line with both loopback URLs:
@@ -36,6 +36,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:0".parse::<SocketAddr>()?;
     let mut egl_directory = std::env::var_os("IPP_EGL_LIBRARY_DIR").map(PathBuf::from);
     let mut read_sources = Vec::new();
+    let mut http_prefixes = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -49,6 +50,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .ok_or("--io-read requires a prefix and directory")?;
                 let directory = args.next().ok_or("--io-read requires a directory")?;
                 read_sources.push((prefix, PathBuf::from(directory)));
+            }
+            "--http-prefix" => {
+                http_prefixes.push(
+                    args.next()
+                        .ok_or("--http-prefix requires a literal prefix")?,
+                );
             }
             _ => return Err(format!("unknown argument: {arg}").into()),
         }
@@ -68,7 +75,10 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(bind)?;
     ipp_server::websocket::serve_with::<gles_presentation::GlesHostServices>(
         listener,
-        ipp_server::websocket::ServeOptions::default(),
+        ipp_server::websocket::ServeOptions {
+            http_prefixes,
+            ..Default::default()
+        },
         |address| {
             println!(
                 "{{\"event\":\"ready\",\"url\":\"ws://{address}\",\"presentation\":\"ws://{presentation_address}\"}}"

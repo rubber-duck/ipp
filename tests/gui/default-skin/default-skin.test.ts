@@ -17,106 +17,119 @@ declare global {
 const FONT = "target/font-assets/shure-tech-mono.ippf";
 
 for (const mode of ["worker", "native"] as const) {
-  test(`default GUI skin ${mode}`, { timeout: 300_000 }, async (context) => {
-    const native = mode === "native";
-    const workspace = resolve(process.cwd());
-    const build = presentingBuild(native, {
-      directory: native ? "target/gles-host" : "target/browser-build/render",
-    });
+  for (const region of ["basic", "composite", "paints"] as const) {
+    test(`default GUI skin ${mode} ${region}`, {
+      timeout: 300_000,
+    }, async (context) => {
+      const native = mode === "native";
+      const workspace = resolve(process.cwd());
+      const build = presentingBuild(native, {
+        directory: native ? "target/gles-host" : "target/browser-build/render",
+      });
 
-    async function browser(endpoint?: {
-      url: string;
-      presentationUrl: string;
-    }) {
-      await runBrowserEnvironment(
-        `gui-default-skin-${mode}`,
-        {
-          workspace,
-          build,
-          operationTimeoutMs: 240_000,
-          rendering: !native,
-        },
-        context.signal,
-        async (environment) => {
-          const captures = resolve(environment.evidence.directory, "captures");
-          await mkdir(captures, { recursive: true });
-          await environment.page.exposeFunction(
-            "saveDefaultSkinCapture",
-            async (image: DefaultSkinImage) =>
-              writeFile(
-                resolve(captures, `${image.name}.png`),
-                encodePng({
-                  width: image.width,
-                  height: image.height,
-                  pixels: Uint8Array.from(Buffer.from(image.rgba, "base64")),
-                }),
+      async function browser(endpoint?: {
+        url: string;
+        presentationUrl: string;
+      }) {
+        await runBrowserEnvironment(
+          `gui-default-skin-${mode}-${region}`,
+          {
+            workspace,
+            build,
+            operationTimeoutMs: 240_000,
+            rendering: !native,
+          },
+          context.signal,
+          async (environment) => {
+            const captures = resolve(
+              environment.evidence.directory,
+              "captures",
+            );
+            await mkdir(captures, { recursive: true });
+            await environment.page.exposeFunction(
+              "saveDefaultSkinCapture",
+              async (image: DefaultSkinImage) =>
+                writeFile(
+                  resolve(captures, `${image.name}.png`),
+                  encodePng({
+                    width: image.width,
+                    height: image.height,
+                    pixels: Uint8Array.from(Buffer.from(image.rgba, "base64")),
+                  }),
+                ),
+            );
+            await environment.page.exposeFunction(
+              "recordDefaultSkinEvidence",
+              (value: object) =>
+                environment.evidence.record("default-skin", value),
+            );
+            return environment.execute("default-skin", { mode }, () =>
+              environment.page.evaluate(
+                async ({ urls, endpoint, font, region }) => {
+                  const contract = await import(urls.generated);
+                  // Encode client-owned skin recipes against the runtime under test.
+                  Object.assign(globalThis, { ippHostContract: contract });
+                  const scenario = await import(
+                    `${urls.origin}/target/gui-default-skin/scenario.js`
+                  );
+                  const fontBytes = new Uint8Array(
+                    await (await fetch(`${urls.origin}/${font}`)).arrayBuffer(),
+                  );
+                  let transport;
+                  if (endpoint) {
+                    transport = scenario.nativePresentationTransport(
+                      endpoint.url,
+                      endpoint.presentationUrl,
+                    );
+                  } else {
+                    const canvas = document.createElement("canvas");
+                    canvas.width = 2048;
+                    canvas.height = 256;
+                    document.body.append(canvas);
+                    transport = scenario.workerTransport(
+                      `${urls.origin}/target/gui-default-skin/worker.js`,
+                      urls.wasm,
+                      contract.MAX_MESSAGE_BYTES,
+                      { canvas: canvas.transferControlToOffscreen() },
+                    );
+                  }
+                  const host =
+                    await contract.IppHostClient.connectTransport(transport);
+                  try {
+                    return await scenario.defaultSkin(
+                      host,
+                      contract,
+                      fontBytes,
+                      {
+                        capture: (image: DefaultSkinImage) =>
+                          window.saveDefaultSkinCapture(image),
+                        record: (value: object) =>
+                          window.recordDefaultSkinEvidence(value),
+                      },
+                      region,
+                    );
+                  } finally {
+                    await host.close();
+                  }
+                },
+                { urls: environment.urls, endpoint, font: FONT, region },
               ),
-          );
-          await environment.page.exposeFunction(
-            "recordDefaultSkinEvidence",
-            (value: object) =>
-              environment.evidence.record("default-skin", value),
-          );
-          return environment.execute("default-skin", { mode }, () =>
-            environment.page.evaluate(
-              async ({ urls, endpoint, font }) => {
-                const contract = await import(urls.generated);
-                // The skin lab's tokens come from the runtime under test.
-                Object.assign(globalThis, { ippHostContract: contract });
-                const scenario = await import(
-                  `${urls.origin}/target/gui-default-skin/scenario.js`
-                );
-                const fontBytes = new Uint8Array(
-                  await (await fetch(`${urls.origin}/${font}`)).arrayBuffer(),
-                );
-                let transport;
-                if (endpoint) {
-                  transport = scenario.nativePresentationTransport(
-                    endpoint.url,
-                    endpoint.presentationUrl,
-                  );
-                } else {
-                  const canvas = document.createElement("canvas");
-                  canvas.width = 2048;
-                  canvas.height = 256;
-                  document.body.append(canvas);
-                  transport = scenario.workerTransport(
-                    `${urls.origin}/target/gui-default-skin/worker.js`,
-                    urls.wasm,
-                    contract.MAX_MESSAGE_BYTES,
-                    { canvas: canvas.transferControlToOffscreen() },
-                  );
-                }
-                const host =
-                  await contract.IppHostClient.connectTransport(transport);
-                try {
-                  return await scenario.defaultSkin(host, contract, fontBytes, {
-                    capture: (image: DefaultSkinImage) =>
-                      window.saveDefaultSkinCapture(image),
-                    record: (value: object) =>
-                      window.recordDefaultSkinEvidence(value),
-                  });
-                } finally {
-                  await host.close();
-                }
-              },
-              { urls: environment.urls, endpoint, font: FONT },
-            ),
-          );
-        },
-      );
-    }
+            );
+          },
+        );
+      }
 
-    await withPresentingHost(
-      "gui-default-skin-gles",
-      build,
-      context.signal,
-      {
-        native,
-        operationTimeoutMs: 270_000,
-        missingPresentation: "GLES presentation endpoint absent",
-      },
-      browser,
-    );
-  });
+      await withPresentingHost(
+        "gui-default-skin-gles",
+        build,
+        context.signal,
+        {
+          native,
+          operationTimeoutMs: 270_000,
+          missingPresentation: "GLES presentation endpoint absent",
+        },
+        browser,
+      );
+    });
+  }
 }

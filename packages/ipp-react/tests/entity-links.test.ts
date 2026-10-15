@@ -1,6 +1,9 @@
+import { ReactWorldTree } from "../src/reconciler/tree.js";
+import { ReactWorldCommits } from "../src/reconciler/commits.js";
+import { Resources } from "../src/resources.js";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createElement, Fragment, StrictMode } from "react";
+import { createElement, Fragment, StrictMode, Suspense } from "react";
 import type {
   BatchOutcome,
   Command,
@@ -869,4 +872,253 @@ test("large parent chains order without recursive dependency traversal", () => {
   assert.equal(ordered.length, links.length);
   assert.equal(ordered[0]!.target, 16384n);
   assert.equal(ordered.at(-1)!.target, 1n);
+});
+
+test("Resources inside Children preserves visual ordering without parenting resources", async () => {
+  const client = new LinkBoundary();
+  const root = createRoot(client, quiet);
+  try {
+    await root.render(
+      createElement(
+        Entity,
+        { id: "parent" },
+        createElement(
+          Children,
+          null,
+          createElement(Entity, { id: "first" }),
+          createElement(
+            Resources,
+            null,
+            createElement(
+              Resources,
+              null,
+              createElement(
+                Entity,
+                { id: "theme" },
+                createElement(Scalar, { value: 1 }),
+              ),
+            ),
+          ),
+          createElement(Entity, { id: "last" }),
+        ),
+      ),
+    );
+    const placements = client.resolved
+      .flat()
+      .filter((operation) => operation.kind === "placeEntity");
+    assert.equal(placements.length, 2);
+    assert.ok(
+      placements.every(
+        (operation) =>
+          operation.entity.kind === "handle" &&
+          operation.entity.id !== client.entities.get("theme"),
+      ),
+    );
+    assert.ok(client.entities.has("theme"));
+    await root.render(null);
+    assert.equal(client.entities.size, 0);
+  } finally {
+    await root.unmount();
+  }
+});
+
+test("mounted urgent Suspense retains native identity while hidden", async () => {
+  const client = new LinkBoundary();
+  client.components = {
+    ...client.components,
+    PresentationGate: { id: 58, fields: { open: { offset: 0, kind: 7 } } },
+  };
+  const root = createRoot(client, quiet);
+  let suspended = false;
+  let resolve!: () => void;
+  const pending = new Promise<void>((done) => {
+    resolve = done;
+  });
+  function Content() {
+    if (suspended) throw pending;
+    return createElement(
+      Entity,
+      { id: "retained-input" },
+      createElement(Scalar, { value: 10 }),
+    );
+  }
+  const scene = () =>
+    createElement(
+      Suspense,
+      { fallback: createElement(Entity, { id: "fallback" }) },
+      createElement(Content),
+    );
+  try {
+    await root.render(scene());
+    const original = client.entities.get("retained-input");
+    assert.ok(original);
+    suspended = true;
+    await root.render(scene());
+    assert.equal(client.entities.get("retained-input"), original);
+    assert.ok(client.entities.has("fallback"));
+    suspended = false;
+    resolve();
+    await root.render(scene());
+    assert.equal(client.entities.get("retained-input"), original);
+  } finally {
+    resolve();
+    await root.unmount();
+  }
+});
+
+test("font fallback uses declared native ancestry and explicit fonts regardless of order", () => {
+  const client = new LinkBoundary();
+  client.components = {
+    ...client.components,
+    GuiFont: { id: 19, fields: { font_size: { offset: 0, kind: 1 } } },
+  };
+  const tree = new ReactWorldTree(client);
+  const parent = tree.instance("ipp-entity", { id: "font-parent" });
+  const children = tree.instance("ipp-children", {});
+  const child = tree.instance("ipp-entity", { id: "font-child" });
+  const fallback = tree.instance("ipp-gui-font", {
+    font_size: 10,
+    fontFallback: true,
+  });
+  const explicit = tree.instance("ipp-gui-font", { font_size: 20 });
+  child.children.push(fallback);
+  children.children.push(child);
+  parent.children.push(children, explicit);
+  tree.children.push(parent);
+  assert.deepEqual(
+    tree.describe().components.map((component) => component.identity),
+    [explicit.identity],
+  );
+  parent.children.pop();
+  tree.restructure();
+  assert.deepEqual(
+    tree.describeCommit().components.map((component) => component.identity),
+    [fallback.identity],
+  );
+  parent.children.push(explicit);
+  parent.children.splice(0, 1, child);
+  tree.restructure();
+  assert.equal(
+    tree.describeCommit().components.length,
+    2,
+    "JSX nesting must not imply native font ancestry",
+  );
+});
+
+test("commit status retains declaration failure until corrected and fence is terminal", async () => {
+  const client = new LinkBoundary();
+  const commits = new ReactWorldCommits(client, quiet);
+  const tree = new ReactWorldTree(client);
+  assert.equal(commits.getStatus().status, "idle");
+  await commits.failed(new Error("bad declaration")).catch(() => {});
+  assert.equal(commits.getStatus().status, "failed");
+  await Reflect.apply(Reflect.get(commits, "scheduleCallback"), commits, [
+    async () => {},
+  ]);
+  assert.equal(
+    commits.getStatus().status,
+    "failed",
+    "unrelated callbacks must not clear declaration failure",
+  );
+  await Reflect.apply(Reflect.get(commits, "enqueue"), commits, [
+    async () => {},
+  ]);
+  assert.equal(
+    commits.getStatus().status,
+    "failed",
+    "skipped resource work must not acknowledge a corrected declaration",
+  );
+  await commits.capture(tree.describe());
+  assert.equal(commits.getStatus().status, "ready");
+  commits.fence();
+  assert.equal(commits.getStatus().status, "closed");
+  await commits.capture(tree.describe());
+  assert.equal(commits.getStatus().status, "closed");
+});
+
+test("retained gate closes only native boundary and restores its own default intent", () => {
+  const client = new LinkBoundary();
+  client.components = {
+    ...client.components,
+    PresentationGate: { id: 58, fields: { open: { offset: 0, kind: 7 } } },
+  };
+  const tree = new ReactWorldTree(client);
+  const parent = tree.instance("ipp-entity", { id: "boundary" });
+  const parentGate = tree.instance("ipp-presentation-gate", {});
+  const children = tree.instance("ipp-children", {});
+  const child = tree.instance("ipp-entity", { id: "child" });
+  const childGate = tree.instance("ipp-presentation-gate", {});
+  parent.children.push(parentGate, children);
+  children.children.push(child);
+  child.children.push(childGate);
+  tree.children.push(parent);
+  tree.describe();
+  parent.hidden = true;
+  tree.restructure();
+  const hidden = tree.describeCommit();
+  assert.deepEqual(
+    hidden.components
+      .find((component) => component.identity === parentGate.identity)!
+      .fields.get(0),
+    { kind: "bool", value: false },
+  );
+  assert.equal(
+    hidden.components.find(
+      (component) => component.identity === childGate.identity,
+    )!.fields.size,
+    0,
+    "inherited closure must avoid redundant descendant writes",
+  );
+  parent.hidden = false;
+  tree.restructure();
+  const revealed = tree.describeCommit();
+  assert.deepEqual(
+    revealed.components
+      .find((component) => component.identity === parentGate.identity)!
+      .fields.get(0),
+    { kind: "bool", value: true },
+  );
+});
+
+test("partial owner hide is refused before native deletion", () => {
+  const client = new LinkBoundary();
+  const tree = new ReactWorldTree(client);
+  const parent = tree.instance("ipp-entity", { id: "shared" });
+  const scalar = tree.instance("ipp-scalar", { value: 1 });
+  parent.children.push(scalar);
+  tree.children.push(parent);
+  tree.describe();
+  scalar.hidden = true;
+  tree.restructure();
+  assert.throws(() => tree.describeCommit(), /partial-owner hiding/);
+});
+
+test("retained hide refuses foreign gate before sending native mutation", async () => {
+  const client = new LinkBoundary();
+  client.components = {
+    ...client.components,
+    PresentationGate: { id: 58, fields: { open: { offset: 0, kind: 7 } } },
+  };
+  const inspect = client.inspectPage.bind(client);
+  client.inspectPage = async () => {
+    const page = await inspect();
+    for (const entity of page.entities)
+      entity.components.push({ component: 58, fields: { open: true } });
+    return page;
+  };
+  const commits = new ReactWorldCommits(client, quiet);
+  const tree = new ReactWorldTree(client);
+  const entity = tree.instance("ipp-entity", { id: "foreign" });
+  tree.children.push(entity);
+  await commits.capture(tree.describe());
+  const count = client.calls.length;
+  entity.hidden = true;
+  tree.restructure();
+  await assert.rejects(
+    commits.capture(tree.describeCommit()),
+    /owned outside this root/,
+  );
+  assert.equal(client.calls.length, count);
+  assert.ok(client.entities.has("foreign"));
+  commits.fence();
 });

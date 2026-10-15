@@ -14,7 +14,7 @@
 //! program and never see paints.
 //! Without paints the program is the static source itself, whose own dispatch
 //! returns the box's colour. [`CanvasPaintPrograms`] holds at most
-//! [`CANVAS_PAINT_SLOTS`] paints, keyed by their shader asset, and rebuilds the
+//! [`CANVAS_PAINT_SLOTS`] distinct paint sources and rebuilds the
 //! program when a paint enters a slot. A paint keeps its slot until another paint
 //! needs one and it has not been drawn in the current frame, so a panel scrolling
 //! out of view does not recompile the program twice; a ninth paint drawn in one
@@ -90,6 +90,8 @@ impl GuiPaintLanes {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CanvasPaintSource {
     pub body: Arc<str>,
+    /// Recipe features: presentation context and optional scene lighting.
+    pub features: u32,
     /// Parameters in name order, each one vector of the instance's block.
     pub parameters: Arc<[(String, ShaderParameterKind)]>,
 }
@@ -226,10 +228,33 @@ fn paint_function(name: &str, source: &CanvasPaintSource) -> String {
             "#define p_{parameter} (u_paint_blocks[ipp_block + {index}]{swizzle})\n"
         ));
     }
+    let context = source.features & 64 != 0;
+    if context && source.features & 8 != 0 {
+        text.push_str("#define sceneLightDirection(i) ippPaintLightDirection(i, ipp_canvas)\n#define sceneLightRadiance(i) ippPaintLightRadiance(i, ipp_canvas)\n");
+    } else if context {
+        text.push_str(
+            "#define sceneLightDirection(i) vec3(0,0,1)\n#define sceneLightRadiance(i) vec3(0)\n",
+        );
+    }
+    let inputs = if context {
+        format!(
+            "vec3 viewDirection = ippPaintView(ipp_canvas);\nint sceneLightCount = {};\n",
+            if source.features & 8 != 0 {
+                "u_light_count"
+            } else {
+                "0"
+            }
+        )
+    } else {
+        String::new()
+    };
     text.push_str(&format!(
-        "vec4 {name}(vec2 position, vec2 size, vec4 color, float edge, int ipp_block) {{\n{}\n}}\n",
+        "vec4 {name}(vec2 position, vec2 size, vec4 color, float edge, vec4 data, int ipp_block, vec2 ipp_canvas) {{\n{inputs}{}\n}}\n",
         source.body
     ));
+    if context {
+        text.push_str("#undef sceneLightDirection\n#undef sceneLightRadiance\n");
+    }
     for (parameter, _) in source.parameters.iter() {
         text.push_str(&format!("#undef p_{parameter}\n"));
     }
@@ -241,8 +266,9 @@ fn paint_function(name: &str, source: &CanvasPaintSource) -> String {
 pub(crate) fn validation_sources(source: &CanvasPaintSource) -> (String, String) {
     let vertex = "#version 300 es\nvoid main() { gl_Position = vec4(0.0, 0.0, 0.0, 1.0); }\n";
     let fragment = format!(
-        "#version 300 es\nprecision highp float;\n{}out vec4 o_color;\n{}void main() {{\n    vec2 point = gl_FragCoord.xy;\n    o_color = ipp_paint_0(point, point + 1.0, vec4(point, 0.0, 1.0), point.x, int(u_paint_blocks[0].w));\n}}\n",
+        "#version 300 es\nprecision highp float;\n{}{}out vec4 o_color;\n{}void main() {{\n    vec2 point = gl_FragCoord.xy;\n    o_color = ipp_paint_0(point, point + 1.0, vec4(point, 0.0, 1.0), point.x, vec4(point, 0.0, 1.0), int(u_paint_blocks[0].w), point);\n}}\n",
         parameter_array(),
+        presentation_source(source.features & 64 != 0),
         paint_function("ipp_paint_0", source)
     );
     (vertex.into(), fragment)
@@ -253,14 +279,25 @@ pub(crate) fn validation_sources(source: &CanvasPaintSource) -> (String, String)
 fn canvas_fragment_source<'a>(
     slots: impl Iterator<Item = (usize, &'a CanvasPaintSource)>,
 ) -> Cow<'static, str> {
-    let base = crate::services::render::embedded_shader!("shaders/surface_gui.frag");
+    fragment_source(
+        crate::services::render::embedded_shader!("shaders/surface_gui.frag"),
+        slots,
+    )
+}
+
+fn fragment_source<'a>(
+    base: &'static str,
+    slots: impl Iterator<Item = (usize, &'a CanvasPaintSource)>,
+) -> Cow<'static, str> {
     let mut functions = String::new();
     let mut dispatch = String::new();
+    let mut presentation = false;
     for (slot, source) in slots {
+        presentation |= source.features & 64 != 0;
         let name = format!("ipp_paint_{slot}");
         functions.push_str(&paint_function(&name, source));
         dispatch.push_str(&format!(
-            "    if (slot == {slot}) return {name}(position, size, color, edge, block);\n"
+            "    if (slot == {slot}) return {name}(position, size, color, edge, data, block, canvasPosition);\n"
         ));
     }
     if functions.is_empty() {
@@ -268,11 +305,23 @@ fn canvas_fragment_source<'a>(
     }
 
     let generated = format!(
-        "#define IPP_CANVAS_PAINTS 1\n{}{functions}vec4 ipp_canvas_paint(int slot, int block, vec2 position, vec2 size, vec4 color, float edge) {{\n{dispatch}    return color;\n}}\n",
-        parameter_array()
+        "#define IPP_CANVAS_PAINTS 1\n{}{}{functions}vec4 ipp_canvas_paint(int slot, int block, vec2 position, vec2 size, vec4 color, float edge, vec4 data, vec2 canvasPosition) {{\n{dispatch}    return color;\n}}\n",
+        parameter_array(),
+        presentation_source(presentation)
     );
     debug_assert_eq!(base.matches(PAINT_PLACEHOLDER).count(), 1);
     Cow::Owned(base.replacen(PAINT_PLACEHOLDER, &generated, 1))
+}
+
+fn presentation_source(enabled: bool) -> String {
+    if !enabled {
+        return String::new();
+    }
+    format!(
+        "#define IPP_MAX_LIGHTS {}\n{}\n",
+        super::super::lighting::lights::MAX_LIGHTS,
+        crate::services::render::embedded_shader!("shaders/canvas-presentation.glsl")
+    )
 }
 
 /// One admitted paint.
@@ -288,12 +337,14 @@ struct CanvasPaintSlot {
 pub(crate) struct CanvasPaintPrograms<D: RenderDevice> {
     slots: [Option<CanvasPaintSlot>; CANVAS_PAINT_SLOTS],
     program: Option<D::Program>,
+    path_program: Option<D::Program>,
+    path_uploaded: Option<(ipp_core::OutputRef, u64)>,
     /// The slots changed since the program was built.
     stale: bool,
     /// Paints admitted since the last successful build.
     added: Vec<AssetKey>,
     /// Paints the combined program rejected, with the compiler message.
-    rejected: BTreeMap<AssetKey, String>,
+    rejected: BTreeMap<AssetKey, (CanvasPaintSource, String)>,
     frame: u64,
     /// The canvas whose parameter blocks the program holds, and their revision.
     uploaded: Option<(ipp_core::OutputRef, u64)>,
@@ -306,6 +357,8 @@ impl<D: RenderDevice> Default for CanvasPaintPrograms<D> {
         Self {
             slots: Default::default(),
             program: None,
+            path_program: None,
+            path_uploaded: None,
             stale: false,
             added: Vec::new(),
             rejected: BTreeMap::new(),
@@ -334,15 +387,18 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         shader: AssetKey,
         source: &CanvasPaintSource,
     ) -> Result<u32, CanvasPaintFallbackReason> {
-        if let Some(message) = self.rejected.get(&shader) {
+        if let Some((_, message)) = self.rejected.get(&shader).or_else(|| {
+            self.rejected
+                .values()
+                .find(|(rejected, _)| rejected == source)
+        }) {
             return Err(CanvasPaintFallbackReason::Program(message.clone()));
         }
         let frame = self.frame;
-        if let Some(index) = self
-            .slots
-            .iter()
-            .position(|slot| slot.as_ref().is_some_and(|slot| slot.shader == shader))
-        {
+        if let Some(index) = self.slots.iter().position(|slot| {
+            slot.as_ref()
+                .is_some_and(|slot| slot.shader == shader || slot.source == *source)
+        }) {
             self.slots[index].as_mut().expect("occupied slot").used = frame;
             return Ok(index as u32 + 1);
         }
@@ -391,6 +447,27 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         Ok(program)
     }
 
+    /// The analytic program shares admission and parameter blocks with the shape program.
+    pub fn prepare_path_draw(
+        &mut self,
+        device: &mut D,
+        output: ipp_core::OutputRef,
+        blocks: &CanvasPaintBlocks,
+    ) -> Result<Option<&D::Program>, RenderError> {
+        if self.program.is_none() || self.stale {
+            self.build(device)?;
+        }
+
+        let Some(program) = self.path_program.as_ref() else {
+            return Ok(None);
+        };
+        if !blocks.values.is_empty() && self.path_uploaded != Some((output, blocks.revision)) {
+            device.set_gui_paint_blocks(program, &blocks.values)?;
+            self.path_uploaded = Some((output, blocks.revision));
+        }
+        Ok(Some(program))
+    }
+
     /// Build the program from the occupied slots. When it fails, reject the paints
     /// admitted since the last successful build and build without them; context
     /// loss returns at once.
@@ -398,7 +475,11 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         if let Some(program) = self.program.take() {
             device.delete_program(program);
         }
+        if let Some(program) = self.path_program.take() {
+            device.delete_program(program);
+        }
         self.uploaded = None;
+        self.path_uploaded = None;
         let vertex = crate::services::render::embedded_shader!("shaders/surface_gui.vert");
         loop {
             let fragment = canvas_fragment_source(
@@ -407,9 +488,34 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
                     .enumerate()
                     .filter_map(|(index, slot)| Some((index + 1, &slot.as_ref()?.source))),
             );
-            match device.create_program(vertex, &fragment) {
-                Ok(program) => {
+            let created = device
+                .create_program(vertex, &fragment)
+                .and_then(|program| {
+                    if self.slots.iter().all(Option::is_none) {
+                        return Ok((program, None));
+                    }
+                    let path_fragment = fragment_source(
+                        crate::services::render::embedded_shader!("shaders/surface.frag"),
+                        self.slots
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, slot)| Some((index + 1, &slot.as_ref()?.source))),
+                    );
+                    match device.create_program(
+                        crate::services::render::embedded_shader!("shaders/surface.vert"),
+                        &path_fragment,
+                    ) {
+                        Ok(path) => Ok((program, Some(path))),
+                        Err(error) => {
+                            device.delete_program(program);
+                            Err(error)
+                        }
+                    }
+                });
+            match created {
+                Ok((program, path)) => {
                     self.program = Some(program);
+                    self.path_program = path;
                     self.stale = false;
                     self.added.clear();
                     self.builds += 1;
@@ -439,10 +545,11 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
                             Warn,
                             "canvas paint rejected by the canvas program: {message}"
                         );
-                        self.rejected.insert(shader, message.clone());
                         for slot in &mut self.slots {
                             if slot.as_ref().is_some_and(|slot| slot.shader == shader) {
-                                *slot = None;
+                                let rejected = slot.take().expect("rejected occupied slot");
+                                self.rejected
+                                    .insert(shader, (rejected.source, message.clone()));
                             }
                         }
                     }
@@ -457,6 +564,10 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         if let Some(program) = self.program.take() {
             device.delete_program(program);
         }
+        if let Some(program) = self.path_program.take() {
+            device.delete_program(program);
+        }
+        self.path_uploaded = None;
         self.slots = Default::default();
         self.stale = false;
         self.added.clear();
@@ -471,6 +582,14 @@ struct CanvasPaintBlock {
     start: u32,
     len: u32,
     lanes: Option<GuiPaintLanes>,
+}
+
+/// A frame-local group of instances with identical packed parameters.
+struct CanvasPaintGroup {
+    slot: u32,
+    packed: Vec<[f32; 4]>,
+    candidates: Vec<CanvasPaintBlock>,
+    start: Option<u32>,
 }
 
 /// The parameter blocks of one canvas's paint instances and the lanes its painted
@@ -522,25 +641,14 @@ impl CanvasPaintBlocks {
                 .is_err()
         });
 
-        // Instances keep their blocks first, so a new instance never displaces one.
+        // Equal parameter blocks share derived GPU storage. Authored paint
+        // instances remain independent: a changed member splits before upload.
+        let mut groups: Vec<CanvasPaintGroup> = Vec::new();
+        let mut by_values = BTreeMap::new();
         let mut admitted = Vec::with_capacity(paints.len());
         for paint in paints {
-            let result = admit(paint);
-            if let Ok((_, source)) = &result {
-                let len = source.parameters.len() as u32;
-                if let Some(block) = previous.get(&paint.target).filter(|block| block.len == len) {
-                    taken.push((block.start, len));
-                }
-            }
-            admitted.push(result);
-        }
-
-        for (paint, result) in paints.iter().zip(admitted) {
-            let kept = previous.get(&paint.target);
-            let outcome = result.and_then(|(slot, source)| {
-                // Every declared parameter needs a property of its type before the
-                // instance takes room in the array.
-                let mut block = Vec::with_capacity(source.parameters.len());
+            let result = admit(paint).and_then(|(slot, source)| {
+                let mut packed = Vec::with_capacity(source.parameters.len());
                 for (name, kind) in source.parameters.iter() {
                     let value = paint
                         .properties
@@ -552,29 +660,103 @@ impl CanvasPaintBlocks {
                         .ok_or_else(|| CanvasPaintFallbackReason::Parameter(name.clone()))?;
                     let mut vector = [0.0; 4];
                     vector[..value.len()].copy_from_slice(value);
-                    block.push(vector);
+                    packed.push(vector);
                 }
 
-                let len = block.len() as u32;
-                let start = match kept.filter(|block| block.len == len) {
-                    Some(block) => block.start,
-                    None => {
-                        let start = first_fit(&taken, len)
-                            .ok_or(CanvasPaintFallbackReason::UniformBudget)?;
-                        taken.push((start, len));
-                        start
-                    }
-                };
-                let end = (start + len) as usize;
-                if values.len() < end {
-                    values.resize(end, [0.0; 4]);
+                let key = (
+                    slot,
+                    packed
+                        .iter()
+                        .map(|vector| vector.map(f32::to_bits))
+                        .collect::<Vec<_>>(),
+                );
+                let index = *by_values.entry(key).or_insert_with(|| {
+                    groups.push(CanvasPaintGroup {
+                        slot,
+                        packed,
+                        candidates: Vec::new(),
+                        start: None,
+                    });
+                    groups.len() - 1
+                });
+                let group = &mut groups[index];
+                if let Some(block) = previous.get(&paint.target).filter(|block| {
+                    block.lanes.is_some() && block.len as usize == group.packed.len()
+                }) {
+                    group.candidates.push(*block);
                 }
-                values[start as usize..end].copy_from_slice(&block);
+                Ok(index)
+            });
+            admitted.push(result);
+        }
+
+        // Preserve unchanged aliases first, then prior independent blocks. A
+        // changed alias cannot overwrite values still used by another instance.
+        for unchanged in [true, false] {
+            for CanvasPaintGroup {
+                packed,
+                candidates,
+                start,
+                ..
+            } in &mut groups
+            {
+                if start.is_some() {
+                    continue;
+                }
+                for candidate in candidates.iter() {
+                    let begin = candidate.start;
+                    let len = candidate.len;
+                    let old = self.values.get(begin as usize..(begin + len) as usize);
+                    if unchanged && old != Some(packed.as_slice()) {
+                        continue;
+                    }
+                    if taken.iter().any(|(at, count)| {
+                        len > 0 && *count > 0 && begin < at + count && *at < begin + len
+                    }) {
+                        continue;
+                    }
+                    *start = Some(begin);
+                    taken.push((begin, len));
+                    break;
+                }
+            }
+        }
+
+        for CanvasPaintGroup {
+            packed,
+            start,
+            ..
+        } in &mut groups
+        {
+            let len = packed.len() as u32;
+            if start.is_none() {
+                *start = first_fit(&taken, len);
+                if let Some(begin) = *start {
+                    taken.push((begin, len));
+                }
+            }
+            if let Some(begin) = *start {
+                let end = begin as usize + packed.len();
+                values.resize(values.len().max(end), [0.0; 4]);
+                values[begin as usize..end].copy_from_slice(packed);
+            }
+        }
+
+        for (paint, result) in paints.iter().zip(admitted) {
+            let kept = previous.get(&paint.target);
+            let outcome = result.and_then(|index| {
+                let CanvasPaintGroup {
+                    slot,
+                    packed,
+                    start,
+                    ..
+                } = &groups[index];
+                let start = start.ok_or(CanvasPaintFallbackReason::UniformBudget)?;
                 Ok(CanvasPaintBlock {
                     start,
-                    len,
+                    len: packed.len() as u32,
                     lanes: Some(GuiPaintLanes {
-                        slot,
+                        slot: *slot,
                         block: start,
                     }),
                 })

@@ -33,7 +33,6 @@ import {
   CONTROL_HEIGHT,
   DENSE_ROW,
   DIAL,
-  INSET,
   TEXT_BODY,
   TEXT_SMALL,
 } from "../themes/geometry.js";
@@ -58,9 +57,9 @@ export const DRAGGED = 0.8;
 /** The bipolar knob's range, value and fill origin. */
 export const BIPOLAR = { min: -100, max: 100, value: -30, origin: 0 } as const;
 
-/** The kit's housing: the dial's side wide and a dense row taller. */
+/** The kit's square dial housing contains its compact numeric readout. */
 const SIDE = DIAL * K;
-const HOUSING = [SIDE, SIDE + DENSE_ROW * K] as const;
+const HOUSING = [SIDE, SIDE] as const;
 /** The housing's top, the sheet's; the caption's row sits above it. */
 const TOP = 129.5;
 
@@ -135,9 +134,9 @@ const SECOND_ROOTS = Object.fromEntries(
  */
 function pairedField(name: "paired" | "typed"): Rect {
   const [x, y, width] = SECOND_ROOTS[name];
-  const top = y + (DENSE_ROW + DIAL + DENSE_ROW + INSET / 2) * K;
+  const top = y + (DENSE_ROW + 8 + DIAL + 8) * K;
   const unit = FONT_ADVANCE * TEXT_BODY * K + (TEXT_BODY * K) / 100;
-  return [x, top, width - (INSET / 2) * K - unit, CONTROL_HEIGHT * K];
+  return [x, top, width - 8 * K - unit, CONTROL_HEIGHT * K];
 }
 
 /** A knob and its paired numeric input, both controlled by one value. */
@@ -171,6 +170,7 @@ function PairedKnob({
         units="%"
         stepParts={false}
         bounds={false}
+        layout={{ width: PAIRED_WIDTH }}
         value={gain}
         onChange={setGain}
       />
@@ -270,7 +270,7 @@ export default defineSpecimen({
       <GuiKit fontSize={TEXT_BODY * K}>
         {COLUMNS.map(({ name }) => {
           const [x, y] = DIALS[name];
-          const at: Point = [x, y - DENSE_ROW * K];
+          const at: Point = [x, y - (DENSE_ROW + 8) * K];
           return name === "bipolar" ? (
             <Knob
               key={name}

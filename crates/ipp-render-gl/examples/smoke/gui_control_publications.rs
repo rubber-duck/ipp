@@ -4,7 +4,8 @@ use super::canvas_publications::{canvas, frame_at, place};
 use super::publications::{apply, assert_color, create, save};
 use ipp_core::components::rows::Rows;
 use ipp_core::components::{
-    CanvasBox, CanvasStyle, GuiBehavior, GuiButton, GuiCheckbox, GuiLayout, GuiSlider, GuiTextInput,
+    CanvasBox, CanvasStyle, GuiBehavior, GuiButton, GuiCheckbox, GuiLayout, GuiMetrics, GuiSlider,
+    GuiTextInput,
 };
 use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
 use ipp_core::systems::canvas::{
@@ -207,6 +208,16 @@ fn control(
                 y: rect[1],
                 ..Default::default()
             }),
+            ComponentValue::GuiMetrics(GuiMetrics {
+                label_inset: 16.0,
+                label_gap: 8.0,
+                rail_thickness: 8.0,
+                thumb_ratio: 0.75,
+                checkbox_ratio: 0.5,
+                icon_ratio: 0.55,
+                caret_width: 1.0,
+                ..Default::default()
+            }),
             ComponentValue::GuiSkin(skin),
         ],
     )?;
@@ -317,6 +328,7 @@ pub fn run<D: RenderDevice>(
     fonts: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let world = host.create_world(Default::default(), &super::selection::panel())?;
     let root = canvas(&mut host, world, 100.0)?;
@@ -551,7 +563,7 @@ pub fn run<D: RenderDevice>(
             .root_output(root.world().id())
             .map(|(output, _, publication)| (output, publication));
         renderer.prepare(&mut host, selected)?;
-        host.progress_assets();
+        super::task_scheduler::progress(&mut host);
         if host
             .asset_resources()
             .get(font_key)

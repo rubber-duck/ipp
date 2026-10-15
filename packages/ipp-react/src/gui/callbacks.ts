@@ -77,6 +77,8 @@ export interface GuiControlEvent<Value> {
   readonly target: GuiTarget;
   readonly tick: bigint;
   readonly value: Value;
+  /** First observed value for this listener registration, including a new incarnation. */
+  readonly initial?: boolean | undefined;
 }
 
 /**
@@ -454,7 +456,11 @@ export function invokeControlValue(
   event: GuiControlEvent<GuiControlValue>,
 ): void {
   const { value } = event;
-  const base = { target: event.target, tick: event.tick };
+  const base = {
+    target: event.target,
+    tick: event.tick,
+    initial: event.initial,
+  };
   switch (value.kind) {
     case "checked":
       return listeners?.onToggle?.({ ...base, value: value.value });

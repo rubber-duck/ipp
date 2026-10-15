@@ -76,10 +76,18 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             .filter(|outcome| origins.contains(&outcome.request_id))
             .cloned()
             .collect::<VecDeque<_>>();
+        let camera_requests: std::collections::BTreeSet<_> = replies
+            .iter()
+            .filter_map(|(id, reply)| {
+                matches!(reply, WorldSessionReply::CompletedCameraNavigate { .. }).then_some(*id)
+            })
+            .collect();
         let mut system_outcomes = report
             .system_command_outcomes
             .iter()
-            .filter(|outcome| outcome.session == self.session.id)
+            .filter(|outcome| {
+                outcome.session == self.session.id && !camera_requests.contains(&outcome.request_id)
+            })
             .cloned()
             .collect::<VecDeque<_>>();
         let mut outcomes = report
@@ -88,20 +96,15 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         let result = (|| {
             for (request_id, reply) in replies.drain(..) {
                 let body = match reply {
-                    WorldSessionReply::CameraNavigate => {
-                        let outcome = system_outcomes
-                            .pop_front()
-                            .ok_or("core did not publish navigation outcome")?;
-                        if outcome.request_id != request_id {
-                            return Err("navigation outcome correlation".into());
-                        }
-                        match outcome.result {
-                            Ok(()) => ResponseBody::CameraNavigated,
-                            Err(reason) => ResponseBody::Error {
-                                code: 1,
-                                message: reason.to_string(),
-                            },
-                        }
+                    WorldSessionReply::CompletedCameraNavigate {
+                        body,
+                        tick,
+                    } => {
+                        self.queue_response_at(request_id, body, tick)?;
+                        continue;
+                    }
+                    WorldSessionReply::CameraNavigate(_) => {
+                        return Err("Camera navigation was not completed".into());
                     }
                     WorldSessionReply::LifecycleSubscription => {
                         let outcome = system_outcomes
@@ -258,7 +261,16 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
     pub(crate) fn queue_response(
         &mut self,
         request_id: u64,
+        body: ResponseBody,
+    ) -> Result<(), String> {
+        self.queue_response_at(request_id, body, self.world.tick())
+    }
+
+    pub(crate) fn queue_response_at(
+        &mut self,
+        request_id: u64,
         mut body: ResponseBody,
+        tick: u64,
     ) -> Result<(), String> {
         if !self.session.outbox.is_live() {
             return Err("World session output is closed".into());
@@ -288,7 +300,7 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         let mut response = Response {
             session: self.session.id,
             request_id,
-            tick: self.world.tick(),
+            tick,
             body,
         };
         if matches!(response.body, ResponseBody::LifecycleDiagnostics(_)) {

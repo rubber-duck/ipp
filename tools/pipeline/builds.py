@@ -289,36 +289,8 @@ def script_product(entry: ProductScript) -> None:
             )
 
 
-def gallery_gui_assets() -> None:
-    with product(ROOT / "target/gallery-gui-assets") as directory:
-        authoring = ROOT / "examples/world-gallery/worlds/gui/authoring"
-        run(
-            [
-                blender(),
-                "--background",
-                "--factory-startup",
-                "--python-exit-code",
-                "17",
-                str(authoring / "projector.blend"),
-                "--python",
-                str(authoring / "build_projector.py"),
-                "--",
-                "--export-only",
-                "--output-directory",
-                str(directory / "projector"),
-            ]
-        )
-        run(
-            [
-                development_python(),
-                "tools/assets/gallery_gui_assets.py",
-                str(directory),
-            ]
-        )
-
-
 def gallery_platformer_assets(*, native: bool = False) -> None:
-    authoring = ROOT / "examples/world-gallery/worlds/platformer/authoring"
+    authoring = ROOT / "examples/demos/scenes/platformer/authoring"
     name = "gallery-platformer-native-assets" if native else "gallery-platformer-assets"
     with product(ROOT / "target" / name) as directory:
         with tempfile.TemporaryDirectory(
@@ -333,7 +305,7 @@ def gallery_platformer_assets(*, native: bool = False) -> None:
                     "17",
                     str(authoring / "platformer.blend"),
                     "--python",
-                    "integrations/blender/export_scene.py",
+                    str(authoring / "export_platformer.py"),
                     "--",
                     exported,
                 ]
@@ -349,8 +321,17 @@ def gallery_platformer_assets(*, native: bool = False) -> None:
                     "--world",
                     "platformer.ipp",
                     "--clips-only",
+                    "--system",
+                    "ipp.surface",
+                    "--system",
+                    "ipp.world-attachment",
+                    "--system",
+                    "ipp.lifecycle-publisher",
                     *(["--native"] if native else []),
                 ]
+            )
+            shutil.copyfile(
+                Path(exported) / "pose-origins.json", directory / "pose-origins.json"
             )
         run(
             [
@@ -359,6 +340,54 @@ def gallery_platformer_assets(*, native: bool = False) -> None:
                 str(directory / "route.json"),
             ]
         )
+
+
+def cockpit_assets(*, native: bool = False) -> None:
+    """Import the cockpit's standard Blender export against its target contract."""
+    authoring = ROOT / "examples/demos/scenes/cockpit/authoring"
+    name = "demos-cockpit-native-assets" if native else "demos-cockpit-assets"
+    with product(ROOT / "target" / name) as directory:
+        with tempfile.TemporaryDirectory(
+            prefix="cockpit-export-", dir=ROOT / "target"
+        ) as exported:
+            run(
+                [
+                    blender(),
+                    "--background",
+                    "--factory-startup",
+                    "--python-exit-code",
+                    "17",
+                    str(authoring / "cockpit-projected.blend"),
+                    "--python",
+                    str(authoring / "export_projected.py"),
+                    "--",
+                    exported,
+                ]
+            )
+            run(
+                [
+                    node(),
+                    "tools/assets/import-blender-scene.mjs",
+                    exported,
+                    str(directory),
+                    "--namespace",
+                    "cockpit",
+                    "--world",
+                    "cockpit.ipp",
+                    "--system",
+                    "ipp.surface",
+                    "--system",
+                    "ipp.world-attachment",
+                    "--system",
+                    "ipp.lifecycle-publisher",
+                    *(["--native"] if native else []),
+                ]
+            )
+            metadata = json.loads((Path(exported) / "cockpit-runtime.json").read_text())
+            manifest_path = directory / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            manifest.update(metadata)
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 def build(name: str) -> None:
@@ -372,10 +401,10 @@ def build(name: str) -> None:
     elif name in ("gles-host", "gles-host-instrumentation"):
         with product(ROOT / "target" / name) as directory:
             gles_host(directory, name == "gles-host-instrumentation")
-    elif name == "gallery-gui-assets":
-        gallery_gui_assets()
     elif name in ("gallery-platformer-assets", "gallery-platformer-native-assets"):
         gallery_platformer_assets(native=name == "gallery-platformer-native-assets")
+    elif name in ("demos-cockpit-assets", "demos-cockpit-native-assets"):
+        cockpit_assets(native=name == "demos-cockpit-native-assets")
     elif name in ("world-hosts", "scaling-host"):
         world_hosts(name == "scaling-host")
     elif name == "builtin-exporter":

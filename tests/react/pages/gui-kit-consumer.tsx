@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 /**
  * A public consumer of `@ipp/react/gui-kit` for the React build: it resolves
  * the entry through the package exports, development sources or the built
@@ -15,7 +16,12 @@ import { Entity, Children } from "@ipp/react";
 
 export function kitPanel(contract: GuiKitContract, font: string) {
   return (
-    <GuiKit contract={contract} font={font} fontSize={16}>
+    <GuiKit
+      skin={cybertronSkin(contract)}
+      contract={contract}
+      font={font}
+      fontSize={16}
+    >
       <Entity id="panel">
         <Children>
           <InlineAlert id="alert" severity="warning" text="Connection lost." />

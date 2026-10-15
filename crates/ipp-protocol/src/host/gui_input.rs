@@ -11,6 +11,10 @@ use ipp_core::systems::gui::local::{GuiNativeTextState, GuiTextComposition, GuiT
 // Cancellations encode their pointer count in one byte.
 const _: () = assert!(GUI_INPUT_MAX_POINTERS <= u8::MAX as usize);
 
+#[cfg(test)]
+#[path = "gui_input_tests.rs"]
+mod tests;
+
 /// All physical input is fenced to an explicitly selected actual surface.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
@@ -41,6 +45,23 @@ pub struct GuiPickingBlocker {
     pub incarnation: u64,
 }
 
+/// Fresh eligible wheel hit, independent of whether the GUI consumes the delta.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GuiInputHit {
+    /// Exact World, entity and control component lifetime at routing.
+    pub target: crate::world::gui::GuiTarget,
+    /// Exact attachment producer path from the presented root to the control.
+    pub path: Vec<crate::world::view_queries::CameraAttachmentReference>,
+}
+
+/// Fixed target and path-count bytes plus one exact attachment per path entry.
+pub fn input_hit_size(path_len: usize) -> Result<usize, ProtocolError> {
+    if path_len > crate::world::view_queries::MAX_CAMERA_PATH_DEPTH {
+        return Err(ProtocolError::Malformed("camera path depth"));
+    }
+    Ok(34 + 4 + 40 * path_len)
+}
+
 /// One correlated terminal. Applied child counts preserve partial admission;
 /// application callbacks consume the independent effect stream and field observation.
 #[derive(Clone, Debug, PartialEq)]
@@ -60,6 +81,7 @@ pub enum GuiPhysicalResponse {
         error: Option<String>,
         remaining: Option<[f32; 2]>,
         native: Option<Vec<u8>>,
+        hit: Option<GuiInputHit>,
     },
     Rejected(String),
     Revoked(u64),
@@ -202,6 +224,19 @@ impl Reader<'_> {
                 },
                 native: if reader.boolean()? {
                     Some(reader.bytes_bounded(crate::MAX_MESSAGE_BYTES)?)
+                } else {
+                    None
+                },
+                hit: if reader.boolean()? {
+                    Some(GuiInputHit {
+                        target: crate::world::gui::GuiTarget {
+                            world: reader.world_reference()?,
+                            entity: ipp_core::EntityId::from_bits(reader.u64()?),
+                            component: reader.u16()?,
+                            incarnation: reader.u64()?,
+                        },
+                        path: reader.camera_path()?,
+                    })
                 } else {
                     None
                 },
@@ -404,6 +439,7 @@ impl Writer {
                     error,
                     remaining,
                     native,
+                    hit,
                 } => {
                     writer.u8(GUI_PHYSICAL_RESPONSE_ROUTED)?;
                     writer.u8(*disposition)?;
@@ -423,6 +459,21 @@ impl Writer {
                     if let Some(native) = native {
                         writer.count(native.len(), crate::MAX_MESSAGE_BYTES)?;
                         writer.raw(native)?;
+                    }
+                    writer.u8(u8::from(hit.is_some()))?;
+                    if let Some(hit) = hit {
+                        input_hit_size(hit.path.len())?;
+                        writer.world_reference(hit.target.world)?;
+                        writer.u64(hit.target.entity.to_bits())?;
+                        writer.u16(hit.target.component)?;
+                        writer.u64(hit.target.incarnation)?;
+                        writer.u32(hit.path.len() as u32)?;
+                        for edge in &hit.path {
+                            writer.world_reference(edge.parent)?;
+                            writer.u64(edge.anchor)?;
+                            writer.u64(edge.incarnation)?;
+                            writer.u64(edge.revision)?;
+                        }
                     }
                 }
                 GuiPhysicalResponse::Rejected(error) => {

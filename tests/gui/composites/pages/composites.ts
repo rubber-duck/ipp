@@ -53,6 +53,7 @@ import {
   selectSystems,
 } from "../../../fixtures/system-selections.js";
 import { check } from "../../../harness/page/checks.js";
+import { assetsLoaded } from "../../support/mounted-panel.js";
 export { nativePresentationTransport } from "../../../../packages/ipp-client/src/native-presentation.js";
 export { workerTransport } from "../../../../packages/ipp-client/src/worker.js";
 
@@ -497,6 +498,13 @@ export async function openCompositePage(
   const view: PresentationView = await host.presentation.select(
     await host.presentation.surface(),
     binding,
+  );
+  // A completed frame need not have its asynchronous font ready yet. Pointer
+  // editing requires the measured glyph run before its first press.
+  await Promise.all(
+    [...panels.values()].map((panel) =>
+      assetsLoaded(panel.client, [panel.font]),
+    ),
   );
   await host.presentation.frame(view);
   const input = await host.input.open(view);

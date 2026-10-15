@@ -84,14 +84,14 @@ class SelectionTests(unittest.TestCase):
 
     def test_gallery_gui_participant_changes_select_the_suite(self):
         for source in (
-            "examples/world-gallery/worlds/gui/dashboard.tsx",
+            "examples/demos/main.tsx",
             "packages/ipp-react/src/gui/theme.ts",
             "packages/ipp-client/tools/assemble.mjs",
             "tools/build/verify-browser.mjs",
         ):
             with self.subTest(source=source):
                 ids, _ = affected([source], [])
-                self.assertTrue(set(suite_ids(["gallery-gui"])).issubset(ids))
+                self.assertTrue(set(suite_ids(["gallery-browser"])).issubset(ids))
 
     def test_gui_surface_and_schema_row_sources_select_their_suites(self):
         # Test targets, shared scenarios and schema-row participants each select
@@ -210,18 +210,7 @@ class SelectionTests(unittest.TestCase):
         self.assertTrue(set(suite_ids(["surfaces"])).issubset(ids))
 
     def test_files_without_area_rules_select_their_declared_coverage(self):
-        gallery = suite_ids(
-            [
-                "animation",
-                "cameras",
-                "render",
-                "lighting",
-                "gallery-particles",
-                "gallery-gui",
-                "gallery-gui-camera",
-                "gallery-platformer",
-            ]
-        )
+        gallery = suite_ids(["gallery-browser"])
         for source, expected in (
             ("crates/ipp-core/src/lib.rs", suite_ids(["contracts"])),
             (
@@ -244,18 +233,13 @@ class SelectionTests(unittest.TestCase):
                 "crates/ipp-render-gl/tests/mesh_residency.rs",
                 suite_ids(["render-residency"]),
             ),
-            ("tests/gallery/pages/viewer.ts", gallery),
-            ("tests/gallery/drivers/browser-gallery.ts", gallery),
-            ("tests/gallery/support/gallery-server.ts", gallery),
+            ("tests/gallery/pages/application.ts", gallery),
+            ("tests/gallery/drivers/browser-application.ts", gallery),
             (
                 "crates/ipp-core/src/world/mutation/operation.rs",
                 suite_ids(["command-streaming", "animation", "gui"]),
             ),
             ("tests/rendering/pages/texture.tsx", suite_ids(["textures"])),
-            (
-                "tools/assets/gallery_gui_assets.py",
-                suite_ids(["gallery-site", "gallery-gui", "gallery-gui-camera"]),
-            ),
             (
                 "crates/ipp-core/src/world/systems/animation/update.rs",
                 suite_ids(["animation"]),

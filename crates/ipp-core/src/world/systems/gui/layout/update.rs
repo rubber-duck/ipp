@@ -36,6 +36,7 @@ struct Evaluator<'context, 'world> {
     reveal: Option<&'context super::reveal::GuiReveal>,
     /// Nearest entity at or above the current one that declares `GuiFont`.
     font: Option<EntityId>,
+    presentation: crate::systems::hierarchy::PresentationEligibility,
     /// Overlays found among their parents' children, in discovery order,
     /// laid out after the boxes they are placed against.
     overlays: Vec<GuiPendingOverlay>,
@@ -72,12 +73,14 @@ pub(super) fn evaluate(
         gui,
         reveal,
         font: None,
+        presentation: Default::default(),
         overlays: Vec::new(),
         view: GuiEntityLayoutView {
             revision,
             extent,
             density,
             placements: BTreeMap::new(),
+            joined_backgrounds: BTreeMap::new(),
             geometry: BTreeMap::new(),
             text_constraints: BTreeMap::new(),
             control_labels: BTreeMap::new(),
@@ -117,12 +120,17 @@ pub(super) fn evaluate(
         next += 1;
         evaluator.overlay(overlay);
     }
+    evaluator.view.joined_backgrounds = super::joined_surface::backgrounds(
+        evaluator.context.world,
+        &evaluator.view.placements,
+        &evaluator.view.overlays,
+    );
     evaluator.view
 }
 
 impl Evaluator<'_, '_> {
-    fn in_scope(&self, entity: EntityId) -> bool {
-        !self.context.world.state.links.invalid.contains(&entity)
+    fn in_scope(&mut self, entity: EntityId) -> bool {
+        self.presentation.open(self.context.world, entity)
     }
 
     fn declared(&self, entity: EntityId) -> bool {
@@ -297,19 +305,36 @@ impl Evaluator<'_, '_> {
             (fill[0] - padding[1] - padding[3]).max(0.0),
             (fill[1] - padding[0] - padding[2]).max(0.0),
         );
+        // Child measurement keeps the available limits (including wrapping).
+        // Only the container's choice between filling and fitting changes.
+        let fit = [
+            style.fit_width && style.width < 0.0,
+            style.fit_height && style.height < 0.0,
+        ];
+        let result_fill = [
+            if fit[0] {
+                f32::INFINITY
+            } else {
+                fill[0]
+            },
+            if fit[1] {
+                f32::INFINITY
+            } else {
+                fill[1]
+            },
+        ];
         let natural = self.intrinsic(entity, content.max_w);
         let children = self.children(entity);
-        // A container fills a bounded axis, padding included, and on an
-        // unbounded one fits its content with its padding round it, as an
-        // overlay's container does while it is measured.
+        // Filled results already include padding. Measured results add it
+        // once, for unbounded axes and explicitly fitted bounded axes.
         let fitted = |size: [f32; 2]| {
             [
-                if fill[0].is_finite() {
+                if result_fill[0].is_finite() {
                     size[0]
                 } else {
                     size[0] + padding[1] + padding[3]
                 },
-                if fill[1].is_finite() {
+                if result_fill[1].is_finite() {
                     size[1]
                 } else {
                     size[1] + padding[0] + padding[2]
@@ -317,30 +342,61 @@ impl Evaluator<'_, '_> {
             ]
         };
         let mut size = if let Some(control) = &scrolling {
-            self.scroll(entity, &children, content, style, depth, control)
+            let viewport = Constraints {
+                min_w: (constraints.min_w.max(style.min_width).min(fill[0])
+                    - padding[1]
+                    - padding[3])
+                    .max(0.0),
+                min_h: (constraints.min_h.max(style.min_height).min(fill[1])
+                    - padding[0]
+                    - padding[2])
+                    .max(0.0),
+                ..content
+            };
+            self.scroll(entity, &children, viewport, style, depth, control)
         } else {
             match style.kind {
-                1 | 2 => fitted(self.flex(&children, content, fill, style.kind == 1, depth)),
-                3 => fitted(self.stack(&children, content, fill, depth)),
-                4 | 5 => fitted(self.single(&children, style, content, fill, depth)),
-                6 => self.single(&children, style, content, fill, depth),
+                1 | 2 => fitted(self.flex(&children, content, result_fill, style, depth)),
+                3 => fitted(self.stack(&children, content, result_fill, depth)),
+                4 | 5 => fitted(self.single(&children, style, content, result_fill, depth)),
+                6 => {
+                    let measured = self.single(&children, style, content, result_fill, depth);
+                    [
+                        measured[0]
+                            + if fit[0] {
+                                padding[1] + padding[3]
+                            } else {
+                                0.0
+                            },
+                        measured[1]
+                            + if fit[1] {
+                                padding[0] + padding[2]
+                            } else {
+                                0.0
+                            },
+                    ]
+                }
                 _ => {
                     for &child in &children {
                         self.visit(child, content, depth + 1);
                     }
                     [
-                        content.clamp_width(natural[0]),
-                        content.clamp_height(natural[1]),
+                        content.clamp_width(natural[0])
+                            + if fit[0] {
+                                padding[1] + padding[3]
+                            } else {
+                                0.0
+                            },
+                        content.clamp_height(natural[1])
+                            + if fit[1] {
+                                padding[0] + padding[2]
+                            } else {
+                                0.0
+                            },
                     ]
                 }
             }
         };
-        for child in children {
-            if let Some(placement) = self.view.placements.get_mut(&child) {
-                placement.origin[0] += padding[3];
-                placement.origin[1] += padding[0];
-            }
-        }
         if style.width >= 0.0 {
             size[0] = style.width;
         }
@@ -349,6 +405,15 @@ impl Evaluator<'_, '_> {
         }
         size[0] = constraints.clamp_width(size[0].clamp(style.min_width, maximum[0]));
         size[1] = constraints.clamp_height(size[1].clamp(style.min_height, maximum[1]));
+        if scrolling.is_none() && matches!(style.kind, 1 | 2) {
+            self.align_flow(&children, style, size);
+        }
+        for child in children {
+            if let Some(placement) = self.view.placements.get_mut(&child) {
+                placement.origin[0] += padding[3];
+                placement.origin[1] += padding[0];
+            }
+        }
         let available = size.iter().all(|value| value.is_finite() && *value >= 0.0)
             && scrolling.as_ref().is_none_or(|control| control.available)
             && (scrolling.is_none() || fill.into_iter().all(f32::is_finite));
@@ -377,7 +442,7 @@ impl Evaluator<'_, '_> {
         depth: usize,
         control: &GuiScrolling,
     ) -> [f32; 2] {
-        let viewport = [constraints.max_w, constraints.max_h];
+        let mut viewport = [constraints.max_w, constraints.max_h];
         if !control.available || !viewport.into_iter().all(f32::is_finite) {
             return [0.0; 2];
         }
@@ -475,6 +540,18 @@ impl Evaluator<'_, '_> {
                 );
             }
         }
+        // Measure under the available bounds, then fit the viewport before
+        // settling offsets, focus reveal and the virtual item range.
+        if style.fit_width && style.width < 0.0 {
+            viewport[0] = constraints.clamp_width(content[0]);
+        }
+        if style.fit_height && style.height < 0.0 {
+            viewport[1] = constraints.clamp_height(content[1]);
+        }
+        if let Some(list) = &mut list {
+            list.viewport = viewport[list.axis];
+        }
+
         let mut settled = GuiScrollLayout::settle(
             control.component,
             control.incarnation,
@@ -636,9 +713,10 @@ impl Evaluator<'_, '_> {
         children: &[EntityId],
         constraints: Constraints,
         fill: [f32; 2],
-        horizontal: bool,
+        flow_style: GuiLayout,
         depth: usize,
     ) -> [f32; 2] {
+        let horizontal = flow_style.kind == 1;
         let main_axis = usize::from(!horizontal);
         let cross_axis = 1 - main_axis;
         let max_main = if horizontal {
@@ -651,8 +729,13 @@ impl Evaluator<'_, '_> {
         } else {
             constraints.max_w
         };
+        // A finite fitted axis has a limit, but no allocated leftover to grow
+        // into. Preserve legacy zero-size flex on truly unbounded axes.
+        let fit_main = max_main.is_finite() && !fill[main_axis].is_finite();
         let flex_total: f32 = children.iter().map(|child| self.style(*child).flex).sum();
-        let mut cursor = 0.0;
+        // Reserve every inter-child gap before measuring fixed children and
+        // distributing the remaining space among flexible children.
+        let mut cursor = flow_style.gap * children.len().saturating_sub(1) as f32;
         let mut cross = 0.0_f32;
         let mut measured = BTreeMap::new();
         let mut leftover = 0.0;
@@ -668,7 +751,12 @@ impl Evaluator<'_, '_> {
                 } else {
                     (margin[0], margin[2])
                 };
-                let main = if flexible {
+                let cross_margin = if horizontal {
+                    margin[0] + margin[2]
+                } else {
+                    margin[3] + margin[1]
+                };
+                let main = if flexible && !fit_main {
                     if max_main.is_finite() && flex_total > 0.0 {
                         leftover * style.flex / flex_total
                     } else {
@@ -679,11 +767,11 @@ impl Evaluator<'_, '_> {
                 };
                 let main = (main - start - end).max(0.0);
                 let mut child_constraints = if horizontal {
-                    Constraints::loose(main, max_cross)
+                    Constraints::loose(main, (max_cross - cross_margin).max(0.0))
                 } else {
-                    Constraints::loose(max_cross, main)
+                    Constraints::loose((max_cross - cross_margin).max(0.0), main)
                 };
-                if flexible {
+                if flexible && !fit_main {
                     if horizontal {
                         child_constraints.min_w = main;
                     } else {
@@ -693,26 +781,27 @@ impl Evaluator<'_, '_> {
                 let size = self.visit(child, child_constraints, depth + 1);
                 measured.insert(child, size);
                 cursor += start + size[main_axis] + end;
-                cross = cross.max(size[cross_axis]);
+                cross = cross.max(size[cross_axis] + cross_margin);
             }
             if !flexible {
                 leftover = (max_main - cursor).max(0.0);
             }
         }
         let mut position = 0.0;
-        for &child in children {
+        for (index, &child) in children.iter().enumerate() {
+            if index > 0 {
+                position += flow_style.gap;
+            }
             let size = measured[&child];
             let style = self.style(child);
             let margin = style.margin();
-            let (start, end, cross_start, alignment) = if horizontal {
-                (margin[3], margin[1], margin[0], style.align_y)
+            let (start, end) = if horizontal {
+                (margin[3], margin[1])
             } else {
-                (margin[0], margin[2], margin[3], style.align_x)
+                (margin[0], margin[2])
             };
             let mut origin = [0.0; 2];
             origin[main_axis] = position + start;
-            origin[cross_axis] = cross_start
-                + alignment_factor(alignment, -1.0) * (cross - size[cross_axis]).max(0.0);
             self.place(child, origin);
             position += start + size[main_axis] + end;
         }
@@ -720,6 +809,46 @@ impl Evaluator<'_, '_> {
         size[main_axis] = cursor;
         size[cross_axis] = cross;
         [fill_or_fit(size[0], fill[0]), fill_or_fit(size[1], fill[1])]
+    }
+
+    /// Cross alignment uses the settled inner box after fitting, padding and
+    /// min/max constraints, rather than the largest sibling's measured size.
+    fn align_flow(&mut self, children: &[EntityId], style: GuiLayout, size: [f32; 2]) {
+        let horizontal = style.kind == 1;
+        let cross_axis = usize::from(horizontal);
+        let padding = style.padding();
+        let inner = if horizontal {
+            size[1] - padding[0] - padding[2]
+        } else {
+            size[0] - padding[3] - padding[1]
+        }
+        .max(0.0);
+        let default = if style.align_items == 2.0 {
+            -1.0
+        } else {
+            style.align_items
+        };
+        for &child in children {
+            let child_style = self.style(child);
+            let (start, end, alignment) = if horizontal {
+                (
+                    child_style.margin_top,
+                    child_style.margin_bottom,
+                    child_style.align_y,
+                )
+            } else {
+                (
+                    child_style.margin_left,
+                    child_style.margin_right,
+                    child_style.align_x,
+                )
+            };
+            if let Some(placement) = self.view.placements.get_mut(&child) {
+                placement.origin[cross_axis] = start
+                    + alignment_factor(alignment, default)
+                        * (inner - start - end - placement.size[cross_axis]).max(0.0);
+            }
+        }
     }
 
     fn stack(

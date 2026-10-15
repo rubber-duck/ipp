@@ -12,6 +12,12 @@ import test from "node:test";
 import { createElement as h, useState } from "react";
 import { Entity, createRoot } from "../src/index.js";
 import {
+  useChoice,
+  useMountSelection,
+  type ChoiceItem,
+} from "../src/gui-kit/choice.js";
+import { Button as NativeChoiceButton } from "../src/gui/controls.js";
+import {
   GUI_KIT_ICONS,
   GuiKit,
   RadioGroup,
@@ -43,6 +49,7 @@ import {
   HOVERED,
   CHECK_MARK,
   contract,
+  skinFixture,
   KitWorld,
   FONT,
   render,
@@ -74,7 +81,7 @@ test("RadioGroup is a labelled group of radio marks whose arrows select", async 
   // A column of the caption and the options, at twice the design size.
   const root = world.fields("axis", "GuiLayout");
   assert.equal(root.get("kind"), 2);
-  assert.equal(root.get("height"), 2 * (24 + 3 * 32));
+  assert.equal(root.get("height"), 2 * (24 + 8 + 3 * 32 + 2 * 4));
   assert.deepEqual(world.children("axis"), ["axis/caption", "axis/options"]);
   assert.deepEqual(world.tone("axis/caption/text"), TOKENS.accent);
   // One group whose arrows move focus and select.
@@ -184,7 +191,11 @@ test("RadioGroup is a labelled group of radio marks whose arrows select", async 
   assert.deepEqual(world.children("axis"), ["axis/options"]);
   assert.equal(world.fields("axis/options", "GuiLayout").get("kind"), 1);
   assert.equal(world.fields("axis/options", "GuiGroup").get("axis"), 0);
-  assert.equal(world.fields("axis/y", "GuiLayout").get("margin_left"), 32);
+  assert.equal(world.fields("axis/options", "GuiLayout").get("gap"), 32);
+  assert.equal(
+    world.fields("axis/y", "GuiLayout").get("margin_left"),
+    undefined,
+  );
 });
 
 test("a choice reports the runtime's selection and writes only the application's own", async () => {
@@ -198,19 +209,31 @@ test("a choice reports the runtime's selection and writes only the application's
   world.value("axis/y/mark", "GuiButton", { selected: true });
   await settle(root);
   assert.deepEqual(changes, ["y"]);
-  // The application follows; nothing is written back, so a later arrow is
-  // never undone by a stale write.
+  // Rejection restores X. Record the actual echo before a later application
+  // update requests Y; the adapter never invents an optimistic observation.
+  world.value("axis/x/mark", "GuiButton", { selected: true });
+  world.value("axis/y/mark", "GuiButton", { selected: false });
+  await settle(root);
   await draw(axis({ value: "y", onChange }));
   await settle(root);
-  assert.deepEqual(world.compared, []);
-  assert.equal(world.fields("axis/x/mark", "GuiButton").get("selected"), true);
-  assert.equal(world.fields("axis/y/mark", "GuiButton").get("selected"), false);
+  assert.deepEqual(world.compared, [
+    ["axis/x/mark", "selected", true],
+    ["axis/y/mark", "selected", true],
+  ]);
+  assert.equal(world.fields("axis/y/mark", "GuiButton").get("selected"), true);
 
+  world.value("axis/y/mark", "GuiButton", { selected: true });
+  world.value("axis/x/mark", "GuiButton", { selected: false });
+  await settle(root);
   // A value of the application's own is written to its item, and the
   // runtime's echo of it is not reported back.
   await draw(axis({ value: "x", onChange }));
   await settle(root);
-  assert.deepEqual(world.compared, [["axis/x/mark", "selected", true]]);
+  assert.deepEqual(world.compared, [
+    ["axis/x/mark", "selected", true],
+    ["axis/y/mark", "selected", true],
+    ["axis/x/mark", "selected", true],
+  ]);
   world.value("axis/x/mark", "GuiButton", { selected: true });
   world.value("axis/y/mark", "GuiButton", { selected: false });
   await settle(root);
@@ -233,6 +256,60 @@ test("a choice reports the runtime's selection and writes only the application's
   assert.deepEqual(free.world.compared, []);
 });
 
+test("controlled choices accept both report orders before converging", async () => {
+  const changes: string[] = [];
+  let value = "x";
+  let updates = Promise.resolve();
+  function Form() {
+    return axis({
+      value,
+      onChange: (next) => {
+        changes.push(next);
+        updates = updates.then(async () => {
+          value = next;
+          await draw(h(Form));
+        });
+      },
+    });
+  }
+  const { world, root, draw } = await render(h(Form));
+  try {
+    for (const [previous, next, selectedFirst] of [
+      ["x", "y", false],
+      ["y", "x", true],
+      ["x", "y", false],
+      ["y", "x", true],
+    ] as const) {
+      const reports = [
+        [previous, false],
+        [next, true],
+      ] as const;
+      for (const [key, selected] of selectedFirst
+        ? [...reports].reverse()
+        : reports)
+        world.value(`axis/${key}/mark`, "GuiButton", { selected });
+      await settle(root);
+      await updates;
+      assert.equal(
+        world.fields(`axis/${next}/mark`, "GuiButton").get("selected"),
+        true,
+      );
+      assert.equal(
+        world.fields(`axis/${previous}/mark`, "GuiButton").get("selected"),
+        false,
+      );
+      assert.deepEqual(
+        world.compared,
+        [],
+        "accepted selection never restores an intermediate group observation",
+      );
+    }
+    assert.deepEqual(changes, ["y", "x", "y", "x"]);
+  } finally {
+    await root.unmount();
+  }
+});
+
 const space = (props: Partial<SegmentedControlProps> = {}) =>
   h(SegmentedControl, {
     id: "space",
@@ -244,6 +321,69 @@ const space = (props: Partial<SegmentedControlProps> = {}) =>
     defaultValue: "world",
     ...props,
   });
+
+test("controlled choices preserve pending async acceptance through repeated returns", async () => {
+  const changes: string[] = [];
+  let value = "x";
+  let accept!: () => Promise<void>;
+  function Form() {
+    return axis({
+      value,
+      onChange: (next) => {
+        changes.push(next);
+        return new Promise<void>((resolve) => {
+          accept = async () => {
+            value = next;
+            await draw(h(Form));
+            resolve();
+          };
+        });
+      },
+    });
+  }
+  const { world, root, draw } = await render(h(Form));
+  try {
+    for (const [previous, next, selectedFirst] of [
+      ["x", "y", false],
+      ["y", "x", true],
+      ["x", "y", true],
+      ["y", "x", false],
+    ] as const) {
+      const reports = [
+        [previous, false],
+        [next, true],
+      ] as const;
+      for (const [key, selected] of selectedFirst
+        ? [...reports].reverse()
+        : reports)
+        world.value(`axis/${key}/mark`, "GuiButton", { selected });
+      await settle(root);
+      assert.deepEqual(
+        world.compared,
+        [],
+        "an unfinished callback is not a rejected selection",
+      );
+      await accept();
+      await settle(root);
+      assert.equal(
+        world.fields(`axis/${next}/mark`, "GuiButton").get("selected"),
+        true,
+      );
+      assert.equal(
+        world.fields(`axis/${previous}/mark`, "GuiButton").get("selected"),
+        false,
+      );
+      assert.deepEqual(
+        world.compared,
+        [],
+        "acceptance must not cause correction echoes",
+      );
+    }
+    assert.deepEqual(changes, ["y", "x", "y", "x"]);
+  } finally {
+    await root.unmount();
+  }
+});
 
 test("SegmentedControl shares one frame among segments cut only at its ends", async () => {
   const changes: string[] = [];
@@ -359,11 +499,7 @@ test("Tabs: a strip whose activation selects the tab whose content shows", async
   const { world, root } = await render(
     navigation({ onChange: (value) => changes.push(value) }),
   );
-  assert.deepEqual(world.children("nav"), [
-    "nav/strip",
-    "nav/line",
-    "nav/content",
-  ]);
+  assert.deepEqual(world.children("nav"), ["nav/strip", "nav/content"]);
   assert.equal(world.fields("nav/strip", "GuiLayout").get("height"), 40);
   // Without overflow the strip is its scroll view and the More slot.
   assert.deepEqual(world.children("nav/strip"), ["nav/view", "more"]);
@@ -397,7 +533,7 @@ test("Tabs: a strip whose activation selects the tab whose content shows", async
   // Only the selected tab's content is declared.
   assert.deepEqual(world.children("nav/content"), ["signals-body"]);
   assert.equal(world.entities.has("overview-body"), false);
-  assert.equal(world.skin("nav/line"), "division");
+  assert.equal(world.skin("nav/strip"), "tabRail");
 
   // Selected: the accent bar along the bottom edge and a lit label.
   assert.deepEqual(
@@ -511,7 +647,10 @@ test("TreeView declares visible rows; unhandled Right and Left expand, collapse 
   ]);
   // The rows are one group whose activation selects, in a list frame.
   assert.ok(world.entity("tree").components.has("GuiScrollView"));
-  assert.equal(world.entity("tree").components.has("GuiSkin"), false);
+  assert.equal(
+    world.fields("tree", "GuiSkin").get("theme"),
+    "ipp-kit/theme/frame",
+  );
   assert.equal(world.fields("tree/rows", "GuiGroup").get("axis"), 1);
   assert.equal(world.fields("tree/rows", "GuiGroup").get("selection"), 1);
   assert.equal(
@@ -717,13 +856,12 @@ test("selection looks: the trigger's open edge, its chevrons and the check mark 
     h(
       GuiKit,
       {
-        contract: {
+        contract: base,
+        id: "ipp-kit",
+        skin: skinFixture({
           ...base,
-          GUI_SKIN_LOOKS: {
-            ...base.GUI_SKIN_LOOKS,
-            button: { em: 16, parts: [edge] },
-          },
-        },
+          looks: { ...base.looks, button: { em: 16, parts: [edge] } },
+        }),
         font: FONT,
         fontSize: 16,
       },
@@ -848,14 +986,14 @@ test("Dropdown: a field-like trigger and its light list of options that take no 
     [16, 16, 8],
   );
 
-  // The list: an anchored light overlay stretched below the trigger a
-  // quarter inset away, closed, on the floating surface.
+  // The list shares the trigger surface in every skin; native layout owns flipping.
   const overlay = world.fields("skin/list", "GuiOverlay");
   assert.deepEqual(
     ["side", "align", "mode"].map((field) => overlay.get(field)),
     [0, 3, 1],
   );
-  assert.equal(world.fields("skin/list", "CanvasStyle").get("y"), 4);
+  assert.equal(world.fields("skin/list", "CanvasStyle").get("y"), 0);
+  assert.equal(overlay.get("join_anchor"), true);
   assert.equal(world.fields("skin/list", "GuiBehavior").get("visible"), false);
   assert.equal(world.skin("skin/list"), "floating");
   assert.deepEqual(world.children("skin/list"), ["skin/options"]);
@@ -1295,5 +1433,69 @@ test("Autocomplete: typing opens the application's suggestions; accepting writes
   assert.equal(loading.fields("dest/list", "GuiBehavior").get("visible"), true);
   assert.deepEqual(loading.children("dest/suggestions/rows"), [
     "dest/suggestions/loading",
+  ]);
+});
+
+test("uncontrolled choices stop showing a removed native member", async () => {
+  let selected: string | undefined;
+  const changes: string[] = [];
+  function Item({
+    id,
+    item,
+  }: {
+    readonly id: string;
+    readonly item: ChoiceItem;
+  }) {
+    const initial = useMountSelection(item.selected);
+    return h(
+      Entity,
+      { id },
+      h(NativeChoiceButton, { ...item, selected: initial }),
+    );
+  }
+  function Choices({ keys }: { readonly keys: readonly string[] }) {
+    const choice = useChoice<string>({
+      defaultValue: "x",
+      onChange: (key) => changes.push(key),
+    });
+    selected = choice.current;
+    return keys.map((key) =>
+      h(Item, { key, id: `member/${key}`, item: choice.item(key) }),
+    );
+  }
+  const { world, root, draw } = await render(h(Choices, { keys: ["x", "y"] }));
+  await settle(root);
+  assert.equal(selected, "x");
+  await draw(h(Choices, { keys: ["y"] }));
+  await settle(root);
+  assert.equal(selected, undefined);
+  assert.deepEqual(changes, []);
+  world.value("member/y", "GuiButton", { selected: true });
+  await settle(root);
+  assert.equal(selected, "y");
+  assert.deepEqual(changes, ["y"]);
+});
+
+test("controlled MultiSelect repeats rejected toggle proposals from committed intent", async () => {
+  const changes: (readonly string[])[] = [];
+  const { world, root } = await render(
+    multi({
+      value: ["render"],
+      defaultOpen: true,
+      onChange: (next) => changes.push(next),
+    }),
+  );
+  await settle(root);
+  for (let iteration = 0; iteration < 2; iteration++) {
+    world.effect("channels/options/physics", { kind: "pressed" });
+    await settle(root);
+    assert.equal(
+      world.fields("channels/options/physics", "GuiButton").get("selected"),
+      false,
+    );
+  }
+  assert.deepEqual(changes, [
+    ["render", "physics"],
+    ["render", "physics"],
   ]);
 });

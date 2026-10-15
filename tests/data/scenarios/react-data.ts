@@ -15,16 +15,15 @@ import {
   fixed,
   percent,
   type DataColumnInterpolation,
+  type ReactWorldContract,
 } from "../../../packages/ipp-react/src/index.js";
 import type { DatasetHost } from "./datasets.js";
 import { check, until as untilReady } from "../../harness/page/checks.js";
 import type * as Generated from "../../../target/integration-artifacts/client/generated.js";
 import { ASSETS, selectSystems } from "../../fixtures/system-selections.js";
 
-type Contract = Pick<
-  typeof Generated,
-  "ExpressionBuilder" | "encodeDataWindows"
->;
+type Contract = ReactWorldContract &
+  Pick<typeof Generated, "ExpressionBuilder" | "encodeDataWindows">;
 const schema = [{ name: "value", kind: "f32" as const }];
 const row = (value: number): DatasetValue[] => [{ kind: "f32", value }];
 function equal(actual: unknown, expected: unknown, label: string) {
@@ -91,7 +90,7 @@ export async function reactData(
   const client = (await host.openWorld(
     world.reference,
   )) as AnimationWorldClient;
-  const root = createRoot(client);
+  const root = createRoot(client, { contract });
   const source = "datasets://react/owned";
   const borrowed = "datasets://react/borrowed";
   const external = await host.datasets.create(borrowed, "buffer", schema);
@@ -203,7 +202,6 @@ export async function reactData(
             source: stream,
             columns: { raw: { definition: assetRef("identity") } },
             windows: [{ kind: "count", count }],
-            encodeWindows: contract.encodeDataWindows,
             interpolationKey: "position",
           }),
         ),
@@ -255,10 +253,9 @@ export async function reactData(
     );
     let unsupported: unknown;
     try {
-      StreamingDataSourceBinding({
+      BufferDataSourceBinding({
         source: stream,
         columns: {},
-        encodeWindows: contract.encodeDataWindows,
         interpolationKey: "slot" as never,
       });
     } catch (error) {
@@ -527,7 +524,7 @@ export async function reactData(
     const reconnect = (await host.openWorld(
       world.reference,
     )) as AnimationWorldClient;
-    const reconnectRoot = createRoot(reconnect);
+    const reconnectRoot = createRoot(reconnect, { contract });
     try {
       await reconnectRoot.render(
         h(

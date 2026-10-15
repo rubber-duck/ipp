@@ -9,7 +9,7 @@ import {
   pickPlot2d,
   type Plot2dContract,
   type Plot2dScene,
-} from "../../examples/world-gallery/worlds/charts2d/content.js";
+} from "../../examples/demos/scenes/charts2d/content.js";
 import { defineClient } from "./client.js";
 
 interface State {

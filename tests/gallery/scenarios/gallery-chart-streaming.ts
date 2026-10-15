@@ -8,6 +8,7 @@ import {
   assertChartLegendState,
   assertChartLegendPixels,
   assertHeightBindingColors,
+  assertChartPickPath,
   chartCheck,
   chartTransform,
   chartSurfaceLocalPoint,
@@ -467,13 +468,14 @@ export async function exerciseStreamingCharts(
     (state) => state.selection?.chart === "straight",
     "shared-line-selected",
   );
+  chartCheck(lineSelected.selection, "Canvas streaming selection is present");
   chartCheck(
     String(lineSelected.selection?.rowId) === String(linePoint.rowId) &&
-      lineSelected.selection?.path.length === 1 &&
       String(lineSelected.selection.world.id) === String(straight.world.id) &&
       String(lineSelected.selection.entity) === String(straight.entity),
     "Real flat pick selects a row in the shorter shared-source window",
   );
+  assertChartPickPath(lineSelected, lineSelected.selection);
   await driver.action("streamPlayback", true);
   const sharedExpiry = await until(
     driver,
@@ -521,10 +523,11 @@ export async function exerciseStreamingCharts(
   );
   chartCheck(
     String(selected.selection?.rowId) === String(point.rowId) &&
-      String(selected.selection?.world.id) === original.world &&
-      selected.selection?.path.length === 0,
-    "Real spatial pick returns the live source row and root World",
+      String(selected.selection?.world.id) === original.world,
+    "Real spatial pick returns the live source row and child Camera World",
   );
+  chartCheck(selected.selection, "Spatial streaming selection is present");
+  assertChartPickPath(selected, selected.selection);
   await driver.capture("stream-selected-point");
   await driver.record("stream-source-row-selected", { point, selected });
   const beforeIds = new Map(

@@ -22,6 +22,7 @@ pub fn run<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::panel())?;
     let camera_world = host.create_world(Default::default(), &super::selection::scene())?;

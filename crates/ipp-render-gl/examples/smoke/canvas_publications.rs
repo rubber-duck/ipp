@@ -126,7 +126,7 @@ pub(super) fn frame_at<D: RenderDevice>(
             host.root_output(root.world().id())
                 .map(|(output, _, publication)| (output, publication)),
         )?;
-        host.progress_assets();
+        super::task_scheduler::progress(host);
     }
 
     let publication = host.root_output(root.world().id()).unwrap().2;
@@ -145,6 +145,7 @@ pub fn run<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::panel())?;
     let child = host.create_world(Default::default(), &super::selection::panel())?;
@@ -276,6 +277,7 @@ fn opacity_cache<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::panel())?;
     let child = host.create_world(Default::default(), &super::selection::panel())?;
@@ -378,7 +380,19 @@ fn opacity_cache<D: RenderDevice>(
                 ..Default::default()
             },
         )?;
-        renderer.set_surface_cache_budget(0);
+        // Cameras require render targets even when the affine Canvas is direct.
+        // Select direct Canvas presentation by removing its optional cache.
+        renderer.set_surface_cache_budget(ipp_render_gl::SURFACE_CACHE_BUDGET_BYTES);
+        if index > 0 {
+            apply(
+                &mut host,
+                parent,
+                vec![Command::RemoveComponent {
+                    entity: EntityRef::Handle(anchor),
+                    component: ComponentValue::SURFACE_CACHE,
+                }],
+            )?;
+        }
         let time = index as f64;
         frame_at(renderer, &mut host, root, viewport, time)?;
         let direct = capture()?;
@@ -521,6 +535,7 @@ fn nested_cache_refresh<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let mut outputs = Vec::new();
     for _ in 0..3 {

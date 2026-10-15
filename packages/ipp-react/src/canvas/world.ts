@@ -18,6 +18,7 @@ import {
 import {
   canvasOutput,
   type CanvasOutputReference,
+  type AttachmentReceipt,
   type CanvasState,
   type CanvasStateUpdateCommand,
   type WorldCreateOptions,
@@ -63,6 +64,8 @@ export interface CanvasWorldHandle {
   readonly world: WorldReference;
   /** The owned World's canvas output; it lives as long as the World. */
   readonly output: CanvasOutputReference;
+  /** Current exact producer receipt for an anchored canvas; absent at the root. */
+  readonly attachment?: AttachmentReceipt | undefined;
   readonly closed: Promise<void>;
 }
 
@@ -134,6 +137,7 @@ export function canvasStateUpdate(
 
 /** The CanvasWorld handle of the World a boundary created. */
 export function canvasWorldHandle(handle: {
+  readonly attachment?: AttachmentReceipt | undefined;
   readonly world: WorldReference;
   readonly closed: Promise<void>;
 }): CanvasWorldHandle {
@@ -143,6 +147,9 @@ export function canvasWorldHandle(handle: {
     },
     get output() {
       return canvasOutput(handle.world);
+    },
+    get attachment() {
+      return handle.attachment;
     },
     closed: handle.closed,
   };

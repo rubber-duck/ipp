@@ -98,7 +98,7 @@ export interface SpecimenContext {
   readonly font: AssetReference;
   /**
    * A `Skin` referencing a named theme of the specimen's theme module, or
-   * nothing while that theme has no rows: the runtime default look.
+   * nothing while that theme has no rows: deliberately unpainted.
    */
   skin(theme: string): ReactNode;
   /** A ref naming a control for `action` pin steps. */

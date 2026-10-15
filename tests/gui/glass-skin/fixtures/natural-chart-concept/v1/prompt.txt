@@ -1,0 +1,25 @@
+Use case: ui-mockup / style-transfer.
+Create one polished high-resolution visual redesign concept for this application's interactive 3D resource chart. This is an actionable UI art-direction reference, not a marketing poster.
+
+INPUT ROLES:
+Image 1 is the current chart/content reference and redesign target: an extruded four-sector pie chart with different sector heights, a selected back/top cyan-blue Compute sector, a hovered front/right purple Reserve sector, amber Storage and sage Network sectors, an underlying perspective grid, two annotations, and a resource legend.
+Image 2 is the APPROVED NATURAL GLASS UI style reference. Its clear/frosted/smoked button sheets, rounded corners, localized polished-edge highlights, soft broad studio reflections, quiet translucent bodies, pale readable monospaced text, and dense frosted tooltip are the material language to extend.
+Image 3 is the actual compact production GUI, for realistic scale, restrained density, continuous connected surfaces, and padding. Do not reproduce either component atlas; redesign only the chart scene from Image 1.
+
+MAIN REQUEST:
+Reimagine the whole chart so it unmistakably belongs to those basic glass UI components. Replace the current wireframe-looking neon edge outlines, angular outlined labels, long saturated leader lines, inconsistent sharp specular artifacts and uncontained legend with a refined coherent optical-glass design.
+
+COMPOSITION AND DATA:
+One large chart scene, approximately 3:2 landscape, crisply rendered. Preserve the current four pie sectors, their order, relative angular proportions, different heights, overall silhouette and three-quarter camera direction. Do not invent more slices, turn it into a donut, equalize the heights, explode the sectors, or change the data for aesthetics. Keep the chart prominent left/center, with a compact legend to the right and efficiently placed annotations. Bring the selected tooltip close above the tall Compute sector rather than the very long leader in Image 1. Hover tooltip sits close to Reserve, above the legend, without collision. Quiet dark blue-black backdrop. Faint grounded grid under the chart, subordinate to the data, with no decorative pedestal.
+
+MATERIAL:
+The sectors should feel like solid pieces of subtly tinted clear/satin glass from the same family as the buttons: gentle absorption through depth, moderately translucent faces, fine rounded polished physical edges, broad controlled analytic-looking studio-card reflections that fade into the middle, small partial pale edge glints determined by light. Smooth curved walls and continuous planar caps; no visible triangle seams or multiple overlapping back-edge wires. Enough body/tint to distinguish each sector, not ghostly empty shells. A soft key light from upper left gives coherent highlights across chart, tooltip sheets and legend. Use reflections as restrained shading patterns feasible in a procedural material: no recognizable reflected environment, reflected scene objects, caustics, raytraced spectacle or mirror floor. Maintain sharp silhouettes, readable text and clear separation; no full-image blur.
+
+INTERACTION:
+Selected Compute stays clearly selected through a slightly brighter cool glass body and a more prominent but narrow LOCALIZED polished-edge highlight; absolutely no continuous cyan stroke tracing all edges, no emissive halo, no double outline. Reserve hover is a quieter reflection/frost change with a tiny pale attachment bead; no magenta interaction border or magenta leader. Other sectors use muted blue, warm amber, sage green and smoky violet absorption, with restrained saturation.
+Both annotations are compact rounded frosted glass sheets matching the basic UI tooltip reference: one integrated surface with soft optical thickness, natural perimeter reflection on only the lit portions, sufficient internal padding, pale clean text. A very short hairline neutral blue-gray connector with a small polished attachment dot, or an integrated short glass pointer, attaches each tooltip to the correct slice; no long crossing laser lines. Keep annotation text facing the viewer, not obliquely distorted.
+Use tooltip text exactly: 'Compute' with secondary small 'Selected'; 'Reserve' with secondary small 'Hover'. Do not invent numerical data.
+The legend is ONE compact smoked/frosted rounded glass panel, not separate glass tiles for rows. Header 'RESOURCES', followed by four clean aligned rows 'Compute', 'Storage', 'Network', 'Reserve'. Small inset subtly glassy swatches retain their category hues. Consistent row spacing, generous modest padding, pale upright monospaced lettering with a readable hierarchy. No italic skew.
+
+QUALITY / AVOID:
+Finished, coherent premium application UI. All glass sheets share the same corner softness and lighting logic. Avoid cyberpunk HUD styling, hard cyan or pink borders, fire/pulses, glowing wireframes, corner shards, chamfer notches, thick outlines, bloom, clutter, oversized labels, text overlapping the chart, blurry geometry. Do not add unrelated UI, captions, comparison panels, headings about the design, buttons or extra charts.

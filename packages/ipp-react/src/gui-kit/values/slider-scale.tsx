@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A slider's scale: tick marks and their labels along its rail, below a
  * horizontal rail or right of a vertical one, each centred on where the
@@ -14,7 +15,7 @@
  * to its labels' far edge, so the stack's measurement includes them. The
  * labelled slider composes one.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
@@ -46,7 +47,7 @@ export interface SliderScaleMarks {
 export interface SliderScaleProps extends SliderScaleMarks {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly min: number;
   readonly max: number;
   /** Along a vertical rail rather than below a horizontal one. */
@@ -117,7 +118,7 @@ export function scaleGeometry(
 }
 
 export function SliderScale({
-  id,
+  id: providedId,
   layer = 0,
   min,
   max,
@@ -126,6 +127,7 @@ export function SliderScale({
   layout,
   ...marks
 }: SliderScaleProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const values = scaleValues(min, max, marks);
   const labels = scaleLabels(min, values, marks);
@@ -133,6 +135,7 @@ export function SliderScale({
   const line = kit.unit(kit.tokens.lineWidth);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_STACK}
@@ -156,6 +159,7 @@ export function SliderScale({
               vertical={vertical}
             >
               <Entity id={`${mark}/tick`}>
+                <PresentationGate open />
                 <Layout
                   kind={LAYOUT_LEAF}
                   {...(vertical

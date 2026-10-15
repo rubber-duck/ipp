@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Tabs: a strip of tabs over a content area that shows the selected tab's
  * content, declared only while its tab is selected. The strip is one Tab
@@ -16,12 +17,12 @@
  * view; keyboard users reach every tab with the arrows. Whatever `more`
  * declares follows at the strip's end.
  *
- * The component is a column of the strip, the control height, the panel
- * division along the strip's bottom and the content area, which fills the
- * rest of its height at the content inset.
+ * The strip paints its rail under the selected underline at one shared
+ * bottom edge. Optional content fills the remaining height at the content
+ * inset; tabs without content form a standalone navigation strip.
  */
 import { useRef, useState, type ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Group, Layout } from "../../gui/components.js";
 import { ScrollView } from "../../gui/scroll.js";
@@ -37,6 +38,7 @@ import {
   type ChoiceProps,
 } from "../choice.js";
 import { GUI_KIT_ICONS } from "../icons.js";
+import { usePanelSurface } from "../containers/panel.js";
 import { useGuiKit } from "../kit.js";
 import {
   LAYOUT_COLUMN,
@@ -46,7 +48,6 @@ import {
 } from "../layout.js";
 import { Menu } from "../overlays/menu.js";
 import { Floating, useOverlayOpen } from "../overlays/overlay.js";
-import { Separator } from "../separator.js";
 import { lineWidth } from "../text.js";
 
 export interface TabItem {
@@ -54,7 +55,7 @@ export interface TabItem {
   readonly value: string;
   readonly label: string;
   readonly disabled?: boolean;
-  /** Entity declarations of the content area while this tab is selected. */
+  /** Content while selected. Omit on all tabs for a standalone navigation strip. */
   readonly content?: ReactNode;
 }
 
@@ -62,7 +63,7 @@ export interface TabsProps extends ChoiceProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the root column; the strip and tabs extend it. */
-  readonly id: string;
+  readonly id?: string;
   readonly tabs: readonly TabItem[];
   /**
    * While the strip overflows, a docked More button after its scroll
@@ -78,7 +79,7 @@ export interface TabsProps extends ChoiceProps {
 const SCROLL_HORIZONTAL = 0;
 
 export function Tabs({
-  id,
+  id: providedId,
   layer = 0,
   tabs,
   overflowMenu = false,
@@ -86,6 +87,7 @@ export function Tabs({
   layout,
   ...props
 }: TabsProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const choice = useChoice(props);
@@ -106,6 +108,7 @@ export function Tabs({
         delta: [(direction * (range?.viewport[0] ?? 0)) / 2, 0],
       })
       .catch(() => {});
+  const parentSurface = usePanelSurface();
   const content = tabs.find((tab) => tab.value === choice.current)?.content;
   // Select a tab from the More menu and scroll the least that shows it.
   const pick = (value: string) => {
@@ -123,12 +126,16 @@ export function Tabs({
   };
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout kind={LAYOUT_COLUMN} {...layout} />
+      {!parentSurface && <Skin theme={kit.theme("tabSurface")} />}
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         <Entity id={`${id}/strip`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_ROW} height={height} />
+          <Skin theme={kit.theme("tabRail")} />
           <Children>
             {overflowing && (
               <ScrollButton
@@ -139,6 +146,7 @@ export function Tabs({
               />
             )}
             <Entity id={`${id}/view`}>
+              <PresentationGate open />
               <Layout kind={LAYOUT_LEAF} flex={1} height={height} />
               <Skin theme={kit.theme("gridBody")} />
               <ScrollView
@@ -150,6 +158,7 @@ export function Tabs({
               />
               <Children>
                 <Entity id={`${id}/tabs`}>
+                  <PresentationGate open />
                   <Layout
                     kind={LAYOUT_ROW}
                     width={widths.reduce((sum, width) => sum + width, 0)}
@@ -184,24 +193,26 @@ export function Tabs({
             {more}
           </Children>
         </Entity>
-        <Separator id={`${id}/line`} />
-        <Entity id={`${id}/content`}>
-          <Layout
-            kind={LAYOUT_COLUMN}
-            flex={1}
-            padding_left={kit.unit(t.inset)}
-            padding_right={kit.unit(t.inset)}
-            padding_top={kit.unit(t.inset)}
-          />
-          {content !== undefined && <Children>{content}</Children>}
-        </Entity>
+        {content !== undefined && (
+          <Entity id={`${id}/content`}>
+            <PresentationGate open />
+            <Layout
+              kind={LAYOUT_COLUMN}
+              flex={1}
+              padding_left={kit.unit(t.inset)}
+              padding_right={kit.unit(t.inset)}
+              padding_top={kit.unit(t.inset)}
+            />
+            <Children>{content}</Children>
+          </Entity>
+        )}
       </Children>
     </Entity>
   );
 }
 
 function Tab({
-  id,
+  id: providedId,
   tab,
   width,
   choice,
@@ -211,11 +222,13 @@ function Tab({
   readonly width: number;
   readonly choice: Choice;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const item = choice.item(tab.value);
   const selected = useMountSelection(item.selected);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         width={width}
@@ -235,7 +248,7 @@ function Tab({
 
 /** A docked chevron button at one end of the strip; it never takes focus. */
 function ScrollButton({
-  id,
+  id: providedId,
   direction,
   disabled,
   onPress,
@@ -245,10 +258,12 @@ function ScrollButton({
   readonly disabled: boolean;
   readonly onPress: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         width={kit.unit(t.dockedWidth)}
@@ -273,7 +288,7 @@ function ScrollButton({
  * aligned with its end; it never takes focus.
  */
 function MoreMenu({
-  id,
+  id: providedId,
   tabs,
   onPick,
 }: {
@@ -281,11 +296,13 @@ function MoreMenu({
   readonly tabs: readonly TabItem[];
   readonly onPick: (value: string) => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const overlay = useOverlayOpen();
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         width={kit.unit(t.dockedWidth)}
@@ -305,6 +322,7 @@ function MoreMenu({
           mode="light"
           align="end"
           open={overlay.open}
+          controlled={overlay.controlled}
           onVisibleChange={overlay.onVisibleChange}
         >
           <Menu

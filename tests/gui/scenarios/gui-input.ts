@@ -1,3 +1,5 @@
+import { applyClientSkin } from "../support/client-skin.js";
+import type { GuiContract } from "./gui-lifecycle.js";
 /** Physical GUI pointer, keyboard and native text input through a generated
  * client, independent of process launch and wire layout.
  *
@@ -235,7 +237,11 @@ export const GUI_INPUT_PARTS = {
   items: exerciseGuiItems,
 } satisfies Record<
   string,
-  (host: GuiHost, fontBytes: ArrayBuffer) => Promise<unknown>
+  (
+    host: GuiHost,
+    fontBytes: ArrayBuffer,
+    contract: GuiContract,
+  ) => Promise<unknown>
 >;
 
 export type GuiInputPart = keyof typeof GUI_INPUT_PARTS;
@@ -245,10 +251,14 @@ export type GuiInputPart = keyof typeof GUI_INPUT_PARTS;
  * presented ordinary GUIs: every part of {@link GUI_INPUT_PARTS} in order,
  * with each part's result under its name.
  */
-export async function exerciseGuiInput(host: GuiHost, fontBytes: ArrayBuffer) {
+export async function exerciseGuiInput(
+  host: GuiHost,
+  fontBytes: ArrayBuffer,
+  contract: GuiContract,
+) {
   const results: Partial<Record<GuiInputPart, unknown>> = {};
   for (const name of Object.keys(GUI_INPUT_PARTS) as GuiInputPart[])
-    results[name] = await GUI_INPUT_PARTS[name](host, fontBytes);
+    results[name] = await GUI_INPUT_PARTS[name](host, fontBytes, contract);
   return results;
 }
 
@@ -841,7 +851,11 @@ async function exerciseGuiPointerAndKeyboard(
  * content at y 2..3 and the outer checkbox rides outer content at y 4..5, so
  * the inner view can scroll by 1 and the outer view by 2.
  */
-async function exerciseGuiScrolling(host: GuiHost) {
+async function exerciseGuiScrolling(
+  host: GuiHost,
+  _fontBytes: ArrayBuffer,
+  contract: GuiContract,
+) {
   const worlds: WorldReference[] = [];
   const sessions: Client[] = [];
   let presentation: PresentedGui | undefined;
@@ -909,6 +923,8 @@ async function exerciseGuiScrolling(host: GuiHost) {
     const innerView = aliasId(outcome, 4);
     const inner = aliasId(outcome, 7);
     const outer = aliasId(outcome, 9);
+    await applyClientSkin(client, contract, aliasId(outcome, 2), "scroll");
+    await applyClientSkin(client, contract, aliasId(outcome, 4), "scroll");
     presentation = await presentGui(host, [{ child: created.reference }]);
     const p = presentation;
     await client.waitForFrame();

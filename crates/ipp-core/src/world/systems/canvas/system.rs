@@ -40,14 +40,15 @@ impl CanvasSystem {
             // Optional bounds may be added to a retained layout-only entity.
             // Populate a new store slot; retained system-owned writes are outputs.
             ComponentValue::CANVAS_BOUNDS if !retained => self.state.dirty = true,
-            ComponentValue::GUI_THEME => self.state.gui_dirty = true,
+            ComponentValue::GUI_METRICS | ComponentValue::GUI_THEME => self.state.gui_dirty = true,
             ComponentValue::GUI_BEHAVIOR if sample => {
                 patch.subtrees.insert(entity);
             }
+            ComponentValue::PRESENTATION_GATE => self.state.dirty = true,
             ComponentValue::CANVAS_STYLE if retained => {
                 patch.subtrees.insert(entity);
             }
-            ComponentValue::CANVAS_PAINT if retained => {
+            ComponentValue::CANVAS_PAINT | ComponentValue::PLOT_CALLOUT_PAINT if retained => {
                 patch.paints.insert(entity);
             }
             component if retained && super::walk::LEAF_COMPONENTS.contains(&component) => {
@@ -110,6 +111,7 @@ impl SystemFactory for CanvasSystemFactory {
     fn capabilities(&self) -> SystemCapabilities {
         let mut capabilities = SystemCapabilities::new(
             [
+                ComponentValue::PRESENTATION_GATE,
                 ComponentValue::CANVAS_STYLE,
                 ComponentValue::CANVAS_LAYER_TRANSITION,
                 ComponentValue::CANVAS_BOX,
@@ -383,6 +385,7 @@ fn input_component(component: u16) -> bool {
                 | ComponentValue::CANVAS_BITMAP
                 | ComponentValue::CANVAS_BOX
                 | ComponentValue::CANVAS_PAINT
+                | ComponentValue::PLOT_CALLOUT_PAINT
                 | ComponentValue::WORLD_ATTACHMENT
         )
 }
@@ -400,6 +403,7 @@ fn gui_input_component(component: u16) -> bool {
             | ComponentValue::GUI_COLOR
             | ComponentValue::GUI_GROUP
             | ComponentValue::GUI_THEME
+            | ComponentValue::GUI_METRICS
             | ComponentValue::GUI_SKIN
             | ComponentValue::GUI_FONT
     )

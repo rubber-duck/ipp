@@ -3,7 +3,7 @@
  * the controls sheet (sheet a). Sheets b and c draw their sections at other
  * scales, so a specimen of those crops lays out at the crop's own scale,
  * multiplies every length it adds by the sheet's factor, takes its theme
- * rows through `scaledTheme` and the runtime's built-in looks with that
+ * rows through `scaledTheme` and explicit Cybertron recipes with that
  * `scale`.
  */
 import type { SkinRow, SkinRows } from "./theme.js";

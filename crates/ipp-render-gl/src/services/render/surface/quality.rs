@@ -5,10 +5,12 @@
 //! quality checks when the view changes. For a triangle's perspective mapping,
 //! the screen Jacobian is an affine numerator divided by homogeneous W². The
 //! maximum vertex spectral norm of that numerator divided by minimum vertex W²
-//! bounds magnification throughout the triangle, including diagonal/shear stretch.
+//! bounds magnification throughout the visible triangle, including diagonal/shear stretch.
+//! Clip before measuring: offscreen magnification must not consume the image
+//! budget and force a visible panel to lose quality.
 //! This computes the scale needed for at least one texture texel per screen pixel
 //! in every direction on the rendered mapping. Provider approximation is separate.
-//! At most 32 occupied offsets are sampled; larger sets and near-plane crossings
+//! At most 32 occupied offsets are sampled; larger sets and degenerate visible W
 //! request the cap instead of doing unbounded work or dividing unstable W.
 //!
 //! Images keep uniform content density/aspect, round their longest dimension up
@@ -113,19 +115,6 @@ pub(super) fn grid_demand(
     if points.iter().flatten().any(|v| !v.is_finite()) {
         return Err(RenderError::UnavailableOutput);
     }
-    let mut front = false;
-    let mut behind = false;
-    for p in &points {
-        let safe = p[3] > 1e-8 && p[2] + p[3] > 0.0;
-        front |= safe;
-        behind |= !safe;
-    }
-    if front && behind {
-        return Ok(capped_demand(extent));
-    }
-    if !front {
-        return Ok([1.0; 2]);
-    }
     let step = extent.map(|v| v / cells as f64);
 
     let pixels = [
@@ -144,8 +133,16 @@ pub(super) fn grid_demand(
             ] {
                 let du: [f64; 4] = std::array::from_fn(|i| (horizontal[i] - origin[i]) / step[0]);
                 let dv: [f64; 4] = std::array::from_fn(|i| (vertical[i] - origin[i]) / step[1]);
-                let minimum_w = origin[3].min(horizontal[3]).min(vertical[3]);
-                for vertex in [origin, horizontal, vertical] {
+                let (polygon, count) = visible_triangle([origin, horizontal, vertical]);
+                if count == 0 {
+                    continue;
+                }
+                let visible = &polygon[..count];
+                let minimum_w = visible.iter().map(|p| p[3]).fold(f64::INFINITY, f64::min);
+                if minimum_w <= 1e-8 {
+                    return Ok(capped_demand(extent));
+                }
+                for vertex in visible {
                     let numerator: [[f64; 2]; 2] = std::array::from_fn(|i| {
                         [
                             pixels[i] * (du[i] * vertex[3] - vertex[i] * du[3]),
@@ -158,6 +155,58 @@ pub(super) fn grid_demand(
         }
     }
     Ok(extent.map(|v| (v * density).max(1.0)))
+}
+
+/// Homogeneous clipping preserves the affine Jacobian numerator. Its norm is
+/// convex, so the clipped vertices still bound every visible interior sample.
+/// A triangle clipped by six planes has at most nine vertices.
+fn visible_triangle(triangle: [[f64; 4]; 3]) -> ([[f64; 4]; 12], usize) {
+    let mut polygon = [[0.0; 4]; 12];
+    polygon[..3].copy_from_slice(&triangle);
+    let mut count = 3;
+    for (axis, sign) in [
+        (0, 1.0),
+        (0, -1.0),
+        (1, 1.0),
+        (1, -1.0),
+        (2, 1.0),
+        (2, -1.0),
+    ] {
+        if count == 0 {
+            break;
+        }
+        let inside = polygon[..count]
+            .iter()
+            .filter(|p| p[3] + sign * p[axis] >= 0.0)
+            .count();
+        if inside == 0 {
+            return (polygon, 0);
+        }
+        if inside == count {
+            continue;
+        }
+        let mut next = [[0.0; 4]; 12];
+        let mut next_count = 0;
+        let mut a = polygon[count - 1];
+        let mut da = a[3] + sign * a[axis];
+        for &b in &polygon[..count] {
+            let db = b[3] + sign * b[axis];
+            if (da >= 0.0) != (db >= 0.0) {
+                let t = da / (da - db);
+                next[next_count] = std::array::from_fn(|i| a[i] + t * (b[i] - a[i]));
+                next_count += 1;
+            }
+            if db >= 0.0 {
+                next[next_count] = b;
+                next_count += 1;
+            }
+            a = b;
+            da = db;
+        }
+        polygon = next;
+        count = next_count;
+    }
+    (polygon, count)
 }
 
 /// Largest singular value of a 2×2 matrix, including shear and diagonal stretch.

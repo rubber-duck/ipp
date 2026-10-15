@@ -1,0 +1,13 @@
+Use case: precise-object-edit.
+Asset type: exact registered unlit texture plate for a fixed-camera cockpit; physical light emission will be added by the game engine.
+Input image is the EDIT TARGET. Preserve the exact camera, wide framing, geometry, positions, all edges and materials.
+Turn OFF ALL artificial lamps in the ship interior. This includes:
+1) the long white strips in both side window frames;
+2) the white strips, tiny lamps and rail lights across the rear sill and angled supports above the dashboard;
+3) every blue-white small rectangular button in the curved dashboard left/right banks;
+4) the horizontal bright bar in the central dashboard recess;
+5) the white indicator slivers near the embedded dark displays;
+6) the illuminated cyan/white arcs on all three circular dial rings.
+Replace luminous cores with their exact unlit lens material (dark neutral blue-gray), keep their precise silhouettes, remove their small local halos. Keep non-emissive brushed metal ring markings, white shell bevels, materials, physical seams and existing fixed ambient illumination. Do not turn the entire room dark or change its overall exposure. The diffuse ambient/reflected appearance remains baked and fixed; we are only extracting small emissive accent lighting.
+Preserve ALL stars, galaxy and planet atmosphere exactly at their original brightness. Keep blank dark display beds blank. No UI, text or new objects.
+Output the same full opaque image, exactly registered with input composition, merely with every artificial light core extinguished. Do not redesign, crop, zoom, move, replace geometry, or change the camera.

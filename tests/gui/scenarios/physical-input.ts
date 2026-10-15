@@ -1,3 +1,5 @@
+import { applyClientSkin } from "../support/client-skin.js";
+import type { GuiContract } from "./gui-lifecycle.js";
 import type {
   Client,
   AssetWorldClient,
@@ -8,7 +10,6 @@ import type {
   LifecycleFieldValue,
   LifecycleTargetWatch,
   PresentationView,
-  RowsInput,
   GuiPhysicalContext,
 } from "@ipp/client";
 import { canvasOutput } from "../../../packages/ipp-client/src/references.js";
@@ -36,17 +37,12 @@ export { workerTransport } from "../../../packages/ipp-client/src/worker.js";
 /** Logical units one browser wheel notch scrolls on these panels. */
 const WHEEL_STEP = 100;
 
-interface Contract {
+interface Contract extends GuiContract {
   encodeBoundingShape(shape: {
     type: "box";
     min: [number, number, number];
     max: [number, number, number];
   }): Uint8Array<ArrayBuffer>;
-  GuiTheme: { encodeParts(input: RowsInput): Uint8Array<ArrayBuffer> };
-  guiPaintPartIndex(input: {
-    part: "background";
-    state?: "hovered" | "pressed";
-  }): number;
 }
 
 /** Fields of component `name` on `entity`, from its one component list. */
@@ -601,6 +597,17 @@ export async function preparePhysicalInput(
           },
           insertComponent(childClient, next, entity, fields),
         ]),
+      );
+      await applyClientSkin(
+        childClient,
+        contract,
+        entity.id,
+        next === "GuiSlider"
+          ? "slider"
+          : next === "GuiTextInput"
+            ? "textInput"
+            : "scroll",
+        true,
       );
       control = next;
       await watchValue(next);

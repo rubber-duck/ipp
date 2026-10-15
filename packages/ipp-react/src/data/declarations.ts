@@ -10,6 +10,7 @@ import type {
   DynamicPropertyInput,
 } from "@ipp/client";
 import { Asset, type AssetReference } from "../assets/declarations.js";
+import { useOptionalWorld } from "../scope/world.js";
 import { componentContract } from "../components.js";
 
 export const DATA_SOURCE_HOST_TYPE = "ipp-data-source";
@@ -171,7 +172,7 @@ export type DataWindow =
 export interface StreamingDataSourceBindingProps
   extends BufferDataSourceBindingProps {
   windows?: readonly DataWindow[];
-  encodeWindows: (windows: readonly DataWindow[]) => Uint8Array<ArrayBuffer>;
+  encodeWindows?: (windows: readonly DataWindow[]) => Uint8Array<ArrayBuffer>;
 }
 
 function columnsProperties(columns: BufferDataSourceBindingProps["columns"]) {
@@ -258,9 +259,15 @@ export function StreamingDataSourceBinding({
   interpolationKey,
   children,
 }: StreamingDataSourceBindingProps) {
+  const scope = useOptionalWorld();
+  const encode = encodeWindows ?? scope?.contract?.encodeDataWindows;
+  if (!encode)
+    throw new Error(
+      "StreamingDataSourceBinding needs a target windows encoder: supply createRoot(..., { contract }) or encodeWindows",
+    );
   return createElement(componentContract.StreamingDataSourceBinding.host, {
     source,
-    windows: encodeWindows(windows),
+    windows: encode(windows),
     ...interpolationKeyField(interpolationKey),
     properties: columnsProperties(columns),
     children,

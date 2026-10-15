@@ -189,8 +189,9 @@ export async function startHost(
         ...(options.gallery
           ? [
               "gallery-assets",
-              "gallery-gui-assets",
               "gallery-platformer-native-assets",
+              "demos-cockpit-native-assets",
+              "demos-drawings",
             ]
           : []),
       ],
@@ -248,6 +249,13 @@ export async function startHost(
                   "target/gallery-platformer-native-assets",
                 ),
               },
+              {
+                prefix: "https://cockpit.ipp.invalid/",
+                directory: join(
+                  workspace,
+                  "target/demos-cockpit-native-assets",
+                ),
+              },
             ]
           : []),
       ].flatMap(({ prefix, directory }) => [
@@ -294,6 +302,13 @@ export async function startHost(
                   directory: join(
                     workspace,
                     "target/gallery-platformer-native-assets",
+                  ),
+                },
+                {
+                  prefix: "https://cockpit.ipp.invalid/",
+                  directory: join(
+                    workspace,
+                    "target/demos-cockpit-native-assets",
                   ),
                 },
               ]

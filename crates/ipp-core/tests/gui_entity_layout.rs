@@ -14,7 +14,7 @@ use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE
 use ipp_core::systems::canvas::{
     CanvasBox, CanvasDrawing, CanvasPart, CanvasPrimitive, CanvasShapeGlow, CanvasStyle, CanvasText,
 };
-use ipp_core::systems::gui::presentation::{GuiFont, GuiPaintPart, GuiSkin, GuiTheme};
+use ipp_core::systems::gui::presentation::{GuiFont, GuiMetrics, GuiPaintPart, GuiSkin, GuiTheme};
 use ipp_core::systems::gui::{GuiPartId, GuiPartProperty, GuiPrimitivePart};
 use ipp_core::*;
 use std::mem::offset_of;
@@ -144,12 +144,12 @@ fn row_negative_margins_and_cross_end_alignment_set_overlap_hit_order() {
 
     // Fixed margin boxes measure 100 and 40 first; flex shares the 260 leftover
     // 1:3. Slots then follow core order: first, spacer, second (pulled 20 left),
-    // tail at the cross end of the 100-tall row.
+    // tail at the cross end of the allocated 200-tall row.
     assert_near(&bounds(&view, first), &rect(0.0, 0.0, 100.0, 100.0));
     assert_near(&bounds(&view, spacer), &rect(100.0, 0.0, 65.0, 50.0));
     assert_near(&bounds(&view, second), &rect(145.0, 0.0, 50.0, 50.0));
     assert_near(&bounds(&view, nested), &rect(145.0, 0.0, 25.0, 25.0));
-    assert_near(&bounds(&view, tail), &rect(205.0, 50.0, 195.0, 50.0));
+    assert_near(&bounds(&view, tail), &rect(205.0, 150.0, 195.0, 50.0));
     assert!(
         panel
             .host
@@ -164,7 +164,7 @@ fn row_negative_margins_and_cross_end_alignment_set_overlap_hit_order() {
     assert_eq!(hit_at(&view, [155.0, 40.0]), Some(second));
     assert_eq!(hit_at(&view, [155.0, 10.0]), Some(nested));
     assert_eq!(hit_at(&view, [120.0, 25.0]), Some(spacer));
-    assert_eq!(hit_at(&view, [300.0, 75.0]), Some(tail));
+    assert_eq!(hit_at(&view, [300.0, 175.0]), Some(tail));
 }
 
 #[test]
@@ -698,6 +698,8 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
     );
+
+    panel.skin(checkbox, "checkbox");
     let slider = panel.create(
         Some(root),
         vec![
@@ -705,7 +707,8 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
     );
-    // Fourteen 0.6 em glyphs outgrow the 8 em minimum of an input.
+
+    panel.skin(slider, "slider"); // Fourteen 0.6 em glyphs outgrow the 8 em minimum of an input.
     let input = panel.create(
         Some(root),
         vec![
@@ -717,6 +720,8 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
     );
+
+    panel.skin(input, "textInput");
     frame_resolving(&mut panel, 16, |panel| {
         let view = panel.output();
         view.hits
@@ -735,6 +740,70 @@ fn controls_carry_intrinsic_sizes_from_their_font_and_placeholder() {
         &bounds(&panel.output(), input),
         &rect(0.0, 20.0 + slider_height, 84.0, 25.0),
     );
+}
+
+#[test]
+fn labelled_checked_controls_share_authored_indicator_aspect_with_text_and_hits() {
+    for (metrics, expected) in [
+        (Some([56.0, 24.0]), [56.0, 24.0]),
+        (Some([24.0, 24.0]), [24.0, 24.0]),
+        (Some([0.0, 24.0]), [24.0, 24.0]),
+        (Some([56.0, 0.0]), [12.0, 12.0]),
+        (None, [20.0, 20.0]),
+    ] {
+        let mut panel = GuiPanel::new(container(2));
+        let source = font(&mut panel.host, panel.world, 33);
+        let root = panel.root_entity;
+        apply_font(&mut panel, root, &source);
+        let mut values = vec![
+            ComponentValue::GuiCheckbox(GuiCheckbox {
+                label: Arc::from("AA"),
+                ..Default::default()
+            }),
+            ComponentValue::GuiLayout(GuiLayout::default()),
+        ];
+        if let Some([min_width, min_height]) = metrics {
+            values.push(ComponentValue::GuiMetrics(GuiMetrics {
+                em: 0.0,
+                min_width,
+                min_height,
+                label_gap: 8.0,
+                ..Default::default()
+            }));
+        }
+        let control = panel.create(Some(root), values);
+        panel.skin(control, "checkbox");
+        frame_resolving(&mut panel, 16, |panel| {
+            !parts(&panel.output(), control, CanvasPart::Label).is_empty()
+        });
+
+        let view = panel.output();
+        let gap = if metrics.is_some() {
+            8.0
+        } else {
+            5.0
+        };
+        assert_near(
+            &panel.layout(control).size,
+            &[expected[0] + gap + 12.0, expected[1]],
+        );
+        let CanvasPrimitive::Box {
+            size,
+            ..
+        } = &parts(&view, control, CanvasPart::Background)[0]
+        else {
+            panic!("checked control background is a box");
+        };
+        assert_near(size, &expected);
+        assert_near(
+            &[parts(&view, control, CanvasPart::Label)[0].style().position[0]],
+            &[expected[0] + gap],
+        );
+        assert_eq!(
+            hit_at(&view, [expected[0] - 1.0, expected[1] * 0.5]),
+            Some(control)
+        );
+    }
 }
 
 fn apply_font(panel: &mut GuiPanel, entity: EntityId, source: &str) {
@@ -770,6 +839,8 @@ fn written_text_reflows_its_input_once_then_reuses_the_measurement() {
             ComponentValue::GuiLayout(GuiLayout::default()),
         ],
     );
+
+    panel.skin(input, "textInput");
     frame_resolving(&mut panel, 16, |panel| {
         let view = panel.output();
         view.hits
@@ -915,8 +986,7 @@ fn stack_and_cross_alignment_move_nested_children() {
     assert_eq!(hit_at(&view, [200.0, 160.0]), Some(second));
     assert_eq!(hit_at(&view, [320.0, 120.0]), Some(dot));
 
-    // Row: the tallest child sets the 150 cross extent, so the centred column
-    // moves down by (150 - 50) / 2 with its leaf.
+    // Row: the allocated 200 cross extent centres the column by (200 - 50) / 2.
     let mut row = GuiPanel::new(container(1));
     let root = row.root_entity;
     row.node(root, sized(50.0, 150.0));
@@ -930,11 +1000,10 @@ fn stack_and_cross_alignment_move_nested_children() {
     );
     let leaf = row.button(centred, sized(50.0, 25.0));
     row.frame();
-    assert_eq!(row.layout(centred).origin, [50.0, 50.0]);
-    assert_near(&bounds(&row.output(), leaf), &rect(50.0, 50.0, 50.0, 25.0));
+    assert_eq!(row.layout(centred).origin, [50.0, 75.0]);
+    assert_near(&bounds(&row.output(), leaf), &rect(50.0, 75.0, 50.0, 25.0));
 
-    // Column: the widest child sets the 200 cross extent, so the end-aligned
-    // row moves right by 200 - 100 with its leaf.
+    // Column: the allocated 400 cross extent ends the row at 400 - 100.
     let mut column = GuiPanel::new(container(2));
     let root = column.root_entity;
     column.node(root, sized(200.0, 50.0));
@@ -948,10 +1017,10 @@ fn stack_and_cross_alignment_move_nested_children() {
     );
     let leaf = column.button(ended, sized(25.0, 25.0));
     column.frame();
-    assert_eq!(column.layout(ended).origin, [100.0, 50.0]);
+    assert_eq!(column.layout(ended).origin, [300.0, 50.0]);
     assert_near(
         &bounds(&column.output(), leaf),
-        &rect(100.0, 50.0, 25.0, 25.0),
+        &rect(300.0, 50.0, 25.0, 25.0),
     );
 }
 
@@ -1043,6 +1112,7 @@ fn nested_scroll_panel(align_height: f32) -> (GuiPanel, [EntityId; 3]) {
         ],
     );
     let content = panel.button(inner, sized(100.0, 200.0));
+    panel.skin(content, "button");
     panel.frame();
     (panel, [outer, inner, content])
 }
@@ -1106,6 +1176,8 @@ fn visual_lanes_move_paint_and_hits_together_without_reflow() {
             styled(CanvasStyle::default()),
         ],
     );
+
+    panel.skin(control, "button");
     panel.frame();
     let before = panel.output();
     for (offset, value) in [
@@ -1443,6 +1515,7 @@ impl PresentedPanel {
             Some(container(2)),
         );
         let boxed = button_in(&mut host, child, root, sized(100.0, 50.0));
+        skin(&mut host, child, boxed, "button");
         let row = create(
             &mut host,
             child,
@@ -1472,6 +1545,7 @@ impl PresentedPanel {
                 ..sized(-1.0, 20.0)
             },
         );
+        skin(&mut host, child, spacer, "button");
         let surface = FlatSurface {
             width: 4.0,
             height: 2.0,
@@ -1655,4 +1729,499 @@ fn density_commands_reflow_the_presented_canvas_and_invalid_values_are_refused()
         panel.assert_density(200.0);
         assert_eq!(panel.output().paint_revision, valid.paint_revision);
     }
+}
+
+#[test]
+fn fitted_column_keeps_padding_once_and_leaves_space_for_later_siblings() {
+    let mut panel = GuiPanel::new(container(2));
+    let root = panel.root_entity;
+    let fitted = panel.node(
+        root,
+        GuiLayout {
+            kind: 2,
+            fit_width: true,
+            fit_height: true,
+            padding_top: 5.0,
+            padding_right: 13.0,
+            padding_bottom: 7.0,
+            padding_left: 11.0,
+            ..Default::default()
+        },
+    );
+    let first = panel.button(fitted, sized(70.0, 20.0));
+    let second = panel.button(fitted, sized(50.0, 30.0));
+    let after = panel.button(root, sized(40.0, 25.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(fitted).size, [94.0, 62.0]);
+    assert_eq!(panel.layout(first).origin, [11.0, 5.0]);
+    assert_eq!(panel.layout(second).origin, [11.0, 25.0]);
+    assert_near(
+        &bounds(&panel.output(), after),
+        &rect(0.0, 62.0, 40.0, 25.0),
+    );
+    assert_eq!(hit_at(&panel.output(), [20.0, 75.0]), Some(after));
+    assert_eq!(panel.layout(root).size, [400.0, 200.0]);
+}
+
+#[test]
+fn fitted_row_keeps_bounded_intrinsic_flex_and_places_later_siblings() {
+    let mut panel = GuiPanel::new(container(1));
+    let root = panel.root_entity;
+    let fitted = panel.node(
+        root,
+        GuiLayout {
+            kind: 1,
+            fit_width: true,
+            fit_height: true,
+            padding_left: 6.0,
+            padding_right: 4.0,
+            padding_top: 3.0,
+            padding_bottom: 5.0,
+            ..Default::default()
+        },
+    );
+    let first = panel.create(
+        Some(fitted),
+        vec![
+            ComponentValue::GuiLayout(GuiLayout {
+                flex: 1.0,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasBox(CanvasBox {
+                width: 30.0,
+                height: 20.0,
+                ..Default::default()
+            }),
+        ],
+    );
+    let second = panel.create(
+        Some(fitted),
+        vec![
+            ComponentValue::GuiLayout(GuiLayout {
+                flex: 3.0,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasBox(CanvasBox {
+                width: 20.0,
+                height: 10.0,
+                ..Default::default()
+            }),
+        ],
+    );
+    let after = panel.button(root, sized(40.0, 10.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(fitted).size, [60.0, 28.0]);
+    assert_eq!(panel.layout(first).size, [30.0, 20.0]);
+    assert_eq!(panel.layout(second).size, [20.0, 10.0]);
+    assert_eq!(panel.layout(first).origin, [6.0, 3.0]);
+    assert_eq!(panel.layout(second).origin, [36.0, 3.0]);
+    assert_near(
+        &bounds(&panel.output(), after),
+        &rect(60.0, 0.0, 40.0, 10.0),
+    );
+}
+
+#[test]
+fn fitted_container_extents_keep_explicit_overrides_and_min_max_bounds() {
+    let mut panel = GuiPanel::new(container(2));
+    let root = panel.root_entity;
+    let explicit = panel.node(
+        root,
+        GuiLayout {
+            kind: 2,
+            fit_width: true,
+            fit_height: true,
+            padding_top: 5.0,
+            padding_bottom: 7.0,
+            ..sized(140.0, 90.0)
+        },
+    );
+    panel.button(explicit, sized(70.0, 20.0));
+    let bounded = panel.node(
+        root,
+        GuiLayout {
+            kind: 2,
+            fit_width: true,
+            fit_height: true,
+            min_width: 100.0,
+            max_width: 120.0,
+            min_height: 45.0,
+            max_height: 60.0,
+            padding_top: 5.0,
+            padding_bottom: 7.0,
+            ..Default::default()
+        },
+    );
+    panel.button(bounded, sized(70.0, 20.0));
+    let after = panel.button(root, sized(40.0, 25.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(explicit).size, [140.0, 90.0]);
+    assert_eq!(panel.layout(bounded).size, [100.0, 45.0]);
+    assert_near(
+        &bounds(&panel.output(), after),
+        &rect(0.0, 135.0, 40.0, 25.0),
+    );
+}
+
+#[test]
+fn fitted_stack_padding_align_and_sized_containers_include_padding_once() {
+    for kind in [3, 4, 5, 6] {
+        let mut panel = GuiPanel::new(container(2));
+        let root = panel.root_entity;
+        let fitted = panel.node(
+            root,
+            GuiLayout {
+                kind,
+                fit_width: true,
+                fit_height: true,
+                padding_top: 5.0,
+                padding_right: 13.0,
+                padding_bottom: 7.0,
+                padding_left: 11.0,
+                ..Default::default()
+            },
+        );
+        let child = panel.button(fitted, sized(70.0, 20.0));
+        let after = panel.button(root, sized(40.0, 25.0));
+        panel.frame();
+
+        assert_eq!(
+            panel.layout(fitted).size,
+            [94.0, 32.0],
+            "layout kind {kind}"
+        );
+        assert_eq!(
+            panel.layout(child).origin,
+            [11.0, 5.0],
+            "layout kind {kind}"
+        );
+        assert_near(
+            &bounds(&panel.output(), after),
+            &rect(0.0, 32.0, 40.0, 25.0),
+        );
+    }
+}
+
+#[test]
+fn flow_gap_is_reserved_before_flex_and_keeps_core_child_order() {
+    for horizontal in [true, false] {
+        let mut panel = GuiPanel::new(GuiLayout {
+            gap: 10.0,
+            kind: if horizontal {
+                1
+            } else {
+                2
+            },
+            ..sized(200.0, 200.0)
+        });
+        let root = panel.root_entity;
+        // A flexible child precedes the fixed child in the authoritative tree.
+        let one = panel.button(
+            root,
+            GuiLayout {
+                flex: 1.0,
+                ..Default::default()
+            },
+        );
+        let fixed = panel.button(root, sized(100.0, 100.0));
+        let three = panel.button(
+            root,
+            GuiLayout {
+                flex: 3.0,
+                ..Default::default()
+            },
+        );
+        panel.frame();
+        let axis = usize::from(!horizontal);
+        assert_eq!(panel.layout(one).size[axis], 20.0);
+        assert_eq!(panel.layout(fixed).origin[axis], 30.0);
+        assert_eq!(panel.layout(three).origin[axis], 140.0);
+        assert_eq!(panel.layout(three).size[axis], 60.0);
+    }
+}
+
+#[test]
+fn fitted_flow_measures_gaps_padding_and_outer_margins_once() {
+    let mut panel = GuiPanel::new(GuiLayout {
+        kind: 1,
+        gap: 7.0,
+        fit_width: true,
+        fit_height: true,
+        align_items: 1.0,
+        padding_left: 5.0,
+        padding_right: 9.0,
+        padding_top: 3.0,
+        padding_bottom: 4.0,
+        ..Default::default()
+    });
+    let root = panel.root_entity;
+    let a = panel.button(
+        root,
+        GuiLayout {
+            margin_left: 2.0,
+            margin_right: 6.0,
+            margin_top: 4.0,
+            margin_bottom: 8.0,
+            ..sized(20.0, 10.0)
+        },
+    );
+    let b = panel.button(
+        root,
+        GuiLayout {
+            flex: 1.0,
+            margin_left: -2.0,
+            margin_top: 2.0,
+            margin_bottom: 1.0,
+            ..sized(30.0, 5.0)
+        },
+    );
+    panel.frame();
+    assert_eq!(panel.layout(root).size, [77.0, 29.0]);
+    assert_eq!(panel.layout(a).origin, [7.0, 7.0]);
+    assert_eq!(panel.layout(b).origin, [38.0, 19.0]);
+    // No trailing gap, including when only one participating child remains.
+    for child in [a, b] {
+        panel
+            .apply(vec![Command::insert_value(
+                EntityRef::Handle(child),
+                ComponentValue::PresentationGate(Default::default()),
+            )])
+            .result
+            .unwrap();
+    }
+    panel
+        .set(
+            b,
+            ComponentValue::PRESENTATION_GATE,
+            offset_of!(ipp_core::components::PresentationGate, open),
+            FieldValue::Bool(false),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(panel.layout(root).size, [42.0, 29.0]);
+    panel
+        .set(
+            a,
+            ComponentValue::PRESENTATION_GATE,
+            offset_of!(ipp_core::components::PresentationGate, open),
+            FieldValue::Bool(false),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(panel.layout(root).size, [14.0, 7.0]);
+}
+
+#[test]
+fn parent_cross_alignment_uses_inner_box_and_child_override_with_margins() {
+    for horizontal in [true, false] {
+        let mut panel = GuiPanel::new(GuiLayout {
+            kind: if horizontal {
+                1
+            } else {
+                2
+            },
+            align_items: 0.0,
+            padding_top: 10.0,
+            padding_bottom: 20.0,
+            padding_left: 10.0,
+            padding_right: 20.0,
+            ..sized(120.0, 120.0)
+        });
+        let root = panel.root_entity;
+        let style = GuiLayout {
+            margin_top: 3.0,
+            margin_bottom: 7.0,
+            margin_left: 3.0,
+            margin_right: 7.0,
+            ..sized(20.0, 20.0)
+        };
+        let centred = panel.button(root, style);
+        let ended = panel.button(
+            root,
+            GuiLayout {
+                align_x: 1.0,
+                align_y: 1.0,
+                ..style
+            },
+        );
+        panel.frame();
+        let cross = usize::from(horizontal);
+        // Inner cross size 90; margin box 30; centred free space 60 / 2.
+        assert_eq!(panel.layout(centred).origin[cross], 43.0);
+        assert_eq!(panel.layout(ended).origin[cross], 73.0);
+        assert_eq!(panel.layout(root).size, [120.0, 120.0]);
+    }
+}
+
+#[test]
+fn fitted_cross_alignment_uses_measured_margin_boxes_and_settled_minimum() {
+    for (minimum, expected_size, expected_origin) in [(0.0, 46.0, 15.0), (90.0, 90.0, 37.0)] {
+        let mut panel = GuiPanel::new(GuiLayout {
+            kind: 2,
+            fit_width: true,
+            fit_height: true,
+            min_width: minimum,
+            align_items: 0.0,
+            padding_left: 5.0,
+            padding_right: 9.0,
+            ..Default::default()
+        });
+        let root = panel.root_entity;
+        panel.button(
+            root,
+            GuiLayout {
+                margin_left: 4.0,
+                margin_right: 8.0,
+                ..sized(20.0, 10.0)
+            },
+        );
+        let small = panel.button(
+            root,
+            GuiLayout {
+                margin_left: 2.0,
+                margin_right: 4.0,
+                ..sized(10.0, 10.0)
+            },
+        );
+        panel.frame();
+        assert_eq!(panel.layout(root).size, [expected_size, 20.0]);
+        assert_eq!(panel.layout(small).origin, [expected_origin, 10.0]);
+    }
+}
+
+#[test]
+fn flow_cross_measurement_limits_children_by_outer_margins() {
+    let mut panel = GuiPanel::new(GuiLayout {
+        kind: 1,
+        align_items: 1.0,
+        ..sized(100.0, 50.0)
+    });
+    let root = panel.root_entity;
+    let child = panel.button(
+        root,
+        GuiLayout {
+            margin_top: 5.0,
+            margin_bottom: 15.0,
+            ..sized(20.0, 100.0)
+        },
+    );
+    panel.frame();
+    assert_eq!(panel.layout(child).size, [20.0, 30.0]);
+    assert_eq!(panel.layout(child).origin, [0.0, 5.0]);
+}
+
+#[test]
+fn invisible_children_keep_flow_but_gated_and_overlay_children_take_no_gap() {
+    let mut panel = GuiPanel::new(GuiLayout {
+        kind: 1,
+        gap: 7.0,
+        fit_width: true,
+        fit_height: true,
+        ..Default::default()
+    });
+    let root = panel.root_entity;
+    let first = panel.button(root, sized(20.0, 10.0));
+    panel.create(
+        Some(root),
+        vec![
+            ComponentValue::GuiLayout(sized(100.0, 100.0)),
+            ComponentValue::GuiBehavior(GuiBehavior {
+                visible: false,
+                ..Default::default()
+            }),
+        ],
+    );
+    panel.create(
+        Some(root),
+        vec![
+            ComponentValue::GuiLayout(sized(100.0, 100.0)),
+            ComponentValue::PresentationGate(ipp_core::components::PresentationGate {
+                open: false,
+            }),
+        ],
+    );
+    let overlay = panel.create(
+        Some(root),
+        vec![
+            ComponentValue::GuiLayout(sized(100.0, 100.0)),
+            ComponentValue::GuiOverlay(Default::default()),
+            ComponentValue::GuiBehavior(Default::default()),
+        ],
+    );
+    let last = panel.button(root, sized(30.0, 10.0));
+    panel.frame();
+    assert_eq!(panel.layout(root).size, [164.0, 100.0]);
+    assert_eq!(panel.layout(first).origin, [0.0, 0.0]);
+    assert_eq!(panel.layout(last).origin, [134.0, 0.0]);
+    assert!(panel.layout(overlay).available);
+}
+
+#[test]
+fn flow_gap_and_alignment_fields_validate_and_reflow_on_write() {
+    let mut panel = GuiPanel::new(GuiLayout {
+        kind: 1,
+        ..sized(100.0, 100.0)
+    });
+    let root = panel.root_entity;
+    let first = panel.button(root, sized(20.0, 20.0));
+    let second = panel.button(root, sized(20.0, 20.0));
+    for (offset, value) in [
+        (offset_of!(GuiLayout, gap), -1.0),
+        (offset_of!(GuiLayout, gap), f32::NAN),
+        (offset_of!(GuiLayout, gap), f32::INFINITY),
+        (offset_of!(GuiLayout, align_items), 1.5),
+        (offset_of!(GuiLayout, align_items), f32::NAN),
+        (offset_of!(GuiLayout, align_items), f32::INFINITY),
+    ] {
+        assert!(
+            panel
+                .set(
+                    root,
+                    ComponentValue::GUI_LAYOUT,
+                    offset,
+                    FieldValue::F32(value)
+                )
+                .result
+                .is_err()
+        );
+    }
+    panel.frame();
+    assert_eq!(panel.layout(second).origin, [20.0, 0.0]);
+    panel
+        .set(
+            root,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, gap),
+            FieldValue::F32(10.0),
+        )
+        .result
+        .unwrap();
+    panel
+        .set(
+            root,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, align_items),
+            FieldValue::F32(0.0),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(panel.layout(first).origin, [0.0, 40.0]);
+    assert_eq!(panel.layout(second).origin, [30.0, 40.0]);
+    panel
+        .set(
+            root,
+            ComponentValue::GUI_LAYOUT,
+            offset_of!(GuiLayout, align_items),
+            FieldValue::F32(2.0),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(panel.layout(first).origin, [0.0, 0.0]);
 }

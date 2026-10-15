@@ -18,6 +18,19 @@ use GuiPhysicalKey::{BackTab, Down, End, Home, Left, Right, Tab, Up};
 /// The control's font size: two units per em, so a `30 x 25` control has a
 /// `18 x 18` field at `[1, 1]`, rails 3 wide at x 21 and 26 and a swatch 3
 /// tall at y 21.
+fn color_metrics() -> crate::systems::gui::presentation::GuiMetrics {
+    crate::systems::gui::presentation::GuiMetrics {
+        color_inset: EM * 0.5,
+        color_gap: EM,
+        color_rail: EM * 1.5,
+        color_swatch: EM * 1.5,
+        color_field: EM * 9.0,
+        color_marker: EM * 0.75,
+        color_thumb: EM * 0.5,
+        ..Default::default()
+    }
+}
+
 const EM: f32 = 2.0;
 const SIZE: [f32; 2] = [30.0, 25.0];
 
@@ -36,7 +49,7 @@ impl Scene {
         let (mut host, _) = host();
         let world = world(&mut host);
         let (root, root_entity) = canvas_root(&mut host, world, 32.0, 28.0);
-        let entity = create(
+        let entity = create_painted(
             &mut host,
             world,
             vec![
@@ -50,7 +63,7 @@ impl Scene {
             ],
             Some(root_entity),
         );
-        let button = create(
+        let button = create_painted(
             &mut host,
             world,
             vec![
@@ -64,7 +77,7 @@ impl Scene {
             world,
             color: entity,
             button,
-            layout: GuiColorLayout::new(SIZE, EM, color.alpha_rail),
+            layout: GuiColorLayout::new(SIZE, &color_metrics(), color.alpha_rail),
         }
     }
 

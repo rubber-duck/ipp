@@ -5,7 +5,7 @@ use crate::QueuedResponse;
 use crate::reliable_output::outbox::{ReplySlot, SessionOutbox};
 use crate::reliable_output::{ReplyReservation, SharedReplyBudget, SharedReplyReservation};
 use ipp_core::services::gui_input::router::{
-    GuiInputRouter, GuiRoutingContext, GuiRoutingDelivery, GuiRoutingDisposition,
+    GuiInputRouter, GuiRoutingContext, GuiRoutingDelivery, GuiRoutingDisposition, GuiRoutingHit,
 };
 use ipp_core::services::gui_input::{
     GuiDeliveryError, GuiDeliveryPermit, GuiDeliveryTerminal, GuiInputError,
@@ -13,7 +13,7 @@ use ipp_core::services::gui_input::{
 use ipp_core::services::reliable_output::OutputClass;
 use ipp_core::systems::gui::local::{GuiLocalEffect, GuiScrollChain};
 use ipp_core::{HostRuntime, ViewQueryTarget};
-use ipp_protocol::host::gui_input::{GuiPhysicalRequest, GuiPhysicalResponse};
+use ipp_protocol::host::gui_input::{GuiInputHit, GuiPhysicalRequest, GuiPhysicalResponse};
 use ipp_protocol::host::presentation::{PresentationSurface, PresentationView};
 use ipp_protocol::host::{HostResponse, HostResponseBody};
 use std::{cell::RefCell, collections::LinkedList, rc::Rc};
@@ -55,6 +55,19 @@ struct Reply {
     cancelled: u32,
     error: Option<String>,
     scroll: Option<GuiScrollChain>,
+    hit: Option<GuiInputHit>,
+}
+
+impl Reply {
+    fn retained_bytes(&self, pending: usize, path_capacity: usize) -> usize {
+        std::mem::size_of::<Reply>()
+            + std::mem::size_of::<Pending>()
+            + 8 * std::mem::size_of::<usize>()
+            + path_capacity
+                * std::mem::size_of::<ipp_protocol::world::view_queries::CameraAttachmentReference>(
+                )
+            + pending * (std::mem::size_of::<Child>() + 4 * std::mem::size_of::<usize>())
+    }
 }
 
 fn finish(reply: &Rc<RefCell<Reply>>) {
@@ -83,6 +96,11 @@ fn finish(reply: &Rc<RefCell<Reply>>) {
                     .as_ref()
                     .and_then(|scroll| scroll.remaining().ok()),
                 native: reply.native.take(),
+                hit: if reply.rejected == 0 && reply.cancelled == 0 {
+                    reply.hit.take()
+                } else {
+                    None
+                },
             }),
         };
         let bytes = ipp_protocol::host::encode_host_response(&response)
@@ -114,12 +132,17 @@ impl GuiDeliveryPermit for Child {
         self.prepare(None)?;
         let size = ipp_protocol::host::gui_input::native_state_size(state)
             .map_err(|_| GuiDeliveryError::Capacity)?;
-        self.reply
-            .borrow()
+        let reply = self.reply.borrow();
+        let hit_bytes = reply.hit.as_ref().map_or(0, |hit| {
+            ipp_protocol::host::gui_input::input_hit_size(hit.path.len())
+                .expect("bounded wheel hit")
+        });
+        reply
             .reservation
             .borrow_mut()
-            .reserve_bytes(512 + 2 * size)
+            .reserve_bytes(512 + 2 * size + hit_bytes)
             .map_err(|_| GuiDeliveryError::Capacity)?;
+        drop(reply);
         self.native = Some(
             ipp_protocol::host::gui_input::encode_native_state(state)
                 .map_err(|_| GuiDeliveryError::Capacity)?,
@@ -178,13 +201,54 @@ impl Drop for Child {
 struct Delivery(Rc<RefCell<Reply>>);
 
 impl GuiRoutingDelivery for Delivery {
+    fn wheel_hit(&mut self, hit: GuiRoutingHit<'_>) -> Result<(), GuiInputError> {
+        let size = ipp_protocol::host::gui_input::input_hit_size(hit.path.len())
+            .map_err(|_| GuiInputError::Capacity)?;
+        let mut reply = self.0.borrow_mut();
+        if !reply.slot.as_ref().is_some_and(ReplySlot::is_live) {
+            return Err(GuiInputError::Unavailable);
+        }
+        let retained = reply.retained_bytes(reply.pending, hit.path.len());
+        reply
+            .reservation
+            .borrow_mut()
+            .reserve_retained(retained)
+            .map_err(|_| GuiInputError::Capacity)?;
+        reply
+            .reservation
+            .borrow_mut()
+            .reserve_bytes(512 + size)
+            .map_err(|_| GuiInputError::Capacity)?;
+        reply.hit = Some(GuiInputHit {
+            target: ipp_protocol::world::gui::GuiTarget {
+                world: hit.target.world.into(),
+                entity: hit.target.entity,
+                component: hit.target.component,
+                incarnation: hit.target.incarnation,
+            },
+            path: hit
+                .path
+                .iter()
+                .map(
+                    |edge| ipp_protocol::world::view_queries::CameraAttachmentReference {
+                        parent: edge.parent().into(),
+                        anchor: edge.anchor().to_bits(),
+                        incarnation: edge.incarnation(),
+                        revision: edge.identity().1,
+                    },
+                )
+                .collect(),
+        });
+        Ok(())
+    }
+
     fn command(&mut self) -> Result<Box<dyn GuiDeliveryPermit>, GuiInputError> {
         {
             let mut reply = self.0.borrow_mut();
-            let retained = std::mem::size_of::<Reply>()
-                + std::mem::size_of::<Pending>()
-                + (reply.pending + 1)
-                    * (std::mem::size_of::<Child>() + 4 * std::mem::size_of::<usize>());
+            let retained = reply.retained_bytes(
+                reply.pending + 1,
+                reply.hit.as_ref().map_or(0, |hit| hit.path.capacity()),
+            );
             reply
                 .reservation
                 .borrow_mut()
@@ -453,6 +517,7 @@ impl GuiHostInputService {
                     cancelled: 0,
                     error: None,
                     scroll: None,
+                    hit: None,
                     native: None,
                 }));
                 self.pending.push_back(Pending {
@@ -537,6 +602,7 @@ impl GuiHostInputService {
                         }
                     }
                     Err(error) => {
+                        reply.hit = None;
                         reply.error = Some(error.to_string());
                         reply.rejected += 1;
                     }

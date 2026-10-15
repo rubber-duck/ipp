@@ -12,6 +12,7 @@ import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
 import "./gui-declaration.test.js";
 import "./gui-kit-core.test.js";
+import "./gui-kit-controlled-values.test.js";
 import "./gui-kit-containers.test.js";
 import "./gui-kit-feedback.test.js";
 import "./gui-kit-overlays.test.js";
@@ -20,6 +21,7 @@ import "./gui-kit-values.test.js";
 import "./control-refs.test.js";
 import "./canvas-world.test.js";
 import "./commit-scope.test.js";
+import "./field-watches.test.js";
 import {
   createElement,
   Fragment,
@@ -973,7 +975,7 @@ test("local malformed trees reject render promises and allow a corrected tree", 
   // Runtime guard complements the public id xor bindTo TypeScript contract.
   await assert.rejects(
     root2.render(createElement(Entity, { id: "", children: null })),
-    /nonempty id or bindTo/,
+    /Entity id must not be empty/,
   );
   await turn();
   assert.equal(

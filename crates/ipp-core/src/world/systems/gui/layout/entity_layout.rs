@@ -75,6 +75,8 @@ pub(in crate::world::systems) struct GuiEntityLayoutView {
     pub extent: [f32; 2],
     pub density: f32,
     pub placements: BTreeMap<EntityId, GuiEntityLayout>,
+    /// Shared background paint rectangles in each participating entity's local space.
+    pub joined_backgrounds: BTreeMap<EntityId, [f32; 4]>,
     pub geometry: BTreeMap<(EntityId, u16), Option<CanvasGeometry>>,
     pub text_constraints: BTreeMap<EntityId, f32>,
     pub control_labels:
@@ -122,6 +124,8 @@ pub(in crate::world::systems::gui) fn entity_layout_input(component: u16) -> boo
                 | ComponentValue::GUI_TEXT_INPUT
                 | ComponentValue::GUI_COLOR
                 | ComponentValue::GUI_FONT
+                | ComponentValue::GUI_METRICS
+                | ComponentValue::GUI_SKIN
                 | ComponentValue::GUI_SCROLL_VIEW
                 | ComponentValue::GUI_VIRTUAL_LIST
                 | ComponentValue::GUI_VIRTUAL_ITEM
@@ -135,7 +139,8 @@ pub(in crate::world::systems::gui) fn entity_layout_input(component: u16) -> boo
 fn label_input(component: u16) -> bool {
     matches!(
         component,
-        ComponentValue::GUI_BUTTON
+        ComponentValue::GUI_SKIN
+            | ComponentValue::GUI_BUTTON
             | ComponentValue::GUI_CHECKBOX
             | ComponentValue::GUI_SLIDER
             | ComponentValue::GUI_TEXT_INPUT
@@ -145,6 +150,12 @@ fn label_input(component: u16) -> bool {
 
 impl GuiEntityLayoutState {
     pub fn dirty(&mut self, entity: EntityId, component: u16) {
+        if matches!(
+            component,
+            ComponentValue::GUI_METRICS | ComponentValue::PRESENTATION_GATE
+        ) {
+            self.structure_dirty = true;
+        }
         if label_input(component) {
             self.label_dirty.insert(entity);
         } else if entity_layout_input(component) {
@@ -301,6 +312,12 @@ impl GuiEntityLayoutState {
         match (current, previous) {
             (Some((text, axis, steps, masked)), Some(previous)) => {
                 !previous.measures(&text, axis, steps, masked)
+                    || previous.metrics
+                        != super::super::presentation::GuiMetrics::resolve(
+                            context.world,
+                            entity,
+                            previous.font_size,
+                        )
             }
             (None, None) => false,
             _ => true,

@@ -27,6 +27,7 @@ pub(in crate::world::systems::gui) fn refresh_eligibility(
     roots: &BTreeSet<EntityId>,
     changed: &mut BTreeSet<EntityId>,
 ) {
+    let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
     let mut visited = BTreeSet::new();
     for &top in roots {
         if !state.entities.contains_key(&top) || has_ancestor_in(state, top, roots) {
@@ -38,10 +39,12 @@ pub(in crate::world::systems::gui) fn refresh_eligibility(
                 continue;
             }
             let scope = (enabled, visible);
+            let open = presentation.open_inputs(components, state, entity);
             let passed = match components.gui_behavior_mut(entity.index() as usize) {
                 Some(behavior) => {
                     let effective = (behavior.enabled && scope.0, behavior.visible && scope.1);
-                    let available = !state.links.invalid.contains(&entity)
+                    let available = open
+                        && !state.links.invalid.contains(&entity)
                         && control_components(state, entity) <= 1;
                     if behavior.effective_enabled != effective.0 {
                         behavior.effective_enabled = effective.0;

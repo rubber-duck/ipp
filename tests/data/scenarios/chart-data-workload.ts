@@ -18,7 +18,7 @@ import {
   createEntity,
   insertComponent,
   successfulBatch,
-} from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
+} from "../../../examples/demos/scenes/charts/shared/commands.js";
 import { check as checkValue } from "../../harness/page/checks.js";
 
 function check(

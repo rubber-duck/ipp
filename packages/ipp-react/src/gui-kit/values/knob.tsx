@@ -1,3 +1,5 @@
+import type { ValueChangeHandler } from "./value-synchronization.js";
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A rotary knob: the runtime's slider presented as a dial in its cut
  * housing, which is the control itself, with the caption above it and, inside
@@ -11,10 +13,9 @@
  * larger size gives longer end captions room. Focus glows on the housing's
  * border.
  *
- * The knob is a fixed-size column as wide as the wider of its housing and
- * caption, centred on each other. `children` go in a column under the
- * housing as tall as a numeric stepper without its caption, field and error
- * line, for the paired input that enters a precise value: a
+ * The column fits its content, as wide as the wider of its housing and
+ * caption, centred on each other. `children` flow under the housing and
+ * can expand for validation feedback. A paired precise input can be a
  * `NumericStepper` without step parts or range caption, sharing the knob's
  * value, so typing a number turns the knob and turning it updates the
  * field:
@@ -32,11 +33,10 @@
  * housing stays centred above it.
  */
 import type { ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
 import { LAYOUT_COLUMN, Row } from "../layout.js";
-import { numericStepperHeight } from "./numeric-stepper.js";
 import {
   SliderControl,
   railGeometry,
@@ -44,6 +44,7 @@ import {
   type SliderCompositeProps,
 } from "./slider-rail.js";
 import { defaultFormat, useScalarValue, withUnits } from "./scalar-value.js";
+import { useOwnRow } from "../row-motion.js";
 import { TextLine, lineWidth } from "../text.js";
 
 export interface KnobProps extends SliderCompositeProps {
@@ -51,8 +52,8 @@ export interface KnobProps extends SliderCompositeProps {
   readonly value?: number;
   /** The initial value while `value` is omitted; the origin, or the minimum. */
   readonly defaultValue?: number;
-  /** The runtime committed a new value. */
-  readonly onChange?: (value: number) => void;
+  /** The runtime committed a new value; return async acceptance before convergence. */
+  readonly onChange?: ValueChangeHandler<number>;
   /** The value the arc runs from, such as zero on a bipolar knob. */
   readonly origin?: number;
   /** Captions of the minimum and maximum at the sweep's ends; shown by default. */
@@ -71,7 +72,7 @@ const TICK_INSET_EMS = 0.5;
 
 export function Knob(props: KnobProps) {
   const {
-    id,
+    id: providedId,
     layer = 0,
     label,
     min,
@@ -89,8 +90,10 @@ export function Knob(props: KnobProps) {
     ref,
     children,
   } = props;
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
+  const readoutInside = t.dialReadoutInside ?? false;
   const { row, gap } = railGeometry(kit);
   const format = props.format ?? defaultFormat(min, max, step);
   const initial =
@@ -108,9 +111,10 @@ export function Knob(props: KnobProps) {
   const body = kit.typeSize("body");
 
   const side = kit.unit(size ?? t.dial);
+  const housingScale = t.dialHousingScale ?? 1;
+  const housingInset = (side * (housingScale - 1)) / 2;
+  const housing = useOwnRow({ outset: [housingInset, housingInset] });
   const caption = label === undefined ? 0 : lineWidth(label, body);
-  const input = kit.unit(numericStepperHeight(t, false));
-  const slot = children === undefined ? 0 : gap + input;
   // An end caption centres a small size below where the tick ring's outer
   // edge ends, at half past seven and half past four, but keeps half an
   // inset inside the housing, clear of its line and cut.
@@ -140,14 +144,19 @@ export function Knob(props: KnobProps) {
     );
   };
   const readout = text(state.current[0]!);
+  const readoutType = readoutInside ? "small" : "body";
+  const readoutSize = kit.typeSize(readoutType);
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         width={Math.max(side, caption)}
-        height={(label === undefined ? 0 : row) + side + row + slot}
+        height={-1}
+        fit_height
+        gap={kit.spacing.label}
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
@@ -155,7 +164,7 @@ export function Knob(props: KnobProps) {
         {label !== undefined && (
           <Row
             id={`${id}/caption`}
-            height={t.denseRow}
+            height={kit.unit(t.denseRow)}
             layout={{ width: caption, align_x: 0 }}
           >
             <TextLine id={`${id}/label`} text={label} tone={tones.label} />
@@ -167,29 +176,41 @@ export function Knob(props: KnobProps) {
           value={state}
           axis={2}
           origin={origin}
-          layout={{ width: side, height: side + row, align_x: 0 }}
+          {...(housingScale !== 1 ? { skinParts: housing } : {})}
+          layout={{
+            width: side,
+            height: side + (readoutInside ? 0 : row),
+            align_x: 0,
+          }}
         >
           {bounds && end("min", min)}
           {bounds && end("max", max)}
           <Row
             id={`${id}/readout`}
             layout={{
-              width: lineWidth(readout, body),
+              width: lineWidth(readout, readoutSize),
               height: row,
-              margin_top: side,
+              margin_top: readoutInside ? (side - row) / 2 : side,
               align_x: 0,
             }}
           >
             <TextLine
               id={`${id}/readout/text`}
               text={readout}
+              size={readoutType}
               tone={tones.readout}
             />
           </Row>
         </SliderControl>
         {children !== undefined && (
           <Entity id={`${id}/slot`}>
-            <Layout kind={LAYOUT_COLUMN} height={input} margin_top={gap} />
+            <PresentationGate open />
+            <Layout
+              kind={LAYOUT_COLUMN}
+              height={-1}
+              fit_height
+              margin_top={0}
+            />
             <Children>{children}</Children>
           </Entity>
         )}

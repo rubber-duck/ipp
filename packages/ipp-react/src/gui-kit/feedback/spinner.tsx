@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Activity of unknown duration beside readable status text: a ring the size
  * of an icon, a quiet track with a lit quarter that turns once a second on the
@@ -10,7 +11,7 @@
  * ends with it, so nothing keeps changing its canvas every frame. Its width
  * hugs its text.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Arc, TURNING_SWEEP } from "../arc.js";
 import { useGuiKit } from "../kit.js";
@@ -20,7 +21,7 @@ import { TextLine, lineWidth } from "../text.js";
 export interface SpinnerProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The status text, such as Preparing…. */
   readonly label: string;
   readonly layout?: GuiKitLayout;
@@ -29,12 +30,19 @@ export interface SpinnerProps {
 /** Ring thickness: an eighth of the icon-sized ring, as the small progress ring. */
 const THICKNESS = 3;
 
-export function Spinner({ id, layer = 0, label, layout }: SpinnerProps) {
+export function Spinner({
+  id: providedId,
+  layer = 0,
+  label,
+  layout,
+}: SpinnerProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const gap = t.inset / 2;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}

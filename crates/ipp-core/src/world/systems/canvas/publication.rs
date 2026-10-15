@@ -158,6 +158,10 @@ pub enum CanvasShapeFill {
     Paint {
         color: [f32; 4],
         paint: CanvasTarget,
+        /// Per-part numeric inputs, independent of the shared paint properties.
+        data: [f32; 4],
+        /// Original part origin and size within expanded coverage, or full shape.
+        bounds: Option<[f32; 4]>,
     },
 }
 
@@ -238,6 +242,29 @@ pub struct CanvasShapeGlow {
     pub falloff: f32,
 }
 
+/// Local edge retained by one section of a joined box contour.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CanvasBoxEdge {
+    /// Keep points at or to the right of the boundary.
+    Left,
+    /// Keep points at or below the boundary.
+    Top,
+    /// Keep points at or to the left of the boundary.
+    Right,
+    /// Keep points at or above the boundary.
+    Bottom,
+}
+
+/// One exact internal edge of a shared contour, independent of ordinary clipping.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CanvasBoxSection {
+    /// Retained side in the box's own orientation, before visual scale.
+    pub edge: CanvasBoxEdge,
+    /// Boundary position in local box units.
+    pub position: f32,
+}
+
 /// Contour of a [`CanvasPrimitive::Box`] within its rectangle.
 ///
 /// Corner arrays run `[top-left, top-right, bottom-right, bottom-left]` in the box's
@@ -248,6 +275,9 @@ pub struct CanvasShapeGlow {
 pub enum CanvasBoxShape {
     /// The rectangle and its border ring.
     Rect {
+        /// Optional coverage section. Joined surfaces partition one contour at
+        /// an exact shared edge without adding border or antialias coverage there.
+        section: Option<CanvasBoxSection>,
         /// 45-degree cut length per corner; an uncut corner keeps the corner radius.
         corner_cut: [f32; 4],
         /// Accent span per corner along both edges leaving it, measured from the
@@ -295,6 +325,7 @@ pub enum CanvasBoxShape {
 impl CanvasBoxShape {
     /// The plain rectangle: no cuts, no accents and no checker.
     pub const RECT: Self = Self::Rect {
+        section: None,
         corner_cut: [0.0; 4],
         corner_accent: [0.0; 4],
         corner_accent_width: 0.0,
@@ -317,6 +348,8 @@ pub enum CanvasPrimitive {
     Path {
         style: CanvasPrimitiveStyle,
         path: Arc<crate::systems::plot::PlotPath>,
+        /// Optional sibling paint for a Plot data mark; decoration stays unpainted.
+        paint: Option<CanvasTarget>,
     },
     /// Original drawing layers normalized at the shared source/preparation boundary.
     Drawing {

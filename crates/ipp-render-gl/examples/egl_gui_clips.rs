@@ -19,8 +19,8 @@ mod smoke;
 
 #[cfg(target_os = "linux")]
 use ipp_core::systems::canvas::{
-    CanvasBoxShape, CanvasPart, CanvasPrimitiveId, CanvasPrimitiveStyle, CanvasShapeChecker,
-    CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
+    CanvasBoxEdge, CanvasBoxSection, CanvasBoxShape, CanvasPart, CanvasPrimitiveId,
+    CanvasPrimitiveStyle, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 
 /// Surface content space: 4 x 3 metres at 80 pixels per metre on 320 x 240.
@@ -485,6 +485,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::write(evidence.join(format!("{label}.rgba")), &frame)?;
         Ok::<_, Box<dyn std::error::Error>>(frame)
     };
+
+    // Joined GUI backgrounds share one contour. Fractional and oblique joins
+    // must match a single translucent box, including its border and corner cuts.
+    for (name, mvp) in [
+        ("front", MVP),
+        (
+            "oblique",
+            view::surface(
+                &view::multiply(&view::rotation_y(0.6), &view::rotation_x(-0.35)),
+                4.5,
+            ),
+        ),
+    ] {
+        let probe = ProbeBox {
+            placement: [0.43, 0.37, 2.6, 2.1],
+            fill: [0.15, 0.52, 0.65, 0.43],
+            border_color: [0.6, 0.8, 0.9, 0.7],
+            corner: [0.17, 0.17],
+            border: 0.025,
+        };
+        let shape = |section| CanvasBoxShape::Rect {
+            section,
+            corner_cut: [0.1, 0.0, 0.1, 0.0],
+            corner_accent: [0.0; 4],
+            corner_accent_width: 0.0,
+            checker: None,
+        };
+        let fill = CanvasShapeFill::Solid(probe.fill);
+        let whole = probe.records_shaped(fill, None, shape(None));
+        device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+        draw_batch(&mut device, &box_program, &whole, &mvp, &ROOT)?;
+        let expected = capture(&mut device, &format!("joined-{name}-whole"))?;
+        for axis in 0..2 {
+            let lower = CanvasBoxSection {
+                edge: [CanvasBoxEdge::Right, CanvasBoxEdge::Bottom][axis],
+                position: 0.613,
+            };
+            let upper = CanvasBoxSection {
+                edge: [CanvasBoxEdge::Left, CanvasBoxEdge::Top][axis],
+                position: 0.613,
+            };
+            let mut sections = probe.records_shaped(fill, None, shape(Some(lower)));
+            sections.extend(probe.records_shaped(fill, None, shape(Some(upper))));
+            device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
+            draw_batch(&mut device, &box_program, &sections, &mvp, &ROOT)?;
+            let actual = capture(&mut device, &format!("joined-{name}-axis-{axis}"))?;
+            let error = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap_or(0);
+            if error > 2 {
+                return Err(format!("joined {name} axis {axis}: max channel error {error}").into());
+            }
+        }
+    }
 
     // Nested clips: green nested inside red, sharing one placement.
     device.begin_frame(WIDTH, HEIGHT, &[0.0, 0.0, 0.0, 1.0])?;
@@ -1344,6 +1401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [level, level, level, 255]
     };
     let rect_shape = |cut: [f32; 4], accent: [f32; 4], accent_width: f32| CanvasBoxShape::Rect {
+        section: None,
         corner_cut: cut.map(|length| length / 80.0),
         corner_accent: accent.map(|length| length / 80.0),
         corner_accent_width: accent_width / 80.0,
@@ -1872,6 +1930,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         border: 0.0,
     };
     let oblique_cut = CanvasBoxShape::Rect {
+        section: None,
         corner_cut: [0.3, 0.0, 0.3, 0.0],
         corner_accent: [0.0; 4],
         corner_accent_width: 0.0,
@@ -2032,6 +2091,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .records_shaped(fill, None, shape)
     };
     let checkered = |size: f32, colors: [[f32; 4]; 2]| CanvasBoxShape::Rect {
+        section: None,
         corner_cut: [0.0; 4],
         corner_accent: [0.0; 4],
         corner_accent_width: 0.0,

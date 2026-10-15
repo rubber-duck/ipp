@@ -62,6 +62,8 @@ pub(super) const SCENE_SYSTEMS: &[SystemId] = &[
 
 #[derive(Default)]
 pub(super) struct Delivery {
+    pub(super) wheel_hits: Vec<(GuiEntityTarget, Vec<crate::WorldAttachmentToken>)>,
+    pub(super) fail_hit: bool,
     pub(super) terminals: Vec<GuiDeliveryTerminal>,
     pub(super) preparations: Vec<bool>,
     pub(super) reserved: usize,
@@ -309,6 +311,49 @@ pub(super) fn create(
         });
     }
     apply(host, world, commands)[0].1
+}
+
+/// Create a control with the explicit input-test skin, or an ordinary non-control.
+pub(super) fn create_painted(
+    host: &mut HostRuntime,
+    world: WorldRef,
+    mut values: Vec<ComponentValue>,
+    parent: Option<EntityId>,
+) -> EntityId {
+    let control = values.iter().any(|value| {
+        matches!(
+            value,
+            ComponentValue::GuiButton(_)
+                | ComponentValue::GuiCheckbox(_)
+                | ComponentValue::GuiSlider(_)
+                | ComponentValue::GuiTextInput(_)
+                | ComponentValue::GuiColor(_)
+                | ComponentValue::GuiScrollView(_)
+                | ComponentValue::GuiVirtualList(_)
+        )
+    });
+    if control
+        && !values
+            .iter()
+            .any(|value| matches!(value, ComponentValue::GuiSkin(_)))
+    {
+        let (theme, motion, metrics) = crate::systems::gui::test_support::input_skin();
+        let theme = create(
+            host,
+            world,
+            vec![
+                ComponentValue::GuiTheme(theme),
+                ComponentValue::GuiThemeMotion(motion),
+                ComponentValue::GuiMetrics(metrics),
+            ],
+            None,
+        );
+        values.push(ComponentValue::GuiSkin(crate::components::GuiSkin {
+            theme,
+            ..Default::default()
+        }));
+    }
+    create(host, world, values, parent)
 }
 
 pub(super) fn button(

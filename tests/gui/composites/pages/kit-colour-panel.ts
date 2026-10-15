@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import { createElement as h } from "react";
 import {
   Children,
@@ -77,7 +78,12 @@ export function kitColourPanel(origin: readonly [number, number]) {
       await root.render(
         h(
           GuiKit,
-          { contract, font, fontSize: KIT_COLOUR_FONT },
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font,
+            fontSize: KIT_COLOUR_FONT,
+          },
           h(
             Entity,
             { id: "colour-kit-root" },

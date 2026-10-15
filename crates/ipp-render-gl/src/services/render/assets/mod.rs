@@ -8,3 +8,4 @@ pub(super) mod generated_paths;
 pub(super) mod loaders;
 pub(super) mod paths;
 pub(super) mod surface_resources;
+mod triangle_order;

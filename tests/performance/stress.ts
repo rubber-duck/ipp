@@ -6,7 +6,7 @@ import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { basename, resolve, join, relative } from "node:path";
 import { runBrowserEnvironment } from "../harness/browser.js";
-import { galleryEnvironment } from "../gallery/drivers/browser-gallery.js";
+import { applicationEnvironment } from "../gallery/drivers/browser-application.js";
 import { invoke } from "../harness/page-calls.js";
 import { writeDataUrl } from "../harness/evidence.js";
 import {
@@ -53,7 +53,7 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
   const result = await runBrowserEnvironment(
     "Blender stress benchmark",
     {
-      ...galleryEnvironment,
+      ...applicationEnvironment,
       build: {
         name: basename(root) as "render-instrumentation",
         generatedModule: join(root, "generated.js"),

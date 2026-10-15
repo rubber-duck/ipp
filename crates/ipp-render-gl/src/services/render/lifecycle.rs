@@ -40,6 +40,7 @@ impl<D: RenderDevice> RenderService<D> {
             surface_analytic_text: false,
             surface_gui_unretained: false,
             canvas_paints: Default::default(),
+            canvas_presentations: Default::default(),
             gui_glyph_program: None,
             canvas_paint_fallbacks: BTreeMap::new(),
             gui_batch_cache: BTreeMap::new(),
@@ -209,6 +210,7 @@ impl<D: RenderDevice> RenderService<D> {
         // Paints are admitted again and the canvas program rebuilt on next use.
         self.canvas_paints.clear(&mut self.device.borrow_mut());
         self.canvas_paint_fallbacks.clear();
+        self.canvas_presentations.clear();
         self.gui_batch_cache.clear();
         // Glyph atlas layout, demand and run bands survive, so recovered text
         // repopulates its original slots.

@@ -31,6 +31,7 @@ function physicalLimit(name: string): number {
   const limits: Record<string, number> = {
     GUI_PHYSICAL_POINTERS: 32,
     GUI_PHYSICAL_BLOCKERS: 32768,
+    GUI_PHYSICAL_HIT_PATH: 64,
   };
   return limits[name] ?? assert.fail(`unknown physical limit ${name}`);
 }
@@ -40,6 +41,7 @@ function harness() {
   let reject = false;
   let next = 0n;
   const kinds: number[] = [];
+  let terminal: ((writer: HostWireWriter) => void) | undefined;
   const input = new HostPhysicalInput(
     async (_tag, encode, accept) => {
       const writer = new HostWireWriter();
@@ -56,12 +58,14 @@ function harness() {
           reply.u8(0);
           reply.u64(++next);
         } else if (kind === 1) reply.u8(1);
+        else if (terminal) terminal(reply);
         else {
           reply.u8(2);
           reply.u8(0);
           reply.u32(1);
           reply.u32(0);
           reply.u32(0);
+          reply.u8(0);
           reply.u8(0);
           reply.u8(0);
           reply.u8(0);
@@ -77,6 +81,9 @@ function harness() {
   return {
     input,
     kinds,
+    terminal: (write: (writer: HostWireWriter) => void) => {
+      terminal = write;
+    },
     after: (callback: () => void) => {
       afterAccept = callback;
     },
@@ -202,4 +209,71 @@ test("native close listeners observe terminal state before reentrant sends", asy
   });
   await context.close();
   await Promise.all(late);
+});
+
+function wheelTerminal(writer: HostWireWriter, pathCount: number | undefined) {
+  writer.u8(2);
+  writer.u8(3); // A hit need not consume any delta.
+  writer.u32(0);
+  writer.u32(0);
+  writer.u32(0);
+  writer.u8(0);
+  writer.u8(0);
+  writer.u8(0);
+  writer.u8(pathCount === undefined ? 0 : 1);
+  if (pathCount === undefined) return;
+  writer.u64(7n);
+  writer.u64(8n);
+  writer.u64(9n);
+  writer.u16(36);
+  writer.u64(10n);
+  writer.u32(pathCount);
+}
+
+test("correlated wheel hits preserve exact target/path and never leak to later replies", async () => {
+  const run = harness();
+  const context = await run.input.open(view);
+  run.terminal((writer) => {
+    wheelTerminal(writer, 1);
+    writer.u64(1n);
+    writer.u64(2n);
+    writer.u64(3n);
+    writer.u64(4n);
+    writer.u64(5n);
+  });
+  const wheel = { kind: "wheel", point: [0.5, 0.5], delta: [0, 1] } as const;
+  assert.deepEqual((await context.send(wheel)).hit, {
+    target: {
+      world: { id: 7n, incarnation: 8n },
+      entity: 9n,
+      component: 36,
+      incarnation: 10n,
+    },
+    path: [
+      {
+        parent: { id: 1n, incarnation: 2n },
+        anchor: 3n,
+        incarnation: 4n,
+        revision: 5n,
+      },
+    ],
+  });
+  run.terminal((writer) => wheelTerminal(writer, 0));
+  assert.deepEqual((await context.send(wheel)).hit?.path, []);
+  run.terminal((writer) => wheelTerminal(writer, undefined));
+  assert.equal((await context.send(wheel)).hit, undefined);
+  await context.close();
+});
+
+test("physical wheel hit decoder rejects over-depth and truncated paths", async () => {
+  for (const depth of [65, 1]) {
+    const run = harness();
+    const context = await run.input.open(view);
+    run.terminal((writer) => wheelTerminal(writer, depth));
+    await assert.rejects(
+      context.send({ kind: "wheel", point: [0.5, 0.5], delta: [0, 1] }),
+      depth === 65 ? /hit path exceeds framing limit/ : /truncated/i,
+    );
+    await context.close();
+  }
 });

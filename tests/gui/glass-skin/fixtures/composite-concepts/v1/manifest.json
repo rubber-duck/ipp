@@ -1,0 +1,26 @@
+{
+  "generator": "built-in image_gen",
+  "styleSource": "../../component-concept.png",
+  "images": [
+    {
+      "family": "choices",
+      "file": "choices.png",
+      "sha256": "76c4430cf3b22f737f0ed68c6969a05c8cd610be1c79792c207f8ec04336ff14"
+    },
+    {
+      "family": "overlays",
+      "file": "overlays.png",
+      "sha256": "9a90944301fac952765d86c84b7766d495ee4f49c4a11018539a14c4543ec9d7"
+    },
+    {
+      "family": "values",
+      "file": "values.png",
+      "sha256": "644b66028b2b680fc50c8c71327b1346255c1cad239f80ad0dfca98b89bb3723"
+    },
+    {
+      "family": "containers",
+      "file": "containers.png",
+      "sha256": "e601271b2e0403ac07c598e96dbe5a5b0cb214ff19dff518fbd508c7e519bd61"
+    }
+  ]
+}

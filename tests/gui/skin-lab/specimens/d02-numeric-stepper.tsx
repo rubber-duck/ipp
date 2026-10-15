@@ -30,7 +30,6 @@ import { defineSpecimen, type Point, type Rect } from "../specimen.js";
 import {
   CONTROL_HEIGHT,
   DENSE_ROW,
-  INSET,
   TEXT_BODY,
   TEXT_SMALL,
 } from "../themes/geometry.js";
@@ -69,9 +68,8 @@ const SMALL = u(TEXT_SMALL);
 /** The field: the sheet's 278 wide at the control height, from x 103.5. */
 const FIELD = { x: 103.5, width: 278, height: u(CONTROL_HEIGHT) };
 
-/** The stepper: the field, half an inset, and the unit as the kit fits it. */
-const STEPPER_WIDTH =
-  FIELD.width + u(INSET / 2) + 2 * FONT_ADVANCE * BODY + BODY / 100;
+/** The stepper: the field, an eight-unit label gap, and the fitted unit. */
+const STEPPER_WIDTH = FIELD.width + u(8) + 2 * FONT_ADVANCE * BODY + BODY / 100;
 
 const field = (middle: number): Rect => [
   FIELD.x,
@@ -181,7 +179,10 @@ export default defineSpecimen({
               defaultValue={value}
               disabled={name === "disabled"}
               ref={lab.control(name)}
-              layout={placed([x, first ? y - u(DENSE_ROW) : y], STEPPER_WIDTH)}
+              layout={placed(
+                [x, first ? y - u(DENSE_ROW + 8) : y],
+                STEPPER_WIDTH,
+              )}
             />
           );
         })}

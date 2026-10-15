@@ -89,7 +89,7 @@ const fn validated_layout<const N: usize>(
 }
 
 /// [`GuiShapeRecord`] inputs of `surface_gui.vert`.
-pub(crate) const GUI_SHAPE_LAYOUT: RetainedRecordLayout<12> = validated_layout(
+pub(crate) const GUI_SHAPE_LAYOUT: RetainedRecordLayout<13> = validated_layout(
     size_of::<GuiShapeRecord>(),
     [
         retained_attribute!(GuiShapeRecord, rect, 0),
@@ -104,6 +104,7 @@ pub(crate) const GUI_SHAPE_LAYOUT: RetainedRecordLayout<12> = validated_layout(
         retained_attribute!(GuiShapeRecord, material_params, 9),
         retained_attribute!(GuiShapeRecord, glow_color, 10),
         retained_attribute!(GuiShapeRecord, clip, 11),
+        retained_attribute!(GuiShapeRecord, paint_data, 12),
     ],
 );
 
@@ -121,7 +122,7 @@ pub(crate) const GUI_GLYPH_LAYOUT: RetainedRecordLayout<4> = validated_layout(
 // Pinned strides: resizing a record changes GPU memory accounting and every
 // consumer's stride, so it must be a deliberate edit here as well. Twelve
 // attributes stay within the 16 that WebGL 2 and GLES 3 guarantee.
-const _: () = assert!(GUI_SHAPE_LAYOUT.stride == 192);
+const _: () = assert!(GUI_SHAPE_LAYOUT.stride == 208);
 const _: () = assert!(GUI_GLYPH_LAYOUT.stride == 64);
 
 /// Stride and attributes of `kind`'s records.
@@ -201,12 +202,13 @@ mod tests {
     #[test]
     fn bridge_tables_are_consecutive_words() {
         assert_eq!(
-            size_of::<RetainedRecordLayout<12>>(),
-            (2 + 12 * 3) * size_of::<u32>()
+            size_of::<RetainedRecordLayout<13>>(),
+            (2 + 13 * 3) * size_of::<u32>()
         );
-        assert_eq!(offset_of!(RetainedRecordLayout<12>, attributes), 8);
+        assert_eq!(offset_of!(RetainedRecordLayout<13>, attributes), 8);
         assert_eq!(GUI_SHAPE_LAYOUT.attributes[10].offset, 160);
         assert_eq!(GUI_SHAPE_LAYOUT.attributes[11].offset, 176);
+        assert_eq!(GUI_SHAPE_LAYOUT.attributes[12].offset, 192);
         assert_eq!(GUI_GLYPH_LAYOUT.attributes[3].offset, 48);
         assert_eq!(gui_record_layout(GuiRecordKind::Glyph).1.len(), 4);
     }

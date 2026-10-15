@@ -167,12 +167,22 @@ pub struct PlotFrame2d {
     pub grid_blue: f32,
     /// Grid linear coverage alpha.
     pub grid_alpha: f32,
+    /// Straight linear RGBA for highlighted marks and their labels.
+    pub highlight_red: f32,
+    /// Highlight linear green.
+    pub highlight_green: f32,
+    /// Highlight linear blue.
+    pub highlight_blue: f32,
+    /// Highlight linear coverage alpha.
+    pub highlight_alpha: f32,
     /// Grid/axis line thickness in local logical units.
     pub line_width: f32,
 }
 
 impl Default for PlotFrame2d {
     fn default() -> Self {
+        let highlight = [1.0; 4];
+
         Self {
             width: 600.0,
             height: 320.0,
@@ -200,6 +210,10 @@ impl Default for PlotFrame2d {
             grid_green: 0.18,
             grid_blue: 0.24,
             grid_alpha: 0.7,
+            highlight_red: highlight[0],
+            highlight_green: highlight[1],
+            highlight_blue: highlight[2],
+            highlight_alpha: highlight[3],
             line_width: 1.0,
         }
     }
@@ -267,6 +281,8 @@ pub struct PlotFrame3d {
     pub grid_blue: f32,
     /// Grid linear coverage alpha.
     pub grid_alpha: f32,
+    /// Show mark outlines, including highlighted edges; materials may provide their own feedback.
+    pub mark_outlines: bool,
     /// Local physical line width.
     pub line_width: f32,
 }
@@ -302,13 +318,14 @@ impl Default for PlotFrame3d {
             grid_green: 0.18,
             grid_blue: 0.24,
             grid_alpha: 0.7,
+            mark_outlines: true,
             line_width: 0.015,
         }
     }
 }
 
 macro_rules! frame_lifecycle {
-    ($name:ty) => {
+    ($name:ty $(, $extra_color:ident)?) => {
         impl ComponentLifecycle for $name {
             fn asset_references() -> &'static [ComponentAssetReference] {
                 &[ComponentAssetReference {
@@ -338,6 +355,7 @@ macro_rules! frame_lifecycle {
                 positive(&[self.font_size, self.line_width])?;
                 color(self.color())?;
                 color(self.grid_color())?;
+                $(color(self.$extra_color())?;)?
                 if self.ticks == 0
                     || self.ticks > 100
                     || self
@@ -354,7 +372,7 @@ macro_rules! frame_lifecycle {
     };
 }
 
-frame_lifecycle!(PlotFrame2d);
+frame_lifecycle!(PlotFrame2d, highlight_color);
 frame_lifecycle!(PlotFrame3d);
 
 macro_rules! chart_component {
@@ -554,6 +572,16 @@ fn fraction(value: f32) -> Result<(), ErrorReason> {
 }
 
 impl PlotFrame2d {
+    /// Straight linear highlighted-mark and callout RGBA.
+    pub fn highlight_color(&self) -> [f32; 4] {
+        [
+            self.highlight_red,
+            self.highlight_green,
+            self.highlight_blue,
+            self.highlight_alpha,
+        ]
+    }
+
     /// Local logical extent.
     pub fn size(&self) -> [f32; 2] {
         [self.width, self.height]

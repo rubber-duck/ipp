@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import test from "node:test";
@@ -16,6 +16,8 @@ import {
 } from "./scenarios/gui-lifecycle.js";
 import { exerciseGuiInput } from "./scenarios/gui-input.js";
 import { exerciseGuiVirtualList } from "./scenarios/gui-virtual-list.js";
+import { exerciseGuiFlow } from "./scenarios/gui-flow.js";
+import { encodePng } from "../harness/images.js";
 
 interface GeneratedHost extends GuiContract {
   IppHostClient: {
@@ -128,6 +130,27 @@ async function presented(
   );
 }
 
+test("native flow spacing and cross alignment update completed GLES frames", {
+  timeout: 120_000,
+}, async (context) => {
+  await presented(
+    "gui-flow",
+    context.signal,
+    async (environment, host, contract) => {
+      const result = await environment.execute("gui flow", {}, () =>
+        exerciseGuiFlow(host, contract, (name, frame) =>
+          writeFile(
+            resolve(environment.evidence.directory, `${name}.png`),
+            encodePng(frame),
+          ),
+        ),
+      );
+      await environment.evidence.record("gui flow", result);
+      assert.equal(result.frames, 3);
+    },
+  );
+});
+
 test("ordinary GUI declarations, batches, compare-and-set and persistence cross a real native connection", {
   timeout: 90_000,
 }, async (context) => {
@@ -174,12 +197,16 @@ test("GUI pointer, keyboard and native text input route through native WebSocket
   timeout: 180_000,
 }, async (context) => {
   const font = await fontBytes();
-  await presented("gui-input", context.signal, async (environment, host) => {
-    const result = await environment.execute("gui input", {}, () =>
-      exerciseGuiInput(host, font),
-    );
-    environment.evidence.record("gui input", result);
-  });
+  await presented(
+    "gui-input",
+    context.signal,
+    async (environment, host, contract) => {
+      const result = await environment.execute("gui input", {}, () =>
+        exerciseGuiInput(host, font, contract),
+      );
+      environment.evidence.record("gui input", result);
+    },
+  );
 });
 
 test("a 100000-item VirtualList scrolls, anchors and restores through native WebSocket/GLES", {
@@ -188,9 +215,9 @@ test("a 100000-item VirtualList scrolls, anchors and restores through native Web
   await presented(
     "gui-virtual-list",
     context.signal,
-    async (environment, host) => {
+    async (environment, host, contract) => {
       const result = await environment.execute("gui virtual list", {}, () =>
-        exerciseGuiVirtualList(host),
+        exerciseGuiVirtualList(host, contract),
       );
       environment.evidence.record("gui virtual list", result);
       assert.deepEqual(result.attached, [0, 10]);

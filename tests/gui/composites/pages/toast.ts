@@ -5,6 +5,7 @@
  * the stack reports a dismissal and the application removes the toast.
  */
 import { createElement } from "react";
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import {
   createRoot,
   type ReactWorldClient,
@@ -54,7 +55,12 @@ export async function prepare(setup: CompositeSetup) {
     root.render(
       createElement(
         GuiKit,
-        { contract: setup.contract, font, fontSize: TOAST_FONT_SIZE },
+        {
+          contract: setup.contract,
+          skin: cybertronSkin(setup.contract),
+          font,
+          fontSize: TOAST_FONT_SIZE,
+        },
         createElement(ToastStack, {
           id: "composite-toasts",
           toasts,

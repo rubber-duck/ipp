@@ -16,6 +16,15 @@ use std::rc::Rc;
 pub(super) struct Ledger(pub(super) Rc<RefCell<Delivery>>);
 
 impl GuiRoutingDelivery for Ledger {
+    fn wheel_hit(&mut self, hit: GuiRoutingHit<'_>) -> Result<(), GuiInputError> {
+        let mut delivery = self.0.borrow_mut();
+        if delivery.fail_hit {
+            return Err(GuiInputError::Capacity);
+        }
+        delivery.wheel_hits.push((hit.target, hit.path.to_vec()));
+        Ok(())
+    }
+
     fn command(&mut self) -> Result<Box<dyn GuiDeliveryPermit>, GuiInputError> {
         Ok(Permit::boxed(&self.0))
     }

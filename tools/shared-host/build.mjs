@@ -25,6 +25,25 @@ const result = await build({
   jsx: "automatic",
   // `development` selects the React package's sources.
   conditions: ["development"],
+  // Linked worktrees can share node_modules; resolve the authoring source here.
+  alias: {
+    "@ipp/react": resolve(workspace, "packages/ipp-react/src/index.ts"),
+    "@ipp/react/canvas": resolve(workspace, "packages/ipp-react/src/canvas.ts"),
+    "@ipp/react/gui": resolve(workspace, "packages/ipp-react/src/gui.ts"),
+    "@ipp/react/gui-kit": resolve(
+      workspace,
+      "packages/ipp-react/src/gui-kit.ts",
+    ),
+    "@ipp/react/gui-cybertron": resolve(
+      workspace,
+      "packages/ipp-react/src/gui-cybertron.ts",
+    ),
+    "@ipp/react/gui-glass": resolve(
+      workspace,
+      "packages/ipp-react/src/gui-glass.ts",
+    ),
+    "@ipp/client": resolve(workspace, "packages/ipp-client/src/index.ts"),
+  },
   sourcemap: "inline",
   // esbuild locates its native binary at run time.
   external: ["esbuild"],

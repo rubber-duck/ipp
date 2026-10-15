@@ -168,6 +168,7 @@ function harness(
   context: TestContext,
   wheelStep?: number,
   cleanup?: () => Promise<void> | undefined,
+  options: Partial<CanvasGuiInputOptions> = {},
 ) {
   const dom = new Dom();
   const previous = new Map(
@@ -202,6 +203,7 @@ function harness(
     },
     () => {},
     physicalWireTag,
+    () => 64,
   );
   const sent: GuiPhysicalInput[] = [];
   const edits: { fence: GuiTextFence; edit: GuiNativeEdit }[] = [];
@@ -228,6 +230,7 @@ function harness(
       onUnhandled: (event) => unhandled.push(event),
       unhandledInputGate: gate,
       ...(wheelStep === undefined ? {} : { wheelStep }),
+      ...options,
     },
   );
   const area = dom.body.children[1]!.children[0]!;
@@ -378,6 +381,163 @@ test("pointer, wheel and keys submit immediately in DOM order", async (context) 
   await flush();
   assert.equal(state.canvas.captures.size, 0);
   assert.deepEqual(state.errors, []);
+});
+
+test("async pointer-down admission holds same-pointer moves and release while other input flows", async (context) => {
+  let admit!: () => void;
+  const admission = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
+  const outcomes: string[] = [];
+  const state = harness(context, undefined, undefined, {
+    awaitPointerDown: true,
+    onInputOutcome(input) {
+      outcomes.push(input.kind);
+      if (input.kind === "pointerDown") return admission;
+      return undefined;
+    },
+  });
+  const event = { button: 0, pointerId: 7, clientX: 110, clientY: 45 };
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointermove", { ...event, clientX: 150 });
+  state.canvas.dispatch("pointerup", { ...event, clientX: 200 });
+  state.canvas.dispatch("pointermove", { ...event, pointerId: 8 });
+  assert.deepEqual(
+    state.sent.map((input) => input.kind),
+    ["pointerDown", "pointerMove"],
+  );
+  await flush();
+  assert.deepEqual(outcomes, ["pointerDown", "pointerMove"]);
+  admit();
+  await flush();
+  await flush();
+  assert.deepEqual(state.sent.slice(2), [
+    { kind: "pointerMove", pointer: 7n, point: [0.7, 0.25] },
+    { kind: "pointerUp", pointer: 7n, point: [0.95, 0.25] },
+  ]);
+});
+
+test("cancel and detach discard pending admission input without stalling later pointers", async (context) => {
+  let admit!: () => void;
+  const admission = new Promise<void>((resolve) => {
+    admit = resolve;
+  });
+  const outcomes: string[] = [];
+  const state = harness(context, undefined, undefined, {
+    awaitPointerDown: true,
+    onInputOutcome(input) {
+      outcomes.push(input.kind);
+      if (input.kind === "pointerDown") return admission;
+      return undefined;
+    },
+  });
+  const event = { button: 0, pointerId: 7, clientX: 110, clientY: 45 };
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointermove", event);
+  state.canvas.dispatch("pointercancel", event);
+  await flush();
+  assert.ok(outcomes.includes("pointerCancel"));
+  admit();
+  await flush();
+  await flush();
+  assert.deepEqual(
+    state.sent.map((input) => input.kind),
+    ["pointerDown", "pointerCancel"],
+  );
+  state.canvas.dispatch("pointerdown", { ...event, pointerId: 8 });
+  state.canvas.dispatch("pointermove", { ...event, pointerId: 8 });
+  state.detach();
+  await flush();
+  await flush();
+  assert.equal(
+    state.sent.at(-1)?.kind,
+    "pointerDown",
+    "detached admission never sends queued movement",
+  );
+});
+
+test("failed down admission cancels scene capture and drops queued movement", async (context) => {
+  const outcomes: string[] = [];
+  const state = harness(context, undefined, undefined, {
+    awaitPointerDown: true,
+    onInputOutcome(input) {
+      outcomes.push(input.kind);
+      if (input.kind === "pointerDown")
+        return Promise.reject(new Error("projection failed"));
+      return undefined;
+    },
+  });
+  const event = { button: 0, pointerId: 7, clientX: 110, clientY: 45 };
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointermove", event);
+  state.canvas.dispatch("pointerup", event);
+  await flush();
+  await flush();
+  assert.deepEqual(outcomes, ["pointerDown", "pointerCancel"]);
+  assert.deepEqual(
+    state.sent.map((input) => input.kind),
+    ["pointerDown"],
+  );
+  assert.equal(state.errors[0]?.message, "projection failed");
+});
+
+test("cancel fences a new down waiting for the preceding release callback", async (context) => {
+  let finishRelease!: () => void;
+  const release = new Promise<void>((resolve) => {
+    finishRelease = resolve;
+  });
+  const state = harness(context, undefined, undefined, {
+    awaitPointerDown: true,
+    onInputOutcome(input) {
+      if (input.kind === "pointerUp") return release;
+      return undefined;
+    },
+  });
+  const event = { button: 0, pointerId: 7, clientX: 110, clientY: 45 };
+  state.canvas.dispatch("pointerdown", event);
+  await flush();
+  await flush();
+  state.canvas.dispatch("pointerup", event);
+  await flush();
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointermove", event);
+  state.canvas.dispatch("pointercancel", event);
+  finishRelease();
+  await flush();
+  await flush();
+  assert.deepEqual(
+    state.sent.map((input) => input.kind),
+    ["pointerDown", "pointerUp", "pointerCancel"],
+  );
+});
+
+test("native cancellation and detach notify pending scene admission and contain callback failures", async (context) => {
+  const cancelled: bigint[] = [];
+  const state = harness(context, undefined, undefined, {
+    awaitPointerDown: true,
+    onInputOutcome(input) {
+      if (input.kind === "pointerCancel") {
+        cancelled.push(input.pointer);
+        throw new Error("cancel callback failure");
+      }
+      if (input.kind === "pointerDown") return new Promise<void>(() => {});
+      return undefined;
+    },
+  });
+  const event = { button: 0, pointerId: 7, clientX: 110, clientY: 45 };
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointermove", event);
+  state.input.cancel({ pointers: [7n], focus: false });
+  await flush();
+  assert.deepEqual(cancelled, [7n]);
+  assert.equal(state.errors[0]?.message, "cancel callback failure");
+  state.canvas.dispatch("pointerdown", { ...event, pointerId: 8 });
+  state.detach();
+  assert.deepEqual(cancelled, [7n, 8n]);
+  assert.equal(
+    state.sent.filter((input) => input.kind === "pointerMove").length,
+    0,
+  );
 });
 
 test("wheel deltas scroll a fixed number of logical units per notch", (context) => {
@@ -816,6 +976,7 @@ function ownerHarness(test: TestContext) {
       },
       () => {},
       physicalWireTag,
+      () => 64,
     );
     context.send = async () => miss;
     context.close = async () => {
@@ -1163,3 +1324,309 @@ test("same-generation reveal synchronizes the native mask without replacing the 
   assert.equal(editor.value, "ab");
   assert.equal(editor.selectionEnd, 2);
 });
+
+test("wheel callbacks preserve submission order without waiting application completion", async (context) => {
+  const first = deferred<GuiInputRoutingOutcome>();
+  const second = deferred<GuiInputRoutingOutcome>();
+  const application = deferred<void>();
+  const callbacks: number[] = [];
+  let focus = 5;
+  const state = harness(context, 40, undefined, {
+    onInputOutcome(input) {
+      if (input.kind !== "wheel") return;
+      callbacks.push(input.delta[0]);
+      focus = Math.max(0, Math.min(5, focus + input.delta[0] / 160));
+      return callbacks.length === 1 ? application.promise : undefined;
+    },
+  });
+  state.route(() => (state.sent.length === 1 ? first.promise : second.promise));
+  const wheel = (deltaX: number) =>
+    state.canvas.dispatch("wheel", {
+      deltaX,
+      deltaY: 0,
+      deltaMode: 0,
+      clientX: 40,
+      clientY: 40,
+    });
+  wheel(-100);
+  wheel(100);
+  assert.equal(state.sent.length, 2, "both native sends remain concurrent");
+  second.resolve(miss);
+  await flush();
+  assert.deepEqual(
+    callbacks,
+    [],
+    "a later native reply cannot overtake the earlier hit",
+  );
+  first.resolve(miss);
+  await flush();
+  await flush();
+  assert.deepEqual(callbacks, [-40, 40]);
+  assert.equal(focus, 5, "mixed directions retain their clamp order");
+  assert.deepEqual(
+    state.unhandled.map((input) =>
+      input.kind === "wheel" ? input.delta[0] : null,
+    ),
+    [-40, 40],
+  );
+  application.resolve();
+  await flush();
+});
+
+test("a failed wheel reply releases later ordered callbacks", async (context) => {
+  const first = deferred<GuiInputRoutingOutcome>();
+  const callbacks: string[] = [];
+  const state = harness(context, 40, undefined, {
+    onInputOutcome(input) {
+      callbacks.push(input.kind);
+    },
+  });
+  state.route(() =>
+    state.sent.length === 1 ? first.promise : Promise.resolve(miss),
+  );
+  for (let index = 0; index < 2; index++)
+    state.canvas.dispatch("wheel", {
+      deltaX: 100,
+      deltaY: 0,
+      deltaMode: 0,
+      clientX: 40,
+      clientY: 40,
+    });
+  first.reject(new Error("failed wheel"));
+  await flush();
+  await flush();
+  assert.ok(
+    callbacks.includes("wheel"),
+    "the later wheel is delivered after the failed predecessor",
+  );
+  assert.ok(
+    callbacks.includes("blur"),
+    "wheel failure cancels a possibly admitted scene lease",
+  );
+  assert.equal(state.errors[0]?.message, "failed wheel");
+});
+
+for (const cancellation of ["down", "blur", "cancel", "detach"] as const) {
+  test(`${cancellation} fences pending wheel replies without blocking a fresh wheel`, async (context) => {
+    const pending = deferred<GuiInputRoutingOutcome>();
+    const callbacks: string[] = [];
+    const state = harness(context, 40, undefined, {
+      onInputOutcome(input) {
+        callbacks.push(input.kind);
+      },
+    });
+    state.route(() =>
+      state.sent.length === 1 ? pending.promise : Promise.resolve(miss),
+    );
+    const wheel = () =>
+      state.canvas.dispatch("wheel", {
+        deltaX: 100,
+        deltaY: 0,
+        deltaMode: 0,
+        clientX: 40,
+        clientY: 40,
+      });
+    wheel();
+    if (cancellation === "down")
+      state.canvas.dispatch("pointerdown", {
+        pointerId: 7,
+        button: 0,
+        clientX: 40,
+        clientY: 40,
+      });
+    else if (cancellation === "blur") state.dom.window.dispatch("blur");
+    else if (cancellation === "cancel")
+      state.input.cancel({ pointers: [], focus: false });
+    else state.detach();
+    if (cancellation !== "detach") wheel();
+    await flush();
+    await flush();
+    assert.equal(
+      callbacks.filter((kind) => kind === "wheel").length,
+      cancellation === "detach" ? 0 : 1,
+      "a fresh wheel does not wait for the retired generation",
+    );
+    const prior = [...callbacks];
+    const unhandled = [...state.unhandled];
+    pending.resolve(miss);
+    await flush();
+    await flush();
+    assert.deepEqual(
+      callbacks,
+      prior,
+      "retired wheel never reaches the scene callback",
+    );
+    assert.deepEqual(
+      state.unhandled,
+      unhandled,
+      "retired wheel never reaches camera fallback",
+    );
+  });
+}
+
+test("a stalled wheel cannot retain an unbounded observer backlog", async (context) => {
+  const stalled = deferred<GuiInputRoutingOutcome>();
+  const callbacks: string[] = [];
+  const lastDelivered = deferred<void>();
+  const state = harness(context, 40, undefined, {
+    onInputOutcome(input) {
+      callbacks.push(input.kind);
+      if (input.kind === "wheel" && input.delta[0] === 80)
+        lastDelivered.resolve();
+    },
+  });
+  state.route(() =>
+    state.sent.length === 1 ? stalled.promise : Promise.resolve(miss),
+  );
+  for (let index = 0; index < 256; index++)
+    state.canvas.dispatch("wheel", {
+      deltaX: index === 255 ? 200 : 100,
+      deltaY: 0,
+      deltaMode: 0,
+      clientX: 40,
+      clientY: 40,
+    });
+  assert.equal(
+    state.sent.length,
+    256,
+    "observer backpressure never serializes native wheel ingress",
+  );
+  await lastDelivered.promise;
+  assert.ok(
+    state.errors.some((error) =>
+      error.message.includes("Wheel outcome backlog"),
+    ),
+    "overflow explicitly reports cancellation instead of silently reordering outcomes",
+  );
+  assert.ok(
+    callbacks.includes("blur"),
+    "overflow cancels the scene wheel lease",
+  );
+  const before = callbacks.filter((kind) => kind === "wheel").length;
+  assert.ok(
+    before > 0 && before < 256,
+    "a bounded fresh generation continues after cancellation",
+  );
+  stalled.resolve(miss);
+  await flush();
+  await flush();
+  assert.equal(
+    callbacks.filter((kind) => kind === "wheel").length,
+    before,
+    "the delayed retired generation cannot resurrect callbacks",
+  );
+});
+
+test("a rejected retired wheel settles its camera gate without late callbacks", async (context) => {
+  const pending = deferred<GuiInputRoutingOutcome>();
+  const callbacks: string[] = [];
+  const state = harness(context, 40, undefined, {
+    onInputOutcome(input) {
+      callbacks.push(input.kind);
+    },
+  });
+  state.route(() =>
+    state.sent.length === 1 ? pending.promise : Promise.resolve(miss),
+  );
+  const waiting = state.gate.scroll(new AbortController().signal);
+  state.canvas.dispatch("wheel", {
+    deltaX: 100,
+    deltaY: 0,
+    deltaMode: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  state.canvas.dispatch("pointerdown", {
+    pointerId: 7,
+    button: 0,
+    clientX: 40,
+    clientY: 40,
+  });
+  pending.reject(new Error("retired wheel failure"));
+  assert.equal(
+    await waiting,
+    false,
+    "retired failures cannot strand camera gate waiters",
+  );
+  await flush();
+  assert.equal(callbacks.includes("wheel"), false);
+  assert.equal(
+    state.unhandled.some((input) => input.kind === "wheel"),
+    false,
+  );
+  assert.deepEqual(
+    state.errors,
+    [],
+    "retired failures do not affect the new gesture",
+  );
+});
+
+for (const terminal of ["cancelled", "rejected", "accepted"] as const) {
+  test(`a late ${terminal} hover cannot cancel or move a newer press`, async (context) => {
+    const hover = deferred<GuiInputRoutingOutcome>();
+    const callbacks: string[] = [];
+    const state = harness(context, undefined, undefined, {
+      awaitPointerDown: true,
+      onInputOutcome(input) {
+        callbacks.push(input.kind);
+      },
+    });
+    state.route(() =>
+      state.sent.length === 1 ? hover.promise : Promise.resolve(applied),
+    );
+    state.canvas.dispatch("pointermove", {
+      pointerId: 7,
+      buttons: 0,
+      clientX: 40,
+      clientY: 40,
+    });
+    state.canvas.dispatch("pointerdown", {
+      pointerId: 7,
+      button: 0,
+      clientX: 40,
+      clientY: 40,
+    });
+    await flush();
+    await flush();
+    assert.deepEqual(callbacks, ["pointerDown"]);
+    if (terminal === "rejected") hover.reject(new Error("retired hover"));
+    else
+      hover.resolve(
+        terminal === "accepted"
+          ? applied
+          : { ...applied, rejected: 1, error: "Cancelled" },
+      );
+    await flush();
+    await flush();
+    assert.deepEqual(
+      callbacks,
+      ["pointerDown"],
+      "old hover never reaches scene input",
+    );
+    assert.equal(
+      state.canvas.hasPointerCapture(7),
+      true,
+      "old failure cannot release the new DOM capture",
+    );
+    assert.deepEqual(state.errors, []);
+    state.canvas.dispatch("pointermove", {
+      pointerId: 7,
+      buttons: 1,
+      clientX: 50,
+      clientY: 40,
+    });
+    state.canvas.dispatch("pointerup", {
+      pointerId: 7,
+      button: 0,
+      clientX: 50,
+      clientY: 40,
+    });
+    await flush();
+    await flush();
+    assert.deepEqual(
+      callbacks,
+      ["pointerDown", "pointerMove", "pointerUp"],
+      "held movement and release keep their existing admission order",
+    );
+  });
+}

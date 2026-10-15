@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Glass components — optical study</title>
+<style>
+  :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1015; color: #dbe7ed; }
+  body { max-width: 1536px; margin: 24px auto; padding: 0 24px; }
+  h1 { font-weight: 500; font-size: 26px; margin: 0 0 10px; }
+  p { color: #96a8b4; font-size: 14px; line-height: 1.6; margin-bottom: 22px; }
+  .controls { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; }
+  label { display: flex; align-items: center; gap: 10px; font-size: 13px; }
+  input { accent-color: #91c7d5; } select { padding: 7px; border: 1px solid #35434c; border-radius: 5px; }
+  canvas { display: block; width: 100%; height: auto; aspect-ratio: 3 / 2; margin-top: 14px; outline: none; touch-action: none; }
+  output { display: block; color: #8094a0; font-size: 12px; }
+</style>
+<h1>A family of glass components</h1>
+<p>Polished edges, translucent depth and soft reflections. Explore the controls, then move the view or light to see the material respond.</p>
+<p><a href="?skin=liquid" style="color:#9bd4df">Liquid glass prototype</a> · <a href="?skin=production" style="color:#9bd4df">Production Glass skin</a> · <a href="?" style="color:#9bd4df">Original optical study</a></p>
+<div class="controls">
+  <label>View <input id="view" type="range" min="-65" max="65" step="1" value="0"></label>
+  <label>Light <input id="light" type="range" min="-5" max="5" step=".05" value="-3"></label>
+  <label><input id="animate" type="checkbox"> Moving light</label>
+  <label>Surface <select id="shape"><option value="flat">Flat</option><option value="cylinder">Cylinder</option><option value="sphere">Sphere</option></select></label>
+</div>
+<canvas width="1536" height="1024" tabindex="0" aria-label="Interactive glass component study"></canvas>
+<output id="status">Loading glass study…</output>
+<p>The production view uses the public GUI skin. Reflections are procedural; frosted scattering is approximate. No scene reflection or background blur pass.</p>
+<script type="module" src="/target/gui-glass-skin/optical-preview.js"></script>
+</html>

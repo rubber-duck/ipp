@@ -99,6 +99,7 @@ pub(in crate::world) struct RenderReadAccess<'a> {
 
 mod preparation;
 mod publication;
+pub(crate) use publication::publish_custom_material;
 pub use publication::{
     PublishedCustomMaterial, PublishedLight, PublishedMaterialProperty, PublishedRenderItem,
     RenderPublication,

@@ -93,7 +93,7 @@ function rectangleFrame(
 
 test("the gallery skinned beam is a closed volume with outward normals and two-joint weights", async () => {
   const { createBeam } = await import(
-    "../../examples/world-gallery/worlds/lighting/animation-assets.js"
+    "../../examples/demos/scenes/lighting/animation-assets.js"
   );
   const mesh = createBeam();
   assert.equal(mesh.positions.length, 80);

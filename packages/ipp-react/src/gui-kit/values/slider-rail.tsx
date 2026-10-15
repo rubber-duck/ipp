@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * The rail the kit's slider composites share: the runtime's slider, at the
  * runtime's unsized depth across its rail, and marks placed along it at the
@@ -10,15 +11,16 @@
  * so its centre is the thumb's centre at that value whatever the rail's
  * length; what it holds, a tick or a label, centres on it.
  *
- * The slider declares no theme: it paints the runtime's default look of its
- * presentation, the slider's or the dial's.
+ * An appearance can supply a slider or dial theme; without one, native
+ * presentation uses the selected skin.
  */
 import type { ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import type { GuiFocusChangeListener } from "../../gui/callbacks.js";
 import { Behavior, Layout } from "../../gui/components.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { Slider } from "../../gui/controls.js";
+import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitScope, type GuiKitTone } from "../kit.js";
 import { LAYOUT_STACK, Row, type GuiKitLayout } from "../layout.js";
 import type { ScalarValue } from "./scalar-value.js";
@@ -41,7 +43,7 @@ export interface SliderCompositeProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the composite's root entity; its parts extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** The caption naming the value, such as GAIN, in the accent. */
   readonly label?: string;
   readonly min: number;
@@ -71,7 +73,7 @@ export function railGeometry(kit: GuiKitScope) {
     depth,
     thumb: THUMB_EDGE * depth,
     bar: kit.unit(t.bar),
-    gap: kit.unit(t.inset / 2),
+    gap: kit.spacing.label,
     row: kit.unit(t.denseRow),
   };
 }
@@ -96,20 +98,22 @@ export function centredOn(size: number, extent: number): number {
  * across, whose centre is the thumb's centre at `fraction` of the range.
  */
 export function RailMark({
-  id,
+  id: providedId,
   fraction,
   vertical,
   children,
 }: {
-  readonly id: string;
+  readonly id?: string;
   readonly fraction: number;
   readonly vertical: boolean;
   readonly children?: ReactNode;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { thumb } = railGeometry(kit);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_STACK}
         {...(vertical
@@ -130,7 +134,7 @@ export function RailMark({
  * takes back its own extent, so the mark never narrows it.
  */
 export function MarkText({
-  id,
+  id: providedId,
   text,
   offset,
   vertical,
@@ -138,7 +142,7 @@ export function MarkText({
   size = "small",
   hang = 0,
 }: {
-  readonly id: string;
+  readonly id?: string;
   readonly text: string;
   readonly offset: number;
   readonly vertical: boolean;
@@ -146,6 +150,7 @@ export function MarkText({
   readonly size?: "small" | "body";
   readonly hang?: -1 | 0 | 1;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { thumb, row } = railGeometry(kit);
   const width = lineWidth(text, kit.typeSize(size));
@@ -195,7 +200,7 @@ export function MarkText({
  * `value` gives them.
  */
 export function SliderControl({
-  id,
+  id: providedId,
   props,
   value,
   axis,
@@ -203,9 +208,11 @@ export function SliderControl({
   origin,
   layout,
   children,
+  skinParts,
 }: {
-  readonly id: string;
+  readonly id?: string;
   readonly props: SliderCompositeProps;
+  readonly skinParts?: Uint8Array<ArrayBuffer>;
   readonly value: ScalarValue;
   /** Horizontal 0, vertical 1 or a dial 2. */
   readonly axis: 0 | 1 | 2;
@@ -214,14 +221,23 @@ export function SliderControl({
   readonly layout: GuiKitLayout;
   readonly children?: ReactNode;
 }) {
+  const id = useEntityId(providedId);
   const { label, min, max, step = 0, fineStep = 0, disabled = false } = props;
+  const theme = useGuiKit().controlTheme(axis === 2 ? "dial" : "slider");
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_STACK} {...layout} />
       <Behavior
         enabled={!disabled}
         {...(label === undefined ? {} : { semantic_label: label })}
       />
+      {(theme || skinParts) && (
+        <Skin
+          {...(theme ? { theme } : {})}
+          {...(skinParts ? { parts: skinParts } : {})}
+        />
+      )}
       <Slider
         min={min}
         max={max}
@@ -253,14 +269,15 @@ export function textTones(disabled: boolean | undefined) {
  * wide.
  */
 export function EndCaption({
-  id,
+  id: providedId,
   text,
   layout,
 }: {
-  readonly id: string;
+  readonly id?: string;
   readonly text: string;
   readonly layout?: GuiKitLayout;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { depth } = railGeometry(kit);
   return (
@@ -283,21 +300,22 @@ export function EndCaption({
  * rail.
  */
 export function CentredLine({
-  id,
+  id: providedId,
   text,
   tone,
   size = "body",
 }: {
-  readonly id: string;
+  readonly id?: string;
   readonly text: string;
   readonly tone: GuiKitTone;
   readonly size?: "small" | "body";
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   return (
     <Row
       id={id}
-      height={kit.tokens.denseRow}
+      height={kit.unit(kit.tokens.denseRow)}
       layout={{ width: lineWidth(text, kit.typeSize(size)), align_x: 0 }}
     >
       <TextLine id={`${id}/text`} text={text} tone={tone} size={size} />

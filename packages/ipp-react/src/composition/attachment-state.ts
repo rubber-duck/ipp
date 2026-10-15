@@ -12,6 +12,7 @@ import {
   type WorldReference,
 } from "@ipp/client";
 import type { Ref } from "react";
+import { registerWorldScope, validateWorldServices } from "../scope/world.js";
 import type { ReactWorldClient } from "../reconciler/world-client.js";
 import {
   ReactWorldCommits,
@@ -446,10 +447,12 @@ class AttachmentRecord {
     this.child = await this.parent.group.host.openWorld(this.world);
     if (!this.usable()) return;
     if (this.child.closure) throw this.child.closure.reason;
+    validateWorldServices(this.child, this.parent.group.options);
     const container = new ReactWorldContainer(
       new ReactWorldTree(this.child),
       new ReactWorldCommits(this.child, this.parent.group.options),
     );
+    registerWorldScope(container, this.child, this.parent.group.options);
     this.scope = this.parent.group.add(container, this.child);
     this.updateCanvas();
     void this.child.closed.then(({ reason }) => {
@@ -626,6 +629,10 @@ class AttachmentRecord {
             get output() {
               record.checkHandle(accepted, description, generation);
               return output;
+            },
+            get attachment() {
+              record.checkHandle(accepted, description, generation);
+              return accepted;
             },
             closed: this.closed,
           };

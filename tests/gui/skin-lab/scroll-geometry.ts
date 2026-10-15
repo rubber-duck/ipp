@@ -47,7 +47,7 @@ export function thumbCentre(
   content: number,
   offset: number,
 ): Point {
-  const end = BAR / 2;
+  const end = 4;
   const travel = height - 2 * end - BAR;
   const length = Math.max((travel * VIEWPORT_HEIGHT) / content, 2 * BAR);
   return [

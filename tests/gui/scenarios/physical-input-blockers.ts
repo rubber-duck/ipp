@@ -8,7 +8,7 @@ import type {
   GuiInputRoutingOutcome,
   RowsInput,
 } from "@ipp/client";
-import { controlState } from "./gui-lifecycle.js";
+import { controlState, encoded } from "./gui-lifecycle.js";
 import { attachCanvasGuiInput } from "../../../packages/ipp-react/src/gui/platform/input.js";
 import { createGuiUnhandledInputGate } from "../../../packages/ipp-react/src/gui/platform/scene-input.js";
 import {
@@ -151,6 +151,12 @@ export async function preparePhysicalBlockers(
       }),
     ]),
   );
+  const attached = created.effects.find((effect) => effect.kind === "written");
+  check(
+    attached?.kind === "written",
+    "Panel attachment omitted its exact receipt",
+  );
+  const attachment = attached.receipt;
   const blockerEntity = { kind: "handle" as const, id: aliasId(created, 3) };
   const output = await host.bindOutput(
     cameraWorld,
@@ -292,9 +298,45 @@ export async function preparePhysicalBlockers(
         result.disposition === (blocked ? "blocked" : "routed") &&
           !result.rejected &&
           !result.cancelled,
-        `Wrong physical result ${JSON.stringify(result)}`,
+        `Wrong physical result ${encoded(result)}`,
       );
       const snapshot = await controlState(panel, entity.id);
+      if (wheel && !blocked) {
+        check(
+          snapshot && result.hit,
+          "Unblocked wheel omitted its fresh control hit",
+        );
+        const { target, path } = result.hit;
+        check(
+          target.world.id === snapshot.target.world.id &&
+            target.world.incarnation === snapshot.target.world.incarnation &&
+            target.entity === snapshot.target.entity &&
+            target.component === snapshot.target.component &&
+            target.incarnation === snapshot.target.incarnation,
+          `Wheel hit lost exact control lifetime: ${encoded(result.hit)}`,
+        );
+        const edge = path[0];
+        check(
+          path.length === 1 &&
+            edge &&
+            edge.parent.id === attachment.parent.id &&
+            edge.parent.incarnation === attachment.parent.incarnation &&
+            edge.anchor === attachment.anchor &&
+            edge.incarnation === attachment.incarnation &&
+            edge.revision === attachment.revision,
+          `Wheel hit lost exact presentation path: ${encoded(path)}`,
+        );
+        // open(false) acquired a fresh context without a new pointer move.
+        check(
+          !snapshot.interaction.hovered,
+          "Wheel hit unexpectedly authored pointer hover",
+        );
+      } else {
+        check(
+          result.hit === undefined,
+          "Blocked wheel or pointer reply exposed a wheel hit",
+        );
+      }
       if (wheel)
         check(
           snapshot?.value.kind === "scroll" &&

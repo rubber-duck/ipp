@@ -1,6 +1,6 @@
 # GUI skin motion transport and pixels
 
-This fixture authors ordinary Canvas, GUI control, theme and motion components through each runtime's generated client, and drives the built-in looks' transitions with physical pointer input. Paint keys, built-in looks and row layouts come from that exact target contract. Its last part declares a World through `@ipp/react` and its GUI kit, as an application does. No private input admission, raw World mutation or client clock participates, and no client timer measures motion.
+This fixture authors ordinary Canvas, GUI control, theme and motion components through each runtime's generated client, and drives explicit Cybertron transitions with physical pointer input. Paint keys and row layouts come from that exact target contract; concrete look recipes come from the client-owned Cybertron skin. Its last part declares a World through `@ipp/react` and its GUI kit, as an application does. No private input admission, raw World mutation or client clock participates, and no client timer measures motion.
 
 ```sh
 python tools/ipp.py test gui-motion --egl-dir /lib64 --software

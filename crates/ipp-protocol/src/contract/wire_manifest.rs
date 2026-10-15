@@ -328,7 +328,8 @@ layouts! {
     "gui-physical-blur" => [field!("tag", Variant => "gui-physical-event")];
     "gui-physical-opened" => [field!("tag", Variant => "gui-physical-response"), field!("context", U64)];
     "gui-physical-closed" => [field!("tag", Variant => "gui-physical-response")];
-    "gui-physical-routed" => [field!("tag", Variant => "gui-physical-response"), field!("disposition", Variant => "gui-physical-disposition"), field!("applied", U32), field!("rejected", U32), field!("cancelled", U32), field!("error", Option => "utf8-65536"), field!("remaining", Option => "gui-input-vector"), field!("native", Option => "gui-native-buffer")];
+    "gui-input-hit" => [field!("target", Named => "gui-target"), field!("path", List, crate::world::view_queries::MAX_CAMERA_PATH_DEPTH as u32 => "camera-attachment-reference")];
+    "gui-physical-routed" => [field!("tag", Variant => "gui-physical-response"), field!("disposition", Variant => "gui-physical-disposition"), field!("applied", U32), field!("rejected", U32), field!("cancelled", U32), field!("error", Option => "utf8-65536"), field!("remaining", Option => "gui-input-vector"), field!("native", Option => "gui-native-buffer"), field!("hit", Option => "gui-input-hit")];
     "gui-physical-rejected" => [field!("tag", Variant => "gui-physical-response"), field!("reason", Utf8, FIELD_BYTES)];
     "gui-physical-revoked" => [field!("tag", Variant => "gui-physical-response"), field!("context", U64)];
     "gui-physical-cancelled" => [field!("tag", Variant => "gui-physical-response"), field!("context", U64), field!("pointers", U8CountedList, ipp_core::services::gui_input::GUI_INPUT_MAX_POINTERS as u32 => "u64"), field!("focus", Bool)];
@@ -531,7 +532,9 @@ layouts! {
         field!("viewport", Named => "view-viewport"),
     ];
     "view-bound" => [field!("tag", Variant => "view-target"), field!("binding", Named => "root-binding"), field!("publication", Option => "publication-reference")];
-    "request-camera-navigate" => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("binding", Named => "root-binding"), field!("publication", Option => "publication-reference"), field!("kind", U32), field!("first", FiniteF32), field!("second", FiniteF32)];
+    "camera-attachment-reference" => [field!("parent", Named => "world-reference"), field!("anchor", U64), field!("incarnation", U64), field!("revision", U64)];
+    "view-camera" => [field!("tag", Variant => "view-target"), field!("root", Union => "view-target"), field!("path", List, crate::world::view_queries::MAX_CAMERA_PATH_DEPTH as u32 => "camera-attachment-reference")];
+    "request-camera-navigate" => [field!("session", U64), field!("request_id", U64), field!("tag", Variant => "request"), field!("binding", Named => "root-binding"), field!("publication", Option => "publication-reference"), field!("path", List, crate::world::view_queries::MAX_CAMERA_PATH_DEPTH as u32 => "camera-attachment-reference"), field!("kind", U32), field!("first", FiniteF32), field!("second", FiniteF32)];
     "response-camera-navigated" => [field!("session", U64), field!("request_id", U64), field!("tick", U64), field!("tag", Variant => "response")];
     "view-viewport" => [field!("width", U32), field!("height", U32), field!("device_pixel_ratio", NonnegativeFiniteF64)];
     "publication-reference" => [field!("host", U64), field!("revision", U64)];
@@ -1635,6 +1638,7 @@ tags! {
     ViewTarget VIEW_ROOT = 0 => "view-root";
     ViewTarget VIEW_PUBLICATION = 1 => "view-publication";
     ViewTarget VIEW_BOUND = 2 => "view-bound";
+    ViewTarget VIEW_CAMERA = 3 => "view-camera";
 
     Outcome OUTCOME_SUCCESS = 0 => "outcome-success";
     Outcome OUTCOME_FAILURE = 1 => "outcome-failure";

@@ -120,7 +120,8 @@ pub struct ShaderBackendSource {
 pub struct ShaderRecipe {
     /// The backend to compile in the receiving rendering Host.
     pub backend: String,
-    /// Bit 0 normals, 1 skinning, 2 mesh poses, 3 lighting, 4 shadow pass, 5 instancing.
+    /// Bit 0 normals, 1 skinning, 2 mesh poses, 3 lighting, 4 shadow pass, 5 instancing,
+    /// 6 Canvas presentation context.
     pub features: u32,
 }
 
@@ -151,10 +152,10 @@ impl ShaderDefinition {
     /// Validate source-independent definition structure. Compilation belongs to the renderer.
     ///
     /// A definition with a nonblank paint body in any backend is a canvas paint: it
-    /// has no material stages, recipe features or required streams, and declares
-    /// only float scalar and vector parameters.
+    /// has no material stages or required streams, permits only presentation/lighting
+    /// recipe features, and declares float scalar, vector or texture parameters.
     pub fn validate(&self) -> Result<(), String> {
-        if self.recipe.features & !63 != 0 || self.recipe.backend.is_empty() {
+        if self.recipe.features & !127 != 0 || self.recipe.backend.is_empty() {
             return Err("Invalid shader recipe".into());
         }
         if self.required_attributes & !15 != 0 {
@@ -177,14 +178,19 @@ impl ShaderDefinition {
             let stages = self.backends.values().any(|source| {
                 !source.vertex.trim().is_empty() || !source.fragment.trim().is_empty()
             });
-            if stages || self.recipe.features != 0 || self.required_attributes != 0 {
+            if stages || self.recipe.features & !(64 | 8) != 0 || self.required_attributes != 0 {
                 return Err(
-                    "A paint definition has no material stages, recipe features or streams".into(),
+                    "A paint permits only presentation/lighting features, no material stages or streams".into(),
                 );
+            }
+            if self.recipe.features & 8 != 0 && self.recipe.features & 64 == 0 {
+                return Err("Paint lighting requires presentation context".into());
             }
             if !self.parameters.values().all(|kind| kind.paint_parameter()) {
                 return Err("Paint parameters are float scalars, vectors or textures".into());
             }
+        } else if self.recipe.features & 64 != 0 {
+            return Err("Presentation context is a canvas paint feature".into());
         }
         Ok(())
     }

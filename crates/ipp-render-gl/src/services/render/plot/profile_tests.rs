@@ -125,6 +125,7 @@ fn layout(count: usize, radial: bool) {
     let planes: Vec<_> = retained
         .iter()
         .map(|plane| ScenePlotPlane {
+            callout_paint: None,
             entity: crate::services::render::outputs::scene::RenderEntity {
                 world,
                 entity,
@@ -210,22 +211,22 @@ fn preparation(count: usize) {
     let mut points = PlotPoints3d::default();
     points.series.insert(0, PlotSeriesRow::default()).unwrap();
     measure("prepare_line", count, || {
-        black_box(plots_2d::prepare_line(&line, &frame2, &input).unwrap());
+        black_box(plots_2d::prepare_line(&line, &frame2, &input, None).unwrap());
     });
     line.interpolation = 1;
     measure("prepare_smooth", count, || {
-        black_box(plots_2d::prepare_line(&line, &frame2, &input).unwrap());
+        black_box(plots_2d::prepare_line(&line, &frame2, &input, None).unwrap());
     });
     measure("prepare_bars2", count, || {
-        black_box(plots_2d::prepare_bars(&bars2, &frame2, &input).unwrap());
+        black_box(plots_2d::prepare_bars(&bars2, &frame2, &input, None).unwrap());
     });
     measure("prepare_bars3", count, || {
-        let output = plots_3d::prepare_bars(&bars3, &frame3, &input).unwrap();
+        let output = plots_3d::prepare_bars(&bars3, &frame3, &input, None).unwrap();
         assert_eq!(output.hits.len(), count);
         black_box(output);
     });
     measure("prepare_points", count, || {
-        let output = plots_3d::prepare_points(&points, &frame3, &input).unwrap();
+        let output = plots_3d::prepare_points(&points, &frame3, &input, None).unwrap();
         assert_eq!(output.hits.len(), count);
         black_box(output);
     });
@@ -277,7 +278,7 @@ fn surface(count: usize, irregular: bool) {
         count,
         || {
             let output =
-                plots_3d::prepare_surface(&chart, &PlotFrame3d::default(), &input).unwrap();
+                plots_3d::prepare_surface(&chart, &PlotFrame3d::default(), &input, None).unwrap();
             assert_eq!(output.hits.len(), count);
             black_box(output);
         },
@@ -349,6 +350,7 @@ fn chart_path_scaling() {
                 ..PlotFrame2d::default()
             },
             &input,
+            None,
         )
         .unwrap();
         let paths: Vec<_> = output

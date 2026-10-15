@@ -21,6 +21,17 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                         result: Err(reason),
                     },
                 ),
+                WorldSessionReply::CameraNavigate(_) => ResponseBody::Error {
+                    code: 1,
+                    message: reason.to_string(),
+                },
+                WorldSessionReply::CompletedCameraNavigate {
+                    body,
+                    tick,
+                } => {
+                    self.queue_response_at(request_id, body, tick)?;
+                    continue;
+                }
                 WorldSessionReply::CameraProject(_) => ResponseBody::CameraProjectResultEvent(
                     ipp_protocol::world::view_queries::ViewQueryOutcome {
                         request_id,
@@ -58,11 +69,13 @@ impl<P: HostServices> Host<P> {
         let RequestBody::CameraNavigate(navigation) = request.body else {
             unreachable!("navigation request");
         };
+        let mut producer = world_id;
         let result = navigation
             .resolve(&self.runtime, world)
             .and_then(|command| {
+                producer = command.output().world().id();
                 self.runtime
-                    .world_mut(world_id)
+                    .world_mut(producer)
                     .ok_or(ipp_core::ErrorReason::InvalidEntity)?
                     .enqueue_system_command_with_reply(
                         ipp_core::systems::camera::CameraSystem::ID,
@@ -75,7 +88,7 @@ impl<P: HostServices> Host<P> {
         session.replies.push((
             request.request_id,
             match result {
-                Ok(()) => WorldSessionReply::CameraNavigate,
+                Ok(()) => WorldSessionReply::CameraNavigate(producer),
                 Err(error) => WorldSessionReply::Rejected(error.to_string()),
             },
         ));
@@ -97,19 +110,53 @@ impl<P: HostServices> Host<P> {
             };
             for (request_id, reply) in &mut session.replies {
                 let body = match reply {
+                    WorldSessionReply::CameraNavigate(producer) => {
+                        let (tick, body) = match frame.worlds.get(producer) {
+                            Some(Ok(producer_report)) => {
+                                let result = producer_report.system_command_outcomes.iter().find(
+                                    |outcome| {
+                                        outcome.session == session.id
+                                            && outcome.request_id == *request_id
+                                    },
+                                );
+                                let body = match result.map(|outcome| outcome.result) {
+                                    Some(Ok(())) => ResponseBody::CameraNavigated,
+                                    Some(Err(reason)) => ResponseBody::Error {
+                                        code: 1,
+                                        message: reason.to_string(),
+                                    },
+                                    None => ResponseBody::Error {
+                                        code: 1,
+                                        message: "Camera producer did not complete navigation"
+                                            .into(),
+                                    },
+                                };
+                                (report.tick, body)
+                            }
+                            _ => (
+                                report.tick,
+                                ResponseBody::Error {
+                                    code: 1,
+                                    message: "Camera producer is unavailable".into(),
+                                },
+                            ),
+                        };
+                        *reply = WorldSessionReply::CompletedCameraNavigate {
+                            body,
+                            tick,
+                        };
+                        continue;
+                    }
                     WorldSessionReply::GeometryPick(query) => {
                         ResponseBody::GeometryPickResultEvent(
                             ipp_protocol::world::view_queries::ViewQueryOutcome {
                                 request_id: *request_id,
                                 tick: report.tick,
-                                result: query.view.resolve(&self.runtime, world).and_then(
-                                    |target| {
-                                        self.runtime.pick_view(
-                                            target,
-                                            [query.x, query.y],
-                                            query.include_view_plane,
-                                        )
-                                    },
+                                result: query.view.pick(
+                                    &self.runtime,
+                                    world,
+                                    [query.x, query.y],
+                                    query.include_view_plane,
                                 ),
                             },
                         )
@@ -119,14 +166,11 @@ impl<P: HostServices> Host<P> {
                             ipp_protocol::world::view_queries::ViewQueryOutcome {
                                 request_id: *request_id,
                                 tick: report.tick,
-                                result: query.view.resolve(&self.runtime, world).and_then(
-                                    |target| {
-                                        self.runtime.project_view(
-                                            target,
-                                            [query.x, query.y],
-                                            query.plane,
-                                        )
-                                    },
+                                result: query.view.project(
+                                    &self.runtime,
+                                    world,
+                                    [query.x, query.y],
+                                    query.plane,
                                 ),
                             },
                         )

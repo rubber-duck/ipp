@@ -7,6 +7,6 @@
 import type { SkinThemes } from "../theme.js";
 
 export const themes: SkinThemes = {
-  checkbox: [],
+  checkbox: { look: "checkbox" },
   switch: { look: "switch" },
 };

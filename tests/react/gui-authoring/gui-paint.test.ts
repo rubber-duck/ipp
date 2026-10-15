@@ -23,12 +23,28 @@ const { values } = parseArgs({
     backend: { type: "string" },
     "egl-dir": { type: "string" },
     projected: { type: "string" },
+    components: { type: "boolean", default: false },
+    sliders: { type: "boolean", default: false },
+    "slider-wheel": { type: "boolean", default: false },
   },
 });
 if (values.backend !== "webgl" && values.backend !== "gles")
   throw new Error("Select --backend webgl or gles");
 const native = values.backend === "gles";
 const projected = values.projected;
+const components = values.components;
+const sliders = values.sliders;
+const sliderWheel = values["slider-wheel"];
+if (
+  Number(components) +
+    Number(sliders) +
+    Number(sliderWheel) +
+    Number(projected !== undefined) >
+  1
+)
+  throw new Error(
+    "Select one of --components, --sliders, --slider-wheel or --projected",
+  );
 if (
   projected !== undefined &&
   projected !== "advanced" &&
@@ -46,7 +62,7 @@ if (!native && eglDirectory)
 for (const variant of native || instrumentation
   ? ["production"]
   : ["development", "production"]) {
-  test(`React GUI authoring through ${native ? "native WebSocket/GLES" : "worker WASM/WebGL"} ${variant}${projected ? ` projected ${projected}` : ""}`, {
+  test(`React GUI authoring through ${native ? "native WebSocket/GLES" : "worker WASM/WebGL"} ${variant}${projected ? ` projected ${projected}` : components ? " components" : sliders ? " sliders" : sliderWheel ? " slider wheel" : ""}`, {
     timeout: 240_000,
   }, async (context) => {
     const workspace = resolve(process.cwd());
@@ -77,7 +93,15 @@ for (const variant of native || instrumentation
             {},
             () =>
               environment.page.evaluate(
-                async ({ urls, native, variant, projected }) => {
+                async ({
+                  urls,
+                  native,
+                  variant,
+                  projected,
+                  components,
+                  sliders,
+                  sliderWheel,
+                }) => {
                   const contract = await import(urls.generated);
                   const scenario = await import(
                     `${urls.origin}/target/react-gui-authoring/paint-${variant}.js`
@@ -146,6 +170,59 @@ for (const variant of native || instrumentation
                           projected === "recovery",
                         ),
                       };
+                    if (sliderWheel)
+                      return {
+                        sliderWheel: await scenario.guiSliderWheel(
+                          host,
+                          contract,
+                          assets.font,
+                        ),
+                      };
+                    if (sliders)
+                      return {
+                        sliders: await scenario.guiSliderDrags(
+                          host,
+                          contract,
+                          assets.font,
+                        ),
+                      };
+                    if (components) {
+                      const widgets = await scenario.guiWidgets(
+                        host,
+                        contract,
+                        assets.font,
+                      );
+                      const retention = widgets.failure
+                        ? null
+                        : await scenario.guiPresentationRetention(
+                            host,
+                            contract,
+                            assets.font,
+                          );
+                      const fields =
+                        !retention || retention.failure
+                          ? null
+                          : await scenario.guiFieldObservation(
+                              host,
+                              contract,
+                              assets.font,
+                            );
+                      const projectedResult =
+                        !fields || fields.failure
+                          ? null
+                          : await scenario.guiProjectedSurfaces(
+                              host,
+                              contract,
+                              assets,
+                            );
+                      return {
+                        components: true,
+                        widgets,
+                        retention,
+                        fields,
+                        projected: projectedResult,
+                      };
+                    }
                     const paint = await scenario.guiPaint(
                       host,
                       contract,
@@ -154,16 +231,18 @@ for (const variant of native || instrumentation
                     const layers = paint.failure
                       ? null
                       : await scenario.guiLayers(host, contract);
-                    const overlays = layers?.failure
-                      ? null
-                      : await scenario.guiOverlays(host, contract);
-                    const projectedResult = overlays?.failure
-                      ? null
-                      : await scenario.guiProjectedSurfaces(
-                          host,
-                          contract,
-                          assets,
-                        );
+                    const overlays =
+                      !layers || layers.failure
+                        ? null
+                        : await scenario.guiOverlays(host, contract);
+                    const projectedResult =
+                      !overlays || overlays.failure
+                        ? null
+                        : await scenario.guiProjectedSurfaces(
+                            host,
+                            contract,
+                            assets,
+                          );
                     return {
                       ...paint,
                       layers,
@@ -174,7 +253,15 @@ for (const variant of native || instrumentation
                     await host.close();
                   }
                 },
-                { urls: environment.urls, native, variant, projected },
+                {
+                  urls: environment.urls,
+                  native,
+                  variant,
+                  projected,
+                  components,
+                  sliders,
+                  sliderWheel,
+                },
               ),
           );
           if (value?.transitions) {
@@ -227,6 +314,11 @@ for (const variant of native || instrumentation
         ...(result.value.layers?.images ?? []),
         ...(result.value.overlays?.images ?? []),
         ...(result.value.projected?.images ?? []),
+        ...(result.value.widgets?.images ?? []),
+        ...(result.value.sliders?.images ?? []),
+        ...(result.value.sliderWheel?.images ?? []),
+        ...(result.value.retention?.images ?? []),
+        ...(result.value.fields?.images ?? []),
       ])
         await writeFile(
           resolve(captures, `${image.label}.png`),
@@ -253,6 +345,37 @@ for (const variant of native || instrumentation
         );
         return;
       }
+      if (result.value.sliderWheel) {
+        await writeFile(
+          resolve(captures, "slider-wheel-observations.json"),
+          JSON.stringify(result.value.sliderWheel.report, null, 2),
+        );
+        assert.equal(result.value.sliderWheel.failure, null);
+        assert.equal(result.value.sliderWheel.report.length, 4);
+        assert.equal(result.value.sliderWheel.images.length, 8);
+        return;
+      }
+      if (result.value.sliders) {
+        await writeFile(
+          resolve(captures, "slider-observations.json"),
+          JSON.stringify(result.value.sliders.report, null, 2),
+        );
+        assert.equal(result.value.sliders.failure, null);
+        assert.equal(result.value.sliders.report.length, 8);
+        assert.equal(result.value.sliders.images.length, 12);
+        return;
+      }
+      if (result.value.components) {
+        assert.equal(result.value.widgets?.failure, null);
+        assert.equal(result.value.widgets?.images.length, 8);
+        assert.equal(result.value.retention?.failure, null);
+        assert.equal(result.value.retention?.images.length, 3);
+        assert.equal(result.value.fields?.failure, null);
+        assert.equal(result.value.fields?.images.length, 2);
+        assert.equal(result.value.projected?.failure, null);
+        assert.equal(result.value.projected?.images.length, 9);
+        return;
+      }
       if (result.value.colourErrors)
         await writeFile(
           resolve(captures, "colour-fill-errors.json"),
@@ -265,7 +388,7 @@ for (const variant of native || instrumentation
       assert.equal(result.value.overlays?.failure, null);
       assert.equal(result.value.overlays?.images.length, 5);
       assert.equal(result.value.projected?.failure, null);
-      assert.equal(result.value.projected?.images.length, 7);
+      assert.equal(result.value.projected?.images.length, 9);
     }
     await withPresentingHost(
       "react-gui-gles-host",
@@ -274,7 +397,8 @@ for (const variant of native || instrumentation
       {
         native,
         ...(eglDirectory === undefined ? {} : { eglDirectory }),
-        operationTimeoutMs: 100_000,
+        // Sustained flat/curved drags take about80s on the shared software GLES Host.
+        operationTimeoutMs: sliders || sliderWheel ? 180_000 : 100_000,
         missingPresentation: "GLES presentation diagnostics missing",
       },
       browser,

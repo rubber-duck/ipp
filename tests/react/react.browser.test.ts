@@ -24,7 +24,7 @@ for (const variant of ["development", "production"] as const) {
     [
       "Animation declarations own ready bindings and imperative playback",
       "animationComponents",
-      (report: string[]) => assert.equal(report.length, 10),
+      (report: string[]) => assert.equal(report.length, 12),
     ],
     [
       "named assets prepare, regenerate, validate references and feed animation",
@@ -32,9 +32,12 @@ for (const variant of ["development", "production"] as const) {
       (report: string[]) =>
         assert.deepEqual(report, [
           "initial consumers acknowledge with an empty selection before readiness",
+          "asset hook observes acknowledged readiness with scoped mesh encoder",
+          "field hook observes native Scalar value reports",
           "forward named references bind after real resource loading",
           "equal encoded content reuses the resource",
           "previous selection survives a pending replacement",
+          "generated entity identity survives resource rerenders",
           "superseded completion cannot replace the newest loaded asset",
           "changed content switches the existing consumer",
           "roots sharing a client have isolated asset scopes",

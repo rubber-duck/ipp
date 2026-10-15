@@ -178,6 +178,7 @@ function scene({ raised, beneath, overlays }: Variant) {
           <Overlay id="dialog" layer={layer}>
             <Panel
               id="dialog/panel"
+              padding={0}
               layout={{
                 ...placed([DIALOG[0], DIALOG[1]], DIALOG[2]),
                 height: DIALOG[3],
@@ -218,6 +219,7 @@ function scene({ raised, beneath, overlays }: Variant) {
         {/* A panel stacked on another panel's text. */}
         <Panel
           id="first"
+          padding={0}
           layout={{
             ...placed([FIRST[0], FIRST[1]], FIRST[2]),
             height: FIRST[3],
@@ -237,6 +239,7 @@ function scene({ raised, beneath, overlays }: Variant) {
           <Overlay id="second" layer={layer}>
             <Panel
               id="second/panel"
+              padding={0}
               layout={{
                 ...placed([SECOND[0], SECOND[1]], SECOND[2]),
                 height: SECOND[3],

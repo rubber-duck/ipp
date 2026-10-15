@@ -1,3 +1,4 @@
+import { registerWorldScope, validateWorldServices } from "./scope/world.js";
 import { createElement, type ReactNode } from "react";
 import { AttachmentContext } from "./composition/attached-world.js";
 import { ReactAttachmentGroup } from "./composition/attachment-state.js";
@@ -48,6 +49,8 @@ export interface ReactWorldRoot {
     listener: (state: import("./assets/registry.js").ReactAssetState) => void,
   ): () => void;
   render(element: ReactNode): Promise<void>;
+  /** Explicitly remove declarations before the non-destructive unmount. */
+  clear(): Promise<void>;
   flush(): Promise<void>;
   unmount(): Promise<void>;
 }
@@ -64,9 +67,11 @@ export function createRoot(
       options.host.sessions.get(client.session) !== client)
   )
     throw new Error("React composition requires a live session from this Host");
+  validateWorldServices(client, options);
   const tree = new ReactWorldTree(client);
   const commits = new ReactWorldCommits(client, options);
   const state = new ReactWorldContainer(tree, commits);
+  registerWorldScope(state, client, options);
   const attachments = options.host
     ? new ReactAttachmentGroup(options.host, state, client, options)
     : undefined;
@@ -212,6 +217,7 @@ export function createRoot(
         if (!client.closure && !closing) listener(state);
       }),
     render,
+    clear: () => render(null),
     flush,
     unmount() {
       if (closing) return cleanupFailed ? cleanup(true) : closing;

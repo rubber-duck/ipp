@@ -1192,8 +1192,35 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
     output: encodedOutput,
     expected_viewport: encodedViewport,
   });
+  const cameraPath = [
+    {
+      parent: { id: 13n, incarnation: 17n },
+      anchor: 52n,
+      incarnation: 6n,
+      revision: 8n,
+    },
+    {
+      parent: { id: 14n, incarnation: 18n },
+      anchor: 53n,
+      incarnation: 7n,
+      revision: 9n,
+    },
+  ];
   for (const [queryView, encodedQueryView] of [
     [rootView, encodedRootView],
+    [
+      { kind: "camera", root: rootView, path: cameraPath },
+      layout("view-camera", {
+        tag: tag("VIEW_CAMERA"),
+        root: encodedRootView,
+        path: cameraPath.map((reference) =>
+          layout("camera-attachment-reference", {
+            ...reference,
+            parent: layout("world-reference", reference.parent),
+          }),
+        ),
+      }),
+    ],
     [
       { kind: "publication", ...view },
       layout("view-publication", {
@@ -2793,6 +2820,7 @@ test("baseline field, scene and lifecycle codecs conform to their manifest", asy
           tag: tag("REQUEST_CAMERA_NAVIGATE"),
           binding: encodedBinding,
           publication: encodedSource,
+          path: [],
           kind,
           first,
           second,

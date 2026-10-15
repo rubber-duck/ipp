@@ -1,3 +1,5 @@
+import { ReactFieldWatches } from "../scope/field-watches.js";
+import type { ReactWorldServiceOptions } from "../scope/world.js";
 import { isAssetReference } from "../assets/declarations.js";
 import { ReactDataSourceRegistry } from "../data/registry.js";
 import { ReactControlRefs } from "../gui/control-ref-registry.js";
@@ -31,7 +33,7 @@ import {
   type ReactWorldFieldValue,
 } from "./tree.js";
 
-export interface ReactWorldRootOptions {
+export interface ReactWorldRootOptions extends ReactWorldServiceOptions {
   host?: ReactCompositionHost;
   onError?: (error: Error) => void;
 }
@@ -178,7 +180,78 @@ function acknowledgedValue(
     : value;
 }
 
+export interface ReactCommitStatus {
+  readonly status: "idle" | "pending" | "ready" | "failed" | "closed";
+  readonly error?: Error;
+}
+
 export class ReactWorldCommits {
+  readonly fieldWatches: ReactFieldWatches;
+  private statusSnapshot: ReactCommitStatus = { status: "idle" };
+  private readonly statusListeners = new Set<() => void>();
+  private pendingWork = 0;
+  private declarationFailure: Error | undefined;
+
+  getStatus(): ReactCommitStatus {
+    return this.statusSnapshot;
+  }
+
+  subscribeStatus(listener: () => void): () => void {
+    this.statusListeners.add(listener);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  private publishStatus(status: ReactCommitStatus): void {
+    if (this.statusSnapshot.status === "closed") return;
+    if (
+      this.statusSnapshot.status === status.status &&
+      this.statusSnapshot.error === status.error
+    )
+      return;
+    this.statusSnapshot = status;
+    for (const listener of this.statusListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.report(error);
+      }
+    }
+  }
+
+  private tracked(
+    work: () => Promise<void>,
+    declaration: boolean,
+  ): () => Promise<void> {
+    this.pendingWork++;
+    this.publishStatus({ status: "pending" });
+    return async () => {
+      let failed = false;
+      try {
+        await work();
+      } catch (error) {
+        failed = true;
+        if (declaration)
+          this.declarationFailure =
+            error instanceof Error ? error : new Error(String(error));
+        this.publishStatus({
+          status: "failed",
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+        throw error;
+      } finally {
+        this.pendingWork--;
+        if (!failed && this.pendingWork === 0)
+          this.publishStatus(
+            this.declarationFailure
+              ? { status: "failed", error: this.declarationFailure }
+              : { status: "ready" },
+          );
+      }
+    };
+  }
+
   private unknownOutcome: unknown;
   private readonly entities = new Map<number, EntityRecord>();
   /** Records whose declaration disappeared and whose cleanup is pending. */
@@ -237,6 +310,7 @@ export class ReactWorldCommits {
     private readonly options: ReactWorldRootOptions,
   ) {
     this.session = client.session;
+    this.fieldWatches = new ReactFieldWatches((error) => this.report(error));
     this.dataSources = new ReactDataSourceRegistry(client, (error) =>
       this.report(error),
     );
@@ -260,11 +334,13 @@ export class ReactWorldCommits {
     );
     void client.closed?.then(({ reason }) => {
       this.fatal = reason;
+      this.publishStatus({ status: "closed" });
       this.closing = true;
       this.dataSources.close();
       this.assets.close();
       this.animations.close();
       this.controls.close();
+      this.fieldWatches.fence();
       this.callbacks.fence();
     });
     this.animations = new ReactAnimationRegistry(
@@ -364,7 +440,7 @@ export class ReactWorldCommits {
   private enqueue(work: () => Promise<void>): Promise<void> {
     // Explicit work is an ordering boundary for a replaceable render slot.
     this.pendingRender = undefined;
-    const result = this.tail.then(work);
+    const result = this.tail.then(this.tracked(work, true));
     this.tail = result.catch((error: unknown) => {
       this.report(error);
     });
@@ -373,7 +449,7 @@ export class ReactWorldCommits {
   }
 
   private scheduleCallback(work: () => Promise<void>): Promise<void> {
-    const result = this.tail.then(work);
+    const result = this.tail.then(this.tracked(work, false));
     this.tail = result.catch((error: unknown) => {
       this.report(error);
     });
@@ -456,6 +532,11 @@ export class ReactWorldCommits {
     return this.latest;
   }
 
+  /** Let queued value callbacks commit application intent before control convergence. */
+  callbacksSettled(): Promise<void> {
+    return this.tail;
+  }
+
   checkpoint(): Promise<void> {
     this.pendingRender = undefined;
     return this.latest;
@@ -466,6 +547,8 @@ export class ReactWorldCommits {
    * callbacks, assets and animations are fenced.
    */
   fence(): void {
+    this.fieldWatches.fence();
+    this.publishStatus({ status: "closed" });
     this.closing = true;
     this.dataSources.close();
     this.assets.close();
@@ -513,6 +596,7 @@ export class ReactWorldCommits {
         for (const cleanup of [
           () => this.animations.dispose(remove),
           () => this.controls.dispose(),
+          () => this.fieldWatches.dispose(),
           () => this.callbacks.dispose(),
           ...(remove ? [() => this.deleteRecords()] : []),
           () => this.dataSources.dispose(remove),
@@ -629,7 +713,8 @@ export class ReactWorldCommits {
     whole = false,
   ): Promise<void> {
     this.checkSession();
-    // Changes captured from here on follow this description.
+    // Claim the ledger before any asynchronous work: later captures must
+    // not be overwritten when this description resumes.
     const changes = whole || this.needsReset ? undefined : this.unapplied;
     this.unapplied = { entities: new Map(), components: new Map() };
     if (this.needsReset) this.controls.reset(true);
@@ -640,6 +725,7 @@ export class ReactWorldCommits {
       failures.push(error);
     }
     try {
+      await this.validateManagedGates(description);
       if (this.needsReset) {
         await this.animations.removeExcept(new Set());
         // The recommit adopts the components on bound entities again,
@@ -658,9 +744,70 @@ export class ReactWorldCommits {
     // registration until a later commit succeeds.
     if (failures.length) this.callbacks.suspend();
     else this.callbacks.resume();
+    if (!failures.length) this.declarationFailure = undefined;
     if (failures.length === 1) throw failures[0];
     if (failures.length)
       throw new AggregateError(failures, "React declaration commit incomplete");
+  }
+
+  private async validateManagedGates(
+    description: ReactWorldDescription,
+  ): Promise<void> {
+    if (description.changes) return;
+    const entitySymbols = new Map(
+      description.entities.map((entity) => [
+        entity.identity,
+        entity.symbolicId,
+      ]),
+    );
+    const owned = new Set(
+      [...this.components.values()]
+        .filter(
+          (record) =>
+            record.description.component ===
+            this.client.components.PresentationGate?.id,
+        )
+        .map((record) => record.entity.description.symbolicId),
+    );
+    const unknown = description.components.filter(
+      (component) =>
+        component.managedGate &&
+        !owned.has(entitySymbols.get(component.entity)!),
+    );
+    if (!unknown.length) return;
+    if (!this.client.inspectPage)
+      throw new Error(
+        "Retained presentation requires entity inspection to protect existing gates",
+      );
+    const targets = new Map(
+      unknown.map((component) => [
+        description.entities.find(
+          (entity) => entity.identity === component.entity,
+        )!.symbolicId,
+        component.component,
+      ]),
+    );
+    let after = 0n;
+    do {
+      this.checkSession();
+      const page = await this.client.inspectPage({
+        collection: "entities",
+        after,
+      });
+      this.checkSession();
+      for (const entity of page.entities) {
+        const gate =
+          entity.metadata.symbolicId && targets.get(entity.metadata.symbolicId);
+        if (
+          gate &&
+          entity.components.some((component) => component.component === gate)
+        )
+          throw new Error(
+            "Suspense cannot replace an existing PresentationGate owned outside this root; declare an explicit safe boundary",
+          );
+      }
+      after = page.next;
+    } while (after !== 0n);
   }
 
   private component(id: number): ComponentDescriptor | undefined {
@@ -823,6 +970,17 @@ export class ReactWorldCommits {
     declared: ReactComponentDescription,
     entityRef: (identity: number) => EntityRef,
   ): PlannedCommand[] {
+    // Structural validation still visits the scene, but stable plain fields
+    // need no field diff or asset resolution merely because a sibling moved.
+    if (
+      record.description === declared &&
+      record.declared === declared.fields &&
+      declared.properties === undefined &&
+      ![...declared.fields.values()].some(
+        (value) => value.kind === "entity-reference",
+      )
+    )
+      return [];
     commitCounters.compared++;
     const { resolved, fields } = this.declaredFields(declared, entityRef);
     const properties = this.declaredProperties(declared);
@@ -953,22 +1111,36 @@ export class ReactWorldCommits {
         this.orphans.add(record);
       }
     }
+    const orphanSymbols = new Map<string, Set<EntityRecord>>();
+    for (const record of this.orphans) {
+      const symbol = record.description.symbolicId;
+      const records = orphanSymbols.get(symbol) ?? new Set<EntityRecord>();
+      records.add(record);
+      orphanSymbols.set(symbol, records);
+    }
+    const knownSymbols = new Map<string, EntityRecord>();
+    for (const record of this.entities.values())
+      if (
+        record.entity !== undefined &&
+        !knownSymbols.has(record.description.symbolicId)
+      )
+        knownSymbols.set(record.description.symbolicId, record);
     const created = new Map<number, number>();
     for (const entity of description.entities) {
       if (this.entities.has(entity.identity)) continue;
-      const orphan = [...this.orphans].find(
-        (record) => record.description.symbolicId === entity.symbolicId,
-      );
+      const orphan = orphanSymbols
+        .get(entity.symbolicId)
+        ?.values()
+        .next().value;
       if (orphan) {
         this.orphans.delete(orphan);
+        orphanSymbols.get(entity.symbolicId)!.delete(orphan);
         orphan.description = entity;
         this.entities.set(entity.identity, orphan);
+        if (orphan.entity !== undefined && !knownSymbols.has(entity.symbolicId))
+          knownSymbols.set(entity.symbolicId, orphan);
       } else if (entity.kind === "bound") {
-        const known = [...this.entities.values()].find(
-          (record) =>
-            record.description.symbolicId === entity.symbolicId &&
-            record.entity !== undefined,
-        );
+        const known = knownSymbols.get(entity.symbolicId);
         this.entities.set(entity.identity, {
           description: entity,
           entity: known?.entity,
@@ -1026,6 +1198,17 @@ export class ReactWorldCommits {
         component,
       ]),
     );
+    const componentOwners = new Map<number, Map<string, Set<number>>>();
+    for (const declaration of description.components) {
+      const owners =
+        componentOwners.get(declaration.component) ??
+        new Map<string, Set<number>>();
+      const symbol = desiredEntities.get(declaration.entity)!.symbolicId;
+      const identities = owners.get(symbol) ?? new Set<number>();
+      identities.add(declaration.identity);
+      owners.set(symbol, identities);
+      componentOwners.set(declaration.component, owners);
+    }
     const retained = new Map<number, ComponentRecord>();
     for (const [identity, record] of this.components) {
       const next = desiredComponents.get(identity);
@@ -1041,13 +1224,10 @@ export class ReactWorldCommits {
       }
       // Another declaration of the component on the same entity keeps it,
       // including one under a `bindTo` reference to its symbolic id.
-      const covered = description.components.some(
-        (other) =>
-          other.identity !== identity &&
-          other.component === component &&
-          desiredEntities.get(other.entity)?.symbolicId ===
-            entity.description.symbolicId,
-      );
+      const owners = componentOwners
+        .get(component)
+        ?.get(entity.description.symbolicId);
+      const covered = !!owners && (owners.size > 1 || !owners.has(identity));
       const deleted =
         entity.description.kind === "declared" && this.orphans.has(entity);
       if (covered || deleted) {

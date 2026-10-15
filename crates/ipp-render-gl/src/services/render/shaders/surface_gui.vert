@@ -44,6 +44,8 @@ flat out vec4 v_corner_accent;
 flat out vec4 v_color0;
 flat out vec4 v_color1;
 flat out vec4 v_border_color;
+layout(location = 12) in vec4 a_paint_data;
+flat out vec4 v_paint_data;
 flat out vec4 v_gradient_coords;
 flat out vec4 v_material_params;
 flat out vec4 v_glow_color;
@@ -114,9 +116,14 @@ void main() {
         // collapses to the centre.
         vec2 exterior_pad = max(pad - vec2(GUI_BOX_ANTIALIAS_PAD), vec2(0.0));
         vec2 center_delta = (lo + hi) * 0.5 - corner;
-        position += interior * sign(center_delta) * min(pad, abs(center_delta));
-        position -= exterior_low * exterior_pad;
-        position += exterior_high * exterior_pad;
+        // Section edges are shared geometry inside one contour. Moving either
+        // half would expose a gap or composite a translucent surface twice.
+        int section_flags = int(floor(a_material_params.x / 64.0));
+        vec2 movable = vec2(
+            (section_flags & (far_corner.x ? 4 : 1)) == 0 ? 1.0 : 0.0,
+            (section_flags & (far_corner.y ? 8 : 2)) == 0 ? 1.0 : 0.0);
+        position += movable * (interior * sign(center_delta) * min(pad, abs(center_delta))
+            - exterior_low * exterior_pad + exterior_high * exterior_pad);
     }
     v_surface_position = position;
     v_placement = a_placement;
@@ -127,6 +134,7 @@ void main() {
     v_color1 = a_color1;
     v_border_color = a_border_color;
     v_gradient_coords = a_gradient_coords;
+    v_paint_data = a_paint_data;
     v_material_params = a_material_params;
     v_glow_color = a_glow_color;
     v_clip = a_clip;

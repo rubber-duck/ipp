@@ -1,3 +1,5 @@
+import type { GuiKitContract } from "@ipp/react/gui-kit";
+import { applyClientSkin } from "../support/client-skin.js";
 /** Ordinary GUI entity lifecycle through a generated client, independent of
  * process launch and wire layout.
  *
@@ -22,7 +24,6 @@ import type {
   BatchOutcome,
   GuiWorldClient,
   PresentationView,
-  RowsInput,
   WorldPersistenceHostClient,
   WorldReference,
 } from "@ipp/client";
@@ -49,13 +50,16 @@ export type GuiHost = WorldPersistenceHostClient<Client>;
 export type GuiTestClient = GuiWorldClient & AssetWorldClient;
 
 /** Row encoders exported by the generated contract under test. */
-export interface GuiContract {
-  GuiTheme: { encodeParts(input: RowsInput): Uint8Array<ArrayBuffer> };
-  GuiSkin: { encodeParts(input: RowsInput): Uint8Array<ArrayBuffer> };
-  guiPaintPartIndex(input: {
-    part: "background";
-    state?: "hovered" | "pressed";
-  }): number;
+export interface GuiContract
+  extends Pick<
+    GuiKitContract,
+    "GuiThemeMotion" | "GuiSkin" | "guiPaintPartIndex"
+  > {
+  GuiTheme: {
+    encodeParts(
+      input: import("@ipp/client").RowsInput,
+    ): Uint8Array<ArrayBuffer>;
+  };
 }
 
 /** JSON with bigint values, for failure messages and evidence. */
@@ -708,6 +712,8 @@ export async function exerciseGuiLifecycle(
       max_width: 2,
       max_height: 2,
       flex: 1,
+      gap: 0.125,
+      align_items: 1,
       align_x: 0,
       align_y: 0,
       padding_top: 0.01,
@@ -719,6 +725,8 @@ export async function exerciseGuiLifecycle(
       margin_bottom: 0.02,
       margin_left: 0.01,
       clip: false,
+      fit_width: false,
+      fit_height: false,
     } as const;
     const denseStyle = {
       x: 0,
@@ -1476,6 +1484,9 @@ export async function exerciseGuiTransientRestore(
       ]),
     );
     const controls = [2, 3, 4].map((index) => aliasId(outcome, index));
+    await applyClientSkin(client, contract, controls[0]!, "checkbox", true);
+    await applyClientSkin(client, contract, controls[1]!, "textInput");
+    await applyClientSkin(client, contract, controls[2]!, "slider");
     presentation = await presentGui(host, [{ child: created.reference }]);
     const p = presentation;
     // Caret and focus fences need evaluated layout with a ready font.

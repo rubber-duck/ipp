@@ -32,6 +32,7 @@ pub(in crate::services::render) struct PrimitiveScene<'a> {
     pub world: ipp_core::WorldRef,
     pub selection: Option<ipp_core::OutputRef>,
     pub plane: Option<super::super::plot::planes::PlotPlaneKey>,
+    pub presentation: Option<&'a super::presentation::CanvasPresentation>,
 }
 
 impl<'a> PrimitiveScene<'a> {
@@ -52,6 +53,7 @@ struct CanvasDrawFrame<'a> {
     paint: SurfacePaint,
     ops: std::vec::IntoIter<SurfaceOp>,
     stale_parent: bool,
+    presentation: std::sync::Arc<super::presentation::CanvasPresentation>,
 }
 
 impl<D: RenderDevice> RenderService<D> {
@@ -128,12 +130,14 @@ impl<D: RenderDevice> RenderService<D> {
                     .layer_offset(op.layer())
                     .ok_or(RenderError::UnavailableOutput)?;
                 let mvp = frame.layering.layer_mvp(&frame.mvp, coordinate);
+                let presentation = frame.presentation.layer(coordinate);
                 match op {
                     SurfaceOp::Gui(range, _) => self.draw_gui_work(
                         frame.scene.canvas.selection,
                         range,
                         frame.clip,
                         &mvp,
+                        &presentation,
                         stats,
                     )?,
                     SurfaceOp::Primitive(index, clip, _) => {
@@ -145,6 +149,7 @@ impl<D: RenderDevice> RenderService<D> {
                                     world: frame.scene.publication.world,
                                     selection: Some(frame.scene.canvas.selection),
                                     plane: None,
+                                    presentation: Some(&presentation),
                                 },
                                 primitive,
                                 clip,
@@ -262,6 +267,13 @@ impl<D: RenderDevice> RenderService<D> {
             paint,
             ops: ops.into_iter(),
             stale_parent: std::mem::take(&mut self.inclusions.active.stale_image),
+            presentation: self
+                .canvas_presentations
+                .get(&scene.canvas.selection)
+                .cloned()
+                .unwrap_or_else(|| {
+                    std::sync::Arc::new(super::presentation::CanvasPresentation::root(0))
+                }),
         })
     }
 
@@ -399,6 +411,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
             CanvasPrimitive::Path {
                 path,
+                paint: authored_paint,
                 ..
             } => {
                 if path.contours.is_empty() {
@@ -409,7 +422,7 @@ impl<D: RenderDevice> RenderService<D> {
                     path,
                 )?;
                 stats.uploaded(uploaded);
-                let color = [
+                let mut color = [
                     style.color[0],
                     style.color[1],
                     style.color[2],
@@ -421,8 +434,44 @@ impl<D: RenderDevice> RenderService<D> {
                     style.scale[0],
                     style.scale[1],
                 ];
+                let painted = scene.selection.and_then(|output| {
+                    let cache = self.gui_batch_cache.get(&output)?;
+                    let lanes = cache.paints.lanes((*authored_paint)?)?;
+                    Some((output, lanes))
+                });
+                let program = if let Some((output, lanes)) = painted {
+                    let cache = self
+                        .gui_batch_cache
+                        .get(&output)
+                        .expect("prepared Canvas paints");
+                    let program = self.canvas_paints.prepare_path_draw(
+                        &mut self.device.borrow_mut(),
+                        output,
+                        &cache.paints,
+                    )?;
+                    if let Some(program) = program {
+                        if let Some(context) = scene.presentation.filter(|p| p.features & 64 != 0) {
+                            context.upload(&mut *self.device.borrow_mut(), program)?;
+                        }
+                        color[3] = style.color[3];
+                        self.device.borrow_mut().set_surface_paint(
+                            program,
+                            [
+                                lanes.slot as f32,
+                                lanes.block as f32,
+                                style.opacity,
+                                u8::from(path.contours.len() > 1) as f32,
+                            ],
+                        )?;
+                        program
+                    } else {
+                        self.surface_program.as_ref().expect("shared path program")
+                    }
+                } else {
+                    self.surface_program.as_ref().expect("shared path program")
+                };
                 self.device.borrow_mut().draw_surface_path(
-                    self.surface_program.as_ref().expect("shared path program"),
+                    program,
                     data.gpu.as_ref().expect("live generated path"),
                     &path.bounds,
                     data.descriptor,
@@ -593,7 +642,7 @@ impl<D: RenderDevice> RenderService<D> {
             let fallbacks = &mut self.canvas_paint_fallbacks;
             cache.paints.prepare(
                 &scene.canvas.paints,
-                |instance| admit_paint::<D>(scene, programs, instance),
+                |instance| admit_paint::<D>(programs, instance, |key| scene.resource(key)),
                 |instance, reason| record_paint_fallback(fallbacks, output, instance, reason),
             );
             fallbacks.retain(|(fallback, entity), _| {
@@ -754,6 +803,7 @@ impl<D: RenderDevice> RenderService<D> {
         range: std::ops::Range<usize>,
         clip: CanvasClip,
         mvp: &[f32; 16],
+        presentation: &super::presentation::CanvasPresentation,
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
         let Some(cache) = self.gui_batch_cache.get_mut(&output) else {
@@ -770,6 +820,9 @@ impl<D: RenderDevice> RenderService<D> {
             output,
             &cache.paints,
         )?;
+        if presentation.features & 64 != 0 {
+            presentation.upload(&mut *self.device.borrow_mut(), shapes)?;
+        }
         let glyphs = self
             .gui_glyph_program
             .as_ref()
@@ -1196,18 +1249,19 @@ impl<D: RenderDevice> RenderService<D> {
 
 /// The slot and source of `instance`'s paint: its loaded, validated shader admitted
 /// to the canvas program.
-fn admit_paint<'a, D: RenderDevice>(
-    scene: &CanvasScene<'a>,
+pub(in crate::services::render) fn admit_paint<'a, D: RenderDevice>(
     programs: &mut super::paint::CanvasPaintPrograms<D>,
     instance: &ipp_core::systems::canvas::CanvasPaintInstance,
+    resource: impl FnOnce(
+        ipp_core::services::asset_management::AssetKey,
+    ) -> Option<&'a ipp_core::services::asset_management::AssetProvider>,
 ) -> Result<(u32, &'a super::paint::CanvasPaintSource), super::paint::CanvasPaintFallbackReason> {
     use super::paint::CanvasPaintFallbackReason;
 
     let shader = instance
         .shader
         .ok_or(CanvasPaintFallbackReason::Unavailable)?;
-    let data = scene
-        .resource(shader)
+    let data = resource(shader)
         .and_then(|resource| resource.data())
         .and_then(|asset| {
             asset
@@ -1227,7 +1281,7 @@ fn admit_paint<'a, D: RenderDevice>(
 
 /// Retain `instance`'s fallback `reason`, logging it only when it changes, or clear
 /// it when the instance paints.
-fn record_paint_fallback(
+pub(in crate::services::render) fn record_paint_fallback(
     fallbacks: &mut std::collections::BTreeMap<
         (ipp_core::OutputRef, ipp_core::EntityId),
         super::paint::CanvasPaintFallback,

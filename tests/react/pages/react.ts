@@ -526,7 +526,7 @@ function declaration(
   },
 ): React.ReactElement {
   const entityProps =
-    options.id === undefined
+    options.bindTo !== undefined
       ? { bindTo: options.bindTo, key: options.key }
       : { id: options.id, key: options.key };
   return React.createElement(

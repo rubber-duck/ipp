@@ -401,6 +401,11 @@ impl GuiPanel {
         )
     }
 
+    /// Attach a complete explicit client-style fixture to a control.
+    pub fn skin(&mut self, entity: EntityId, name: &str) {
+        skin(&mut self.host, self.world, entity, name);
+    }
+
     pub fn set(
         &mut self,
         entity: EntityId,
@@ -507,6 +512,34 @@ impl GuiPanel {
             })
             .unwrap();
     }
+}
+
+/// Explicit fixture skin, shared by direct-core layout and publication scenarios.
+pub fn skin(host: &mut HostRuntime, world: WorldId, entity: EntityId, name: &str) {
+    let (theme, motion, metrics) = super::skin_fixture::theme(name);
+    let theme = create(
+        host,
+        world,
+        None,
+        vec![
+            ComponentValue::GuiTheme(theme),
+            ComponentValue::GuiThemeMotion(motion),
+            ComponentValue::GuiMetrics(metrics),
+        ],
+    );
+    apply(
+        host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(entity),
+            ComponentValue::GuiSkin(ipp_core::components::GuiSkin {
+                theme,
+                ..Default::default()
+            }),
+        )],
+    )
+    .result
+    .unwrap();
 }
 
 pub fn apply(host: &mut HostRuntime, world: WorldId, operations: Vec<Command>) -> BatchOutcome {

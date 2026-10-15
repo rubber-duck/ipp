@@ -82,7 +82,8 @@ fn invalid_samples_split_both_interpolations_without_bridging_the_gap() {
         .map([8.0, 0.0])[0]
         - 2.0;
     for interpolation in [0, 1] {
-        let geometry = prepare_line(&line(interpolation), &frame, &input(&ids, &x, &y)).unwrap();
+        let geometry =
+            prepare_line(&line(interpolation), &frame, &input(&ids, &x, &y), None).unwrap();
         let paths: Vec<_> = geometry
             .canvas
             .iter()
@@ -129,7 +130,7 @@ fn source_identity_and_series_slot_survive_deleted_rows_and_large_u64_labels() {
             ..Default::default()
         })
         .unwrap();
-    let geometry = prepare_line(&chart, &fixed_frame(), &input(&ids, &x, &y)).unwrap();
+    let geometry = prepare_line(&chart, &fixed_frame(), &input(&ids, &x, &y), None).unwrap();
     assert_eq!(
         geometry.hits[0].row,
         PlotRowIdentity {
@@ -138,6 +139,30 @@ fn source_identity_and_series_slot_survive_deleted_rows_and_large_u64_labels() {
         }
     );
     assert!(geometry.canvas.iter().any(|paint| matches!(&paint.kind, PlotPrimitiveKind::Text { text, .. } if text.as_ref() == "exact identity")));
+    let styled = prepare_line(
+        &chart,
+        &fixed_frame(),
+        &input(&ids, &x, &y),
+        Some(&PlotCalloutStyle::default()),
+    )
+    .unwrap();
+    assert_eq!(geometry.hits, styled.hits);
+    let marks = |output: &PlotPreparedGeometry| {
+        output
+            .canvas
+            .iter()
+            .filter(|item| item.data_mark)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(marks(&geometry), marks(&styled));
+    assert!(styled.canvas.iter().any(|paint| matches!(
+        paint.kind,
+        PlotPrimitiveKind::CalloutBox {
+            border_width: 0.0,
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -148,7 +173,7 @@ fn automatic_bar_range_includes_zero_and_keeps_negative_direction() {
     let mut chart = PlotBars2d::default();
     chart.series.push(PlotSeriesRow::default()).unwrap();
     let frame = PlotFrame2d::default();
-    let geometry = prepare_bars(&chart, &frame, &input(&ids, &x, &y)).unwrap();
+    let geometry = prepare_bars(&chart, &frame, &input(&ids, &x, &y), None).unwrap();
     let baseline = frame.padding_top
         + (frame.height - frame.padding_top - frame.padding_bottom) * (20.0 / 30.0);
     let PlotHitShape::Rect(negative) = geometry.hits[0].shape else {
@@ -176,7 +201,8 @@ fn multiple_bar_series_use_one_range_and_disjoint_group_slots() {
             ..Default::default()
         })
         .unwrap();
-    let geometry = prepare_bars(&chart, &PlotFrame2d::default(), &input(&ids, &x, &y)).unwrap();
+    let geometry =
+        prepare_bars(&chart, &PlotFrame2d::default(), &input(&ids, &x, &y), None).unwrap();
     let PlotHitShape::Rect(a) = geometry.hits[0].shape else {
         panic!("bar hit")
     };
@@ -199,7 +225,7 @@ fn supplied_bin_values_are_not_counted_or_aggregated() {
     let mut chart = PlotBars2d::default();
     chart.series.push(PlotSeriesRow::default()).unwrap();
     let frame = fixed_frame();
-    let geometry = prepare_bars(&chart, &frame, &input(&ids, &x, &y)).unwrap();
+    let geometry = prepare_bars(&chart, &frame, &input(&ids, &x, &y), None).unwrap();
     assert_eq!(geometry.hits.len(), 3);
     let heights: Vec<_> = geometry
         .hits
@@ -223,7 +249,7 @@ fn pie_normalizes_positive_values_and_preserves_a_hollow_center() {
         ..Default::default()
     };
     chart.series.push(PlotSeriesRow::default()).unwrap();
-    let geometry = prepare_pie(&chart, &fixed_frame(), &input(&ids, &x, &y)).unwrap();
+    let geometry = prepare_pie(&chart, &fixed_frame(), &input(&ids, &x, &y), None).unwrap();
     assert_eq!(geometry.hits.len(), 4);
     let sweeps: Vec<_> = geometry
         .hits
@@ -284,10 +310,10 @@ fn mismatched_or_absent_selectors_fail_instead_of_drawing_zero() {
     let ids = [DataRowId(1)];
     let x = values(&[2.0]);
     let y = vec![ExpressionResult::Valid(DynamicValue::Bool(true))];
-    assert!(prepare_line(&line(0), &fixed_frame(), &input(&ids, &x, &y)).is_err());
+    assert!(prepare_line(&line(0), &fixed_frame(), &input(&ids, &x, &y), None).is_err());
     let mut chart = line(0);
     chart.series.get_mut(0).unwrap().x = "absent".into();
-    assert!(prepare_line(&chart, &fixed_frame(), &input(&ids, &x, &x)).is_err());
+    assert!(prepare_line(&chart, &fixed_frame(), &input(&ids, &x, &x), None).is_err());
 }
 
 #[test]
@@ -358,4 +384,118 @@ fn curved_stroke_preserves_the_cubic_midpoint_with_regular_strip_edges() {
             .iter()
             .any(|point| (point[0] - 50.0).abs() < 1e-4 && (point[1] - 30.0).abs() < 1e-4)
     );
+}
+
+#[test]
+fn only_data_marks_select_sibling_paint_in_all_2d_families() {
+    let ids = [DataRowId(1), DataRowId(2), DataRowId(3)];
+    let x = values(&[1.0, 3.0, 5.0]);
+    let y = values(&[10.0, 60.0, 30.0]);
+    let input = input(&ids, &x, &y);
+    let frame = fixed_frame();
+    for interpolation in [0, 1] {
+        let mut chart = line(interpolation);
+        chart.marker_size = 6.0;
+        let prepared = prepare_line(&chart, &frame, &input, None).unwrap();
+        assert_eq!(prepared.hits.len(), 3);
+        assert_eq!(
+            prepared.canvas.iter().filter(|item| item.data_mark).count(),
+            4
+        );
+        assert!(
+            prepared
+                .canvas
+                .iter()
+                .filter(|item| item.data_mark)
+                .all(|item| matches!(item.kind, PlotPrimitiveKind::Path(_)))
+        );
+        assert!(
+            prepared
+                .canvas
+                .iter()
+                .any(|item| !item.data_mark && matches!(item.kind, PlotPrimitiveKind::Text { .. }))
+        );
+    }
+
+    let mut bars = PlotBars2d::default();
+    bars.series.push(PlotSeriesRow::default()).unwrap();
+    let prepared = prepare_bars(&bars, &frame, &input, None).unwrap();
+    assert_eq!(
+        prepared.canvas.iter().filter(|item| item.data_mark).count(),
+        3
+    );
+    assert!(
+        prepared
+            .canvas
+            .iter()
+            .filter(|item| item.data_mark)
+            .all(|item| matches!(item.kind, PlotPrimitiveKind::Box { .. }))
+    );
+
+    let mut pie = PlotPie2d::default();
+    pie.series.push(PlotSeriesRow::default()).unwrap();
+    let prepared = prepare_pie(&pie, &frame, &input, None).unwrap();
+    assert_eq!(
+        prepared.canvas.iter().filter(|item| item.data_mark).count(),
+        3
+    );
+    assert!(prepared.canvas.iter().all(|item| item.data_mark));
+}
+
+#[test]
+fn authored_highlight_color_preserves_marks_and_picking_for_every_2d_family() {
+    use crate::components::schema::ComponentLifecycle;
+
+    let ids = [DataRowId(1), DataRowId(2)];
+    let x = values(&[2.0, 6.0]);
+    let y = values(&[30.0, 70.0]);
+    let input = input(&ids, &x, &y);
+    let before = fixed_frame();
+    assert_eq!(before.highlight_color(), [1.0; 4]);
+    let after = PlotFrame2d {
+        highlight_red: 0.2,
+        highlight_green: 0.7,
+        highlight_blue: 0.9,
+        highlight_alpha: 0.8,
+        ..before.clone()
+    };
+    assert!(after.validate().is_ok());
+    let invalid = PlotFrame2d {
+        highlight_alpha: f32::NAN,
+        ..after.clone()
+    };
+    assert!(invalid.validate().is_err());
+
+    macro_rules! compare {
+        ($chart:ty, $prepare:ident) => {{
+            let mut chart = <$chart>::default();
+            chart.series.push(PlotSeriesRow::default()).unwrap();
+            chart
+                .labels
+                .push(PlotLabelRow {
+                    row_id: "1".into(),
+                    text: "selected".into(),
+                    highlighted: true,
+                    offset: [24.0, -30.0],
+                    ..Default::default()
+                })
+                .unwrap();
+            let mut original = $prepare(&chart, &before, &input, None).unwrap();
+            let styled = $prepare(&chart, &after, &input, None).unwrap();
+            let mut highlighted_parts = 0;
+            for primitive in &mut original.canvas {
+                if primitive.color == before.highlight_color() {
+                    assert!(!primitive.data_mark);
+                    primitive.color = after.highlight_color();
+                    highlighted_parts += 1;
+                }
+            }
+            assert!(highlighted_parts >= 3);
+            assert_eq!(original, styled);
+        }};
+    }
+
+    compare!(PlotLine2d, prepare_line);
+    compare!(PlotBars2d, prepare_bars);
+    compare!(PlotPie2d, prepare_pie);
 }

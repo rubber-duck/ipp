@@ -14,6 +14,7 @@ type Entry = {
   signature?: string;
   driverSignature?: string;
   transitionSignature?: string;
+  playing?: boolean | undefined;
   pending: AnimationPlaybackControl[];
 };
 
@@ -90,7 +91,10 @@ export class ReactAnimationRegistry {
       if (!entry) {
         entry = {
           declaration,
-          pending: declaration.autoPlay ? [{ action: "play" }] : [],
+          pending:
+            declaration.playing === undefined && declaration.autoPlay
+              ? [{ action: "play" }]
+              : [],
         };
         this.entries.set(declaration.identity, entry);
         const owned = entry;
@@ -189,6 +193,13 @@ export class ReactAnimationRegistry {
       // Creation acknowledgement may arrive after local unmount. Retain the ID
       // for queued cleanup, but never start obsolete playback.
       if (!this.live() || !this.desired.has(declaration.identity)) continue;
+      if (
+        declaration.playing !== undefined &&
+        declaration.playing !== entry.playing
+      ) {
+        entry.pending.push({ action: declaration.playing ? "play" : "pause" });
+      }
+      entry.playing = declaration.playing;
       while (
         entry.pending.length &&
         this.live() &&

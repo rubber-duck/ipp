@@ -115,11 +115,11 @@ fn steps_commit_a_pending_edit_first_and_a_part_at_its_bound_does_nothing() {
 #[test]
 fn step_parts_are_squares_of_the_height_at_the_ends_that_never_overlap() {
     assert_eq!(
-        number_step_rects([196.0, 40.0]),
+        number_step_rects([196.0, 40.0], 1.0),
         [[0.0, 0.0, 40.0, 40.0], [156.0, 0.0, 40.0, 40.0]]
     );
     assert_eq!(
-        number_step_rects([60.0, 40.0]),
+        number_step_rects([60.0, 40.0], 1.0),
         [[0.0, 0.0, 30.0, 40.0], [30.0, 0.0, 30.0, 40.0]]
     );
 }

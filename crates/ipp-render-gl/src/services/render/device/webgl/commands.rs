@@ -734,6 +734,16 @@ impl RenderDevice for WebGlRenderDevice {
         unsafe { delete_gui_batch(batch) };
     }
 
+    fn set_surface_paint(
+        &mut self,
+        program: &Self::Program,
+        lanes: [f32; 4],
+    ) -> Result<(), RenderError> {
+        // SAFETY: The live four-word array is copied synchronously by the bridge;
+        // it validates the program handle, keeps no memory view and cannot reenter Rust.
+        self.check(unsafe { set_surface_paint(program.id, lanes.as_ptr()) })
+    }
+
     fn set_gui_paint_blocks(
         &mut self,
         program: &Self::Program,
@@ -901,6 +911,14 @@ impl RenderDevice for WebGlRenderDevice {
         };
         self.check(id)?;
         self.attach_skin(id, asset)
+    }
+
+    fn reorder_mesh_indices(&mut self, mesh: &u32, indices: &[u16]) -> Result<(), RenderError> {
+        // SAFETY: The bridge validates the live context-owned mesh and copies
+        // this immutable slice synchronously. No view survives the call or
+        // WASM memory growth, and the bridge requires the original index count.
+        let result = unsafe { reorder_mesh_indices(*mesh, indices.as_ptr(), indices.len()) };
+        self.check(result)
     }
 
     fn create_texture(

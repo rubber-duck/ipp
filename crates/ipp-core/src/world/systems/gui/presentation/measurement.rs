@@ -1,4 +1,4 @@
-use super::GuiFont;
+use super::{GuiFont, GuiMetrics};
 use crate::EntityId;
 use crate::components::schema::same_text;
 use crate::services::asset_management::{
@@ -8,36 +8,13 @@ use crate::services::asset_management::{
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::canvas::{CanvasGeometry, CanvasGlyph};
 use crate::systems::gui::GuiSystem;
+use crate::systems::gui::local::GuiControlKind;
 use crate::systems::gui::local::GuiEntityTarget;
 use crate::systems::gui::local::controls::identity::entity_control;
-use crate::systems::gui::local::{GUI_SLIDER_DIAL, GuiControlKind};
 use crate::text::{
     TextFont, TextLinePolicy, TextMaxWidth, TextMeasureRequest, TextOutcome, measure_text,
 };
 use std::sync::Arc;
-
-/// Heights of unsized controls in ems of their font, from the design
-/// language's sizes at its 16-unit body type: full-size controls (buttons and
-/// text fields) 40, small controls (the checkbox box) 32, and a slider deep
-/// enough across its rail for its 16-unit thumb, which is three quarters of
-/// that depth.
-pub(in crate::world::systems::gui) const CONTROL_HEIGHT: f32 = 2.5;
-pub(in crate::world::systems::gui) const SMALL_HEIGHT: f32 = 2.0;
-const SLIDER_DEPTH: f32 = 4.0 / 3.0;
-
-/// Length of an unsized slider along its rail, in ems.
-const SLIDER_LENGTH: f32 = 8.0;
-
-/// Side of an unsized dial, which is square, in ems: 80 at the language's
-/// 16-unit body type, room for its tick ring half an em inside the housing
-/// around a value ring 44 across.
-pub(in crate::world::systems::gui) const DIAL_SIDE: f32 = 5.0;
-
-/// Gap between a checkbox's box and its label, in ems.
-const CHECKBOX_LABEL_GAP: f32 = 0.5;
-
-/// Inset of a text input's line from the left of its content box, in ems.
-pub(in crate::world::systems::gui) const TEXT_INPUT_INSET: f32 = 1.0;
 
 /// A control's measured label line and where it sits in the control.
 ///
@@ -55,6 +32,7 @@ pub(in crate::world::systems) struct GuiControlLabel {
     text: Arc<str>,
     font: Option<AssetKey>,
     pub font_size: f32,
+    pub metrics: GuiMetrics,
     pub geometry: Option<CanvasGeometry>,
     pub layout: Option<Arc<crate::text::TextLayout>>,
     pub intrinsic: [f32; 2],
@@ -71,6 +49,16 @@ pub(in crate::world::systems) struct GuiControlLabel {
     pub content: [f32; 4],
     /// The control's laid-out size.
     size: [f32; 2],
+}
+
+/// Preserve the skin's preferred checkbox/switch aspect beside a label.
+/// Unspecified or zero intrinsic dimensions retain the ordinary square box.
+fn checkbox_indicator_width(metrics: &GuiMetrics, height: f32) -> f32 {
+    if metrics.min_width > 0.0 && metrics.min_height > 0.0 {
+        height * metrics.min_width / metrics.min_height
+    } else {
+        height
+    }
 }
 
 impl GuiControlLabel {
@@ -119,14 +107,18 @@ impl GuiControlLabel {
             // Between a numeric input's step parts, the line is centred.
             GuiControlKind::TextInput if self.steps => {
                 let [decrement, increment] =
-                    super::super::local::controls::number::number_step_rects(self.size);
+                    super::super::local::controls::number::number_step_rects(
+                        self.size,
+                        self.metrics.number_step_ratio,
+                    );
                 let start = decrement[0] + decrement[2];
                 [start + (increment[0] - start - line[0]) * 0.5, centred]
             }
-            GuiControlKind::TextInput => [x + TEXT_INPUT_INSET * self.font_size, centred],
-            GuiControlKind::Checkbox if self.labelled() => {
-                [x + height + CHECKBOX_LABEL_GAP * self.font_size, centred]
-            }
+            GuiControlKind::TextInput => [x + self.metrics.label_inset, centred],
+            GuiControlKind::Checkbox if self.labelled() => [
+                x + checkbox_indicator_width(&self.metrics, height) + self.metrics.label_gap,
+                centred,
+            ],
             _ => [x, y],
         }
     }
@@ -136,13 +128,17 @@ impl GuiControlLabel {
         !self.text.is_empty()
     }
 
-    /// A checkbox's box in a control of `size`: the square of its content
-    /// height at the left of its content box while it shows a label, and the
-    /// whole control otherwise.
+    /// A labelled checkbox's indicator keeps the skin's preferred aspect at
+    /// content height; an unlabelled checkbox paints the whole control.
     pub(in crate::world::systems::gui) fn checkbox_box(&self, size: [f32; 2]) -> [f32; 4] {
         let [x, y, _, height] = self.content;
         if self.labelled() {
-            [x, y, height, height]
+            [
+                x,
+                y,
+                checkbox_indicator_width(&self.metrics, height),
+                height,
+            ]
         } else {
             [0.0, 0.0, size[0], size[1]]
         }
@@ -274,6 +270,7 @@ pub(in crate::world::systems::gui) fn measure_control(
     let steps = control_steps(world, entity, kind);
     let masked = control_masked(world, gui, target, kind);
     let font_size = typography.map_or(super::GUI_DEFAULT_FONT_SIZE, |font| font.font_size);
+    let metrics = GuiMetrics::resolve(world, entity, font_size);
     let assets = context.asset_resources();
     let font = typography
         .filter(|font| !font.source.is_empty())
@@ -293,6 +290,7 @@ pub(in crate::world::systems::gui) fn measure_control(
             && previous.measures(&text, axis, steps, masked)
             && previous.font == font
             && previous.font_size == font_size
+            && previous.metrics == metrics
     }) {
         return Some((previous.clone(), false));
     }
@@ -354,34 +352,30 @@ pub(in crate::world::systems::gui) fn measure_control(
     };
     let intrinsic = match kind {
         GuiControlKind::Button => [
-            text_size[0].max(2.0 * font_size),
-            text_size[1].max(CONTROL_HEIGHT * font_size),
+            text_size[0].max(metrics.min_width),
+            text_size[1].max(metrics.min_height),
         ],
-        GuiControlKind::Checkbox if !text.is_empty() => [
-            (SMALL_HEIGHT + CHECKBOX_LABEL_GAP) * font_size + text_size[0],
-            text_size[1].max(SMALL_HEIGHT * font_size),
-        ],
-        GuiControlKind::Checkbox => [SMALL_HEIGHT * font_size, SMALL_HEIGHT * font_size],
-        GuiControlKind::Slider if axis == GUI_SLIDER_DIAL as usize => [DIAL_SIDE * font_size; 2],
-        GuiControlKind::Slider => {
-            let mut size = [SLIDER_LENGTH * font_size; 2];
-            size[1 - axis] = SLIDER_DEPTH * font_size;
-            size
+        GuiControlKind::Checkbox if !text.is_empty() => {
+            let height = text_size[1].max(metrics.min_height);
+            [
+                checkbox_indicator_width(&metrics, height) + metrics.label_gap + text_size[0],
+                height,
+            ]
         }
+        GuiControlKind::Slider if axis == 1 => [metrics.min_height, metrics.min_width],
         GuiControlKind::Color => {
-            crate::systems::gui::local::controls::color::intrinsic_size(font_size, axis == 1)
+            crate::systems::gui::local::controls::color::intrinsic_size(&metrics, axis == 1)
         }
-        GuiControlKind::ScrollView | GuiControlKind::VirtualList => [0.0; 2],
-        // Step parts add a square of the control's height at each end.
         GuiControlKind::TextInput => [
-            text_size[0].max(8.0 * font_size)
+            text_size[0].max(metrics.min_width)
                 + if steps {
-                    2.0 * CONTROL_HEIGHT * font_size
+                    2.0 * metrics.min_height * metrics.number_step_ratio
                 } else {
                     0.0
                 },
-            text_size[1].max(CONTROL_HEIGHT * font_size),
+            text_size[1].max(metrics.min_height),
         ],
+        _ => [metrics.min_width, metrics.min_height],
     };
     let measured = geometry.is_some();
     Some((
@@ -391,6 +385,7 @@ pub(in crate::world::systems::gui) fn measure_control(
             text,
             font,
             font_size,
+            metrics,
             geometry,
             layout,
             intrinsic,

@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A tree of the application's nodes in a list frame. Each visible node is a
  * row, indented by its depth, with an expand chevron on a branch, an optional
@@ -27,7 +28,7 @@
  */
 import { useImperativeHandle, useRef, useState, type Ref } from "react";
 import type { GuiPhysicalKey } from "@ipp/client";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import {
   Behavior,
@@ -85,7 +86,7 @@ export interface TreeViewProps extends ChoiceProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the frame; rows extend it with their keys. */
-  readonly id: string;
+  readonly id?: string;
   readonly nodes: readonly TreeNode[];
   /** Keys of the expanded branches, controlled. */
   readonly expanded?: readonly string[];
@@ -143,7 +144,7 @@ function geometry(kit: GuiKitScope) {
 }
 
 export function TreeView({
-  id,
+  id: providedId,
   layer = 0,
   nodes,
   expanded,
@@ -153,6 +154,7 @@ export function TreeView({
   layout,
   ...props
 }: TreeViewProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
   const choice = useChoice(props);
@@ -214,6 +216,7 @@ export function TreeView({
   const pad = g.gap;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout kind={LAYOUT_STACK} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
@@ -224,6 +227,7 @@ export function TreeView({
       />
       <Children>
         <Entity id={`${id}/rows`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_COLUMN}
             height={rows.length * g.row + 2 * pad}
@@ -256,7 +260,7 @@ export function TreeView({
 }
 
 function TreeRow({
-  id,
+  id: providedId,
   row,
   choice,
   onFocus,
@@ -268,6 +272,7 @@ function TreeRow({
   readonly onFocus: (focused: boolean) => void;
   readonly onToggle: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
   const { node } = row;
@@ -277,6 +282,7 @@ function TreeRow({
   const color = kit.color(tone);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_ROW}
         height={g.row}
@@ -296,6 +302,7 @@ function TreeRow({
         <Strut id={`${id}/strut`} height={g.row} />
         {row.branch ? (
           <Entity id={`${id}/chevron`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_LEAF}
               width={g.icon}
@@ -316,11 +323,13 @@ function TreeRow({
         ) : (
           // A leaf keeps the chevron's column, so labels of a level align.
           <Entity id={`${id}/leaf`}>
+            <PresentationGate open />
             <Layout kind={LAYOUT_LEAF} width={g.icon} height={0} />
           </Entity>
         )}
         {node.icon !== undefined && (
           <Entity id={`${id}/icon`}>
+            <PresentationGate open />
             <Layout kind={LAYOUT_LEAF} align_y={0} margin_left={g.gap} />
             <Style
               red={color[0]}

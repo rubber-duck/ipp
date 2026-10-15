@@ -25,6 +25,7 @@ export class ReactAssetRegistry {
   private readonly owned = new Map<string, ClientAssetSource>();
   private desired = new Map<string, AssetDescription>();
   private readonly listeners = new Set<(state: ReactAssetState) => void>();
+  private readonly snapshotListeners = new Set<() => void>();
   private readonly unsubscribe: (() => void) | undefined;
   private closed = false;
 
@@ -44,7 +45,7 @@ export class ReactAssetRegistry {
   }
 
   get(id: string): ReactAssetState | undefined {
-    return this.entries.get(id)?.state;
+    return this.closed ? undefined : this.entries.get(id)?.state;
   }
 
   subscribe(listener: (state: ReactAssetState) => void): () => void {
@@ -54,7 +55,25 @@ export class ReactAssetRegistry {
     };
   }
 
+  subscribeSnapshot(listener: () => void): () => void {
+    this.snapshotListeners.add(listener);
+    return () => {
+      this.snapshotListeners.delete(listener);
+    };
+  }
+
+  private changedSnapshot(): void {
+    for (const listener of this.snapshotListeners) {
+      try {
+        listener();
+      } catch (error) {
+        this.report(error);
+      }
+    }
+  }
+
   private publish(entry: Entry): void {
+    this.changedSnapshot();
     for (const listener of this.listeners) {
       try {
         listener(entry.state);
@@ -119,7 +138,10 @@ export class ReactAssetRegistry {
       throw new Error("Asset declarations require named resource support");
     const retained = new Set(assets.map((asset) => asset.id));
     for (const id of this.entries.keys())
-      if (!retained.has(id)) this.entries.delete(id);
+      if (!retained.has(id)) {
+        this.entries.delete(id);
+        this.changedSnapshot();
+      }
     for (const description of assets) {
       const previous = this.entries.get(description.id);
       if (
@@ -181,6 +203,9 @@ export class ReactAssetRegistry {
 
   close(): void {
     this.closed = true;
+    this.entries.clear();
+    this.changedSnapshot();
+    this.snapshotListeners.clear();
     this.unsubscribe?.();
     this.listeners.clear();
   }

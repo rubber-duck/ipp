@@ -3,6 +3,7 @@ import test from "node:test";
 import { readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ReactWorldContract } from "@ipp/react";
 import type { Client, HostClientBase } from "@ipp/client";
 import { createPlotCapture } from "./support/plot-capture.js";
 import { encodePng } from "../harness/images.js";
@@ -15,6 +16,7 @@ import { reactPlots } from "./scenarios/react-plots.js";
 import { exercisePlotAxisSupport } from "./scenarios/plot-axis-support.js";
 import { exercisePlotAxisMotion } from "./scenarios/plot-axis-motion.js";
 import { exercisePlotAxisGating } from "./scenarios/plot-axis-gating.js";
+import { exercisePlotGlass } from "./scenarios/plot-glass.js";
 import { exercisePlotPercentage } from "./scenarios/plot-percentage.js";
 import { exercisePlotViewPlacement } from "./scenarios/plot-view-placement.js";
 import type { Plot2dContract } from "./support/plot-2d-scene.js";
@@ -25,6 +27,9 @@ import type { ChartContract } from "./scenarios/chart-data-workload.js";
 // completed frames cross the real browser transport before image assertions.
 for (const [family, offscreen, transformed] of [
   ["2d", undefined],
+  ["glass-2d", undefined],
+  ["glass-3d", undefined],
+  ["glass-lifecycle", undefined],
   ["dense", undefined],
   ["3d", undefined],
   ["react", undefined],
@@ -54,7 +59,8 @@ for (const [family, offscreen, transformed] of [
     const profile = resolve(workspace, "target/gles-host");
     const contract = (await import(
       pathToFileURL(join(profile, "generated.js")).href
-    )) as Plot2dContract &
+    )) as ReactWorldContract &
+      Plot2dContract &
       Plot3dContract &
       ChartContract & {
         IppHostClient: {
@@ -111,55 +117,59 @@ for (const [family, offscreen, transformed] of [
           record,
         );
         await environment.execute(`plots-${caseName}`, {}, async () =>
-          family === "2d"
-            ? exercisePlot2d(host, contract, font, capture, record)
-            : family === "dense"
-              ? exerciseDenseLines(host, contract, font, capture, record)
-              : family === "3d"
-                ? exercisePlot3d(host, contract, font, capture)
-                : family === "percentage"
-                  ? exercisePlotPercentage(
-                      host,
-                      contract,
-                      font,
-                      capture,
-                      record,
-                    )
-                  : family === "axis-gating"
-                    ? exercisePlotAxisGating(
+          family === "glass-2d" ||
+          family === "glass-3d" ||
+          family === "glass-lifecycle"
+            ? exercisePlotGlass(host, contract, font, capture, record, family)
+            : family === "2d"
+              ? exercisePlot2d(host, contract, font, capture, record)
+              : family === "dense"
+                ? exerciseDenseLines(host, contract, font, capture, record)
+                : family === "3d"
+                  ? exercisePlot3d(host, contract, font, capture)
+                  : family === "percentage"
+                    ? exercisePlotPercentage(
                         host,
                         contract,
                         font,
                         capture,
                         record,
                       )
-                    : family === "axis-motion"
-                      ? exercisePlotAxisMotion(
+                    : family === "axis-gating"
+                      ? exercisePlotAxisGating(
                           host,
                           contract,
                           font,
                           capture,
                           record,
                         )
-                      : family === "axis"
-                        ? exercisePlotAxisSupport(
+                      : family === "axis-motion"
+                        ? exercisePlotAxisMotion(
                             host,
                             contract,
                             font,
                             capture,
                             record,
-                            transformed ?? false,
                           )
-                        : family === "view"
-                          ? exercisePlotViewPlacement(
+                        : family === "axis"
+                          ? exercisePlotAxisSupport(
                               host,
                               contract,
                               font,
                               capture,
                               record,
-                              offscreen,
+                              transformed ?? false,
                             )
-                          : reactPlots(host, contract, font, capture, record),
+                          : family === "view"
+                            ? exercisePlotViewPlacement(
+                                host,
+                                contract,
+                                font,
+                                capture,
+                                record,
+                                offscreen,
+                              )
+                            : reactPlots(host, contract, font, capture, record),
         );
       },
     );

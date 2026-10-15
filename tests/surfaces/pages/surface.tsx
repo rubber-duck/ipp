@@ -121,7 +121,7 @@ function cacheDeclaration(symbolicId: string) {
 }
 
 function observeCanvas(anchor: string) {
-  return (handle: AttachedWorldHandle) => {
+  return (handle: Pick<AttachedWorldHandle, "world" | "closed">) => {
     let tracked: Promise<SurfaceTestClient>;
     tracked = host.openWorld(handle.world).then((session) => {
       observedCanvasClients.add(session);

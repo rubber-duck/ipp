@@ -640,7 +640,14 @@ fn logical_focus_publishes_compact_ring_and_direct_priority_without_native_focus
     use crate::systems::gui::presentation::GuiCanvasPublication;
     let mut host = GuiTestHost::default();
     let world = host
-        .create_world(Default::default(), &PRESENTED_GUI_SYSTEMS)
+        .create_world(
+            Default::default(),
+            &[
+                PRESENTED_GUI_SYSTEMS.as_slice(),
+                &[crate::systems::asset_dependencies::AssetDependencySystem::ID],
+            ]
+            .concat(),
+        )
         .unwrap();
     let root = create(
         &mut host,
@@ -662,6 +669,39 @@ fn logical_focus_publishes_compact_ring_and_direct_priority_without_native_focus
                 before: None,
             },
         }],
+    );
+    let mut parts = crate::components::rows::Rows::new();
+    parts
+        .push(crate::systems::gui::presentation::GuiPaintPart {
+            border_width: Some(1.0),
+            ..crate::systems::gui::presentation::GuiPaintPart::keyed(
+                crate::systems::gui::GuiPartId::base(
+                    crate::systems::gui::GuiPrimitivePart::FocusRing,
+                ),
+            )
+            .unwrap()
+        })
+        .unwrap();
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiSkin(crate::systems::gui::presentation::GuiSkin {
+                    parts,
+                    ..Default::default()
+                }),
+            ),
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiLayout(crate::components::GuiLayout {
+                    width: 50.0,
+                    height: 20.0,
+                    ..Default::default()
+                }),
+            ),
+        ],
     );
     let selection = crate::OutputRef::canvas(host.world_ref(world).unwrap());
     let local = snapshot(&mut host, world, entity);
@@ -775,18 +815,9 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
     let override_color = [0.1, 0.2, 0.9, 1.0];
     let theme_border = [0.1, 0.9, 0.2, 1.0];
     let override_border = [0.8, 0.8, 0.1, 1.0];
-    // Without rows the ring takes the colour of the button's default look, and
-    // its width at the default font size against the look's em.
-    let look = crate::systems::gui::presentation::looks::default_look(GuiControlKind::Button);
-    let ring = look
-        .row(GuiPartId::base(GuiPrimitivePart::FocusRing))
-        .unwrap();
-    let default_color = ring.color.unwrap();
-    let default_width = ring.border_width.unwrap()
-        * crate::systems::gui::presentation::GUI_DEFAULT_FONT_SIZE
-        / look.em;
+    // The client authors ring width; colour and border precedence are independent.
+    let default_width = 1.75;
     let cases = [
-        (None, None, None, None, default_color),
         (Some(theme_color), None, None, None, theme_color),
         (
             Some(theme_color),
@@ -816,6 +847,7 @@ fn ordinary_focus_ring_uses_theme_and_override_color_with_border_precedence() {
             .push(GuiPaintPart {
                 color,
                 border_color,
+                border_width: Some(default_width),
                 ..GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::FocusRing)).unwrap()
             })
             .unwrap();
@@ -1180,4 +1212,119 @@ fn gui_actions_are_refused_without_the_gui_system() {
         outcome.result.unwrap_err().reason,
         ErrorReason::UnsupportedDependency
     );
+}
+
+#[test]
+fn presentation_gate_retains_control_identity_value_and_cancels_focus() {
+    let (mut host, world) = fixture();
+    let group = create(
+        &mut host,
+        world,
+        ComponentValue::PresentationGate(crate::components::PresentationGate::default()),
+    );
+    let control = create(
+        &mut host,
+        world,
+        ComponentValue::GuiTextInput(crate::components::GuiTextInput {
+            text: "native edited text".into(),
+            ..Default::default()
+        }),
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::PlaceEntity {
+            entity: EntityRef::Handle(control),
+            placement: EntityPlacementRef {
+                parent: Some(EntityRef::Handle(group)),
+                before: None,
+            },
+        }],
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(control),
+            ComponentValue::GuiBehavior(crate::components::GuiBehavior {
+                focusable: true,
+                ..Default::default()
+            }),
+        )],
+    );
+    let initial = snapshot(&mut host, world, control);
+    action(&mut host, world, initial.target, GuiLocalAction::Focus(0));
+    frame(&mut host);
+    let focused = outcomes(&mut host, world);
+    assert!(
+        focused[0].result.is_ok(),
+        "initial={initial:?}, outcome={:?}",
+        focused[0].result
+    );
+    assert!(snapshot(&mut host, world, control).focused);
+    apply(
+        &mut host,
+        world,
+        vec![Command::SetField {
+            entity: EntityRef::Handle(group),
+            component: ComponentValue::PRESENTATION_GATE,
+            field: FieldWrite {
+                offset: std::mem::offset_of!(crate::components::PresentationGate, open) as u32,
+                value: FieldValue::Bool(false),
+            },
+        }],
+    );
+    let hidden = snapshot(&mut host, world, control);
+    assert_eq!(hidden.target, initial.target);
+    assert_eq!(hidden.value, initial.value);
+    assert!(!hidden.available);
+    assert!(!hidden.focused);
+    action(&mut host, world, initial.target, GuiLocalAction::Focus(0));
+    frame(&mut host);
+    assert_eq!(
+        outcomes(&mut host, world)[0].result,
+        Err(ErrorReason::Unavailable)
+    );
+    apply(
+        &mut host,
+        world,
+        vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(group),
+            component: ComponentValue::PRESENTATION_GATE,
+        }],
+    );
+    let ordered = submit(
+        &mut host,
+        world,
+        vec![
+            Command::insert_value(
+                EntityRef::Handle(group),
+                ComponentValue::PresentationGate(crate::components::PresentationGate {
+                    open: false,
+                }),
+            ),
+            Command::GuiAction {
+                target: crate::GuiActionTarget {
+                    entity: EntityRef::Handle(control),
+                    component: initial.target.component,
+                    incarnation: initial.target.incarnation,
+                },
+                action: GuiLocalAction::Focus(0),
+            },
+        ],
+    );
+    assert_eq!(ordered.result.unwrap_err().reason, ErrorReason::Unavailable);
+    apply(
+        &mut host,
+        world,
+        vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(group),
+            component: ComponentValue::PRESENTATION_GATE,
+        }],
+    );
+    let revealed = snapshot(&mut host, world, control);
+    assert_eq!(revealed.target, initial.target);
+    assert_eq!(revealed.value, initial.value);
+    assert!(revealed.available);
+    assert!(!revealed.focused);
 }

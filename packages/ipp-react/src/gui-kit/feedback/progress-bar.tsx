@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Measured completion of a task: its label and readout above a read-only
  * frame holding a fill. The frame and fill are the switch's rail and block
@@ -29,10 +30,10 @@
 import { useMemo, type ReactNode } from "react";
 import { Animation } from "../../animation/declarations.js";
 import { AnimationAsset, assetRef } from "../../assets/declarations.js";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
-import { useGuiKit, type GuiKitTone } from "../kit.js";
+import { useGuiKit, type GuiKitTone, type GuiKitTokens } from "../kit.js";
 import {
   LAYOUT_COLUMN,
   LAYOUT_LEAF,
@@ -62,7 +63,7 @@ export interface ProgressBarSegment {
 export interface ProgressBarProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The task, such as Uploading. */
   readonly label: string;
   /**
@@ -123,8 +124,19 @@ function reportedParts(
   return { parts, total };
 }
 
+function progressGeometry(tokens: GuiKitTokens) {
+  const height = tokens.progressHeight ?? tokens.smallHeight;
+  if (tokens.progressInset === undefined)
+    return {
+      clearance: (height - tokens.dockedHeight) / 2,
+      fillHeight: tokens.dockedHeight,
+    };
+  const clearance = Math.max(0, Math.min(height / 2, tokens.progressInset));
+  return { clearance, fillHeight: height - 2 * clearance };
+}
+
 export function ProgressBar({
-  id,
+  id: providedId,
   layer = 0,
   label,
   value,
@@ -132,6 +144,7 @@ export function ProgressBar({
   status,
   layout,
 }: ProgressBarProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const outcome = status && OUTCOMES[status];
@@ -159,7 +172,7 @@ export function ProgressBar({
     : total === undefined
       ? undefined
       : percentage(total);
-  const clearance = (t.smallHeight - t.dockedHeight) / 2;
+  const { clearance, fillHeight } = progressGeometry(t);
 
   // The run of visible pieces, then the leading section while running; the
   // run takes the part cut on its outer ends only.
@@ -176,15 +189,18 @@ export function ProgressBar({
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        height={kit.unit(t.denseRow + LABEL_GAP + t.smallHeight)}
+        height={kit.unit(
+          t.denseRow + LABEL_GAP + (t.progressHeight ?? t.smallHeight),
+        )}
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
-        <Row id={`${id}/labels`} height={t.denseRow}>
+        <Row id={`${id}/labels`} height={kit.unit(t.denseRow)}>
           <TextLine id={`${id}/label`} text={label} layout={{ flex: 1 }} />
           {status === "failed" && (
             <Icon
@@ -193,6 +209,13 @@ export function ProgressBar({
               tone="error"
               size={t.textBody}
               layout={{ margin_right: kit.unit(t.inset / 4) }}
+            />
+          )}
+          {status === "complete" && fillHeight < CHECK_MARK && (
+            <CheckMark
+              id={`${id}/check`}
+              tone="accent"
+              layout={{ margin_right: kit.unit(t.inset / 2) }}
             />
           )}
           {readout !== undefined && (
@@ -204,37 +227,38 @@ export function ProgressBar({
           )}
         </Row>
         <Entity id={`${id}/frame`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_PADDING}
-            height={kit.unit(t.smallHeight)}
+            height={kit.unit(t.progressHeight ?? t.smallHeight)}
             padding_top={kit.unit(clearance)}
             padding_right={kit.unit(clearance)}
             padding_bottom={kit.unit(clearance)}
             padding_left={kit.unit(clearance)}
             margin_top={kit.unit(LABEL_GAP)}
           />
-          <Skin theme={kit.theme("frame")} />
+          <Skin theme={kit.theme("progressFrame")} />
           <Children>
             <Entity id={`${id}/track`}>
+              <PresentationGate open />
               {/* Its own stack, so alignment in it is inside the clearance. */}
-              <Layout kind={LAYOUT_STACK} height={kit.unit(t.dockedHeight)} />
+              <Layout kind={LAYOUT_STACK} height={kit.unit(fillHeight)} />
               <Children>
                 {moving ? (
                   <Entity id={`${id}/segment`}>
+                    <PresentationGate open />
                     <Layout
                       kind={LAYOUT_LEAF}
                       width={kit.unit(SEGMENT)}
-                      height={kit.unit(t.dockedHeight)}
+                      height={kit.unit(fillHeight)}
                       align_x={kit.reducedMotion ? 0 : -1}
                     />
                     <Skin theme={kit.theme("valueAccent")} />
                   </Entity>
                 ) : (
                   <Entity id={`${id}/fills`}>
-                    <Layout
-                      kind={LAYOUT_ROW}
-                      height={kit.unit(t.dockedHeight)}
-                    />
+                    <PresentationGate open />
+                    <Layout kind={LAYOUT_ROW} height={kit.unit(fillHeight)} />
                     <Children>
                       {pieces.map((piece, index) => (
                         <Piece
@@ -249,20 +273,21 @@ export function ProgressBar({
                       ))}
                       {total !== undefined && total < 1 && (
                         <Entity id={`${id}/rest`}>
+                          <PresentationGate open />
                           <Layout kind={LAYOUT_LEAF} flex={1 - total} />
                         </Entity>
                       )}
                     </Children>
                   </Entity>
                 )}
-                {status === "complete" && (
+                {status === "complete" && fillHeight >= CHECK_MARK && (
                   <CheckMark
                     id={`${id}/check`}
                     tone="surface"
                     layout={{
                       align_x: 1,
                       // As far from the fill's end as from its edges.
-                      margin_right: kit.unit((t.dockedHeight - CHECK_MARK) / 2),
+                      margin_right: kit.unit((fillHeight - CHECK_MARK) / 2),
                     }}
                   />
                 )}
@@ -282,7 +307,7 @@ export function ProgressBar({
  * at the pulse's rest and fading.
  */
 function Piece({
-  id,
+  id: providedId,
   theme,
   share,
   first,
@@ -296,19 +321,22 @@ function Piece({
   readonly last: boolean;
   readonly lead?: boolean | undefined;
 }): ReactNode {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const cut = kit.unit(t.partCut);
+  const { fillHeight } = progressGeometry(t);
   const parts = useOwnRow({
     corner_cut: [first ? cut : 0, 0, last ? cut : 0, 0],
     ...(lead ? { opacity: PULSE_REST } : {}),
   });
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         {...(lead ? { width: kit.unit(LEAD) } : { flex: share ?? 0 })}
-        height={kit.unit(t.dockedHeight)}
+        height={kit.unit(fillHeight)}
       />
       <Skin theme={kit.theme(theme)} parts={parts} />
       {lead && <Pulse target={id} />}
@@ -322,7 +350,8 @@ function Piece({
  * segment rests at the start (`align_x` -1) and the clip carries it to the
  * end and back.
  */
-function Sweep({ id }: { readonly id: string }) {
+function Sweep({ id: providedId }: { readonly id: string }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const layout = kit.contract.components.GuiLayout;
   const clip = useMemo(

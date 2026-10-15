@@ -258,6 +258,14 @@ test("Control refs bind from their tracking and unchanged publication queries no
     component: 42,
     incarnation: 1n,
   });
+  assert.equal((await ref.current.focus(1)).ok, false);
+  assert.equal((await ref.current.blur()).ok, false);
+  assert.deepEqual(
+    state.actions.map((command) =>
+      command.kind === "guiAction" ? command.action : undefined,
+    ),
+    [{ kind: "focus", part: 1 }, { kind: "blur" }],
+  );
   await state.publish(description);
   assert.deepEqual(state.counts(), {
     subscriptions: 1,
@@ -326,6 +334,8 @@ test("Control handles read fields, compare-and-set through setFieldIf and act on
   state.replace();
   assert.equal(ref.current, null);
   await assert.rejects(handle.read(), /no longer live/);
+  await assert.rejects(handle.focus(), /no longer live/);
+  await assert.rejects(handle.blur(), /no longer live/);
   await assert.rejects(
     handle.compareAndSet("checked", true, false),
     /no longer live/,

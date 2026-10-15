@@ -31,6 +31,7 @@ impl SystemFactory for RenderSystemFactory {
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
         crate::systems::SystemCapabilities::new(
             [
+                crate::ComponentValue::PRESENTATION_GATE,
                 crate::ComponentValue::UNLIT_MATERIAL,
                 crate::ComponentValue::MESH_INSTANCE,
                 crate::ComponentValue::UNLIT_TEXTURE,

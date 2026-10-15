@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A searchable dropdown: a dropdown whose list sits under a search field on
  * its floating surface, the text input look with a leading magnifier. The trigger keeps showing the selection while the
@@ -16,7 +17,8 @@
  * application is still fetching after `onQueryChange`.
  */
 import { useEffect, useRef, useState, type Ref } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
+import { Skin } from "../../gui/theme.js";
 import { TextInput } from "../../gui/controls.js";
 import { Behavior, Layout } from "../../gui/components.js";
 import type {
@@ -69,7 +71,7 @@ async function clearText(
 }
 
 export function SearchableDropdown({
-  id,
+  id: providedId,
   layer = 0,
   options,
   placeholder = "Select",
@@ -85,6 +87,7 @@ export function SearchableDropdown({
   searchRef,
   ...state
 }: SearchableDropdownProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const overlay = useOverlayOpen(state);
@@ -143,9 +146,11 @@ export function SearchableDropdown({
       <SelectList
         id={`${id}/list`}
         open={overlay.open}
+        controlled={overlay.controlled}
         onVisibleChange={overlay.onVisibleChange}
       >
         <Entity id={`${id}/search`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_ROW}
             height={gap + height}
@@ -155,6 +160,7 @@ export function SearchableDropdown({
           />
           <Children>
             <Entity id={`${id}/search/field`}>
+              <PresentationGate open />
               <Layout
                 kind={LAYOUT_ROW}
                 height={height}
@@ -165,6 +171,9 @@ export function SearchableDropdown({
                 padding_left={icon + gap}
               />
               <Behavior semantic_label={searchPlaceholder} />
+              {kit.controlTheme("textInput") && (
+                <Skin theme={kit.controlTheme("textInput")} />
+              )}
               <TextInput
                 placeholder={searchPlaceholder}
                 onTextCommit={search}

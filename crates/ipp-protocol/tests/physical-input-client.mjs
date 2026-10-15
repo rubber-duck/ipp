@@ -55,6 +55,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         const [layoutName, fieldName] = {
           GUI_PHYSICAL_POINTERS: ["gui-physical-cancelled", "pointers"],
           GUI_PHYSICAL_BLOCKERS: ["gui-physical-open", "blockers"],
+          GUI_PHYSICAL_HIT_PATH: ["gui-input-hit", "path"],
         }[name];
         return manifest.WIRE_LAYOUTS[layoutName].fields.find(
           (field) => field.name === fieldName,
@@ -115,6 +116,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         error: null,
         remaining: null,
         native: null,
+        hit: null,
         ...fields,
       });
     const send = async (command, expected, reply = routed()) => {
@@ -180,6 +182,22 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         );
       }
     }
+    const wheelHit = layout("gui-input-hit", {
+      target: layout("gui-target", {
+        world: encodedWorld,
+        entity: 71n,
+        component: 36,
+        incarnation: 72n,
+      }),
+      path: [
+        layout("camera-attachment-reference", {
+          parent: encodedWorld,
+          anchor: 73n,
+          incarnation: 74n,
+          revision: 75n,
+        }),
+      ],
+    });
     for (const [disposition, shift] of [
       ["ROUTED", true],
       ["MISS", false],
@@ -198,11 +216,26 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
           delta: vector(4, -5),
           shift: shift === true,
         }),
-        routed(disposition, { remaining: vector(4, -5), error: "bounded" }),
+        routed(disposition, {
+          remaining: vector(4, -5),
+          error: "bounded",
+          hit: disposition === "UNHANDLED" ? wheelHit : null,
+        }),
       );
       assert.equal(result.disposition, disposition.toLowerCase());
       assert.deepEqual(result.remaining, [4, -5]);
       assert.equal(result.error, "bounded");
+      assert.deepEqual(
+        result.hit,
+        disposition === "UNHANDLED"
+          ? {
+              target: { world, entity: 71n, component: 36, incarnation: 72n },
+              path: [
+                { parent: world, anchor: 73n, incarnation: 74n, revision: 75n },
+              ],
+            }
+          : undefined,
+      );
     }
     const target = { world, entity: 18n, component: 36, incarnation: 19n };
     const fence = { target, generation: 20n };

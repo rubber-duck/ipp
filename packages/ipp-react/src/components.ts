@@ -5,6 +5,7 @@ import type { AssetReference, AssetFieldWrite } from "./assets/declarations.js";
 import type { ReactNode } from "react";
 import type { FieldWrite } from "@ipp/client";
 import { guiComponentContract } from "./gui/fields.js";
+import { useEntityId } from "./scope/identity.js";
 import { plotComponentContract } from "./plots/fields.js";
 
 export const ENTITY_HOST_TYPE = "ipp-entity";
@@ -113,6 +114,10 @@ export const componentContract = {
     fields: { source: "string", variant: "number" },
   },
 
+  PresentationGate: {
+    host: "ipp-presentation-gate",
+    fields: { open: "boolean" },
+  },
   ParentJoint: {
     host: "ipp-parent-joint",
     fields: { ordinal: "number" },
@@ -281,7 +286,10 @@ export type ComponentFields<Name extends ComponentName> = {
 export type EntityProps = {
   children?: ReactNode;
 } & import("./gui/callbacks.js").GuiActionListeners &
-  ({ id: string; bindTo?: never } | { id?: never; bindTo: string });
+  (
+    | { id?: string | undefined; bindTo?: never }
+    | { id?: never; bindTo: string }
+  );
 
 export interface ComponentProps {
   children?: ReactNode;
@@ -325,12 +333,12 @@ export function SphereSurface(props: SphereSurfaceProps) {
 export type SurfaceCacheProps = ComponentProps & {
   /**
    * Camera-to-Surface distance in metres below which current full-quality
-   * presentation is selected. Farther distances select bands that halve resolution
-   * and refresh rate each time the distance doubles. `0` caches at every
+   * presentation is selected. Farther distances select bands that halve the
+   * refresh rate each time the distance doubles. `0` caches at every
    * distance. Finite and non-negative.
    */
   direct_distance?: number | undefined;
-  /** Cache texel density per Surface metre in the nearest cached band; positive. */
+  /** Multiplier of projected device-pixel demand, independent of Canvas layout. */
   resolution_scale?: number | undefined;
   /**
    * Maximum content refresh rate in hertz in the nearest cached band;
@@ -359,6 +367,10 @@ export type ScalarProps = ComponentProps & ComponentFields<"Scalar">;
 
 export type TransformProps = ComponentProps &
   ComponentFields<"Transform"> & {
+    position?: readonly [number, number, number];
+    rotation?: readonly [number, number, number];
+    quaternion?: readonly [number, number, number, number];
+    scale?: number | readonly [number, number, number];
     /** Euler angles in radians, intrinsic XYZ order. Cannot be mixed with q props. */
     rx?: number | undefined;
     ry?: number | undefined;
@@ -384,7 +396,11 @@ export type BoundingGeometryProps = ComponentProps &
 export type PickingGeometryProps = BoundingGeometryProps;
 
 export function Entity(props: EntityProps) {
-  return createElement<EntityProps>(ENTITY_HOST_TYPE, props);
+  const id = useEntityId(props.id);
+  return createElement(ENTITY_HOST_TYPE, {
+    ...props,
+    ...(props.bindTo === undefined ? { id } : {}),
+  });
 }
 
 /** Declare ordered, non-owning links to the enclosing Entity. */
@@ -409,7 +425,43 @@ export function Scalar(props: ScalarProps) {
 }
 
 export function Transform(props: TransformProps) {
-  const { rx, ry, rz, ...fields } = props;
+  const { position, rotation, quaternion, scale, ...scalar } = props;
+  const groups = [
+    [position, [scalar.x, scalar.y, scalar.z], "position"],
+    [rotation, [scalar.rx, scalar.ry, scalar.rz], "rotation"],
+    [quaternion, [scalar.qx, scalar.qy, scalar.qz, scalar.qw], "quaternion"],
+    [scale, [scalar.sx, scalar.sy, scalar.sz], "scale"],
+  ] as const;
+  for (const [tuple, values, name] of groups) {
+    if (tuple !== undefined && values.some((value) => value !== undefined))
+      throw new Error(`Transform cannot mix ${name} with its scalar fields`);
+    if (
+      tuple !== undefined &&
+      ((typeof tuple !== "number" &&
+        tuple.length !== (name === "quaternion" ? 4 : 3)) ||
+        !(typeof tuple === "number" ? [tuple] : tuple).every(Number.isFinite))
+    )
+      throw new RangeError(`Transform ${name} must contain finite numbers`);
+  }
+  const expanded = {
+    ...scalar,
+    ...(position ? { x: position[0], y: position[1], z: position[2] } : {}),
+    ...(rotation ? { rx: rotation[0], ry: rotation[1], rz: rotation[2] } : {}),
+    ...(quaternion
+      ? {
+          qx: quaternion[0],
+          qy: quaternion[1],
+          qz: quaternion[2],
+          qw: quaternion[3],
+        }
+      : {}),
+    ...(scale === undefined
+      ? {}
+      : typeof scale === "number"
+        ? { sx: scale, sy: scale, sz: scale }
+        : { sx: scale[0], sy: scale[1], sz: scale[2] }),
+  };
+  const { rx, ry, rz, ...fields } = expanded;
   if (rx === undefined && ry === undefined && rz === undefined) {
     return createElement(componentContract.Transform.host, fields);
   }
@@ -533,4 +585,12 @@ export type ParticleMeshProps = ComponentProps &
 
 export function ParticleMesh(props: ParticleMeshProps) {
   return createElement(componentContract.ParticleMesh.host, props);
+}
+
+export type PresentationGateProps = ComponentProps &
+  ComponentFields<"PresentationGate">;
+
+/** Keep native entities live while explicitly admitting or withholding presentation. */
+export function PresentationGate(props: PresentationGateProps) {
+  return createElement(componentContract.PresentationGate.host, props);
 }

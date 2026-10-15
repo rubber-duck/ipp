@@ -1,3 +1,5 @@
+import { cybertronSkin, cybertronTokens } from "@ipp/react/gui-cybertron";
+import { Metrics } from "@ipp/react/gui";
 /**
  * One specimen in its own canvas World on a presenting Host: declare it,
  * reapply edited themes as row writes on the live theme entities, and
@@ -124,6 +126,14 @@ export interface SpecimenCapture {
   /** Focus or pointer feedback still live after every pin was released. */
   readonly leftover: readonly string[];
   readonly timings: Readonly<Record<string, number>>;
+}
+
+/** Real controls and input in a scoped presentation, shared by native and worker drivers. */
+export interface SpecimenInteraction {
+  readonly client: Client;
+  readonly input: GuiPhysicalContext;
+  control(name: string): GuiControlHandle;
+  capture(): Promise<PresentedCapture>;
 }
 
 function identity(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
@@ -325,6 +335,32 @@ export class SpecimenSession {
     }
   }
 
+  /** Own input/presentation cleanup while a maintained scenario exercises live controls. */
+  async interact<T>(
+    present: Present,
+    section: (interaction: SpecimenInteraction) => Promise<T>,
+  ): Promise<T> {
+    return present(this.binding, async (view) => {
+      await this.settled(view);
+      const input = await this.options.host.input.open(view);
+      try {
+        return await section({
+          client: this.client,
+          input,
+          control: (name) => {
+            const handle = this.controls.get(name)?.current;
+            check(handle, `No declared control named ${name}`);
+            return handle;
+          },
+          capture: () => this.settled(view),
+        });
+      } finally {
+        await input.send({ kind: "blur" }).catch(() => {});
+        await input.close().catch(() => {});
+      }
+    });
+  }
+
   private declarations(): ReactNode {
     const lab: SpecimenContext = {
       font: assetRef(FONT_ASSET),
@@ -350,7 +386,8 @@ export class SpecimenSession {
       {
         contract,
         font: lab.font,
-        fontSize: contract.GUI_SKIN_TOKENS.textBody,
+        fontSize: cybertronTokens.textBody,
+        skin: cybertronSkin(contract),
       },
       createElement(Asset<Uint8Array<ArrayBuffer>>, {
         id: FONT_ASSET,
@@ -360,11 +397,12 @@ export class SpecimenSession {
       }),
       // One child slot for every theme, so adding the first rows of a theme
       // never moves the specimen to another slot and re-declares it.
-      [...this.encoded].map(([name, { parts, em, motion }]) =>
+      [...this.encoded].map(([name, { parts, em, motion, metrics }]) =>
         createElement(
           Entity,
           { key: name, id: `skin-lab/theme/${name}` },
           createElement(Theme, { parts, em }),
+          metrics && createElement(Metrics, metrics),
           motion && createElement(ThemeMotion, { parts: motion }),
         ),
       ),
@@ -394,7 +432,12 @@ export class SpecimenSession {
     const deadline = performance.now() + 30_000;
     for (;;) {
       const state = this.root.getAsset(id);
-      if (state?.status === "loaded") return { status: "loaded" };
+      if (state?.status === "loaded") {
+        // Resource observers can schedule a skin selection after readiness.
+        // Await its receiving-World acknowledgement before judging a frame.
+        await this.root.flush();
+        return { status: "loaded" };
+      }
       if (state?.status === "failed")
         return { status: "failed", error: state.error ?? "unknown" };
       if (performance.now() > deadline)

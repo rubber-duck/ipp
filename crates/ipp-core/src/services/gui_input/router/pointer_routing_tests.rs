@@ -19,7 +19,7 @@ fn canvas_scene(size: [f32; 2], children: Vec<Vec<ComponentValue>>) -> (Rig, Vec
     let (root, root_entity) = canvas_root(&mut host, world, size[0], size[1]);
     let entities = children
         .into_iter()
-        .map(|values| create(&mut host, world, values, Some(root_entity)))
+        .map(|values| create_painted(&mut host, world, values, Some(root_entity)))
         .collect();
     let rig = Rig::new(
         host,
@@ -41,7 +41,10 @@ fn slider(min: f32, max: f32, step: f32, value: f32) -> ComponentValue {
 
 /// Painted thumb centre of a slider laid out at `rect`, at a value fraction.
 fn thumb_centre(rect: [f32; 4], fraction: f32) -> [f32; 2] {
-    let thumb = slider_rail(rect, 0).unwrap().thumb_rect(fraction).unwrap();
+    let thumb = slider_rail(rect, 0, 0.75)
+        .unwrap()
+        .thumb_rect(fraction)
+        .unwrap();
     [thumb[0] + thumb[2] * 0.5, thumb[1] + thumb[3] * 0.5]
 }
 
@@ -547,7 +550,7 @@ fn unloading_the_font_of_a_focused_text_input_keeps_its_focus() {
             }),
         )],
     );
-    let text = create(
+    let text = create_painted(
         &mut host,
         world,
         vec![
@@ -559,7 +562,7 @@ fn unloading_the_font_of_a_focused_text_input_keeps_its_focus() {
         ],
         Some(root_entity),
     );
-    let button = create(
+    let button = create_painted(
         &mut host,
         world,
         vec![

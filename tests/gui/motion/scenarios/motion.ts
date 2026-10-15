@@ -1,3 +1,9 @@
+import {
+  cybertronLooks,
+  cybertronSkin,
+} from "../../../../packages/ipp-react/src/gui-cybertron.js";
+import { cybertronControlMetrics } from "../../../../packages/ipp-react/src/gui-cybertron/metrics.js";
+import { ControlSkin } from "../../../../packages/ipp-react/src/gui-kit/control-skin.js";
 import { createElement as h } from "react";
 import { renderDiagnostics } from "../../../../packages/ipp-client/src/diagnostics.js";
 import type {
@@ -68,17 +74,6 @@ interface MotionContract {
     layout: RowsLayoutDescriptor,
     rows: RowsInput<Row>,
   ): Uint8Array<ArrayBuffer>;
-  /** Built-in looks with their appearance and motion rows. */
-  readonly GUI_SKIN_LOOKS: Readonly<
-    Record<
-      string,
-      {
-        readonly em: number;
-        readonly parts: readonly Part[];
-        readonly motion: readonly Part[];
-      }
-    >
-  >;
 }
 
 type MotionClient = GuiWorldClient & AnimationWorldClient;
@@ -1448,8 +1443,20 @@ async function defaultSkinMotion(
   }
 
   try {
-    const look = contract.GUI_SKIN_LOOKS.switch;
-    check(look, "The contract exports no switch look");
+    const looks = cybertronLooks({
+      guiPaintPartIndex: (key) => {
+        const row = contract.GUI_PAINT_PART_KEYS.find(
+          (row) =>
+            row.part === key.part &&
+            (row.state ?? undefined) === key.state &&
+            (row.variant ?? undefined) === key.variant,
+        );
+        check(row, `Missing paint key ${JSON.stringify(key)}`);
+        return row.index;
+      },
+    });
+    const look = looks.switch!;
+    const buttonLook = looks.button!;
     const theme = { kind: "alias" as const, alias: 4 };
     successfulBatch(
       await client.batch([
@@ -1462,17 +1469,62 @@ async function defaultSkinMotion(
         ),
         ...placed(2, "GuiButton", BUTTON),
         ...placed(3, "GuiCheckbox", SWITCH),
-        // A client theme made from the exported switch look: its rows and
-        // its motion rows, as the generated contract carries them.
+        createEntity(5, "button-theme"),
+        insertComponent(
+          client,
+          "GuiTheme",
+          { kind: "alias", alias: 5 },
+          { em: buttonLook.em },
+        ),
+        insertComponent(client, "GuiThemeMotion", { kind: "alias", alias: 5 }),
+        ...["GuiTheme", "GuiThemeMotion"].map(
+          (component): Command => ({
+            kind: "setField",
+            entity: { kind: "alias", alias: 5 },
+            component: client.components[component]!.id,
+            field: {
+              offset: client.components[component]!.fields.parts!.offset,
+              value: rows(
+                component,
+                (component === "GuiTheme"
+                  ? buttonLook.parts
+                  : buttonLook.motion!) as readonly Part[],
+              ),
+            },
+          }),
+        ),
+        insertComponent(client, "GuiSkin", { kind: "alias", alias: 2 }),
+        {
+          kind: "setField",
+          entity: { kind: "alias", alias: 2 },
+          component: client.components.GuiSkin!.id,
+          field: {
+            offset: client.components.GuiSkin!.fields.theme!.offset,
+            value: { kind: "entity", value: { kind: "alias", alias: 5 } },
+          },
+        },
+        // Both client-owned looks use ordinary shared rows and metrics.
         createEntity(4, "switch-theme"),
         insertComponent(client, "GuiTheme", theme, { em: look.em }),
+        insertComponent(
+          client,
+          "GuiMetrics",
+          theme,
+          cybertronControlMetrics("switch") as Record<string, number>,
+        ),
+        insertComponent(
+          client,
+          "GuiMetrics",
+          { kind: "alias", alias: 5 },
+          cybertronControlMetrics("button") as Record<string, number>,
+        ),
         {
           kind: "setField",
           entity: theme,
           component: client.components.GuiTheme!.id,
           field: {
             offset: client.components.GuiTheme!.fields.parts!.offset,
-            value: rows("GuiTheme", look.parts),
+            value: rows("GuiTheme", look.parts as readonly Part[]),
           },
         },
         insertComponent(client, "GuiThemeMotion", theme),
@@ -1482,7 +1534,7 @@ async function defaultSkinMotion(
           component: client.components.GuiThemeMotion!.id,
           field: {
             offset: client.components.GuiThemeMotion!.fields.parts!.offset,
-            value: rows("GuiThemeMotion", look.motion),
+            value: rows("GuiThemeMotion", look.motion! as readonly Part[]),
           },
         },
         insertComponent(client, "GuiSkin", { kind: "alias", alias: 3 }),
@@ -1725,7 +1777,13 @@ async function kitReducedMotion(
       await kitRoot.render(
         h(
           GuiKit,
-          { contract, font: font.source, fontSize: KIT_FONT, reducedMotion },
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font: font.source,
+            fontSize: KIT_FONT,
+            reducedMotion,
+          },
           h(
             Entity,
             { id: "canvas" },
@@ -1751,6 +1809,7 @@ async function kitReducedMotion(
                   align_x: -1,
                   align_y: -1,
                 }),
+                h(ControlSkin, { role: "button" }),
                 h(Button, {}),
               ),
               h(Spinner, {

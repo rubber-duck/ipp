@@ -5,15 +5,12 @@
 //! cannot scroll and takes no input. Its control fields author the bars in
 //! logical units: the track's thickness, its inset from the control's far side
 //! (the right edge for the vertical track, the bottom edge for the horizontal
-//! one) and its inset from the control's ends. Fields left at their default
-//! follow one rule: a bar is half the control's inherited font size thick,
-//! and sits one thickness in from the far side and half a thickness in from
-//! the ends. When both tracks show, each stops where the
-//! crossing track starts. The track's ends point over half its thickness, so
-//! the thumb travels the track without those ends. The thumb length is that
-//! travel times the visible fraction of the content, never shorter than two
-//! thicknesses, and the thumb moves through the rest of the travel in
-//! proportion to the committed offset over the scroll capacity. Paint and hit
+//! one) and its inset from the control's ends. Unspecified fields resolve from
+//! the selected skin's metrics; absent measurements resolve to zero. When
+//! both tracks show, each stops where the crossing track starts. Authored tip
+//! clearance and minimum thumb ratios determine travel, while the visible
+//! content fraction and committed offset determine thumb size and position.
+//! Paint and hit
 //! testing use the same rectangles.
 //!
 //! Nested ScrollViews keep their bars visible: a track that would lie under
@@ -21,12 +18,6 @@
 //! edge or ends there.
 
 use crate::systems::gui::GuiPrimitivePart;
-
-/// Shortest thumb, in track thicknesses.
-const SCROLL_THUMB_MIN_LENGTH: f32 = 2.0;
-
-/// Default bar thickness in ems of the control's inherited font.
-pub(crate) const GUI_SCROLL_BAR_EMS: f32 = 0.5;
 
 /// Authored bar geometry of one scrolling control, in logical units.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,14 +28,18 @@ pub(crate) struct GuiScrollBarStyle {
     pub(crate) inset: f32,
     /// From each of the control's ends to the track's tips.
     pub(crate) end_inset: f32,
+    /// Track tip clearance relative to thickness.
+    pub(crate) tip_ratio: f32,
+    /// Minimum thumb length relative to thickness.
+    pub(crate) min_thumb_ratio: f32,
 }
 
 impl GuiScrollBarStyle {
-    /// The control's `bar_` fields `[thickness, inset, end_inset]` for an
-    /// inherited font of `font_size`. A negative thickness takes
-    /// [`GUI_SCROLL_BAR_EMS`] of the font; a negative inset takes the
-    /// thickness, and a negative end inset half of it.
-    pub(crate) fn from_fields(fields: [f32; 3], font_size: f32) -> Self {
+    /// The control's `bar_` fields override shared metrics in logical units.
+    pub(crate) fn from_fields(
+        fields: [f32; 3],
+        metrics: &crate::systems::gui::presentation::GuiMetrics,
+    ) -> Self {
         let authored = |field: f32, default: f32| {
             if field < 0.0 {
                 default
@@ -52,11 +47,13 @@ impl GuiScrollBarStyle {
                 field
             }
         };
-        let thickness = authored(fields[0], GUI_SCROLL_BAR_EMS * font_size);
+        let thickness = authored(fields[0], metrics.scroll_thickness);
         Self {
             thickness,
-            inset: authored(fields[1], thickness),
-            end_inset: authored(fields[2], thickness * 0.5),
+            inset: authored(fields[1], metrics.scroll_inset),
+            end_inset: authored(fields[2], metrics.scroll_end_inset),
+            tip_ratio: metrics.scroll_tip_ratio,
+            min_thumb_ratio: metrics.scroll_min_thumb_ratio,
         }
     }
 }
@@ -240,14 +237,14 @@ impl GuiScrollBarFrame {
         bounds: GuiScrollBarBounds,
     ) -> [Option<GuiScrollBar>; 2] {
         let bar = |axis: usize| {
-            if !shown[axis] {
+            if !shown[axis] || self.style.thickness <= 0.0 {
                 return None;
             }
             let track = self.track(axis, shown, bounds)?;
             let thickness = self.style.thickness;
 
             // The thumb stays off the pointed ends, half a thickness at each.
-            let tip = (thickness * 0.5).min(track[axis + 2] * 0.5);
+            let tip = (thickness * self.style.tip_ratio).min(track[axis + 2] * 0.5);
             let rail = [track[axis] + tip, track[axis + 2] - 2.0 * tip];
             let visible = if self.extent[axis] > 0.0 {
                 (page[axis] / self.extent[axis]).clamp(0.0, 1.0)
@@ -255,7 +252,7 @@ impl GuiScrollBarFrame {
                 1.0
             };
             let thumb_length = (rail[1] * visible)
-                .max(thickness * SCROLL_THUMB_MIN_LENGTH)
+                .max(thickness * self.style.min_thumb_ratio)
                 .min(rail[1]);
             let fraction = if capacity[axis] > 0.0 {
                 (offset[axis] / capacity[axis]).clamp(0.0, 1.0)

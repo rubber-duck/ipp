@@ -92,12 +92,48 @@ fn motion_indexes_stay_bounded_through_control_churn_and_mid_transition_deletion
         .unwrap();
     let parent = create(&mut host, world, Vec::new(), None);
     let themes = std::array::from_fn::<_, 2, _>(|_| {
+        use crate::systems::gui::motion::GuiMotionPart;
+        use crate::systems::gui::presentation::GuiPaintPart;
+        use crate::systems::gui::{GuiPartId, GuiPartVariant, GuiPrimitivePart, GuiSkinState};
+        let background = GuiPrimitivePart::Background;
+        let mut parts = crate::components::rows::Rows::new();
+        for (id, color) in [
+            (GuiPartId::base(background), [0.0, 0.0, 0.0, 1.0]),
+            (
+                GuiPartId::variant(background, GuiSkinState::Idle, GuiPartVariant::Checked),
+                [1.0; 4],
+            ),
+        ] {
+            parts
+                .push(GuiPaintPart {
+                    color: Some(color),
+                    ..GuiPaintPart::keyed(id).unwrap()
+                })
+                .unwrap();
+        }
+        let mut motion = crate::components::rows::Rows::new();
+        motion
+            .push(GuiMotionPart {
+                duration: Some(0.1),
+                ..GuiMotionPart::keyed(GuiPartId::variant(
+                    background,
+                    GuiSkinState::Idle,
+                    GuiPartVariant::Checked,
+                ))
+                .unwrap()
+            })
+            .unwrap();
         create(
             &mut host,
             world,
             vec![
-                ComponentValue::GuiTheme(GuiTheme::default()),
-                ComponentValue::GuiThemeMotion(GuiThemeMotion::default()),
+                ComponentValue::GuiTheme(GuiTheme {
+                    parts,
+                    ..Default::default()
+                }),
+                ComponentValue::GuiThemeMotion(GuiThemeMotion {
+                    parts: motion,
+                }),
             ],
             None,
         )

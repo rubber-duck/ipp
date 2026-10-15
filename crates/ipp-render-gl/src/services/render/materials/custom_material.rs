@@ -7,7 +7,15 @@ use ipp_core::{
     DynamicProperties, DynamicValue, services::asset_management::AssetKey,
     systems::render::PublishedMaterialProperty,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// A material candidate belongs to a concrete geometry producer, not just its entity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(in crate::services::render) struct CustomMaterialKey {
+    pub entity: EntityId,
+    pub mesh: ipp_core::MeshKey,
+    pub component: u16,
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub(in crate::services::render) struct CustomProgramKey {
@@ -53,34 +61,37 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         world: &RenderScene<'_>,
         items: &[SceneItem<'_>],
-    ) -> Result<BTreeMap<EntityId, PreparedCustomMaterial>, RenderError> {
+    ) -> Result<BTreeMap<CustomMaterialKey, PreparedCustomMaterial>, RenderError> {
         #[cfg(feature = "instrumentation")]
         let _allocation_scope = ipp_core::profiling::AllocationScope::new(224, "gl.custom-prepare");
 
         // Records own only copied draw flags, asset identities and retained buffers.
         // They never keep component/asset references across a World phase.
         let mut ready = std::mem::take(&mut self.custom_materials);
-        ready.retain(|entity, _| {
-            items
-                .binary_search_by_key(entity, |item| item.entity)
-                .is_ok()
-                && items
-                    .iter()
-                    .any(|item| item.entity == *entity && item.published.custom.is_some())
+        ready.retain(|key, _| {
+            items.iter().any(|item| {
+                item.custom_material
+                    && item.custom_material_key() == *key
+                    && item.published.custom.is_some()
+            })
         });
         self.custom_fallbacks.retain(|entity, _| {
             items
                 .binary_search_by_key(entity, |item| item.entity)
                 .is_ok()
         });
+        let mut failed_entities = BTreeSet::new();
         let mut previous = None;
         for item in items {
-            if previous == Some(item.entity) {
+            if !item.custom_material {
                 continue;
             }
-            previous = Some(item.entity);
+            if previous == Some(item.custom_material_key()) {
+                continue;
+            }
+            previous = Some(item.custom_material_key());
             if item.particle.is_some_and(|p| p.sprite) {
-                ready.remove(&item.entity);
+                ready.remove(&item.custom_material_key());
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             }
@@ -92,7 +103,7 @@ impl<D: RenderDevice> RenderService<D> {
                 self.custom_fallbacks.remove(&item.entity);
                 continue;
             };
-            let prepared = ready.entry(item.entity).or_default();
+            let prepared = ready.entry(item.custom_material_key()).or_default();
             let result = (|| {
                 let asset = material.shader.ok_or_else(|| {
                     RenderError::RenderDevice("shader definition pending or unset".into())
@@ -106,10 +117,26 @@ impl<D: RenderDevice> RenderService<D> {
                         RenderError::RenderDevice("compiled shader unavailable".into())
                     })?;
                 let definition = &shader.definition;
-                let mesh = world
-                    .mesh_metadata(item.mesh)
-                    .ok_or(RenderError::MissingMesh)?;
-                let present = mesh.attributes();
+                let mesh = if item.derived.is_some() {
+                    None
+                } else {
+                    Some(
+                        world
+                            .mesh_metadata(item.mesh)
+                            .ok_or(RenderError::MissingMesh)?,
+                    )
+                };
+                let present = if let Some((_, derived)) = item.derived {
+                    let streams = derived.geometry.meshes[derived.mesh_index]
+                        .material
+                        .as_ref()
+                        .ok_or(RenderError::MissingMesh)?;
+                    u32::from(!streams.colors.is_empty())
+                        | (u32::from(!streams.uvs.is_empty()) << 1)
+                        | (u32::from(!streams.normals.is_empty()) << 2)
+                } else {
+                    mesh.expect("ordinary mesh metadata").attributes()
+                };
                 if definition.required_attributes & !present != 0 {
                     return Err(RenderError::RenderDevice(
                         "required custom vertex attribute missing".into(),
@@ -163,7 +190,7 @@ impl<D: RenderDevice> RenderService<D> {
                     texture_index += 1;
                 }
                 prepared.textures.truncate(texture_index);
-                let normals = mesh.has_normals();
+                let normals = present & 4 != 0;
                 let normals = normals
                     && item.pose.is_none_or(|(key, _)| {
                         world.mesh_metadata(key).is_some_and(|m| m.has_normals())
@@ -218,24 +245,27 @@ impl<D: RenderDevice> RenderService<D> {
                 Ok(())
             })();
             match result {
-                Ok(()) => {
-                    self.custom_fallbacks.remove(&item.entity);
-                }
+                Ok(()) => {}
                 Err(RenderError::ContextLost) => return Err(RenderError::ContextLost),
                 Err(error) => {
-                    ready.remove(&item.entity);
-                    self.record_custom_fallback(
-                        item.entity,
-                        material
-                            .shader
-                            .and_then(|key| world.resource(key))
-                            .map_or("unavailable shader", |resource| &*resource.source().uri),
-                        error,
-                    );
+                    let first_failure = failed_entities.insert(item.entity);
+                    ready.remove(&item.custom_material_key());
+                    if first_failure {
+                        self.record_custom_fallback(
+                            item.entity,
+                            material
+                                .shader
+                                .and_then(|key| world.resource(key))
+                                .map_or("unavailable shader", |resource| &*resource.source().uri),
+                            error,
+                        );
+                    }
                 }
             }
         }
 
+        self.custom_fallbacks
+            .retain(|entity, _| failed_entities.contains(entity));
         Ok(ready)
     }
 

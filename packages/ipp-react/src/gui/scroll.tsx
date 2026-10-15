@@ -1,4 +1,8 @@
 import {
+  useNativeControl,
+  type NativeControlSkinProps,
+} from "./native-skin.js";
+import {
   createElement,
   Fragment,
   useCallback,
@@ -25,6 +29,7 @@ import type {
 } from "./callbacks.js";
 
 export type ScrollViewProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiScrollView"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -34,7 +39,7 @@ export type ScrollViewProps = ComponentProps &
   };
 
 export function ScrollView({ ref, ...props }: ScrollViewProps) {
-  return createElement(componentContract.GuiScrollView.host, {
+  return useNativeControl(componentContract.GuiScrollView.host, "scroll", {
     ...props,
     controlRef: ref,
   });
@@ -48,6 +53,7 @@ export function VirtualItem(props: VirtualItemProps) {
 }
 
 export type VirtualListProps = ComponentProps &
+  NativeControlSkinProps &
   ComponentFields<"GuiVirtualList"> &
   GuiFeedbackListeners & {
     ref?: GuiControlRef;
@@ -92,7 +98,7 @@ export function VirtualList({
   return createElement(
     Fragment,
     null,
-    createElement(componentContract.GuiVirtualList.host, {
+    useNativeControl(componentContract.GuiVirtualList.host, "scroll", {
       ...props,
       controlRef: ref,
       onRangeChange: receive,

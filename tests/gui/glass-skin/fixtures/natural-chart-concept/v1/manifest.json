@@ -1,0 +1,52 @@
+{
+  "tool": "built-in image_gen",
+  "task": "ipp-43iw.25",
+  "selected": "reference.png",
+  "status": "approved visual direction; illustrative concept, not a runtime render",
+  "inputs": {
+    "chart": "input-chart.png",
+    "approvedGui": "../../natural-glass-concept/components.png",
+    "productionGui": "input-production.png"
+  },
+  "stages": [
+    {
+      "prompt": "prompt.txt",
+      "output": "first-pass.png"
+    },
+    {
+      "prompt": "refinement-prompt.txt",
+      "inputs": [
+        "first-pass.png",
+        "../../natural-glass-concept/components.png"
+      ],
+      "output": "reference.png"
+    }
+  ],
+  "artifacts": {
+    "input-chart.png": {
+      "sha256": "a260a6157b1fb2a4a99a13cdbc4b4f4457fc50f519909bc7756f9c2ff55096c8",
+      "width": 1220,
+      "height": 1020
+    },
+    "first-pass.png": {
+      "sha256": "e8dd22ab9c21e9c34e78d6474c45df916900fe0debf81e6b96ebf916c6d7f65f",
+      "width": 1536,
+      "height": 1024
+    },
+    "reference.png": {
+      "sha256": "f48f4dc725602d92e8d11e670b221b1d71601e6ca70fbfb6829d5317ad3aca9b",
+      "width": 1536,
+      "height": 1024
+    },
+    "input-production.png": {
+      "sha256": "9e1deb34ac7b986c66a186088129fd3f7c7bdddf21caef22429ce129bef6a06c",
+      "width": 1536,
+      "height": 1024
+    }
+  },
+  "notes": [
+    "Refinement reduces continuous edge outlines and rear-edge wires while keeping the frosted tooltip and unified legend direction.",
+    "Preserve actual source data and native geometry when implementing; generated geometry is illustrative.",
+    "Concept optics should be approximated with procedural reflections and alpha transmission; no scene reflection or backdrop blur is required."
+  ]
+}

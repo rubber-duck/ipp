@@ -63,6 +63,18 @@ impl<D: RenderDevice> RenderService<D> {
         viewport: WorldViewport,
         presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
+        let previous_contexts = std::mem::take(&mut self.canvas_presentations);
+        let paint_features =
+            super::super::canvas::presentation::output_features::<D>(host, selection, publication)?;
+        if selection.kind() == OutputKind::Canvas {
+            let features = paint_features.get(&selection).copied().unwrap_or(0);
+            self.canvas_presentations.insert(
+                selection,
+                std::sync::Arc::new(
+                    super::super::canvas::presentation::CanvasPresentation::root(features),
+                ),
+            );
+        }
         let canvas = if selection.kind() == OutputKind::Canvas {
             let scene = CanvasScene::new(host, selection, publication)?;
             Some(CanvasView {
@@ -169,6 +181,23 @@ impl<D: RenderDevice> RenderService<D> {
                             let child =
                                 CanvasScene::new(host, surface.selection, surface.publication)?;
                             let extent = child.canvas.logical_extent;
+                            let features =
+                                paint_features.get(&surface.selection).copied().unwrap_or(0);
+                            let context = if features & 64 != 0 {
+                                super::super::canvas::presentation::CanvasPresentation::surface(
+                                    &scene,
+                                    surface,
+                                    extent,
+                                    features,
+                                    previous_contexts
+                                        .get(&surface.selection)
+                                        .map(|p| p.as_ref()),
+                                )?
+                            } else {
+                                super::super::canvas::presentation::CanvasPresentation::root(0)
+                            };
+                            self.canvas_presentations
+                                .insert(surface.selection, std::sync::Arc::new(context));
                             let [width, height] = surface.extent.map(f64::from);
                             let content = if surface.geometry.exact_affine(0.0).is_some() {
                                 ipp_core::math::multiply(
@@ -326,6 +355,21 @@ impl<D: RenderDevice> RenderService<D> {
                                 clip,
                                 opacity,
                             } => {
+                                if let Some(parent) = self.canvas_presentations.get(&job.selection)
+                                {
+                                    let features =
+                                        paint_features.get(&selection).copied().unwrap_or(0);
+                                    let mapping = attachment
+                                        .child_mapping(child.canvas.logical_extent, view.clip)
+                                        .ok_or(RenderError::InvalidTransform)?;
+                                    let coordinate = scene
+                                        .canvas
+                                        .layer_offset(slot.layer)
+                                        .ok_or(RenderError::UnavailableOutput)?;
+                                    let context = parent.child(&mapping, coordinate, features)?;
+                                    self.canvas_presentations
+                                        .insert(selection, std::sync::Arc::new(context));
+                                }
                                 let canvas = Some(CanvasView {
                                     plane,
                                     clip,

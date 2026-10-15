@@ -13,8 +13,8 @@ const TALL: [f32; 4] = [0.0, 0.0, 20.0, 100.0];
 
 #[test]
 fn a_vertical_rail_runs_from_the_bottom_with_the_horizontal_rail_turned() {
-    let wide = slider_rail(WIDE, 0).unwrap();
-    let tall = slider_rail(TALL, 1).unwrap();
+    let wide = slider_rail(WIDE, 0, 0.75).unwrap();
+    let tall = slider_rail(TALL, 1, 0.75).unwrap();
     assert_eq!(wide.thumb_centers(), [7.5, 92.5]);
     assert_eq!(tall.thumb_centers(), [92.5, 7.5]);
 
@@ -32,13 +32,13 @@ fn a_vertical_rail_runs_from_the_bottom_with_the_horizontal_rail_turned() {
 
     // A rail thicker than the control is clamped to it.
     assert_eq!(tall.rail_rect(30.0), [0.0, 0.0, 20.0, 100.0]);
-    assert!(slider_rail(TALL, 2).is_none());
+    assert!(slider_rail(TALL, 2, 0.75).is_none());
 }
 
 #[test]
 fn a_fill_from_the_minimum_starts_at_the_rail_end_under_half_the_thumb() {
-    let wide = slider_rail(WIDE, 0).unwrap();
-    let tall = slider_rail(TALL, 1).unwrap();
+    let wide = slider_rail(WIDE, 0, 0.75).unwrap();
+    let tall = slider_rail(TALL, 1, 0.75).unwrap();
     assert_eq!(wide.fill_rect(0.0, 0.0, 8.0), Some([0.0, 6.0, 7.5, 8.0]));
     assert_eq!(wide.fill_rect(0.0, 0.5, 8.0), Some([0.0, 6.0, 50.0, 8.0]));
     assert_eq!(tall.fill_rect(0.0, 0.0, 8.0), Some([6.0, 92.5, 8.0, 7.5]));
@@ -48,8 +48,8 @@ fn a_fill_from_the_minimum_starts_at_the_rail_end_under_half_the_thumb() {
 
 #[test]
 fn a_fill_from_an_inner_origin_lies_between_the_origin_and_the_value_on_either_side() {
-    let wide = slider_rail(WIDE, 0).unwrap();
-    let tall = slider_rail(TALL, 1).unwrap();
+    let wide = slider_rail(WIDE, 0, 0.75).unwrap();
+    let tall = slider_rail(TALL, 1, 0.75).unwrap();
 
     // Origin at the middle, the value a quarter of the range below or above
     // it: the fill runs from the middle to the thumb centre on that side.
@@ -82,8 +82,8 @@ fn a_fill_from_an_inner_origin_lies_between_the_origin_and_the_value_on_either_s
 
 #[test]
 fn a_fill_from_the_maximum_starts_at_the_far_rail_end() {
-    let wide = slider_rail(WIDE, 0).unwrap();
-    let tall = slider_rail(TALL, 1).unwrap();
+    let wide = slider_rail(WIDE, 0, 0.75).unwrap();
+    let tall = slider_rail(TALL, 1, 0.75).unwrap();
     assert_eq!(wide.fill_rect(1.0, 1.0, 8.0), Some([92.5, 6.0, 7.5, 8.0]));
     assert_eq!(wide.fill_rect(1.0, 0.5, 8.0), Some([50.0, 6.0, 50.0, 8.0]));
     assert_eq!(tall.fill_rect(1.0, 1.0, 8.0), Some([6.0, 0.0, 8.0, 7.5]));
@@ -117,8 +117,8 @@ fn a_dial_draws_in_the_top_left_square_of_its_control() {
     // An 80-unit square dial at 16-unit type: a tick ring 32 from the centre,
     // ticks 4 long, a quarter-em gap and a 4-unit value arc centred 22 out.
     let square = slider_dial([10.0, 20.0, 80.0, 80.0]).unwrap();
-    assert_eq!(square.ticks_radius(16.0), 32.0);
-    assert_eq!(square.ring_radius(16.0, 4.0, 4.0), 22.0);
+    assert_eq!(square.ticks_radius(8.0), 32.0);
+    assert_eq!(square.ring_radius(8.0, 4.0, 4.0, 4.0), 22.0);
     assert_eq!(square.square(32.0), [18.0, 28.0, 64.0, 64.0]);
     assert_eq!(square.travel(), 200.0);
 
@@ -131,7 +131,7 @@ fn a_dial_draws_in_the_top_left_square_of_its_control() {
 
     // Rings never turn inside out on a dial too small for them.
     let tiny = slider_dial([0.0, 0.0, 12.0, 12.0]).unwrap();
-    assert_eq!(tiny.ring_radius(16.0, 4.0, 4.0), 0.0);
+    assert_eq!(tiny.ring_radius(8.0, 4.0, 4.0, 4.0), 0.0);
     assert!(slider_dial([0.0, 0.0, 0.0, 10.0]).is_none());
     assert!(slider_dial([0.0, 0.0, f32::NAN, 10.0]).is_none());
 }

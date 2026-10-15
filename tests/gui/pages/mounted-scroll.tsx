@@ -1,3 +1,4 @@
+import { cybertronControlMetrics } from "@ipp/react/gui-cybertron";
 /** Mounted nested ScrollViews and a React VirtualList: React DOM ->
  * IppCanvas -> generated worker client -> WebGL frames, with ordinary GUI
  * entities in an attached child World. */
@@ -19,6 +20,7 @@ import {
   Skin,
   Style,
   Theme,
+  Metrics,
   VirtualList,
   type GuiControlHandle,
   type GuiVirtualRange,
@@ -373,9 +375,11 @@ function Application({
           >
             <Entity id="scroll-bars">
               <Theme parts={encoded.outer} />
+              <Metrics {...cybertronControlMetrics("scroll")} />
             </Entity>
             <Entity id="inner-scroll-bars">
               <Theme parts={encoded.inner} />
+              <Metrics {...cybertronControlMetrics("scroll")} />
             </Entity>
             <Entity id="canvas">
               <Layout kind={2} width={WIDTH} height={HEIGHT} />

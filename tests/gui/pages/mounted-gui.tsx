@@ -1,3 +1,4 @@
+import { cybertronControlMetrics } from "@ipp/react/gui-cybertron";
 /** Mounted browser GUI fixture: React DOM -> IppCanvas -> generated worker
  * client, with ordinary GUI entities in attached child Worlds. */
 import { useCallback, useState, type ReactElement } from "react";
@@ -31,6 +32,7 @@ import {
   Style,
   TextInput,
   Theme,
+  Metrics,
   type GuiControlHandle,
 } from "../../../packages/ipp-react/src/gui.js";
 import {
@@ -229,6 +231,8 @@ function themeParts(
       undefined,
       {
         color: [1, 0.72, 0.08, 1],
+        border_width: 1.6,
+        border_color: [1, 0.72, 0.08, 1],
         opacity: 1,
         corner_cut: [0, 0, 0, 0],
         glow_intensity: 0,
@@ -315,13 +319,16 @@ function PanelTheme({
     <>
       <Entity id="mounted-controls">
         <Theme parts={themeParts(tone)} />
+        <Metrics {...cybertronControlMetrics("textInput")} />
       </Entity>
       <Entity id="slider-controls">
         <Theme parts={themeParts(tone, undefined, true)} />
+        <Metrics {...cybertronControlMetrics("slider")} />
       </Entity>
       {indicator ? (
         <Entity id="indicator-controls">
           <Theme parts={themeParts(0, indicator)} />
+          <Metrics {...cybertronControlMetrics("checkbox")} />
         </Entity>
       ) : null}
     </>

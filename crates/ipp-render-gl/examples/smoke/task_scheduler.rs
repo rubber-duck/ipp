@@ -21,6 +21,10 @@ type LoadFuture = Pin<Box<dyn Future<Output = ()>>>;
 type TaskSlot = Rc<RefCell<Option<LoadFuture>>>;
 type TaskTable = RefCell<BTreeMap<u64, TaskSlot>>;
 
+thread_local! {
+    static HOST_TASKS: RefCell<BTreeMap<u64, Weak<SmokeAssetTasks>>> = const { RefCell::new(BTreeMap::new()) };
+}
+
 #[derive(Default)]
 struct ReadyQueue(Mutex<VecDeque<u64>>);
 
@@ -80,7 +84,19 @@ impl SmokeAssetTasks {
     pub(crate) fn install(host: &mut HostRuntime) -> Rc<Self> {
         let tasks = Rc::new(Self::default());
         host.set_asset_load_scheduler(tasks.clone());
+        HOST_TASKS.with(|hosts| {
+            let mut hosts = hosts.borrow_mut();
+            hosts.retain(|_, tasks| tasks.strong_count() != 0);
+            hosts.insert(host.identity(), Rc::downgrade(&tasks));
+        });
         tasks
+    }
+
+    /// Reuse the scheduler owned by this exact native fixture Host.
+    pub(crate) fn for_host(host: &mut HostRuntime) -> Rc<Self> {
+        HOST_TASKS
+            .with(|hosts| hosts.borrow().get(&host.identity()).and_then(Weak::upgrade))
+            .unwrap_or_else(|| Self::install(host))
     }
 
     /// Bound each service phase; further ready work continues on the next frame.
@@ -104,4 +120,13 @@ impl SmokeAssetTasks {
             }
         }
     }
+}
+
+/// Drive resource work at a synchronous smoke Host's asset service boundary.
+pub(crate) fn progress(host: &mut HostRuntime) {
+    let tasks = SmokeAssetTasks::for_host(host);
+    tasks.poll_ready();
+    host.progress_assets();
+    tasks.poll_ready();
+    host.progress_assets();
 }

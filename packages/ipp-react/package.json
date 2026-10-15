@@ -28,6 +28,16 @@
       "types": "./src/canvas.ts",
       "development": "./src/canvas.ts",
       "default": "./dist/canvas.js"
+    },
+    "./gui-glass": {
+      "types": "./src/gui-glass.ts",
+      "development": "./src/gui-glass.ts",
+      "default": "./dist/gui-glass.js"
+    },
+    "./gui-cybertron": {
+      "types": "./src/gui-cybertron.ts",
+      "development": "./src/gui-cybertron.ts",
+      "default": "./dist/gui-cybertron.js"
     }
   },
   "scripts": {

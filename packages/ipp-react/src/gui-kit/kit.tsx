@@ -3,7 +3,7 @@
  * the font and the body size every kit component draws at, the shared theme
  * entities and the reduced-motion setting. One `GuiKit` declares the kit's
  * themes once in each World container; kit components reference them by
- * symbolic id and scale their own lengths by `fontSize / GUI_SKIN_TOKENS.em`,
+ * symbolic id and scale their own lengths by `fontSize / tokens.em`,
  * as the themes' rows scale by their `em`.
  *
  * Reduced motion is one setting for the runtime and the kit. The `GuiKit`
@@ -15,29 +15,23 @@
  * of its nearest `GuiKit`, so a nested kit can hold part of a World still
  * without changing the preference.
  */
-import {
-  createContext,
-  createElement,
-  Fragment,
-  useContext,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  type ReactNode,
-} from "react";
+import { createElement, useContext, useMemo } from "react";
 import type { AssetReference } from "../assets/declarations.js";
 import { AttachmentContext } from "../composition/attached-world.js";
-import type { ReactWorldCommits } from "../reconciler/commits.js";
-import { Entity } from "../components.js";
-import { Theme } from "../gui/theme.js";
-import { encodeKitThemes, type KitThemeName } from "./themes.js";
+import { SkinProvider } from "../gui/skin-provider.js";
+import { GuiSkinContext } from "../gui/skin-context.js";
+import {
+  guiKitSpacing,
+  type GuiKitSpacing,
+  type GuiKitSpacingOverrides,
+} from "./spacing.js";
+import type { KitThemeName } from "./themes.js";
 
 /** Linear RGBA. */
 export type GuiKitColor = readonly [number, number, number, number];
 
 /**
- * The design-language tokens the kit reads from the generated contract's
- * `GUI_SKIN_TOKENS`: role colours, and lengths in logical units at `em`.
+ * Client skin tokens: role colours, and lengths in logical units at `em`.
  */
 export interface GuiKitTokens {
   readonly em: number;
@@ -61,12 +55,28 @@ export interface GuiKitTokens {
   readonly frameGlowReach: number;
   readonly controlHeight: number;
   readonly smallHeight: number;
+  /** Choice hit-row side; omitted uses the icon size in custom skins. */
+  readonly choiceTarget?: number;
+  /** Visible choice mark side, independent of the hit row. */
+  readonly choiceIndicator?: number;
+  readonly switchWidth?: number;
+  readonly switchHeight?: number;
   /** Side of an unsized dial, which is square. */
   readonly dial: number;
+  /** Place the readout inside the dial; omitted keeps the ordinary readout row. */
+  readonly dialReadoutInside?: boolean;
+  /** Visual housing diameter as a fraction of the dial side; omitted uses the full side. */
+  readonly dialHousingScale?: number;
   readonly dockedHeight: number;
+  /** Optional progress-frame inset in em units; omitted uses the ordinary docked clearance. */
+  readonly progressInset?: number;
+  /** Independent progress track height; defaults to smallHeight. */
+  readonly progressHeight?: number;
   readonly dockedWidth: number;
   readonly bar: number;
   readonly inset: number;
+  /** Form spacing roles at em; omitted roles derive from inset. */
+  readonly spacing?: GuiKitSpacingOverrides;
   readonly row: number;
   readonly denseRow: number;
   readonly selectionGutter: number;
@@ -81,35 +91,31 @@ export type GuiKitRow = { readonly part: number } & {
   readonly [field: string]: unknown;
 };
 
-/** A built-in look of the generated contract. */
+/** A client-owned look recipe. */
 export interface GuiKitLook {
   readonly em: number;
   readonly parts: readonly GuiKitRow[];
+  readonly motion?: readonly GuiKitRow[] | undefined;
+  readonly metrics?: import("../gui/theme.js").MetricsProps | undefined;
 }
 
 /**
  * What the kit uses of the receiving runtime's generated contract module:
- * pass the module itself. Its tokens and built-in looks are the only source of
- * the kit's colours and lengths.
+ * pass the module itself. Skins supply all colours, lengths and recipes.
  */
 export interface GuiKitContract {
-  readonly GUI_SKIN_TOKENS: GuiKitTokens;
-  readonly GUI_SKIN_LOOKS: {
-    readonly button: GuiKitLook;
-    readonly checkbox: GuiKitLook;
-    readonly amber: GuiKitLook;
-    readonly secondary: GuiKitLook;
-    readonly secondaryAmber: GuiKitLook;
-    readonly docked: GuiKitLook;
-    readonly textInput: GuiKitLook;
-    readonly scroll: GuiKitLook;
-  };
   guiPaintPartIndex(key: {
     readonly part: string;
     readonly state?: string;
     readonly variant?: string;
   }): number;
   readonly GuiTheme: {
+    encodeParts(table: {
+      readonly nextSlot: number;
+      readonly rows: ReadonlyMap<number, GuiKitRow>;
+    }): Uint8Array<ArrayBuffer>;
+  };
+  readonly GuiThemeMotion: {
     encodeParts(table: {
       readonly nextSlot: number;
       readonly rows: ReadonlyMap<number, GuiKitRow>;
@@ -136,163 +142,31 @@ export interface GuiKitContract {
   };
 }
 
-export interface GuiKitProps {
-  /**
-   * The receiving runtime's generated contract module. Omit it inside
-   * another `GuiKit` to inherit.
-   */
-  readonly contract?: GuiKitContract;
-  /**
-   * The GUI font kit text draws with, the shared Shure Tech Mono Nerd Font:
-   * a font source or an asset reference. Omit it inside another `GuiKit` to
-   * inherit.
-   */
-  readonly font?: string | AssetReference;
-  /**
-   * Body text size in the World's logical units. Kit lengths are drawn
-   * `fontSize / GUI_SKIN_TOKENS.em` times their design size. Omit it inside
-   * another `GuiKit` to inherit.
-   */
-  readonly fontSize?: number;
-  /**
-   * Hold motion still: the World's GUI preference, which snaps the runtime's
-   * skin transitions, and the kit's own animations, which stand still or
-   * end at once. The kit that declares the World's themes sends it to the
-   * World; a nested kit only holds the kit animations beneath it. Omit it to
-   * inherit; omitted everywhere, the kit sends nothing and its animations
-   * move.
-   */
-  readonly reducedMotion?: boolean;
-  readonly children?: ReactNode;
+/** Optional authoring appearance; native controls continue to own their state. */
+export interface GuiKitAppearance {
+  readonly tokens: GuiKitTokens;
+  readonly themes?: Partial<Record<KitThemeName, string>>;
+  readonly controls?: Partial<Record<GuiKitControlName, string>>;
+  readonly metrics?: Partial<
+    Record<GuiKitControlName, import("../gui/theme.js").MetricsProps>
+  >;
 }
 
-interface GuiKitValue {
-  readonly contract: GuiKitContract;
-  readonly font: string | AssetReference;
-  readonly fontSize: number;
-  /** The setting given to this kit or the nearest enclosing one. */
-  readonly reducedMotion: boolean | undefined;
-  /** The World container whose kit themes this kit references. */
-  readonly container: unknown;
-}
+export type GuiKitControlName =
+  | "button"
+  | "checkbox"
+  | "switch"
+  | "textInput"
+  | "slider"
+  | "dial"
+  | "scroll"
+  | "color";
 
-const GuiKitContext = createContext<GuiKitValue | null>(null);
+/** Kit configuration also provides the skin for native controls in this World. */
+export type GuiKitProps = import("../gui/skin-provider.js").SkinProviderProps;
 
-/** Symbolic id of a kit theme entity in its World. */
-function themeId(name: KitThemeName): string {
-  return `ipp-kit/theme/${name}`;
-}
-
-/**
- * Provide the kit to the components below it. The first `GuiKit` in a World's
- * declarations declares the kit's theme entities there, as top-level entities
- * beside its children, so place it outside any `Children`. A `GuiKit` nested
- * in the same World declares nothing and changes only what it is given, such
- * as the size of a part of the panel or reduced motion beneath it; a
- * `GuiKit` in another World (inside an `AttachedWorld` or `CanvasWorld`)
- * declares that World's themes and sends its reduced motion there.
- */
-export function GuiKit({
-  contract,
-  font,
-  fontSize,
-  reducedMotion,
-  children,
-}: GuiKitProps) {
-  const outer = useContext(GuiKitContext);
-  const container = useContext(AttachmentContext);
-  const resolved = {
-    contract: contract ?? outer?.contract,
-    font: font ?? outer?.font,
-    fontSize: fontSize ?? outer?.fontSize,
-    reducedMotion: reducedMotion ?? outer?.reducedMotion,
-  };
-  if (!resolved.contract || !resolved.font || resolved.fontSize === undefined)
-    throw new Error(
-      "GuiKit needs a contract, font and fontSize, or an enclosing GuiKit to inherit them from",
-    );
-  if (!(resolved.fontSize > 0) || !Number.isFinite(resolved.fontSize))
-    throw new RangeError("GuiKit fontSize must be positive and finite");
-  const declares = outer?.container !== container;
-  const value = useMemo<GuiKitValue>(
-    () => ({
-      contract: resolved.contract!,
-      font: resolved.font!,
-      fontSize: resolved.fontSize!,
-      reducedMotion: resolved.reducedMotion,
-      container,
-    }),
-    [
-      resolved.contract,
-      resolved.font,
-      resolved.fontSize,
-      resolved.reducedMotion,
-      container,
-    ],
-  );
-  const themes = useMemo(
-    () => (declares ? encodeKitThemes(resolved.contract!) : undefined),
-    [declares, resolved.contract],
-  );
-  useReducedMotionPreference(
-    declares ? container?.commits : undefined,
-    resolved.reducedMotion,
-  );
-  return createElement(
-    GuiKitContext,
-    { value },
-    themes &&
-      Object.entries(themes).map(([name, { parts, em }]) =>
-        createElement(
-          Entity,
-          { key: name, id: themeId(name as KitThemeName) },
-          createElement(Theme, { parts, em }),
-        ),
-      ),
-    createElement(Fragment, null, children),
-  );
-}
-
-/**
- * Send the World's reduced-motion preference through `commits` when the
- * setting changes, and turn it off again when the setting or the kit goes
- * after turning it on. Undefined `commits`, in a kit that declares nothing,
- * sends nothing.
- */
-function useReducedMotionPreference(
-  commits: ReactWorldCommits | undefined,
-  reducedMotion: boolean | undefined,
-): void {
-  /** The value this kit last sent, if any. */
-  const sent = useRef<boolean | undefined>(undefined);
-  useLayoutEffect(() => {
-    if (!commits) return;
-    return () => {
-      // Unmounting the root fences it first, so this then sends nothing.
-      if (sent.current) sendReducedMotion(commits, false);
-      sent.current = undefined;
-    };
-  }, [commits]);
-  useLayoutEffect(() => {
-    if (!commits) return;
-    const next = reducedMotion ?? (sent.current ? false : undefined);
-    if (
-      next !== undefined &&
-      next !== sent.current &&
-      sendReducedMotion(commits, next)
-    )
-      sent.current = next;
-  }, [commits, reducedMotion]);
-}
-
-function sendReducedMotion(
-  commits: ReactWorldCommits,
-  reducedMotion: boolean,
-): boolean {
-  return commits.sendSystemCommand({
-    type: "GuiPreferencesUpdateCommand",
-    reducedMotion,
-  });
+export function GuiKit(props: GuiKitProps) {
+  return createElement(SkinProvider, props);
 }
 
 /** Text sizes of the type scale. */
@@ -308,6 +182,8 @@ export interface GuiKitScope {
   readonly font: string | AssetReference;
   /** Body text size in the World's units. */
   readonly fontSize: number;
+  /** Resolved skin/client spacing roles in World logical units. */
+  readonly spacing: GuiKitSpacing;
   /**
    * Hold motion still: looping animations are not declared, leaving what
    * they move at its rest, and timed changes such as a toast's fade happen
@@ -321,11 +197,15 @@ export interface GuiKitScope {
   color(tone: GuiKitTone): GuiKitColor;
   /** The symbolic id of a kit theme entity. */
   theme(name: KitThemeName): string;
+  /** Optional look for a previously unskinned native control. */
+  controlTheme(name: GuiKitControlName): string | undefined;
+  /** Preferred native control dimensions from the selected skin, in logical units. */
+  controlSize(name: GuiKitControlName): readonly [number, number] | undefined;
 }
 
 /** The kit of the enclosing `GuiKit`, which must declare its themes in this World. */
 export function useGuiKit(): GuiKitScope {
-  const kit = useContext(GuiKitContext);
+  const kit = useContext(GuiSkinContext);
   const container = useContext(AttachmentContext);
   if (!kit)
     throw new Error("Kit components need an enclosing GuiKit in their World");
@@ -334,7 +214,7 @@ export function useGuiKit(): GuiKitScope {
       "Kit components need a GuiKit inside their own World's declarations",
     );
   return useMemo(() => {
-    const tokens = kit.contract.GUI_SKIN_TOKENS;
+    const tokens = kit.appearance.tokens;
     const scale = kit.fontSize / tokens.em;
     const sizes = {
       small: tokens.textSmall,
@@ -346,11 +226,35 @@ export function useGuiKit(): GuiKitScope {
       contract: kit.contract,
       font: kit.font,
       fontSize: kit.fontSize,
+      spacing: guiKitSpacing(tokens, scale),
       reducedMotion: kit.reducedMotion ?? false,
       unit: (length) => length * scale,
       typeSize: (size) => sizes[size] * scale,
       color: (tone) => tokens[tone],
-      theme: themeId,
+      theme: (name) => {
+        const theme = kit.appearance.themes?.[name];
+        if (!theme)
+          throw new Error(
+            `The selected skin does not define the ${name} kit theme`,
+          );
+        return theme;
+      },
+      controlTheme: (name) => kit.appearance?.controls?.[name],
+      controlSize: (name) => {
+        const metrics = kit.appearance.metrics?.[name];
+        const width = metrics?.min_width;
+        const height = metrics?.min_height;
+        if (
+          width === undefined ||
+          height === undefined ||
+          width <= 0 ||
+          height <= 0
+        )
+          return;
+        const em = metrics?.em ?? 0;
+        const factor = em > 0 ? kit.fontSize / em : 1;
+        return [width * factor, height * factor] as const;
+      },
     };
   }, [kit]);
 }

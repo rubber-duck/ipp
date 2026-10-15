@@ -1,5 +1,5 @@
 /** Real React → generated client → dataset transport → Plot → completed frame. */
-import { createElement as h } from "react";
+import { createElement as h, Fragment, useLayoutEffect } from "react";
 import {
   canvasOutput,
   f32,
@@ -7,10 +7,9 @@ import {
   type DatasetValue,
   type HostClientBase,
   type RootBinding,
-  type RowsInput,
 } from "@ipp/client";
 import {
-  Asset,
+  FontAsset,
   Animation,
   AnimationAsset,
   BufferDataSourceBinding,
@@ -21,20 +20,33 @@ import {
   PlotFrame2d,
   PlotLegend,
   PlotLine2d,
+  PlotSkinProvider,
+  ShaderAsset,
+  PaintShader,
   assetRef,
-  createRoot,
+  createWorldRoot,
+  useAsset,
+  useDataSource,
+  useEntityId,
+  useField,
+  useWorld,
+  usePlotRows,
+  type ReactAssetState,
+  type ReactDataSourceState,
+  type ReactFieldState,
   plotLegendPlacement,
   plotLegendSize,
   type AnimationHandle,
-  type PlotContract,
-  type PlotLabel,
+  type ReactWorldContract,
   type PlotSeries,
 } from "@ipp/react";
-import { Style } from "@ipp/react/gui";
+import { Paint, Style } from "@ipp/react/gui";
+import { glassSkin } from "@ipp/react/gui-glass";
 import type * as Generated from "@ipp/host-contract";
 import { check, until as untilReady } from "../../harness/page/checks.js";
 
-type Contract = PlotContract & Pick<typeof Generated, "ExpressionBuilder">;
+type Contract = ReactWorldContract &
+  Pick<typeof Generated, "ExpressionBuilder">;
 interface Frame {
   readonly width: number;
   readonly height: number;
@@ -97,22 +109,67 @@ export async function reactPlots(
   capture: Capture,
   record: (label: string, value: unknown) => Promise<void> = async () => {},
 ) {
-  const world = await host.createWorld({
-    temporary: true,
-    symbolicId: "react-plots",
-    canvas: { extent: [1200, 400], unitsPerMetre: 96 },
-    selectedSystems: [
-      "ipp.animation",
-      "ipp.asset-dependencies",
-      "ipp.data-bindings",
-      "ipp.plot",
-      "ipp.canvas",
-      "ipp.lifecycle-publisher",
-    ],
-  });
-  const client = await host.openWorld(world.reference);
-  const root = createRoot(client);
+  const owned = await createWorldRoot(
+    host,
+    {
+      temporary: true,
+      symbolicId: "react-plots",
+      canvas: { extent: [1200, 400], unitsPerMetre: 96 },
+      selectedSystems: [
+        "ipp.animation",
+        "ipp.asset-dependencies",
+        "ipp.data-bindings",
+        "ipp.plot",
+        "ipp.canvas",
+        "ipp.lifecycle-publisher",
+      ],
+    },
+    { contract },
+  );
+  const { world, client, root } = owned;
+  let watchAdds = 0;
+  let watchRemoves = 0;
+  const watchLifecycle = client.watchLifecycle.bind(client);
+  client.watchLifecycle = async (targets, listener) => {
+    const fieldWatch = targets.some(
+      ({ target }) =>
+        target.kind === "value" &&
+        target.component === client.components.PlotFrame2d!.id,
+    );
+    if (fieldWatch) watchAdds++;
+    const watch = await watchLifecycle(targets, listener);
+    return {
+      ...watch,
+      remove: async () => {
+        if (fieldWatch) watchRemoves++;
+        return watch.remove();
+      },
+    };
+  };
   const source = `datasets://react-plots/${client.session}`;
+  let observedAsset: ReactAssetState | undefined;
+  let observedSource: ReactDataSourceState | undefined;
+  let observedField: ReactFieldState | undefined;
+  const observedIds = new Set<string>();
+  let observedFieldName = "width";
+  let targetChangedPending = false;
+  function ScopeProbe() {
+    const scope = useWorld();
+    const id = useEntityId();
+    observedAsset = useAsset("font");
+    observedSource = useDataSource(source);
+    observedField = useField("plot-0", "PlotFrame2d", observedFieldName);
+    if (observedFieldName === "height" && observedField.status === "pending")
+      targetChangedPending = true;
+    useLayoutEffect(() => {
+      observedIds.add(id);
+    });
+    check(
+      scope.client === client && scope.contract === contract,
+      "Hooks resolve the receiving World and target contract",
+    );
+    return null;
+  }
   const builder = new contract.ExpressionBuilder();
   const input = builder.input("column:value", "f32");
   const identity = builder.encode(input);
@@ -120,10 +177,6 @@ export async function reactPlots(
   const scaled = builder.encode(
     builder.binary("multiply", input, builder.input("parameter", "f32")),
   );
-  const series: RowsInput<PlotSeries> = {
-    nextSlot: 5,
-    rows: new Map([[2, { name: "Stable series", x: "x", y: "y" }]]),
-  };
   const cyan = [0, 0.8, 1, 1] as const;
   const yellow = [1, 0.8, 0, 1] as const;
   const categorical = {
@@ -148,21 +201,49 @@ export async function reactPlots(
     );
     return { content, size, placement };
   });
-  const labels: RowsInput<PlotLabel> = {
-    nextSlot: 8,
-    rows: new Map([
-      [
-        7,
-        {
-          series: 2,
+  const glass = glassSkin(
+    contract as unknown as Parameters<typeof glassSkin>[0],
+  );
+  const chartSkin = {
+    ...glass,
+    plots: (scope: string) => ({ paint: glass.plots!(scope).paint! }),
+  };
+  const seriesSlots = new Map<number, number>();
+  function SeriesPlot({ index }: { index: number }) {
+    const value: PlotSeries = {
+      name: categoryLabel,
+      x: "x",
+      y: "y",
+      ...(index === 0 ? { color: categoryColor } : { color_column: "color" }),
+    };
+    const series = usePlotRows([{ key: "stable", value }]);
+    const slot = [...series.rows.keys()][0]!;
+    seriesSlots.set(index, slot);
+    const labels = usePlotRows([
+      {
+        key: "row-two",
+        value: {
+          series: slot,
           row: 2n,
           text: "ROW 2",
           highlighted: true,
-          offset: [20, -25],
+          offset: [20, -25] as const,
         },
-      ],
-    ]),
-  };
+      },
+    ]);
+    const plot = h(PlotLine2d, {
+      series,
+      labels,
+      interpolation: index === 0 ? "straight" : "smooth",
+    });
+    const explicit = h(Paint, { source: assetRef("chart-explicit") });
+    return h(
+      Fragment,
+      null,
+      ...(index === 0 ? [explicit, plot] : [plot, explicit]),
+    );
+  }
+  let playing: boolean | undefined;
   let animation: AnimationHandle | null = null;
   const clip = {
     duration: 1,
@@ -195,115 +276,106 @@ export async function reactPlots(
   try {
     const scene = () =>
       h(
-        DataSource,
-        {
-          name: source,
-          ownership: "producer",
-          datasets: host.datasets,
-          kind: "buffer",
-          schema: [
-            { name: "value", kind: "f32" },
-            { name: "color", kind: "vec4" },
-          ],
-        },
-        h(Asset<Uint8Array<ArrayBuffer>>, {
-          id: "font",
-          kind: 17,
-          data: font,
-          encode: (bytes) => bytes,
-        }),
-        h(ColumnBindingAsset, { id: "identity", definition: identity }),
-        h(ColumnBindingAsset, {
-          id: "color-identity",
-          definition: colorIdentity,
-        }),
-        h(ColumnBindingAsset, { id: "scaled", definition: scaled }),
-        h(AnimationAsset, { id: "parameter-clip", clip }),
-        ...[2, 3].map((parameter, index) =>
+        PlotSkinProvider,
+        { id: "chart-skin", skin: chartSkin },
+        h(
+          DataSource,
+          {
+            name: source,
+            ownership: "producer",
+            datasets: host.datasets,
+            kind: "buffer",
+            schema: [
+              { name: "value", kind: "f32" },
+              { name: "color", kind: "vec4" },
+            ],
+          },
+          h(ScopeProbe),
           h(
-            Entity,
-            { key: index, id: `plot-${index}` },
-            h(Style, { x: 20 + index * 600, y: 35 }),
-            h(PlotFrame2d, {
-              width: 370,
-              height: 340,
-              min_x: 0,
-              max_x: 6,
-              min_y: 0,
-              max_y: 20,
-              automatic_x: false,
-              automatic_y: false,
-              source: assetRef("font"),
-              x_title: "SOURCE",
-              y_title: "EVALUATED",
-              font_size: 14,
-            }),
-            h(BufferDataSourceBinding, {
-              source,
-              columns: {
-                x: { definition: assetRef("identity") },
-                y: {
-                  definition: assetRef("scaled"),
-                  parameter: f32(parameter),
-                },
-                ...(index === 1
-                  ? { color: { definition: assetRef("color-identity") } }
-                  : {}),
-              },
-            }),
-            h(PlotLine2d, {
-              contract,
-              series:
-                index === 0
-                  ? {
-                      nextSlot: series.nextSlot,
-                      rows: new Map([
-                        [2, { ...series.rows.get(2)!, color: categoryColor }],
-                      ]),
-                    }
-                  : {
-                      nextSlot: series.nextSlot,
-                      rows: new Map([
-                        [2, { ...series.rows.get(2)!, color_column: "color" }],
-                      ]),
-                    },
-              labels,
-              interpolation: index === 0 ? "straight" : "smooth",
-            }),
+            ShaderAsset,
+            { id: "chart-explicit", recipe: {}, parameters: {} },
+            h(PaintShader, null, "return color;"),
+          ),
+          h(FontAsset, {
+            id: "font",
+            data: font,
+          }),
+          h(ColumnBindingAsset, { id: "identity", definition: identity }),
+          h(ColumnBindingAsset, {
+            id: "color-identity",
+            definition: colorIdentity,
+          }),
+          h(ColumnBindingAsset, { id: "scaled", definition: scaled }),
+          h(AnimationAsset, { id: "parameter-clip", clip }),
+          ...[2, 3].map((parameter, index) =>
             h(
-              Children,
-              null,
-              h(PlotLegend, {
-                id: `legend-${index}`,
-                font: assetRef("font"),
-                title: "COLOR",
-                width: 180,
-                ...(index === 0
-                  ? {
-                      entries: [
-                        {
-                          id: "stable",
-                          label: categoryLabel,
-                          color: categoryColor,
-                        },
-                      ],
-                    }
-                  : numeric),
-                x: legends[index]!.placement.canvasPosition[0],
-                y: legends[index]!.placement.canvasPosition[1],
+              Entity,
+              { key: index, id: `plot-${index}` },
+              h(Style, { x: 20 + index * 600, y: 35 }),
+              h(PlotFrame2d, {
+                width: 370,
+                height: 340,
+                min_x: 0,
+                max_x: 6,
+                min_y: 0,
+                max_y: 20,
+                automatic_x: false,
+                automatic_y: false,
+                source: assetRef("font"),
+                x_title: "SOURCE",
+                y_title: "EVALUATED",
+                font_size: 14,
               }),
+              h(BufferDataSourceBinding, {
+                source,
+                columns: {
+                  x: { definition: assetRef("identity") },
+                  y: {
+                    definition: assetRef("scaled"),
+                    parameter: f32(parameter),
+                  },
+                  ...(index === 1
+                    ? { color: { definition: assetRef("color-identity") } }
+                    : {}),
+                },
+              }),
+              h(SeriesPlot, { index }),
+              h(
+                Children,
+                null,
+                h(PlotLegend, {
+                  id: `legend-${index}`,
+                  font: assetRef("font"),
+                  title: "COLOR",
+                  width: 180,
+                  ...(index === 0
+                    ? {
+                        entries: [
+                          {
+                            id: "stable",
+                            label: categoryLabel,
+                            color: categoryColor,
+                          },
+                        ],
+                      }
+                    : numeric),
+                  x: legends[index]!.placement.canvasPosition[0],
+                  y: legends[index]!.placement.canvasPosition[1],
+                }),
+              ),
+              ...(index === 0
+                ? [
+                    h(Animation, {
+                      source: assetRef("parameter-clip"),
+                      autoPlay: false,
+                      ...(playing === undefined ? {} : { playing }),
+                      ref: (value) => {
+                        animation = value;
+                      },
+                    }),
+                  ]
+                : []),
             ),
-            ...(index === 0
-              ? [
-                  h(Animation, {
-                    source: assetRef("parameter-clip"),
-                    autoPlay: false,
-                    ref: (value) => {
-                      animation = value;
-                    },
-                  }),
-                ]
-              : []),
           ),
         ),
       );
@@ -323,7 +395,16 @@ export async function reactPlots(
       { operation: "append", rows: [row(1), row(2), row(3)] },
     ]);
     check(!outcome.failure, "React source update rejected");
-    const inspection = await client.inspect();
+    // A provider mounts consumers after its required assets are ready.
+    const inspection = await until(
+      () => client.inspect(),
+      (snapshot) =>
+        [0, 1].every((index) =>
+          snapshot.entities.some(
+            (entity) => entity.metadata.symbolicId === `plot-${index}`,
+          ),
+        ),
+    );
     const entities = [0, 1].map(
       (index) =>
         inspection.entities.find(
@@ -388,6 +469,30 @@ export async function reactPlots(
     // Ready-gated font selections can author source fields after the first
     // commit. Acknowledge those writes before capture requests a new output.
     await root.flush();
+    await until(
+      async () => {
+        await client.waitForFrame();
+        return observedField;
+      },
+      (value) => value?.status === "ready",
+    );
+    check(
+      observedField?.value === 370,
+      "Field hook reports native frame width",
+    );
+    check(
+      observedSource?.status === "ready" && observedSource.handle === handle,
+      "Data source hook observes acknowledged producer ownership",
+    );
+    check(
+      observedAsset?.status === "loaded" &&
+        observedAsset.current?.source === fontReadiness.asset?.current?.source,
+      "Asset hook observes loaded font selection",
+    );
+    check(
+      observedIds.size === 1,
+      "Generated IDs retain identity across readiness renders",
+    );
     await record("react.font-readiness", {
       asset: fontReadiness.asset,
       resource: fontReadiness.resource,
@@ -397,6 +502,23 @@ export async function reactPlots(
       height: 400,
       devicePixelRatio: 1,
     });
+    await until(
+      async () => root.getAsset("chart-explicit"),
+      (asset) => asset?.status === "loaded",
+    );
+    const explicitSource = root.getAsset("chart-explicit")!.current!.source;
+    const painted = await client.inspect();
+    for (const index of [0, 1]) {
+      const entity = painted.entities.find(
+        (entry) => entry.metadata.symbolicId === `plot-${index}`,
+      )!;
+      check(
+        entity.components.some(
+          (component) => component.fields.source === explicitSource,
+        ),
+        `Explicit paint wins over the provider in declaration order ${index}`,
+      );
+    }
     const baseline = await capture("react-plots-baseline", binding);
     for (const start of [0, 600]) {
       let cyan = 0;
@@ -626,6 +748,44 @@ export async function reactPlots(
         colorPixels(updatedFrame, [20, 35, 390, 375], categoryColor) > 80,
       "Rerender applies the same new color to the legend and rendered series",
     );
+    check(
+      Number(watchAdds) === 1 && Number(watchRemoves) === 0,
+      `Routine commits and native value reports reuse one admitted field watch (${watchAdds} adds/${watchRemoves} removals)`,
+    );
+    check(
+      seriesSlots.get(0) === 0 && seriesSlots.get(1) === 0,
+      "Keyed Plot rows retain series slots through color edits",
+    );
+    observedFieldName = "height";
+    await root.render(scene());
+    await until(
+      async () => {
+        await client.waitForFrame();
+        return observedField;
+      },
+      (value) => value?.status === "ready" && value.value === 340,
+    );
+    check(
+      targetChangedPending &&
+        Number(watchAdds) === 2 &&
+        Number(watchRemoves) === 1,
+      "Field target changes clear stale values and replace exactly one watch",
+    );
+    const controller = (await client.inspect()).controllers![0]!;
+    await animation!.playAtSpeed(0);
+    playing = true;
+    await root.render(scene());
+    check(
+      (await client.inspect()).controllers![0]?.state === "playing",
+      "Live playing prop starts the retained native controller",
+    );
+    playing = false;
+    await root.render(scene());
+    const paused = (await client.inspect()).controllers![0]!;
+    check(
+      paused.state === "paused" && paused.id === controller.id,
+      "Live playing prop pauses without controller replacement",
+    );
     await record("react.legend", { legends, categoryLabel, categoryColor });
   } finally {
     try {
@@ -645,15 +805,7 @@ export async function reactPlots(
         "Removing the last chart consumer and producer releases the dataset",
       );
     } finally {
-      try {
-        await root.unmount();
-      } finally {
-        try {
-          await client.close();
-        } finally {
-          await host.destroyWorld(world.reference);
-        }
-      }
+      await owned.dispose();
     }
   }
 }

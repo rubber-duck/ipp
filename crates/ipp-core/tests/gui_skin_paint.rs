@@ -274,10 +274,23 @@ impl Panel {
     /// A control with its own layout in the root row.
     fn laid_out(&mut self, value: ComponentValue, layout: GuiLayout) -> EntityId {
         let parent = self.root_entity;
+        let (theme, _, metrics) =
+            support::skin_fixture::theme(support::skin_fixture::control_name(&value));
+        let theme_entity = self.entity(vec![
+            ComponentValue::GuiTheme(theme),
+            ComponentValue::GuiMetrics(metrics),
+        ]);
         create(
             &mut self.host,
             self.world,
-            vec![value, ComponentValue::GuiLayout(layout)],
+            vec![
+                value,
+                ComponentValue::GuiLayout(layout),
+                ComponentValue::GuiSkin(GuiSkin {
+                    theme: theme_entity,
+                    ..Default::default()
+                }),
+            ],
             Some(parent),
         )
     }
@@ -312,13 +325,46 @@ impl Panel {
     }
 
     fn theme(&mut self, parts: Rows<GuiPaintPart>) -> EntityId {
-        self.entity(vec![ComponentValue::GuiTheme(GuiTheme {
-            parts,
-            ..Default::default()
-        })])
+        self.entity(vec![
+            ComponentValue::GuiTheme(GuiTheme {
+                parts,
+                ..Default::default()
+            }),
+            ComponentValue::GuiMetrics(support::skin_fixture::theme("button").2),
+        ])
     }
 
     fn skin(&mut self, entity: EntityId, theme: EntityId, parts: Rows<GuiPaintPart>) {
+        if theme != EntityId::from_bits(0) {
+            let has_metrics = self
+                .host
+                .world_mut(self.world)
+                .unwrap()
+                .inspect(theme)
+                .is_some_and(|snapshot| {
+                    snapshot
+                        .components
+                        .iter()
+                        .any(|value| matches!(value, ComponentValue::GuiMetrics(_)))
+                });
+            if !has_metrics {
+                self.insert(
+                    theme,
+                    ComponentValue::GuiMetrics(support::skin_fixture::theme("button").2),
+                );
+            }
+        }
+        if theme == EntityId::from_bits(0) {
+            self.insert(
+                entity,
+                ComponentValue::GuiMetrics(ipp_core::components::GuiMetrics {
+                    thumb_ratio: 0.75,
+                    checkbox_ratio: 0.5,
+                    icon_ratio: 0.55,
+                    ..Default::default()
+                }),
+            );
+        }
         self.insert(
             entity,
             ComponentValue::GuiSkin(GuiSkin {
@@ -738,6 +784,7 @@ fn cut_corners_accents_strokes_and_inner_glow_resolve_per_property_through_state
     panel.present();
 
     let frame_shape = CanvasBoxShape::Rect {
+        section: None,
         corner_cut: [6.0, 0.0, 6.0, 0.0],
         corner_accent: [0.0, 8.0, 0.0, 8.0],
         corner_accent_width: 3.0,
@@ -785,6 +832,7 @@ fn cut_corners_accents_strokes_and_inner_glow_resolve_per_property_through_state
     assert_eq!(
         painted_box(part_of(&idle, checkbox, CanvasPart::Background)).shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [0.0; 4],
             corner_accent: [4.0; 4],
             corner_accent_width: 1.5,
@@ -825,6 +873,7 @@ fn cut_corners_accents_strokes_and_inner_glow_resolve_per_property_through_state
     assert_eq!(
         painted_box(part_of(&panel.canvas(), button, CanvasPart::Background)).shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [0.0; 4],
             corner_accent: [0.0, 8.0, 0.0, 8.0],
             corner_accent_width: 3.0,
@@ -1051,9 +1100,8 @@ fn background_label_icon_and_focus_ring_resolve_as_independent_parts() {
     assert_eq!(style.color, [0.0, 0.0, 1.0, 1.0]);
     let ring = painted_box(part_of(&canvas, button, CanvasPart::FocusRing));
     assert_eq!(ring.border_color, [0.0, 1.0, 0.0, 1.0]);
-    // The theme recolours the ring; its width is the lit line of the button's
-    // default look, 1.5 at the looks' 16-unit em drawn at this 10-unit font.
-    assert!((ring.border_width - 1.5 * 10.0 / 16.0).abs() < 1e-6);
+    // An authored focus colour does not introduce an unauthored line width.
+    assert_eq!(ring.border_width, 0.0);
     assert_eq!(ring.fill, CanvasShapeFill::Solid([0.0; 4]));
     assert_eq!(ring.size, [50.0, 20.0]);
 
@@ -1094,8 +1142,8 @@ fn background_label_icon_and_focus_ring_resolve_as_independent_parts() {
     let untouched = painted_box(part_of(&hovered, button, CanvasPart::Background));
     assert_eq!(untouched.fill, CanvasShapeFill::Solid([1.0, 0.0, 0.0, 1.0]));
     assert_eq!(untouched.opacity, 1.0);
-    // The theme sets no border, so the button keeps its default idle line.
-    assert!((untouched.border_width - 1.25 * 10.0 / 16.0).abs() < 1e-6);
+    // The theme sets no border.
+    assert_eq!(untouched.border_width, 0.0);
     assert!(Arc::ptr_eq(&before.entries[0], &hovered.entries[0]));
     assert_eq!(before.layout_revision, hovered.layout_revision);
 }
@@ -1148,7 +1196,7 @@ fn label_skin_assets_are_rejected_so_the_measured_font_never_swaps() {
         label: "AA".into(),
         ..Default::default()
     }));
-    let theme = panel.theme(Rows::new());
+    let theme = panel.theme(rows([row(GuiPartId::base(GuiPrimitivePart::Label))]));
     panel.skin(button, theme, Rows::new());
     panel.load(|_| support::canvas_font_bytes(), 1);
     let measured = panel.canvas();
@@ -1599,10 +1647,14 @@ fn checkbox_indicator_alignment_clamps_to_its_end_cells() {
 fn slider_fill_spans_the_rail_start_to_the_thumb_centre_with_a_stable_identity() {
     let mut panel = Panel::new();
     let slider = panel.control(ComponentValue::GuiSlider(GuiSlider::default()));
-    let theme = panel.theme(rows([GuiPaintPart {
-        color: Some([0.2, 0.9, 0.8, 1.0]),
-        ..row(GuiPartId::base(GuiPrimitivePart::Fill))
-    }]));
+    let theme = panel.theme(rows([
+        GuiPaintPart {
+            color: Some([0.2, 0.9, 0.8, 1.0]),
+            ..row(GuiPartId::base(GuiPrimitivePart::Fill))
+        },
+        row(GuiPartId::base(GuiPrimitivePart::Background)),
+        row(GuiPartId::base(GuiPrimitivePart::Icon)),
+    ]));
     panel.skin(slider, theme, Rows::new());
     panel.frame();
     // The 50 x 20 slider carries a 15 x 15 thumb whose centre travels from 7.5
@@ -1768,7 +1820,7 @@ fn drawing_skin_asset_fits_its_view_box_to_the_scaled_part() {
 }
 
 #[test]
-fn control_backgrounds_sit_on_their_default_look_and_transparent_colours_stay_transparent() {
+fn explicit_empty_background_properties_are_neutral_and_transparent_colours_stay_transparent() {
     let mut panel = Panel::new();
     // The looks' em, so their lengths are the design language's.
     let root = panel.root_entity;
@@ -1781,14 +1833,10 @@ fn control_backgrounds_sit_on_their_default_look_and_transparent_colours_stay_tr
     }]));
     panel.skin(button, theme, Rows::new());
     panel.frame();
-    // An ordinary control always paints its background: an opacity-only row
-    // fades the default look's interior (sRGB #00131c) and keeps its line.
+    // An opacity-only row explicitly enables a neutral white, borderless box.
     let painted = painted_box(part_of(&panel.canvas(), button, CanvasPart::Background));
-    assert_eq!(
-        painted.fill,
-        CanvasShapeFill::Solid([0.0, 0.006_512_090_6, 0.011_612_245, 1.0])
-    );
-    assert_eq!(painted.border_width, 1.25);
+    assert_eq!(painted.fill, CanvasShapeFill::Solid([1.0; 4]));
+    assert_eq!(painted.border_width, 0.0);
     assert_eq!(painted.opacity, 0.5);
     assert_eq!(painted.scale, [1.0, 1.0]);
 
@@ -2365,16 +2413,13 @@ fn a_state_only_icon_paints_only_in_its_state_with_one_identity() {
     }]));
     panel.skin(button, theme, Rows::new());
     panel.present();
-    assert_eq!(parts_of(&panel.canvas(), button), [CanvasPart::Background]);
+    assert!(parts_of(&panel.canvas(), button).is_empty());
 
     let mut lease = None;
     panel.feedback(button, &mut lease, GuiInteractionUpdate::Hover(true));
     panel.frame();
     let hovered = panel.canvas();
-    assert_eq!(
-        parts_of(&hovered, button),
-        [CanvasPart::Background, CanvasPart::Icon]
-    );
+    assert_eq!(parts_of(&hovered, button), [CanvasPart::Icon]);
     let icon = part_of(&hovered, button, CanvasPart::Icon);
     assert_eq!(
         painted_box(icon).fill,
@@ -2387,7 +2432,7 @@ fn a_state_only_icon_paints_only_in_its_state_with_one_identity() {
 
     panel.feedback(button, &mut lease, GuiInteractionUpdate::Hover(false));
     panel.frame();
-    assert_eq!(parts_of(&panel.canvas(), button), [CanvasPart::Background]);
+    assert!(parts_of(&panel.canvas(), button).is_empty());
     panel.feedback(button, &mut lease, GuiInteractionUpdate::Hover(true));
     panel.frame();
     assert_eq!(
@@ -2601,6 +2646,7 @@ fn a_skinned_entity_that_is_not_a_control_paints_its_base_background_before_its_
     assert_eq!(
         painted.shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [0.0; 4],
             corner_accent: [12.0; 4],
             corner_accent_width: 3.0,
@@ -2733,6 +2779,7 @@ fn a_skinned_canvas_box_paints_once_through_its_skin_over_its_size_or_its_layout
     assert_eq!(
         painted.shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [4.0, 0.0, 4.0, 0.0],
             corner_accent: [0.0; 4],
             corner_accent_width: 0.0,
@@ -3076,12 +3123,12 @@ fn colour_field_and_checker_rows_resolve_per_property_through_states() {
         };
         checker
     };
-    // Absent colours are the light and mid greys of sRGB #CCCCCC and #999999.
+    // Explicit checker geometry with no colours uses neutral white and black.
     assert_eq!(
         checker(alpha_box.shape),
         Some(CanvasShapeChecker {
             size: 6.0,
-            colors: [srgb(0xCCCCCC), srgb(0x999999)],
+            colors: [[1.0; 4], [0.0, 0.0, 0.0, 1.0]],
         })
     );
     assert_eq!(checker(painted(&canvas, unchecked).shape), None);
@@ -3095,6 +3142,7 @@ fn colour_field_and_checker_rows_resolve_per_property_through_states() {
     assert_eq!(
         swatch_box.shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [0.0; 4],
             corner_accent: [8.0; 4],
             corner_accent_width: swatch_box.border_width,
@@ -3330,6 +3378,7 @@ fn part_glow(intensity: f32, reach: f32) -> Option<CanvasShapeGlow> {
 
 fn cut(corner_cut: [f32; 4]) -> CanvasBoxShape {
     CanvasBoxShape::Rect {
+        section: None,
         corner_cut,
         corner_accent: [0.0; 4],
         corner_accent_width: 0.0,
@@ -3342,7 +3391,7 @@ fn label_color(canvas: &CanvasPublication, entity: EntityId) -> [f32; 4] {
 }
 
 #[test]
-fn an_unthemed_button_paints_the_reference_look_in_every_state() {
+fn an_explicit_fixture_button_paints_the_reference_look_in_every_state() {
     let mut panel = Panel::new();
     panel.font(16.0);
     let size = GuiLayout {
@@ -3605,20 +3654,19 @@ fn theme_rows_of_the_checked_variants_style_selected_and_unselected_buttons() {
     assert_eq!(background(selected), CanvasShapeFill::Solid(red));
     assert_eq!(background(unselected), CanvasShapeFill::Solid(blue));
 
-    // A property the theme leaves to the default look keeps the look's
-    // selected row: the accent line.
+    // No border colour is inherited from another skin.
     assert_eq!(
         painted_box(part_of(&canvas, selected, CanvasPart::Background)).border_color,
-        srgb(ACCENT)
+        [0.0; 4]
     );
     assert_eq!(
         painted_box(part_of(&canvas, unselected, CanvasPart::Background)).border_color,
-        srgb(NEUTRAL)
+        [0.0; 4]
     );
 }
 
 #[test]
-fn unthemed_checkboxes_and_sliders_paint_their_reference_looks() {
+fn explicit_fixture_checkboxes_and_sliders_paint_their_reference_looks() {
     let mut panel = Panel::new();
     let root = panel.root_entity;
     panel.font_size(root, 16.0);
@@ -3716,7 +3764,7 @@ fn close(left: &[f32], right: &[f32]) -> bool {
 }
 
 #[test]
-fn an_unthemed_dial_paints_its_rings_inside_a_cut_housing() {
+fn an_explicit_fixture_dial_paints_its_rings_inside_a_cut_housing() {
     let mut panel = Panel::new();
     let root = panel.root_entity;
     panel.font_size(root, 16.0);
@@ -3895,7 +3943,7 @@ fn an_unthemed_dial_paints_its_rings_inside_a_cut_housing() {
 }
 
 #[test]
-fn a_partial_theme_sits_on_the_default_look_property_by_property() {
+fn a_partial_theme_has_no_implicit_skin_in_any_state() {
     let mut panel = Panel::new();
     let root = panel.root_entity;
     panel.font_size(root, 16.0);
@@ -3915,26 +3963,23 @@ fn a_partial_theme_sits_on_the_default_look_property_by_property() {
     }]));
     panel.skin(button, theme, Rows::new());
     panel.present();
-    let frame = cut([8.0, 0.0, 8.0, 0.0]);
+    let frame = CanvasBoxShape::RECT;
 
-    // The theme's colour replaces the default interior; the line and the cut
-    // stay the default look's.
+    // The authored colour enables only the background; no line or cut is implicit.
     let painted = painted_box(part_of(&panel.canvas(), button, CanvasPart::Background));
     assert_eq!(painted.fill, CanvasShapeFill::Solid(red));
-    assert_eq!(painted.border_width, 1.25);
+    assert_eq!(painted.border_width, 0.0);
     assert_eq!(painted.shape, frame);
 
-    // Every theme row comes before every default row: the theme's base colour
-    // also wins over the default pressed fill, while the default pressed rim
-    // and glow fill in what the theme leaves absent.
+    // Hover and press cannot introduce an unauthored rim or glow.
     let mut lease = None;
     panel.feedback(button, &mut lease, GuiInteractionUpdate::Hover(true));
     panel.feedback(button, &mut lease, GuiInteractionUpdate::Press);
     panel.frame();
     let painted = painted_box(part_of(&panel.canvas(), button, CanvasPart::Background));
     assert_eq!(painted.fill, CanvasShapeFill::Solid(red));
-    assert_eq!(painted.border_color, srgb(ACCENT));
-    assert_eq!(painted.glow, edge_glow(0.02));
+    assert_eq!(painted.border_color, [0.0; 4]);
+    assert_eq!(painted.glow, None);
 
     // An override wins over both in every state.
     panel.skin(
@@ -3954,7 +3999,7 @@ fn a_partial_theme_sits_on_the_default_look_property_by_property() {
 }
 
 #[test]
-fn the_built_in_switch_look_is_an_ordinary_theme_for_a_checkbox() {
+fn the_explicit_switch_look_is_an_ordinary_theme_for_a_checkbox() {
     let mut panel = Panel::new();
     let rail = GuiLayout {
         width: 72.0,
@@ -3969,7 +4014,7 @@ fn the_built_in_switch_look_is_an_ordinary_theme_for_a_checkbox() {
         }),
         rail,
     );
-    let look = ipp_core::systems::gui::gui_skin_looks()
+    let look = support::skin_fixture::gui_skin_looks()
         .iter()
         .find(|look| look.name == "switch")
         .unwrap();
@@ -3999,7 +4044,7 @@ fn the_built_in_switch_look_is_an_ordinary_theme_for_a_checkbox() {
 }
 
 #[test]
-fn default_looks_paint_only_boxes_and_glyphs_and_demand_no_drawing() {
+fn explicit_looks_paint_only_boxes_and_glyphs_and_demand_no_drawing() {
     let mut panel = Panel::new();
     panel.font(10.0);
     let controls = [
@@ -4216,6 +4261,7 @@ fn a_canvas_paint_fills_the_background_part_with_its_row_colour_and_nothing_else
     let CanvasShapeFill::Paint {
         color,
         paint: target,
+        ..
     } = painted.fill
     else {
         panic!(
@@ -4582,6 +4628,7 @@ fn a_colour_control_paints_its_surfaces_and_swatch_from_one_value() {
     assert!(matches!(
         painted(CanvasPart::PartIcon(1)).shape,
         CanvasBoxShape::Rect {
+            section: None,
             corner_cut: [2.0, 0.0, 2.0, 0.0],
             ..
         }
@@ -4719,5 +4766,184 @@ fn a_disabled_colour_control_dims_its_surfaces_and_keeps_its_swatch() {
     support::gui_panel::assert_near(&swatch, &[0.0, 1.0, 1.0, 1.0]);
     for part in [CanvasPart::Marker, CanvasPart::PartIcon(1)] {
         assert_eq!(painted(part).border_color, srgb(NEUTRAL), "{part:?}");
+    }
+}
+
+#[test]
+fn theme_parts_share_one_paint_and_outset_preserves_original_coordinates_and_hits() {
+    let mut panel = Panel::new();
+    let paint = |source: &str| {
+        ComponentValue::CanvasPaint(ipp_core::components::CanvasPaint {
+            source: source.into(),
+            ..Default::default()
+        })
+    };
+    let theme = panel.theme(rows(
+        [
+            GuiPrimitivePart::Background,
+            GuiPrimitivePart::Fill,
+            GuiPrimitivePart::Icon,
+        ]
+        .map(|part| GuiPaintPart {
+            paint: Some(true),
+            paint_data: Some([0.25, 0.5, 0.0, 1.0]),
+            outset: Some([2.0, 3.0]),
+            ..row(GuiPartId::base(part))
+        }),
+    ));
+    panel.insert(theme, paint("paint:///shared"));
+    let slider = panel.control(ComponentValue::GuiSlider(GuiSlider {
+        value: 0.5,
+        ..Default::default()
+    }));
+    panel.skin(slider, theme, Rows::new());
+    panel.frame();
+    let canvas = panel.canvas();
+    assert_eq!(canvas.paints.len(), 1);
+    assert_eq!(canvas.paints[0].target.entity, theme);
+    let hit = canvas
+        .hits
+        .iter()
+        .find(|hit| hit.target.entity == slider)
+        .unwrap()
+        .clone();
+    for part in [CanvasPart::Background, CanvasPart::Fill, CanvasPart::Icon] {
+        let painted = painted_box(part_of(&canvas, slider, part));
+        let CanvasShapeFill::Paint {
+            paint,
+            data,
+            bounds: Some(bounds),
+            ..
+        } = painted.fill
+        else {
+            panic!("{part:?} must use the shared paint");
+        };
+        assert_eq!(paint.entity, theme);
+        assert_eq!(data, [0.25, 0.5, 0.0, 1.0]);
+        assert_eq!(&bounds[..2], &[2.0, 3.0]);
+        assert_eq!(painted.size, [bounds[2] + 4.0, bounds[3] + 6.0]);
+    }
+    // An explicit false row suppresses the theme and an entity Background paint.
+    panel.insert(slider, paint("paint:///own"));
+    panel.skin(
+        slider,
+        theme,
+        rows([GuiPaintPart {
+            paint: Some(false),
+            ..row(GuiPartId::base(GuiPrimitivePart::Background))
+        }]),
+    );
+    panel.frame();
+    let overridden = panel.canvas();
+    assert!(matches!(
+        painted_box(part_of(&overridden, slider, CanvasPart::Background)).fill,
+        CanvasShapeFill::Solid(_)
+    ));
+    assert_eq!(
+        overridden
+            .hits
+            .iter()
+            .find(|hit| hit.target.entity == slider)
+            .unwrap()
+            .bounds,
+        hit.bounds
+    );
+    // A true override instead binds the control's own paint, leaving other parts shared.
+    panel.skin(
+        slider,
+        theme,
+        rows([GuiPaintPart {
+            paint: Some(true),
+            ..row(GuiPartId::base(GuiPrimitivePart::Icon))
+        }]),
+    );
+    panel.frame();
+    let overridden = panel.canvas();
+    assert_eq!(overridden.paints.len(), 2);
+    assert!(
+        matches!(painted_box(part_of(&overridden, slider, CanvasPart::Icon)).fill, CanvasShapeFill::Paint { paint, .. } if paint.entity == slider)
+    );
+    // Removal drops exact component lifetimes, and replacement binds a fresh one.
+    let previous = canvas.paints[0].target;
+    panel
+        .apply(vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(theme),
+            component: ComponentValue::CANVAS_PAINT,
+        }])
+        .result
+        .unwrap();
+    panel.frame();
+    assert!(
+        panel
+            .canvas()
+            .paints
+            .iter()
+            .all(|paint| paint.target != previous)
+    );
+    panel.insert(theme, paint("paint:///replacement"));
+    panel.frame();
+    let replacement = panel.canvas();
+    let current = replacement
+        .paints
+        .iter()
+        .find(|paint| paint.target.entity == theme)
+        .unwrap()
+        .target;
+    assert_ne!(previous.incarnation, current.incarnation);
+}
+
+#[test]
+fn decorative_outset_preserves_face_origin_with_unequal_part_scale() {
+    let mut panel = Panel::new();
+    let appearance = |outset| {
+        rows([GuiPaintPart {
+            paint: Some(true),
+            scale: Some([1.5, 0.75]),
+            outset: Some(outset),
+            ..row(GuiPartId::base(GuiPrimitivePart::Icon))
+        }])
+    };
+    let theme = panel.theme(appearance([0.0, 0.0]));
+    panel.insert(
+        theme,
+        ComponentValue::CanvasPaint(ipp_core::components::CanvasPaint {
+            source: "paint:///shared".into(),
+            ..Default::default()
+        }),
+    );
+    let slider = panel.control(ComponentValue::GuiSlider(GuiSlider {
+        value: 0.5,
+        ..Default::default()
+    }));
+    panel.skin(slider, theme, Rows::new());
+    panel.frame();
+    let original = painted_box(part_of(&panel.canvas(), slider, CanvasPart::Icon));
+    for outset in [[3.0, 2.0], [8.0, 5.0], [-1.0, -0.5]] {
+        panel.insert(
+            theme,
+            ComponentValue::GuiTheme(GuiTheme {
+                parts: appearance(outset),
+                ..Default::default()
+            }),
+        );
+        panel.frame();
+        let painted = painted_box(part_of(&panel.canvas(), slider, CanvasPart::Icon));
+        let CanvasShapeFill::Paint {
+            bounds: Some(bounds),
+            ..
+        } = painted.fill
+        else {
+            panic!("the scaled part must retain its original shader bounds");
+        };
+        assert_eq!(painted.scale, original.scale);
+        for axis in 0..2 {
+            assert_eq!(
+                painted.position[axis] + bounds[axis] * painted.scale[axis],
+                original.position[axis],
+                "outset {outset:?}, axis {axis}"
+            );
+            assert_eq!(bounds[axis + 2], original.size[axis]);
+            assert_eq!(painted.size[axis], original.size[axis] + 2.0 * outset[axis]);
+        }
     }
 }

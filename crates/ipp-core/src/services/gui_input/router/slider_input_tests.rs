@@ -1,14 +1,14 @@
 //! Slider input beyond the horizontal rail: a vertical slider's drags, track
 //! presses and keys with its minimum at the bottom, Shift's fine step, the
-//! wheel, which steps a slider only while it holds focus and otherwise
-//! scrolls the scroll view around it, and a dial's relative vertical drags.
+//! wheel, which steps the slider under the pointer without moving focus and
+//! otherwise scrolls the scroll view around it, and a dial's relative drags.
 
-use crate::components::{GuiScrollView, GuiSlider};
+use crate::components::{GuiBehavior, GuiScrollView, GuiSlider};
 use crate::services::gui_input::router::*;
 use crate::services::gui_input::routing_test_support::*;
 use crate::services::gui_input::test_support::*;
 use crate::systems::gui::local::controls::slider::slider_rail;
-use crate::{ComponentValue, EntityId, WorldRef};
+use crate::{Command, ComponentValue, EntityId, EntityRef, WorldRef};
 
 use GuiPhysicalKey::{Down, End, Home, Left, Right, Tab, Up};
 
@@ -44,7 +44,10 @@ fn vertical_scene(slider: GuiSlider) -> (Rig, WorldRef, EntityId) {
 /// fraction.
 fn thumb_centre(rig: &mut Rig, world: WorldRef, entity: EntityId, fraction: f32) -> [f32; 2] {
     let rect = rig.bounds(world, entity);
-    let thumb = slider_rail(rect, 1).unwrap().thumb_rect(fraction).unwrap();
+    let thumb = slider_rail(rect, 1, 0.75)
+        .unwrap()
+        .thumb_rect(fraction)
+        .unwrap();
     rig.logical([thumb[0] + thumb[2] * 0.5, thumb[1] + thumb[3] * 0.5])
 }
 
@@ -212,19 +215,65 @@ const ON_SLIDER: [f32; 2] = [3.0, 1.0];
 const BELOW: [f32; 2] = [3.0, 4.0];
 
 #[test]
-fn the_wheel_over_an_unfocused_slider_scrolls_its_scroll_view() {
+fn the_wheel_steps_an_unfocused_slider_without_scrolling_or_taking_focus() {
     let mut scene = Scrolled::new();
-    let view = scene.rig.snapshot(scene.world, scene.view).target;
+    let target = scene.rig.snapshot(scene.world, scene.slider).target;
     assert_eq!(
         scene.wheel(ON_SLIDER, [0.0, 1.0], false),
         GuiRoutingDisposition::Routed {
-            target: view
+            target
         }
     );
-    assert_eq!(scene.state(), (5.0, 1.0));
+    assert_eq!(scene.state(), (4.0, 0.0));
+    assert_eq!(
+        scene.rig.ledger.borrow().wheel_hits,
+        vec![(target, Vec::new())]
+    );
+    assert!(
+        !scene
+            .rig
+            .snapshot(scene.world, scene.slider)
+            .interaction
+            .hovered
+    );
+    assert!(!scene.rig.snapshot(scene.world, scene.slider).focused);
     scene.wheel(ON_SLIDER, [0.0, -1.0], true);
-    assert_eq!(scene.state(), (5.0, 0.0));
-    assert!(scene.rig.commits().is_empty());
+    assert_eq!(scene.state(), (4.25, 0.0));
+    scene.wheel(BELOW, [0.0, 1.0], false);
+    assert_eq!(scene.state(), (4.25, 1.0));
+    assert!(!scene.rig.snapshot(scene.world, scene.slider).focused);
+    scene.rig.finish();
+}
+
+#[test]
+fn disabled_or_removed_sliders_leave_the_wheel_to_the_scroll_view() {
+    let mut scene = Scrolled::new();
+    apply(
+        &mut scene.rig.host,
+        scene.world,
+        vec![Command::insert_value(
+            EntityRef::Handle(scene.slider),
+            ComponentValue::GuiBehavior(GuiBehavior {
+                enabled: false,
+                ..Default::default()
+            }),
+        )],
+    );
+    scene.rig.frame();
+    scene.wheel(ON_SLIDER, [0.0, 1.0], false);
+    assert_eq!(scene.state(), (5.0, 1.0));
+    apply(
+        &mut scene.rig.host,
+        scene.world,
+        vec![Command::RemoveComponent {
+            entity: EntityRef::Handle(scene.slider),
+            component: ComponentValue::GUI_SLIDER,
+        }],
+    );
+    scene.rig.frame();
+    scene.wheel(ON_SLIDER, [0.0, 1.0], false);
+    assert_eq!(scene.rig.scroll(scene.world, scene.view)[1], 2.0);
+    assert!(scene.rig.rejected().is_empty());
     scene.rig.finish();
 }
 
@@ -285,6 +334,29 @@ fn dial_scene(slider: GuiSlider) -> (Rig, WorldRef, EntityId) {
         Some(root_entity),
     );
     (Rig::new(host, root, viewport(100, 120)), world, entity)
+}
+
+#[test]
+fn a_hovered_dial_takes_wheel_steps_and_bounds_without_taking_focus() {
+    let (mut rig, world, entity) = dial_scene(slider(2, 9.0));
+    let point = within(&mut rig, world, entity, [0.5, 0.5]);
+    let target = rig.snapshot(world, entity).target;
+    for (delta, shift, expected) in [(-1.0, false, 10.0), (-1.0, false, 10.0), (1.0, true, 9.75)] {
+        assert_eq!(
+            rig.send(GuiPhysicalInput::Wheel {
+                point,
+                delta: [0.0, delta],
+                shift
+            }),
+            GuiRoutingDisposition::Routed {
+                target
+            }
+        );
+        assert_eq!(scalar(&mut rig, world, entity), expected);
+        assert!(!rig.snapshot(world, entity).focused);
+    }
+    assert!(rig.rejected().is_empty());
+    rig.finish();
 }
 
 /// Normalized viewport point at a fraction of a control's box.
@@ -363,4 +435,19 @@ fn a_dial_steps_by_keys_as_every_slider_does() {
     }
     assert_eq!(values, [6.0, 5.0, 5.25, 5.0, 6.0, 10.0, 0.0]);
     rig.finish();
+}
+
+#[test]
+fn wheel_hit_reservation_failure_admits_no_value_action() {
+    let mut scene = Scrolled::new();
+    scene.rig.ledger.borrow_mut().fail_hit = true;
+    let point = scene.rig.logical(ON_SLIDER);
+    assert_eq!(
+        scene.rig.route(wheel(point, [0.0, 1.0])),
+        Err(GuiInputError::Capacity)
+    );
+    scene.rig.frame();
+    assert_eq!(scene.state(), (5.0, 0.0));
+    assert!(scene.rig.ledger.borrow().wheel_hits.is_empty());
+    scene.rig.finish();
 }

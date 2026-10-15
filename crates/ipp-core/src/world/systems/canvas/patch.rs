@@ -27,7 +27,7 @@ use super::*;
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::gui::presentation::{GuiControlObservation, GuiOverlayObservation};
 use crate::world::WorldSimulationState;
-use crate::{ComponentValue, EntityId, OutputRef};
+use crate::{EntityId, OutputRef};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -197,7 +197,7 @@ impl CanvasSystem {
             .iter()
             .filter(|paint| self.state.patch.paints.contains(&paint.target.entity))
             .all(|paint| {
-                incarnation(world, paint.target.entity, ComponentValue::CANVAS_PAINT)
+                incarnation(world, paint.target.entity, paint.target.component)
                     == Some(paint.target.incarnation)
             })
     }

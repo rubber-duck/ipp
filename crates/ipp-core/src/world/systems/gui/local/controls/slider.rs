@@ -38,10 +38,6 @@
 //! that reaches a bound continues from that bound, so reversing direction
 //! responds at once. Drags snap to the step as rail drags do.
 
-/// Slider-thumb edge as a fraction of the control's smaller side, which
-/// leaves finite centre travel on narrow controls.
-const SLIDER_THUMB_EDGE: f32 = 0.75;
-
 /// Shared slider geometry for paint and pointer-to-value routing.
 ///
 /// The contained thumb travels by its centre between `centers[0]` at the
@@ -160,11 +156,11 @@ impl GuiSliderRail {
 /// Resolve the finite contained-thumb geometry for one retained slider rect
 /// whose value runs along `axis`: 0 for x, 1 for y with the minimum at the
 /// bottom.
-pub(crate) fn slider_rail(rect: [f32; 4], axis: usize) -> Option<GuiSliderRail> {
+pub(crate) fn slider_rail(rect: [f32; 4], axis: usize, thumb_ratio: f32) -> Option<GuiSliderRail> {
     if !rect.iter().all(|value| value.is_finite()) || rect[2] <= 0.0 || rect[3] <= 0.0 || axis > 1 {
         return None;
     }
-    let thumb_edge = rect[2].min(rect[3]) * SLIDER_THUMB_EDGE;
+    let thumb_edge = rect[2].min(rect[3]) * thumb_ratio.clamp(0.0, 1.0);
     let low = rect[axis] + thumb_edge * 0.5;
     let high = rect[axis] + rect[axis + 2] - thumb_edge * 0.5;
     let across = 1 - axis;
@@ -191,12 +187,6 @@ pub(crate) const DIAL_SWEEP: f32 = 0.75;
 /// in dial sides: the control's size, and with it the skin's em, sets the
 /// drag's sensitivity.
 pub(crate) const DIAL_DRAG_SIDES: f32 = 2.5;
-
-/// Margin of the tick ring from the dial square's edge, in ems.
-pub(crate) const DIAL_INSET_EMS: f32 = 0.5;
-
-/// Gap between the tick ring and the value ring, in ems.
-const DIAL_GAP_EMS: f32 = 0.25;
 
 /// Shared dial geometry for paint and drag routing: the square the dial
 /// draws in and the value-to-angle mapping.
@@ -247,16 +237,21 @@ impl GuiSliderDial {
         ]
     }
 
-    /// Outer radius of the tick ring for a control font of `font_size`.
-    pub(crate) fn ticks_radius(self, font_size: f32) -> f32 {
-        (self.side * 0.5 - DIAL_INSET_EMS * font_size).max(0.0)
+    /// Outer radius of the tick ring after the authored inset.
+    pub(crate) fn ticks_radius(self, inset: f32) -> f32 {
+        (self.side * 0.5 - inset).max(0.0)
     }
 
     /// Radius of the value ring's centre line inside ticks `tick_length` long
     /// and around a value arc `value_width` thick.
-    pub(crate) fn ring_radius(self, font_size: f32, tick_length: f32, value_width: f32) -> f32 {
-        let gap = DIAL_GAP_EMS * font_size;
-        (self.ticks_radius(font_size) - tick_length - gap - value_width * 0.5).max(0.0)
+    pub(crate) fn ring_radius(
+        self,
+        inset: f32,
+        gap: f32,
+        tick_length: f32,
+        value_width: f32,
+    ) -> f32 {
+        (self.ticks_radius(inset) - tick_length - gap - value_width * 0.5).max(0.0)
     }
 }
 

@@ -41,6 +41,7 @@ fn style(position: [f32; 2], scale: [f32; 2]) -> CanvasPrimitiveStyle {
 
 fn checker_rect(checker: Option<CanvasShapeChecker>, accent: [f32; 4]) -> CanvasBoxShape {
     CanvasBoxShape::Rect {
+        section: None,
         corner_cut: [0.0; 4],
         corner_accent: accent,
         corner_accent_width: 3.0,
@@ -895,6 +896,8 @@ fn paint_fill() -> CanvasShapeFill {
             component: ipp_core::ComponentValue::CANVAS_PAINT,
             incarnation: 1,
         },
+        data: [0.0; 4],
+        bounds: None,
     }
 }
 
@@ -980,4 +983,38 @@ fn a_paint_without_lanes_draws_its_colour_and_lanes_change_the_hash_but_values_c
     assert_ne!(hash(Some(first)), hash(Some(moved)));
     assert_ne!(hash(Some(first)), hash(None));
     assert_eq!(hash(Some(first)), hash(Some(first)));
+}
+
+#[test]
+fn expanded_paint_retains_original_part_coordinates_and_per_part_data() {
+    let mut fill = paint_fill();
+    let CanvasShapeFill::Paint {
+        data,
+        bounds,
+        ..
+    } = &mut fill
+    else {
+        unreachable!()
+    };
+    *data = [0.25, 0.5, 0.0, 1.0];
+    *bounds = Some([2.0, 3.0, 40.0, 10.0]);
+    let record = painted_box_records(
+        &style([10.0, 20.0], [-2.0, 2.0]),
+        &[44.0, 16.0],
+        &[0.0; 2],
+        1.0,
+        &[0.0; 4],
+        &fill,
+        None,
+        &CanvasBoxShape::RECT,
+        CLIP,
+        Some(GuiPaintLanes {
+            slot: 1,
+            block: 2,
+        }),
+    )[0];
+    assert_eq!(record.paint_data, [0.25, 0.5, 0.0, 1.0]);
+    let (_, _, position, size, ..) = shader_paint_inputs(&record, [10.0, 20.0], 0.0);
+    assert_eq!(position, [-2.0, -3.0]);
+    assert_eq!(size, [40.0, 10.0]);
 }

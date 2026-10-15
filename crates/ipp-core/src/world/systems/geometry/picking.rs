@@ -147,10 +147,14 @@ impl<'a> GeometryQueryAccess<'a> {
             query,
         )?;
 
+        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
         let mut nearest: Option<(f64, GeometryPickHit)> = None;
         let mut intervals = Vec::new();
         // Entity ordering and stable authored part order resolve exact ties.
         for &entity in self.world.state.entities.keys() {
+            if !presentation.open(self.world, entity) {
+                continue;
+            }
             let Some(value) = self
                 .world
                 .components

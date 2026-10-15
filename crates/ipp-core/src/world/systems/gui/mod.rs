@@ -34,6 +34,6 @@ pub use local::MAX_GUI_TEXT_BYTES;
 pub(crate) use local::controls::slider::slider_rail;
 pub use presentation::{
     GUI_BASE_PARTS, GuiPartId, GuiPartProperty, GuiPartStyle, GuiPartVariant, GuiPrimitivePart,
-    GuiSkinLook, GuiSkinState, gui_skin_looks,
+    GuiSkinState,
 };
 pub use system::{GuiSystem, GuiSystemFactory};

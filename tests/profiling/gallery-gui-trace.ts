@@ -11,14 +11,11 @@ import type { HostContract, HostState } from "../../tools/shared-host/host.js";
 import { runBrowserEnvironment } from "../harness/browser.js";
 import { runNativeEnvironment } from "../harness/native.js";
 import {
-  galleryEnvironment,
-  openGallery,
-} from "../gallery/drivers/browser-gallery.js";
-import { controlPoint, gainFraction } from "../gallery/gallery-gui-oracle.js";
-import { awaitStationIdle } from "../gallery/support/gallery-gui.js";
+  applicationEnvironment,
+  openApplication,
+} from "../gallery/drivers/browser-application.js";
 import { NativeGalleryDriver } from "../gallery/drivers/native-gallery.js";
 import { optionalWorkerCpu } from "./support/worker-profiling.js";
-import type { GalleryGuiState } from "../gallery/pages/viewer.js";
 
 const { values } = parseArgs({
   options: {
@@ -99,9 +96,9 @@ try {
     await runBrowserEnvironment(
       "gallery semantic trace",
       {
-        ...galleryEnvironment,
+        ...applicationEnvironment,
         build: {
-          ...galleryEnvironment.build,
+          ...applicationEnvironment.build,
           name: "render-instrumentation",
           generatedModule: resolve(
             "target/browser-build/render-instrumentation/generated.js",
@@ -119,93 +116,62 @@ try {
       controller.signal,
       async (scenario) => {
         await scenario.page.setViewportSize({ width: 1280, height: 800 });
-        const g = await openGallery(scenario, {
-          initialPage: "gui",
-          canvasShare: 1,
+        const g = await openApplication(scenario, {
           entryPath: "/target/gallery-trace/index.html",
-          helperPath: "/target/gallery-trace/viewer-browser-helper.js",
+          helperPath: "/target/gallery-trace/application-browser-helper.js",
         });
-        await awaitStationIdle(g);
         const before = await g.capture("trace-before");
-        assert.ok(
-          before.summary.foregroundPixels > 1000,
-          "gallery painted before capture",
-        );
-        const initial = await g.call<GalleryGuiState>("galleryGuiState");
-        const slider = initial.controls.find(
-          (control) => control.kind === "slider",
-        );
-        assert.ok(slider?.value.kind === "scalar");
-        let active = false;
+        assert.ok(before.summary.foregroundPixels > 1000);
+        let captureId: string | undefined;
         try {
-          const from = await controlPoint(
-            g,
-            { role: "slider" },
-            gainFraction(slider.value.value),
+          captureId = await g.call<string>(
+            "startTrace",
+            maxEvents,
+            maxArtifactBytes,
           );
-          const to = await controlPoint(
-            g,
-            { role: "slider" },
-            gainFraction(0.18),
-          );
-          await g.call("startGalleryTrace", maxEvents, maxArtifactBytes);
-          active = true;
-          const drag = async () =>
-            g.drag([from.clientX, from.clientY], [to.clientX, to.clientY]);
+          const change = async () => {
+            await g.press("demo-display");
+            await g.press("demo-skin-picker");
+            await g.press("demo-skin-picker/options/cybertron");
+          };
           if (values.cdp) {
             const sampled = await optionalWorkerCpu(
               scenario.page.context().browser()!,
               scenario.page.workers().at(-1)!.url(),
-              drag,
+              change,
             );
             cdpTrack = sampled.track;
             await writeFile(
               join(output, "worker-cpu-profile.json"),
               JSON.stringify(sampled.track),
             );
-          } else await drag();
-          await g.settle();
-          const changed = await g.call<GalleryGuiState>("galleryGuiState");
-          const value = changed.controls.find(
-            (control) => control.kind === "slider",
-          )?.value;
-          assert.ok(
-            value?.kind === "scalar" &&
-              Math.abs(value.value - slider.value.value) > 0.1,
-            "physical drag changes GAIN",
-          );
-          // Full profiles bypass the capped operation event log; raw arrays live in JSON artifacts.
-          const capture = (await scenario.page.evaluate(
-            async ({ module }) => (await import(module)).stopGalleryTrace(),
-            { module: g.helper },
-          )) as ProfileCapture;
-          await writeFile(
-            join(output, "profile-capture.json"),
-            JSON.stringify(capture, null, 2),
-          );
+          } else await change();
+          assert.equal((await g.state()).options.skin, "cybertron");
+          const capture = await g.call<ProfileCapture>("stopTrace");
           await g.capture("trace-after");
           assert.ok(
             (await g.difference("trace-before", "trace-after")).changedPixels >
               100,
-            "drag changes completed image",
           );
           await save(
             capture,
             {
               directory: scenario.evidence.directory,
-              initialGain: slider.value.value,
-              finalGain: value.value,
               browserVersion: scenario.page.context().browser()?.version(),
+              action: "physical shared application skin selection",
             },
             {
-              context: `viewer-page:${scenario.page.url()}`,
+              context: `application-page:${scenario.page.url()}`,
               timeOrigin: await scenario.page.evaluate(
                 () => performance.timeOrigin,
               ),
             },
           );
         } finally {
-          if (active) await g.call("cancelGalleryTrace");
+          if (captureId) await g.call("cancelTrace", captureId);
+          await scenario.page.evaluate(async () => {
+            await window.ippDemoApplication?.dispose();
+          });
         }
       },
     );
@@ -268,15 +234,8 @@ try {
         let scenarioFailure: unknown;
         try {
           await driver.start(
-            "gui",
-            [
-              "--width",
-              "960",
-              "--height",
-              "640",
-              "--options",
-              '{"autoscan":false}',
-            ],
+            "shapes",
+            ["--width", "960", "--height", "640"],
             environment.signal,
           );
           const before = await driver.capture(
@@ -288,7 +247,11 @@ try {
             trace: { maxEvents },
             maxArtifactBytes,
           });
-          await driver.call("options", ['{"gain":0.18}'], environment.signal);
+          await driver.call(
+            "action",
+            ["skin", '"cybertron"'],
+            environment.signal,
+          );
           const after = await driver.capture(
             join(output, "native-after"),
             environment.signal,
@@ -334,7 +297,7 @@ try {
               painted,
               changed,
               state: inspected.report,
-              nativeAction: "public gallery gain option",
+              nativeAction: "public application skin action",
               fixtureInputs: JSON.parse(
                 await readFile(
                   "target/gallery-trace/fixture-inputs.json",

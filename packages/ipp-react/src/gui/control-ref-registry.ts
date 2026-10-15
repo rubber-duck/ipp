@@ -4,6 +4,7 @@ import {
   type ComponentFieldValue,
   type EntitySnapshot,
   type FieldValue,
+  type GuiAction,
   type GuiTarget,
   type LifecycleValueRecord,
 } from "@ipp/client";
@@ -139,8 +140,8 @@ function controlFieldValue(
 /**
  * Control refs and value observation of one root's GUI control declarations,
  * and of its Behaviors, whose open state `onVisibleChange` and action
- * listeners observe; they are tracked as controls are but never publish a
- * handle to a ref.
+ * listeners observe. Kit visibility adapters also use internal Behavior refs
+ * for guarded writes through the same component lifetime.
  * Each tracked control holds one shared lifecycle tracking of its component;
  * a binding (and its ref handle) exists while that tracking shows the entity
  * live with a component incarnation, and a new incarnation publishes a new
@@ -535,6 +536,18 @@ export class ReactControlRefs {
     const check = () => {
       if (!this.live(binding)) throw new Error("Control ref is no longer live");
     };
+    const action = async (value: GuiAction) => {
+      check();
+      return this.client.batch([
+        {
+          kind: "guiAction",
+          entity: { kind: "handle", id: target.entity },
+          component: target.component,
+          incarnation: target.incarnation,
+          action: value,
+        },
+      ]);
+    };
     const binding: ControlBinding = {
       live: true,
       valid: () =>
@@ -543,6 +556,11 @@ export class ReactControlRefs {
         tracked.acknowledged.valid(),
       handle: Object.freeze({
         target,
+        focus: (part?: number) =>
+          action(
+            part === undefined ? { kind: "focus" } : { kind: "focus", part },
+          ),
+        blur: () => action({ kind: "blur" }),
         read: async () => {
           check();
           const page = await this.client.inspectPage!({
@@ -581,18 +599,7 @@ export class ReactControlRefs {
             `Control compare-and-set rejected: ${outcome.error.reason}`,
           );
         },
-        action: async (action) => {
-          check();
-          return this.client.batch([
-            {
-              kind: "guiAction",
-              entity: { kind: "handle", id: target.entity },
-              component: target.component,
-              incarnation: target.incarnation,
-              action,
-            },
-          ]);
-        },
+        action,
       } satisfies GuiControlHandle),
     };
     this.bindings.set(identity, binding);

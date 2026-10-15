@@ -1,3 +1,4 @@
+import { useEntityId } from "../scope/identity.js";
 /**
  * A secondary text button, such as CLEAR, Retry or Cancel: the part cut and a
  * text label in small type at the small control height, its width hugging its
@@ -5,7 +6,7 @@
  * The amber variant, for a destructive action such as Purge, swaps the accent
  * and the idle line for amber in every state, as on every button.
  */
-import { Entity } from "../components.js";
+import { PresentationGate, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
@@ -21,7 +22,7 @@ import { textWidth } from "./text.js";
 export interface SecondaryButtonProps extends GuiFeedbackListeners {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly label: string;
   readonly onPress?: GuiPressListener;
   readonly ref?: GuiControlRef;
@@ -32,7 +33,7 @@ export interface SecondaryButtonProps extends GuiFeedbackListeners {
 }
 
 export function SecondaryButton({
-  id,
+  id: providedId,
   layer = 0,
   label,
   onPress,
@@ -42,11 +43,13 @@ export function SecondaryButton({
   layout,
   ...feedback
 }: SecondaryButtonProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const size = kit.typeSize("small");
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}

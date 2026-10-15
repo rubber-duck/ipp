@@ -55,7 +55,7 @@ Development/production fixtures exercise real commits → generated client → M
 | [Canvas](../../tests/rendering/canvas/canvas.test.ts) | DOM composition, context/error routing, multiple canvases, resize, startup/StrictMode and runtime replacement |
 | [Display density](../../tests/rendering/canvas/dpi.test.ts) | Completed WebGL frames at emulated densities, CSS resize and proportional caps |
 | [Custom materials](../../tests/rendering/custom-materials.test.ts) | Shader/asset declarations, parameter edits, readiness, fallback and recovery |
-| [Gallery animation](../../tests/gallery/gallery-animation.test.ts) | Playback declarations/controls and completed frames |
+| [Native demo animation](../../tests/gallery/native-gallery.test.ts) | Playback declarations/controls and completed frames |
 
 Use `python tools/ipp.py test custom-materials animation` for the latter behaviors. [Rendering scenarios](rendering.md) add asset and image evidence. The [testing policy](integration-testing.md) owns synchronization, failure artifacts and cleanup requirements. Remote refs remain outside current support; a replacement canvas session starts a fresh World.
 

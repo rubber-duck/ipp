@@ -8,7 +8,7 @@ import {
   closePlot3d,
   type Plot3dContract,
   type Plot3dScene,
-} from "../../examples/world-gallery/worlds/charts3d/content.js";
+} from "../../examples/demos/scenes/charts3d/content.js";
 
 interface State {
   scene: Plot3dScene;

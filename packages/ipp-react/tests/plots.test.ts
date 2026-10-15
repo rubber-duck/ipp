@@ -2,15 +2,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import * as contract from "../../../target/integration-artifacts/client/generated.js";
-import {
-  PlotLine2d,
-  PlotBars2d,
-  PlotPie2d,
-  PlotGridBars3d,
-  PlotHeightSurface3d,
-  PlotPoints3d,
-  PlotPie3d,
-} from "../src/plots/declarations.js";
+import { describePlot } from "../src/plots/declarations.js";
 import {
   PlotLegend,
   plotColorScaleColor,
@@ -43,13 +35,13 @@ const props = {
 
 test("all Plot wrappers retain sparse slots and lossless source row IDs", () => {
   const declarations = [
-    PlotLine2d(props),
-    PlotBars2d(props),
-    PlotPie2d(props),
-    PlotGridBars3d(props),
-    PlotHeightSurface3d(props),
-    PlotPoints3d(props),
-    PlotPie3d(props),
+    describePlot("PlotLine2d", props),
+    describePlot("PlotBars2d", props),
+    describePlot("PlotPie2d", props),
+    describePlot("PlotGridBars3d", props),
+    describePlot("PlotHeightSurface3d", props),
+    describePlot("PlotPoints3d", props),
+    describePlot("PlotPie3d", props),
   ];
   const names = [
     "PlotLine2d",
@@ -81,7 +73,7 @@ test("all Plot wrappers retain sparse slots and lossless source row IDs", () => 
 });
 
 test("labels keep u64 maximum and reject inexact authoring input", () => {
-  const declaration = PlotLine2d({
+  const declaration = describePlot("PlotLine2d", {
     ...props,
     labels: {
       nextSlot: 1,
@@ -103,7 +95,7 @@ test("labels keep u64 maximum and reject inexact authoring input", () => {
   ])
     assert.throws(
       () =>
-        PlotLine2d({
+        describePlot("PlotLine2d", {
           ...props,
           labels: {
             nextSlot: 1,
@@ -115,7 +107,7 @@ test("labels keep u64 maximum and reject inexact authoring input", () => {
 });
 
 test("removed series slots stay dead when series order changes", () => {
-  const declaration = PlotLine2d({
+  const declaration = describePlot("PlotLine2d", {
     ...props,
     series: {
       nextSlot: 12,
@@ -124,7 +116,7 @@ test("removed series slots stay dead when series order changes", () => {
         [7, { name: "A" }],
       ]),
     },
-    interpolation: "smooth",
+    interpolation: 1,
   });
   const series = contract.decodeRowsTable(
     contract.components.PlotLine2d.fields.series.rows,

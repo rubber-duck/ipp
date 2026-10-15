@@ -68,7 +68,7 @@ fn draw<D: RenderDevice>(
     assert!(report.worlds.values().all(std::result::Result::is_ok));
     let publication = host.root_output(output.world().id()).unwrap().2;
     renderer.prepare(host, Some((output, publication)))?;
-    host.progress_assets();
+    super::task_scheduler::progress(host);
     let summary = renderer.draw(host, output, publication, viewport, 0.0)?;
     assert_eq!(summary.failed_draw_calls, 0);
     assert!(!summary.invalid_camera);
@@ -98,6 +98,7 @@ pub fn run<D: RenderDevice>(
     fonts: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let root_world = host.create_world(Default::default(), &super::selection::scene())?;
     let spatial = host.create_world(Default::default(), &super::selection::scene())?;

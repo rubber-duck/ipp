@@ -3,8 +3,9 @@ use crate::components::schema::ComponentLifecycle;
 use ipp_schema_derive::SchemaComponent;
 
 /// Constraint layout on one ordinary entity; structure is exclusively core ordered links.
-/// Padding reduces measurement constraints and offsets content without adding to
-/// intrinsic or explicit outer size, following the existing GUI box rules.
+/// Padding reduces measurement constraints and offsets content. Automatic
+/// containers normally fill bounded axes; fitted axes include padding once
+/// around measured content. Explicit outer extents retain the existing box rules.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct GuiLayout {
@@ -24,6 +25,11 @@ pub struct GuiLayout {
     pub max_height: f32,
     /// Share of remaining row/column space; zero selects intrinsic measurement.
     pub flex: f32,
+    /// Nonnegative logical spacing between participating row/column children.
+    pub gap: f32,
+    /// Default cross-axis alignment for row/column children in -1..=1; 2 selects start.
+    /// A child's explicit alignment takes precedence.
+    pub align_items: f32,
     /// Horizontal alignment in -1..=1; 2 selects the container's default.
     pub align_x: f32,
     /// Vertical alignment in -1..=1; 2 selects the container's default.
@@ -46,6 +52,10 @@ pub struct GuiLayout {
     pub margin_left: f32,
     /// Clip this entity and its descendants to the settled logical box.
     pub clip: bool,
+    /// Fit measured content and padding when width is automatic, within its bounds.
+    pub fit_width: bool,
+    /// Fit measured content and padding when height is automatic, within its bounds.
+    pub fit_height: bool,
 }
 
 impl Default for GuiLayout {
@@ -59,6 +69,8 @@ impl Default for GuiLayout {
             max_width: -1.0,
             max_height: -1.0,
             flex: 0.0,
+            gap: 0.0,
+            align_items: 2.0,
             align_x: 2.0,
             align_y: 2.0,
             padding_top: 0.0,
@@ -70,6 +82,8 @@ impl Default for GuiLayout {
             margin_bottom: 0.0,
             margin_left: 0.0,
             clip: false,
+            fit_width: false,
+            fit_height: false,
         }
     }
 }
@@ -153,6 +167,10 @@ pub struct GuiOverlay {
     /// Priority band: popup 1, dialog 2 or notification 3. Structural and
     /// independent of mode; a nested overlay inherits at least its owner's band.
     pub band: u32,
+    /// Share the background contour and paint coordinates with an adjacent, aligned anchor.
+    /// This joins the optical surface without changing layout, hits or layering.
+    /// Non-touching or differently scaled boxes retain independent paint bounds.
+    pub join_anchor: bool,
 }
 
 impl Default for GuiOverlay {
@@ -162,6 +180,7 @@ impl Default for GuiOverlay {
             align: 0,
             mode: Self::MODE_MANUAL,
             band: Self::BAND_POPUP,
+            join_anchor: false,
         }
     }
 }
@@ -220,8 +239,8 @@ impl ComponentLifecycle for GuiOverlay {
 impl ComponentLifecycle for GuiLayout {
     fn validate(&self) -> Result<(), ErrorReason> {
         let optional = [self.width, self.height, self.max_width, self.max_height];
-        let lengths = [self.min_width, self.min_height, self.flex];
-        let aligns = [self.align_x, self.align_y];
+        let lengths = [self.min_width, self.min_height, self.flex, self.gap];
+        let aligns = [self.align_x, self.align_y, self.align_items];
         if self.kind > 6
             || optional
                 .iter()

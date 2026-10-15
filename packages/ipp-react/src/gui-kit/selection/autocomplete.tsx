@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * An autocomplete: a text field with the application's suggestions in an
  * option list below it. The typed text is the field's value; suggestions
@@ -14,10 +15,11 @@
  * typing opens it again.
  *
  * The application owns the suggestions, typically fetched or filtered from
- * `onInputChange`; the field owns its text, which starts as `defaultText`.
+ * `onInputChange`; the field owns its text, which starts as `defaultInputValue`.
  */
-import { useRef, useState, type Ref } from "react";
-import { Children, Entity } from "../../components.js";
+import { useLayoutEffect, useRef, type Ref } from "react";
+import { PresentationGate, Children, Entity } from "../../components.js";
+import { Skin } from "../../gui/theme.js";
 import { TextInput } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import type {
@@ -30,13 +32,18 @@ import { useGuiKit } from "../kit.js";
 import { LAYOUT_LEAF, type GuiKitLayout } from "../layout.js";
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen } from "../overlays/overlay.js";
-import { SELECT_WIDTH, SelectList, useControlRef } from "./select-trigger.js";
+import { useTextValue } from "../values/text-value.js";
+import {
+  SELECT_WIDTH,
+  SelectList,
+  useConnectedSelectSkin,
+} from "./select-trigger.js";
 
 export interface AutocompleteProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the field; the list and its rows extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** The application's suggestions for the current text. */
   readonly suggestions: readonly SelectOption[];
   /** The field's text changed: typed, or an accepted suggestion's label. */
@@ -45,8 +52,10 @@ export interface AutocompleteProps {
   readonly onSelect?: (key: string) => void;
   /** Enter without an active suggestion: the typed text. */
   readonly onCommit?: (text: string) => void;
-  /** The field's text when it is declared. */
-  readonly defaultText?: string;
+  /** Application text to synchronize with the runtime; pair with onInputChange. */
+  readonly inputValue?: string;
+  /** Initial text while inputValue is omitted. */
+  readonly defaultInputValue?: string;
   readonly placeholder?: string;
   /** The field's semantic name, such as Destination. */
   readonly label?: string;
@@ -62,13 +71,14 @@ export interface AutocompleteProps {
 }
 
 export function Autocomplete({
-  id,
+  id: providedId,
   layer = 0,
   suggestions,
   onInputChange,
   onSelect,
   onCommit,
-  defaultText = "",
+  inputValue,
+  defaultInputValue = "",
   placeholder = "",
   label,
   loading,
@@ -77,6 +87,7 @@ export function Autocomplete({
   ref,
   layout,
 }: AutocompleteProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   // Whether the user wants the list: opened by typing, closed by the
@@ -87,26 +98,21 @@ export function Autocomplete({
   // The visibility last declared, so the report of the list hiding for
   // lack of suggestions is not taken for the runtime closing it.
   const declared = useRef(shown);
-  declared.current = shown;
+  useLayoutEffect(() => {
+    declared.current = shown;
+  }, [shown]);
   const follow: GuiVisibleChangeListener = (event) => {
     if (!event.value && !declared.current) return;
     overlay.onVisibleChange(event);
   };
 
-  const [initial] = useState(defaultText);
-  // The text as the field last reported it, and an accepted label this
-  // client wrote, whose report is no typing.
-  const reported = useRef(initial);
+  const text = useTextValue(inputValue, defaultInputValue, onInputChange, ref);
   const written = useRef<string | undefined>(undefined);
-  const field = useRef<GuiControlHandle | null>(null);
-  const attach = useControlRef(field, ref);
 
   const changed: GuiTextCommitListener = (event) => {
     const accepted = event.value === written.current;
     written.current = undefined;
-    if (event.value === reported.current) return;
-    reported.current = event.value;
-    onInputChange?.(event.value);
+    if (!text.changed(event)) return;
     if (!accepted) overlay.setOpen(true);
   };
   const accept = (key: string) => {
@@ -115,9 +121,15 @@ export function Autocomplete({
     const suggestion = suggestions.find((option) => option.key === key);
     if (suggestion) {
       written.current = suggestion.label;
-      void field.current
+      void text.handle.current
         ?.action({ kind: "text", value: suggestion.label })
-        .catch(() => {});
+        .then((outcome) => {
+          if (!outcome.ok && written.current === suggestion.label)
+            written.current = undefined;
+        })
+        .catch(() => {
+          if (written.current === suggestion.label) written.current = undefined;
+        });
     }
     onSelect?.(key);
   };
@@ -126,8 +138,10 @@ export function Autocomplete({
     onCommit?.(event.value);
   };
 
+  const connectedSkin = useConnectedSelectSkin(shown);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
@@ -141,12 +155,15 @@ export function Autocomplete({
         enabled={!disabled}
         {...(label === undefined ? {} : { semantic_label: label })}
       />
+      {kit.controlTheme("textInput") && (
+        <Skin theme={kit.controlTheme("textInput")} {...connectedSkin} />
+      )}
       <TextInput
         placeholder={placeholder}
-        text={initial}
+        text={text.initial}
         onTextCommit={changed}
         onSubmit={commit}
-        ref={attach}
+        ref={text.ref}
       />
       <Children>
         <SelectList id={`${id}/list`} open={shown} onVisibleChange={follow}>

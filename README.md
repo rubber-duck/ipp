@@ -9,7 +9,7 @@ Before stabilization, APIs and formats may change directly. Clients and fixtures
 - [Architecture](docs/architecture.md) is the source of truth for accepted design.
 - [Implementation strategies](docs/plans/README.md) describe direction and maintained integration harnesses.
 - [Build guide](docs/development/building.md) covers setup, current scope and validation.
-- [Scene gallery](examples/world-gallery/README.md) and [headless client](examples/headless-client/README.md) are runnable entry points.
+- [Scene gallery](examples/demos/README.md) and [headless client](examples/headless-client/README.md) are runnable entry points.
 - [Agent guide](AGENTS.md) and [development workflow](docs/development/workflow.md) define architecture review, Beads coordination, and validation.
 
 With Rustup, Python from `.python-version`, and Node from `.node-version` installed:

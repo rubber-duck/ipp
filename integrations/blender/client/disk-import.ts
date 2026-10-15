@@ -27,10 +27,14 @@ export async function importBlenderScene(
   options: {
     symbolicId?: string;
     clipsOnly?: boolean;
+    /** Additional capabilities needed by application-authored content after import. */
+    additionalSystems?: readonly string[];
   } = {},
 ) {
   const created = await host.createWorld({
-    selectedSystems: BLENDER_SYSTEMS,
+    selectedSystems: [
+      ...new Set([...BLENDER_SYSTEMS, ...(options.additionalSystems ?? [])]),
+    ],
     ...(options.symbolicId ? { symbolicId: options.symbolicId } : {}),
   });
   let client: BlenderClient | undefined;

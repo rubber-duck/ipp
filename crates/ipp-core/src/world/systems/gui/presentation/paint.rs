@@ -1,5 +1,3 @@
-use super::component::em_scale;
-use super::looks::{GuiSkinLook, control_look, default_look};
 use super::measurement::GuiControlLabel;
 use super::{
     GUI_DEFAULT_FONT_SIZE, GuiPaintPart, GuiPartId, GuiPartStyle, GuiPartVariant, GuiPrimitivePart,
@@ -13,26 +11,12 @@ use crate::services::asset_management::{
 };
 use crate::systems::SystemRuntimeAccess;
 use crate::systems::canvas::*;
-use crate::systems::gui::layout::scroll_bars::GUI_SCROLL_BAR_EMS;
 use crate::systems::gui::local::controls::color::{GuiColorLayout, hsv_to_linear};
 use crate::systems::gui::local::controls::identity::{GuiControl, GuiEligibility};
 use crate::systems::gui::local::controls::slider::{GuiSliderDial, slider_dial};
 use crate::systems::gui::local::{GuiColor, GuiControlKind, GuiInteractionFlags};
 use crate::systems::gui::motion::focus_part_channel;
 use crate::world::WorldSimulationState;
-
-/// Thickness of the marks drawn on a text line in ems: the caret's width and
-/// the composition underline along the bottom of the line.
-const TEXT_MARK: f32 = 1.0 / 16.0;
-
-/// Side of a numeric input's step marks in ems, centred in their parts.
-const STEP_MARK: f32 = 0.75;
-
-/// Linear RGBA of the checker's absent first colour, sRGB `#CCCCCC`.
-const CHECKER_LIGHT: [f32; 4] = [0.603_827_36, 0.603_827_36, 0.603_827_36, 1.0];
-
-/// Linear RGBA of the checker's absent second colour, sRGB `#999999`.
-const CHECKER_DARK: [f32; 4] = [0.318_546_77, 0.318_546_77, 0.318_546_77, 1.0];
 
 /// A control's identity, eligibility fields and pointer feedback as its paint
 /// reads them; values are read from the control's own fields.
@@ -65,13 +49,12 @@ fn skin(
 }
 
 /// A control part's appearance in `state` and `variant` for an inherited font
-/// of `font_size`: the skin's override row, then the theme's rows and then the
-/// control's default `look`, each most specific first, every source filling
+/// of `font_size`: the skin's override rows, then the theme's rows,
+/// each most specific first, every source filling
 /// only the properties still absent.
 pub(in crate::world::systems::gui) fn appearance(
     skin: Option<&GuiSkin>,
     theme: Option<&GuiTheme>,
-    look: &GuiSkinLook,
     font_size: f32,
     part: GuiPrimitivePart,
     state: GuiSkinState,
@@ -80,7 +63,6 @@ pub(in crate::world::systems::gui) fn appearance(
     resolve_rows(
         skin,
         theme,
-        Some(look),
         font_size,
         part,
         GuiPartId::candidates(part, state, variant),
@@ -94,7 +76,6 @@ pub(in crate::world::systems::gui) fn appearance(
 fn resolve_rows(
     skin: Option<&GuiSkin>,
     theme: Option<&GuiTheme>,
-    look: Option<&GuiSkinLook>,
     font_size: f32,
     part: GuiPrimitivePart,
     candidates: impl Iterator<Item = GuiPartId> + Clone,
@@ -108,15 +89,9 @@ fn resolve_rows(
         let scale = theme.length_scale(font_size);
         for identity in candidates.clone() {
             if let Some(row) = part_row(theme.parts.iter().map(|(_, row)| row), identity) {
-                style.inherit(&row.scaled_style(scale));
-            }
-        }
-    }
-    if let Some(look) = look {
-        let scale = em_scale(look.em, font_size);
-        for identity in candidates {
-            if let Some(row) = look.row(identity) {
-                style.inherit(&row.scaled_style(scale));
+                let mut inherited = row.scaled_style(scale);
+                inherited.paint_owner = inherited.paint.and_then(|_| skin.map(|skin| skin.theme));
+                style.inherit(&inherited);
             }
         }
     }
@@ -169,11 +144,10 @@ pub(in crate::world::systems::gui) fn control_variant(
     })
 }
 
-/// Whether the theme or the default look of `kind` styles an unchecked
+/// Whether the authored theme styles an unchecked
 /// indicator in `state`, which then paints while the checkbox is unchecked.
 pub(in crate::world::systems::gui) fn explicit_unchecked(
     theme: Option<&GuiTheme>,
-    kind: GuiControlKind,
     state: GuiSkinState,
 ) -> bool {
     let identity = GuiPartId::variant(GuiPrimitivePart::Icon, state, GuiPartVariant::Unchecked);
@@ -182,7 +156,6 @@ pub(in crate::world::systems::gui) fn explicit_unchecked(
     theme
         .and_then(|theme| part_row(theme.parts.iter().map(|(_, row)| row), identity))
         .is_some_and(styled)
-        || default_look(kind).row(identity).is_some_and(styled)
 }
 
 /// A control's primitives. `focus` is its focused part while it shows the
@@ -223,8 +196,8 @@ pub(in crate::world::systems) fn control_paint(
     };
     let state = GuiSkinState::resolve(!enabled, body.pressed, body.hovered);
     let variant = control_variant(context.world, painted.control);
-    let look = control_look(context.world, painted.control);
     let font_size = label.map_or(GUI_DEFAULT_FONT_SIZE, |label| label.font_size);
+    let metrics = super::GuiMetrics::resolve(context.world, entity, font_size);
     // A part in transition paints its sample instead of its resolved appearance.
     let motion = context
         .world
@@ -232,7 +205,7 @@ pub(in crate::world::systems) fn control_paint(
         .gui_behavior(index)
         .map(|behavior| &behavior.motion);
     let resolve = |part| {
-        let mut style = appearance(skin, theme, look, font_size, part, state, variant);
+        let mut style = appearance(skin, theme, font_size, part, state, variant);
         if let Some(motion) = motion {
             motion.appearance(part as u32, &mut style);
         }
@@ -250,9 +223,11 @@ pub(in crate::world::systems) fn control_paint(
         .and_then(|_| slider_dial(whole));
     let rail = slider
         .filter(|slider| !slider.is_dial())
-        .and_then(|slider| super::super::slider_rail(whole, slider.rail_axis()));
+        .and_then(|slider| {
+            super::super::slider_rail(whole, slider.rail_axis(), metrics.thumb_ratio)
+        });
     // The rail is one scroll bar thick: every track shares a thickness.
-    let rail_thickness = GUI_SCROLL_BAR_EMS * font_size;
+    let rail_thickness = metrics.rail_thickness;
     let ratio = slider.map_or(0.0, |slider| slider.fraction(slider.value));
     let origin = slider.map_or(0.0, |slider| slider.fraction(slider.origin));
     // Where each thumb lies: the value's, and a range's upper one.
@@ -262,7 +237,7 @@ pub(in crate::world::systems) fn control_paint(
     let color = (kind == GuiControlKind::Color)
         .then(|| context.world.components.gui_color(index))
         .flatten();
-    let color_layout = color.map(|color| GuiColorLayout::new(size, font_size, color.alpha_rail));
+    let color_layout = color.map(|color| GuiColorLayout::new(size, &metrics, color.alpha_rail));
 
     // The Background is the whole control, a slider's rail or a labelled
     // checkbox's box; the focus ring follows a checkbox's box and a slider's
@@ -324,7 +299,7 @@ pub(in crate::world::systems) fn control_paint(
                         flags.pressed,
                         flags.hovered,
                     );
-                    let style = appearance(skin, theme, look, font_size, part, bar_state, variant);
+                    let style = appearance(skin, theme, font_size, part, bar_state, variant);
                     primitives.extend(paint_shape(id, rect, &style));
                 }
             }
@@ -332,11 +307,11 @@ pub(in crate::world::systems) fn control_paint(
         GuiControlKind::Checkbox => {
             let icon = resolve(GuiPrimitivePart::Icon);
             if variant == Some(GuiPartVariant::Checked)
-                || explicit_unchecked(theme, kind, state)
+                || explicit_unchecked(theme, state)
                 || motion.is_some_and(|motion| motion.visible_part(GuiPrimitivePart::Icon))
             {
                 let [x, y, width, height] = background_rect;
-                let edge = width.min(height) * 0.5;
+                let edge = width.min(height) * metrics.checkbox_ratio;
                 let align = icon.align_x.unwrap_or(0.0).clamp(-1.0, 1.0);
                 let center = x + width * 0.5 + (width - height).max(0.0) * align * 0.5;
                 let scale = icon.scale.unwrap_or([1.0; 2]);
@@ -381,7 +356,6 @@ pub(in crate::world::systems) fn control_paint(
                         let mut thumb = appearance(
                             skin,
                             theme,
-                            look,
                             font_size,
                             GuiPrimitivePart::Icon,
                             state,
@@ -409,7 +383,7 @@ pub(in crate::world::systems) fn control_paint(
                 let ticks = resolve(GuiPrimitivePart::Ticks);
                 let track = resolve(GuiPrimitivePart::Track);
                 for (part, rect, style) in
-                    dial_parts(dial, font_size, origin, ratio, ticks, track, fill, icon)
+                    dial_parts(dial, &metrics, origin, ratio, ticks, track, fill, icon)
                 {
                     primitives.extend(paint_shape(part, rect, &style));
                 }
@@ -422,8 +396,7 @@ pub(in crate::world::systems) fn control_paint(
                 let part_style = |part: u32, primitive| {
                     let flags = part_interaction.parts[part as usize];
                     let state = GuiSkinState::resolve(!enabled, flags.pressed, flags.hovered);
-                    let mut style =
-                        appearance(skin, theme, look, font_size, primitive, state, variant);
+                    let mut style = appearance(skin, theme, font_size, primitive, state, variant);
                     if let Some(motion) = motion {
                         motion.appearance(focus_part_channel(part, primitive), &mut style);
                     }
@@ -438,7 +411,7 @@ pub(in crate::world::systems) fn control_paint(
         GuiControlKind::Button | GuiControlKind::TextInput => {
             let icon = resolve(GuiPrimitivePart::Icon);
             if icon.color.is_some() || icon.asset.is_some() {
-                let edge = (size[1] * 0.55).min(size[0]);
+                let edge = (size[1] * metrics.icon_ratio).min(size[0]);
                 primitives.extend(paint_shape(
                     CanvasPart::Icon,
                     [(size[1] - edge) * 0.5, (size[1] - edge) * 0.5, edge, edge],
@@ -451,7 +424,10 @@ pub(in crate::world::systems) fn control_paint(
             // direction is at its bound.
             if let Some(input) = number {
                 let stepping = input.step_enabled();
-                let rects = super::super::local::controls::number::number_step_rects(size);
+                let rects = super::super::local::controls::number::number_step_rects(
+                    size,
+                    metrics.number_step_ratio,
+                );
                 for (index, (cell, mark, cell_id, mark_id)) in [
                     (
                         GuiPrimitivePart::Decrement,
@@ -476,8 +452,7 @@ pub(in crate::world::systems) fn control_paint(
                         flags.hovered,
                     );
                     let resolve = |part: GuiPrimitivePart| {
-                        let mut style =
-                            appearance(skin, theme, look, font_size, part, state, variant);
+                        let mut style = appearance(skin, theme, font_size, part, state, variant);
                         if let Some(motion) = motion {
                             motion.appearance(part as u32, &mut style);
                         }
@@ -485,7 +460,7 @@ pub(in crate::world::systems) fn control_paint(
                     };
                     let rect = rects[index];
                     primitives.extend(paint_shape(cell_id, rect, &resolve(cell)));
-                    let side = (STEP_MARK * font_size).min(rect[2]).min(rect[3]);
+                    let side = metrics.step_mark.min(rect[2]).min(rect[3]);
                     primitives.extend(paint_shape(
                         mark_id,
                         [
@@ -520,7 +495,7 @@ pub(in crate::world::systems) fn control_paint(
                 [
                     origin[0] + caret.position[0] * label.font_size,
                     origin[1] + caret.position[1] * label.font_size,
-                    label.font_size * TEXT_MARK,
+                    metrics.caret_width,
                     caret.height * label.font_size,
                 ],
                 &appearance,
@@ -534,9 +509,9 @@ pub(in crate::world::systems) fn control_paint(
                     CanvasPart::Composition,
                     [
                         origin[0] + rect[0] * label.font_size,
-                        origin[1] + (rect[1] + rect[3] - TEXT_MARK) * label.font_size,
+                        origin[1] + (rect[1] + rect[3]) * label.font_size - metrics.caret_width,
                         rect[2] * label.font_size,
-                        TEXT_MARK * label.font_size,
+                        metrics.caret_width,
                     ],
                     &appearance,
                 ));
@@ -544,6 +519,7 @@ pub(in crate::world::systems) fn control_paint(
         }
     }
     if let Some(label) = label
+        && resolve(GuiPrimitivePart::Label).authored
         && let Some(CanvasGeometry::Glyphs {
             font,
             font_size,
@@ -676,7 +652,7 @@ fn color_parts(
 #[allow(clippy::too_many_arguments)]
 fn dial_parts(
     dial: GuiSliderDial,
-    font_size: f32,
+    metrics: &super::GuiMetrics,
     origin: f32,
     fraction: f32,
     mut ticks: GuiPartStyle,
@@ -685,7 +661,12 @@ fn dial_parts(
     mut pointer: GuiPartStyle,
 ) -> Vec<(CanvasPart, [f32; 4], GuiPartStyle)> {
     let width = |style: &GuiPartStyle| style.border_width.unwrap_or(0.0).max(0.0);
-    let ring = dial.ring_radius(font_size, width(&ticks), width(&fill));
+    let ring = dial.ring_radius(
+        metrics.dial_inset,
+        metrics.dial_gap,
+        width(&ticks),
+        width(&fill),
+    );
     let [start, sweep] = GuiSliderDial::sweep();
     let cell = match ticks.arc_dashes {
         Some([cells, _]) if cells > 0.0 => 1.0 / cells,
@@ -696,7 +677,7 @@ fn dial_parts(
     ticks.arc_sweep = Some(sweep + cell);
     parts.push((
         CanvasPart::Ticks,
-        dial.square(dial.ticks_radius(font_size)),
+        dial.square(dial.ticks_radius(metrics.dial_inset)),
         ticks,
     ));
     track.arc_start = Some(start);
@@ -760,7 +741,6 @@ pub(in crate::world::systems) fn skinned_background(
     let appearance = resolve_rows(
         skin,
         theme,
-        None,
         font_size,
         part,
         std::iter::once(GuiPartId::base(part)),
@@ -786,7 +766,54 @@ fn part_primitive(
     appearance: &GuiPartStyle,
     retained: &impl Fn(CanvasPrimitiveId) -> Option<AssetKey>,
 ) -> Option<CanvasPrimitive> {
-    let primitive = shape(style, part, rect, appearance);
+    let entity = style.identity.target.entity;
+    let explicit_paint = part == CanvasPart::Background
+        && appearance.paint.is_none()
+        && context
+            .world
+            .components
+            .canvas_paint(entity.index() as usize)
+            .is_some();
+    if !appearance.authored && !explicit_paint {
+        return None;
+    }
+    let outset = appearance.outset.unwrap_or([0.0; 2]);
+    let scale = appearance.scale.unwrap_or([1.0; 2]);
+    let expanded = [
+        rect[0] - outset[0] * scale[0],
+        rect[1] - outset[1] * scale[1],
+        (rect[2] + 2.0 * outset[0]).max(0.0),
+        (rect[3] + 2.0 * outset[1]).max(0.0),
+    ];
+    let mut primitive = shape(style, part, expanded, appearance);
+    let entity = style.identity.target.entity;
+    let selected = match appearance.paint {
+        Some(true) => super::super::super::canvas::update::paint_target(
+            context.world,
+            appearance.paint_owner.unwrap_or(entity),
+        ),
+        Some(false) => None,
+        None if part == CanvasPart::Background => {
+            super::super::super::canvas::update::paint_target(context.world, entity)
+        }
+        None => None,
+    };
+    if let Some(paint) = selected {
+        primitive = super::super::super::canvas::walk::with_paint(primitive, paint);
+        if let CanvasPrimitive::Box {
+            fill:
+                CanvasShapeFill::Paint {
+                    data,
+                    bounds,
+                    ..
+                },
+            ..
+        } = &mut primitive
+        {
+            *data = appearance.paint_data.unwrap_or([0.0; 4]);
+            *bounds = Some([outset[0], outset[1], rect[2], rect[3]]);
+        }
+    }
     let previous = retained(primitive.style().identity);
     apply_asset(context, primitive, appearance, previous)
 }
@@ -946,6 +973,7 @@ fn shape(
             let corner_accent = appearance.corner_accent.unwrap_or([0.0; 4]);
             let accented = corner_accent.iter().any(|span| *span > 0.0);
             CanvasBoxShape::Rect {
+                section: None,
                 corner_cut: appearance.corner_cut.unwrap_or([0.0; 4]),
                 corner_accent,
                 corner_accent_width: if accented {
@@ -959,8 +987,8 @@ fn shape(
                     .map(|size| CanvasShapeChecker {
                         size,
                         colors: [
-                            appearance.checker_color0.unwrap_or(CHECKER_LIGHT),
-                            appearance.checker_color1.unwrap_or(CHECKER_DARK),
+                            appearance.checker_color0.unwrap_or([1.0; 4]),
+                            appearance.checker_color1.unwrap_or([0.0, 0.0, 0.0, 1.0]),
                         ],
                     }),
             }
@@ -975,5 +1003,34 @@ fn shape(
         fill,
         glow,
         shape,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_empty_row_explicitly_enables_a_neutral_primitive() {
+        let mut rows = crate::components::rows::Rows::new();
+        rows.push(GuiPaintPart::keyed(GuiPartId::base(GuiPrimitivePart::Background)).unwrap())
+            .unwrap();
+        let skin = GuiSkin {
+            theme: EntityId::from_bits(1),
+            ..Default::default()
+        };
+        let theme = GuiTheme {
+            parts: rows,
+            ..Default::default()
+        };
+        let style = resolve_rows(
+            Some(&skin),
+            Some(&theme),
+            GUI_DEFAULT_FONT_SIZE,
+            GuiPrimitivePart::Background,
+            std::iter::once(GuiPartId::base(GuiPrimitivePart::Background)),
+        );
+        assert!(style.authored);
+        assert_eq!(style.color, None);
     }
 }

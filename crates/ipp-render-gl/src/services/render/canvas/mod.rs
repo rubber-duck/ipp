@@ -4,4 +4,5 @@
 pub(super) mod draw;
 pub(super) mod layering;
 pub(super) mod paint;
+pub(super) mod presentation;
 pub(super) mod scene;

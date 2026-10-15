@@ -1,0 +1,1 @@
+{"extends":"../tsconfig.json","include":["values-specimen.tsx","../scenarios/composite-values.ts","values-lab.tsx"]}

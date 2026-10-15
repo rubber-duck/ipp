@@ -1,0 +1,230 @@
+{
+  "source": "../component-concept.png",
+  "sourceSize": [
+    1536,
+    1024
+  ],
+  "note": "Lossless source pixels; switch pressed/focus/disabled are ON, idle/hover OFF. No regenerated or painted reference pixels.",
+  "crops": [
+    {
+      "file": "button-idle.png",
+      "family": "button",
+      "state": "idle",
+      "rectangle": [
+        160,
+        200,
+        235,
+        82
+      ]
+    },
+    {
+      "file": "button-hover.png",
+      "family": "button",
+      "state": "hover",
+      "rectangle": [
+        435,
+        200,
+        235,
+        82
+      ]
+    },
+    {
+      "file": "button-pressed.png",
+      "family": "button",
+      "state": "pressed",
+      "rectangle": [
+        710,
+        200,
+        235,
+        82
+      ]
+    },
+    {
+      "file": "button-focus.png",
+      "family": "button",
+      "state": "focus",
+      "rectangle": [
+        985,
+        200,
+        235,
+        82
+      ]
+    },
+    {
+      "file": "button-disabled.png",
+      "family": "button",
+      "state": "disabled",
+      "rectangle": [
+        1260,
+        200,
+        235,
+        82
+      ]
+    },
+    {
+      "file": "input-idle.png",
+      "family": "input",
+      "state": "idle",
+      "rectangle": [
+        150,
+        374,
+        254,
+        80
+      ]
+    },
+    {
+      "file": "input-hover.png",
+      "family": "input",
+      "state": "hover",
+      "rectangle": [
+        425,
+        374,
+        254,
+        80
+      ]
+    },
+    {
+      "file": "input-pressed.png",
+      "family": "input",
+      "state": "pressed",
+      "rectangle": [
+        700,
+        374,
+        254,
+        80
+      ]
+    },
+    {
+      "file": "input-focus.png",
+      "family": "input",
+      "state": "focus",
+      "rectangle": [
+        975,
+        374,
+        254,
+        80
+      ]
+    },
+    {
+      "file": "input-disabled.png",
+      "family": "input",
+      "state": "disabled",
+      "rectangle": [
+        1250,
+        374,
+        254,
+        80
+      ]
+    },
+    {
+      "file": "switch-idle.png",
+      "family": "switch",
+      "state": "idle",
+      "rectangle": [
+        200,
+        547,
+        152,
+        82
+      ]
+    },
+    {
+      "file": "switch-hover.png",
+      "family": "switch",
+      "state": "hover",
+      "rectangle": [
+        475,
+        547,
+        152,
+        82
+      ]
+    },
+    {
+      "file": "switch-pressed.png",
+      "family": "switch",
+      "state": "pressed",
+      "rectangle": [
+        748,
+        547,
+        152,
+        82
+      ]
+    },
+    {
+      "file": "switch-focus.png",
+      "family": "switch",
+      "state": "focus",
+      "rectangle": [
+        1022,
+        547,
+        152,
+        82
+      ]
+    },
+    {
+      "file": "switch-disabled.png",
+      "family": "switch",
+      "state": "disabled",
+      "rectangle": [
+        1297,
+        547,
+        152,
+        82
+      ]
+    },
+    {
+      "file": "slider-idle.png",
+      "family": "slider",
+      "state": "idle",
+      "rectangle": [
+        156,
+        741,
+        244,
+        58
+      ]
+    },
+    {
+      "file": "slider-hover.png",
+      "family": "slider",
+      "state": "hover",
+      "rectangle": [
+        432,
+        741,
+        244,
+        58
+      ]
+    },
+    {
+      "file": "slider-pressed.png",
+      "family": "slider",
+      "state": "pressed",
+      "rectangle": [
+        707,
+        741,
+        244,
+        58
+      ]
+    },
+    {
+      "file": "slider-focus.png",
+      "family": "slider",
+      "state": "focus",
+      "rectangle": [
+        982,
+        741,
+        244,
+        58
+      ]
+    },
+    {
+      "file": "slider-disabled.png",
+      "family": "slider",
+      "state": "disabled",
+      "rectangle": [
+        1257,
+        741,
+        244,
+        58
+      ]
+    }
+  ]
+}

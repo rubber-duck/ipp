@@ -2,6 +2,7 @@
 //! local mutation boundary, observed through native state, the `text` field
 //! and completed Canvas paint.
 
+use crate::components::rows::Rows;
 use crate::services::gui_input::router::{GuiPhysicalButton, GuiPhysicalInput, GuiPhysicalKey};
 use crate::services::gui_input::{GuiDeliveryTerminal, GuiInputError};
 use crate::systems::canvas::{CanvasPaintEntry, CanvasPart, CanvasPrimitive};
@@ -13,8 +14,42 @@ use crate::systems::gui::local::{
     GuiLocalAction, GuiLocalActionError, GuiLocalEffect, GuiLocalEffectKind, GuiNativeTextState,
     GuiTextComposition, GuiTextEdit, GuiTextFence, GuiTextInput, MAX_GUI_TEXT_BYTES,
 };
+use crate::systems::gui::presentation::{GuiMetrics, GuiPaintPart, GuiSkin};
+use crate::systems::gui::{GuiPartId, GuiPrimitivePart};
 use crate::{Command, ComponentValue, EntityId, EntityRef};
 use std::sync::Arc;
+
+fn text_skin() -> ComponentValue {
+    let mut parts = Rows::new();
+    for (part, color) in [
+        (GuiPrimitivePart::Label, [1.0; 4]),
+        (GuiPrimitivePart::Caret, [0.0, 1.0, 1.0, 1.0]),
+        (GuiPrimitivePart::Selection, [0.0, 0.0, 1.0, 1.0]),
+    ] {
+        parts
+            .push(GuiPaintPart {
+                color: Some(color),
+                ..GuiPaintPart::keyed(GuiPartId::base(part)).unwrap()
+            })
+            .unwrap();
+    }
+    let skin = GuiSkin {
+        parts,
+        ..Default::default()
+    };
+    crate::components::schema::ComponentLifecycle::validate(&skin)
+        .expect("valid text fixture rows");
+    ComponentValue::GuiSkin(skin)
+}
+
+fn text_metrics() -> ComponentValue {
+    ComponentValue::GuiMetrics(GuiMetrics {
+        label_inset: ROUTED_FONT_SIZE,
+        caret_width: TEXT_MARK,
+        number_step_ratio: 1.0,
+        ..Default::default()
+    })
+}
 
 /// Fixture font advances in ems: "a" and "e" 0.55, "V" 0.65, unmapped 0.5.
 const A: f32 = 0.55 * ROUTED_FONT_SIZE;
@@ -47,6 +82,8 @@ const GLYPH_V: u32 = 2;
 
 fn text_input(host: &mut GuiRoutedHost, text: &str) -> EntityId {
     host.create(vec![
+        text_skin(),
+        text_metrics(),
         ComponentValue::GuiTextInput(GuiTextInput {
             text: text.into(),
             placeholder: Arc::default(),
@@ -385,21 +422,8 @@ fn caret_and_selection_resolve_their_own_skin_rows() {
 }
 
 #[test]
-fn an_unthemed_text_input_paints_the_reference_text_caret_and_selection() {
+fn an_explicit_skin_enables_text_caret_and_selection() {
     use crate::systems::canvas::CanvasShapeFill;
-
-    /// Linear RGBA of an sRGB `0xrrggbb` sample.
-    fn srgb(hex: u32) -> [f32; 4] {
-        let linear = |byte: u32| {
-            let value = f64::from(byte & 0xff) / 255.0;
-            (if value <= 0.04045 {
-                value / 12.92
-            } else {
-                ((value + 0.055) / 1.055).powf(2.4)
-            }) as f32
-        };
-        [linear(hex >> 16), linear(hex >> 8), linear(hex), 1.0]
-    }
 
     let (mut host, entity) = focused("ae");
     edit(&mut host, GuiTextEdit::Selection([0, 1]));
@@ -410,11 +434,11 @@ fn an_unthemed_text_input_paints_the_reference_text_caret_and_selection() {
         } => color,
         other => panic!("{other:?}"),
     };
-    assert_eq!(fill(CanvasPart::Selection), srgb(0x0b6fc0));
-    assert_eq!(fill(CanvasPart::Caret), srgb(0x00f4fb));
+    assert_eq!(fill(CanvasPart::Selection), [0.0, 0.0, 1.0, 1.0]);
+    assert_eq!(fill(CanvasPart::Caret), [0.0, 1.0, 1.0, 1.0]);
     assert_eq!(
         part_of_host(&host, entity, CanvasPart::Label).style().color,
-        srgb(0xe5f5f7)
+        [1.0; 4]
     );
 }
 
@@ -985,6 +1009,8 @@ fn reveal_preserves_native_fence_selection_and_provisional_composition() {
 fn masked_placeholder_is_readable_and_empty_composition_is_masked() {
     let mut host = GuiRoutedHost::new();
     let entity = host.create(vec![
+        text_skin(),
+        text_metrics(),
         ComponentValue::GuiTextInput(GuiTextInput {
             masked: true,
             placeholder: "aV".into(),
@@ -1014,6 +1040,8 @@ fn masked_placeholder_is_readable_and_empty_composition_is_masked() {
 fn masked_numeric_commits_and_steps_keep_their_number_semantics() {
     let mut host = GuiRoutedHost::new();
     let entity = host.create(vec![
+        text_skin(),
+        text_metrics(),
         ComponentValue::GuiTextInput(GuiTextInput {
             masked: true,
             numeric: true,

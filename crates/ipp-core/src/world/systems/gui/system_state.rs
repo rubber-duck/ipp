@@ -228,9 +228,11 @@ impl GuiLocalState {
     ) {
         let mut roots: BTreeSet<_> = context.changed_entity_links().collect();
         for (entity, component) in context.changed_components() {
-            if component == ComponentValue::GUI_BEHAVIOR
-                || (CONTROL_COMPONENTS.contains(&component)
-                    && !context.retains_component(entity, component))
+            if matches!(
+                component,
+                ComponentValue::GUI_BEHAVIOR | ComponentValue::PRESENTATION_GATE
+            ) || (CONTROL_COMPONENTS.contains(&component)
+                && !context.retains_component(entity, component))
             {
                 roots.insert(entity);
             }

@@ -629,10 +629,10 @@ test("value callbacks fire from value records, current value first, only when th
     world.deliver(7n, true);
     await settled();
     assert.deepEqual(
-      toggles.map((event) => [event.tick, event.value]),
+      toggles.map((event) => [event.tick, event.value, event.initial]),
       [
-        [5n, false],
-        [6n, true],
+        [5n, false, true],
+        [6n, true, false],
       ],
       "the first record reports the current value; an equal value does not fire",
     );
@@ -649,6 +649,7 @@ test("value callbacks fire from value records, current value first, only when th
     assert.equal(toggles.length, 2);
     world.deliver(9n, true);
     await settled();
+    assert.equal(toggles.at(-1)?.initial, true);
     assert.deepEqual(toggles.map((event) => [event.tick, event.value]).at(-1), [
       9n,
       true,

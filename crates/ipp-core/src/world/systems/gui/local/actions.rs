@@ -800,7 +800,12 @@ impl GuiSystem {
             component,
             incarnation: target.incarnation,
         };
-        if !eligibility(context.world_data, entity).eligible() {
+        if !crate::systems::hierarchy::PresentationEligibility::default().open_inputs(
+            &context.world_data.components,
+            &context.staged.entities_state,
+            entity,
+        ) || !eligibility(context.world_data, entity).eligible()
+        {
             return Err(ErrorReason::Unavailable);
         }
         let value = context

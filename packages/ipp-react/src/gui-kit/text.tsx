@@ -1,9 +1,10 @@
+import { useEntityId } from "../scope/identity.js";
 /**
  * Text leaves of the kit: one line in a tone of the palette at a size of the
  * type scale, one icon glyph, and the check mark. Each is an ordinary entity
  * vertically centred in a row by default; a text's layout box is its line box.
  */
-import { Entity } from "../components.js";
+import { PresentationGate, Entity } from "../components.js";
 import { Font, Layout, Style, Text } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { GUI_KIT_ICONS, type GuiKitIcon } from "./icons.js";
@@ -30,7 +31,7 @@ export function glyphSizeForWidth(width: number): number {
 export interface TextLineProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly text: string;
   /** Palette role: accent for titles and labels, text for content, neutral for secondary. */
   readonly tone?: GuiKitTone;
@@ -40,17 +41,19 @@ export interface TextLineProps {
 
 /** One line of text in a tone of the palette at a size of the type scale. */
 export function TextLine({
-  id,
+  id: providedId,
   layer = 0,
   text,
   tone = "text",
   size = "body",
   layout,
 }: TextLineProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const color = kit.color(tone);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
       <Style
         layer={layer}
@@ -67,7 +70,7 @@ export function TextLine({
 export interface IconProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly icon: GuiKitIcon;
   readonly tone?: GuiKitTone;
   /** Font size at the tokens' `em`; the icon size by default. */
@@ -77,17 +80,19 @@ export interface IconProps {
 
 /** One icon glyph of the shared font in a tone of the palette. */
 export function Icon({
-  id,
+  id: providedId,
   layer = 0,
   icon,
   tone = "accent",
   size,
   layout,
 }: IconProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const color = kit.color(tone);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
       <Style
         layer={layer}
@@ -123,7 +128,7 @@ export const CHECK_MARK = 16;
 export interface CheckMarkProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** Lit on the page, or the surface colour on a lit fill. */
   readonly tone?: "accent" | "surface";
   /** Side at the tokens' `em`; the checkbox's icon size by default. */
@@ -136,15 +141,17 @@ export interface CheckMarkProps {
  * `size`; its own font size draws the stroke in proportion.
  */
 export function CheckMark({
-  id,
+  id: providedId,
   layer = 0,
   tone = "accent",
   size = CHECK_MARK,
   layout,
 }: CheckMarkProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}

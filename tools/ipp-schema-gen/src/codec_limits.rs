@@ -13,6 +13,7 @@ const FIELD_LIMITS: &[(&str, &str, &str, bool)] = &[
         "fields",
         false,
     ),
+    ("CAMERA_PATH_DEPTH", "view-camera", "path", true),
     ("ATTACHMENT_EFFECTS", "response-batch", "effects", false),
     ("FIELD_BYTES", "value-string", "value", false),
     ("METADATA_CLASSES", "metadata", "classes", false),
@@ -108,6 +109,7 @@ const HOST_LIMITS: &[(&str, &str, &str)] = &[
         "pointers",
     ),
     ("GUI_PHYSICAL_BLOCKERS", "gui-physical-open", "blockers"),
+    ("GUI_PHYSICAL_HIT_PATH", "gui-input-hit", "path"),
 ];
 
 /// GUI payload bounds, present exactly when the target compiles GUI.
@@ -150,6 +152,7 @@ pub(super) const CODEC_LIMIT_NAMES: &[&str] = &[
     "MAX_MESSAGE_BYTES",
     "COMMAND_PAGE_LIMITS",
     "BATCH_OUTCOME_ALIASES",
+    "CAMERA_PATH_DEPTH",
     "ATTACHMENT_EFFECTS",
     "FIELD_BYTES",
     "METADATA_CLASSES",

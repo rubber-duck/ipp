@@ -760,6 +760,7 @@ fn shape_style(position: [f32; 2], scale: [f32; 2]) -> CanvasPrimitiveStyle {
 
 fn rect(cut: [f32; 4], accent: [f32; 4], accent_width: f32) -> CanvasBoxShape {
     CanvasBoxShape::Rect {
+        section: None,
         corner_cut: cut,
         corner_accent: accent,
         corner_accent_width: accent_width,

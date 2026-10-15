@@ -4,7 +4,7 @@ A control's parts move between the appearances its interaction key resolves: its
 
 ## Timing rows
 
-Timing comes from [`GuiMotionPart`](component.rs) rows in the [`GuiThemeMotion`](component.rs) companion of the theme a `GuiSkin` names, then from the motion rows of the control's [default look](../presentation/looks.rs), its kind's or the dial's, each property resolving independently along the part's chain exactly as appearance properties do. A row is keyed by a qualified part identity and sets any of:
+Timing comes from [`GuiMotionPart`](component.rs) rows in the [`GuiThemeMotion`](component.rs) companion of the theme a `GuiSkin` names, each property resolving independently along the part's chain exactly as appearance properties do. A row is keyed by a qualified part identity and sets any of:
 
 - `duration`: Host seconds of the transition into that appearance;
 - `easing`: 0 linear, 1 smoothstep, 2 ease-out cubic ([`GuiMotionEasing`](component.rs)); absent is linear;
@@ -18,11 +18,9 @@ Timing comes from [`GuiMotionPart`](component.rs) rows in the [`GuiThemeMotion`]
 
 No resolved duration, a zero duration or reduced motion make the change immediate, and so does a change that leaves every animated value where it was. A focus ring or a check mark without rows therefore changes at once. A transition needs no clip: its destination is the resolved appearance.
 
-The built-in looks state the reference sheet's rules this way: hover in 80 ms (the hovered row) and out 120 ms (the base row, the transition into idle); a press immediate with its release over 100 ms (the pressed row's zero duration and its exit); disable immediate both ways (zero duration and exit); a checked fill or a selection over 100 ms (variant rows); the switch block over 160 ms with an ease-out cubic (its variant rows). Each exported look carries its motion rows, so a theme made from one moves as the look does.
-
 ## Channels and material
 
-A transition animates the part's colour, opacity, scale, horizontal alignment, line colour, line width and glow intensity ([`GuiMotionValues`](runtime_state.rs)), from the displayed values to the destination's, with paint's neutral value where one end sets nothing. Every other property is material: it adopts the destination when the transition starts, keeps the origin's value where the destination sets none, so a glow keeps its reach while it fades out, and keeps the origin's paint asset until the transition ends. Gradient stops and geometry, corner shapes, fill modes, strokes and glow reach and colour do not change between the built-in looks' states, and a stepped shape value cannot interpolate; animating them would add per-frame work no look uses.
+A transition animates the part's colour, opacity, scale, horizontal alignment, line colour, line width and glow intensity ([`GuiMotionValues`](runtime_state.rs)), from the displayed values to the destination's, with paint's neutral value where one end sets nothing. Every other property is material: it adopts the destination when the transition starts, keeps the origin's value where the destination sets none, so a glow keeps its reach while it fades out, and keeps the origin's paint asset until the transition ends. Gradient stops and geometry, corner shapes, fill modes, strokes and glow reach and colour do not change unless authored by a client, and a stepped shape value cannot interpolate; animating them would add per-frame work no look uses.
 
 A part that paints only while visible fades toward zero opacity: an unchecked indicator its look leaves unstyled, and a focus ring that no longer shows. The painter keeps drawing either while its channel is above zero.
 
@@ -34,7 +32,7 @@ GUI records each control's last key in schema-ignored state of its `GuiBehavior`
 
 `AnimationSystem` is the sole sampler. It restarts a part's clock when its transition identity changes, advances it by each Host frame, writes the eased sample and marks the transition settled when the elapsed time reaches the authored duration. GUI releases settled channels at its next preparation. Generic fields, ordinary controllers and persistence cannot address the channels. Restored and replaced controls start without them: preparation first records their key, so the replacement itself appears at once. Exact control and `GuiBehavior` incarnations fence every request and sample.
 
-A World that does not select `AnimationSystem` records no keys and creates no channels: every part paints its resolved appearance and every change is immediate. `GuiThemeMotion` therefore requires the Animation System.
+A World that does not select `AnimationSystem` records no keys and creates no channels: every part paints its resolved appearance and every change is immediate. `GuiThemeMotion` may still be authored, so one skin definition works in Worlds with or without animation.
 
 ## Reduced motion
 

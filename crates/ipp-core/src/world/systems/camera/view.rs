@@ -138,6 +138,68 @@ impl HostRuntime {
         Ok((view, hit))
     }
 
+    /// Pick in the selected Camera domain, with a plane for scene-local dragging.
+    pub fn pick_camera_domain(
+        &self,
+        root: ViewQueryTarget,
+        path: &[WorldAttachmentToken],
+        point: [f32; 2],
+        include_view_plane: bool,
+    ) -> Result<(ViewDescriptor, Option<crate::ViewPickHit>), ErrorReason> {
+        if !point
+            .iter()
+            .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+        {
+            return Err(ErrorReason::InvalidViewport);
+        }
+        let view = self.resolve_camera_view(root, path)?;
+        let camera = self
+            .output(view.publication, view.output)
+            .and_then(|chunk| chunk.data::<CameraPublication>())
+            .ok_or(ErrorReason::InvalidEntity)?;
+        let ray = camera.ray_for_extent(point, view.extent)?;
+        let hit =
+            self.pick_publication(view.publication, view.output, &ray.ray, ray.near, ray.far)?;
+        let hit = hit
+            .map(|mut identity| {
+                let position = std::array::from_fn(|index| {
+                    (ray.ray.origin[index] + identity.hit.distance * ray.ray.direction[index])
+                        as f32
+                });
+                if !position.iter().all(|value| value.is_finite()) {
+                    return Err(ErrorReason::InvalidGeometry);
+                }
+                let view_plane = if include_view_plane {
+                    let forward = camera.pose.vector([0.0, 0.0, -1.0]);
+                    let length = forward
+                        .iter()
+                        .map(|value| value * value)
+                        .sum::<f64>()
+                        .sqrt();
+                    Some(WorldPlane {
+                        point: position,
+                        normal: forward.map(|value| (value / length) as f32),
+                    })
+                } else {
+                    None
+                };
+                let mut composed_path: Vec<_> = path
+                    .iter()
+                    .map(|token| (token.parent(), token.anchor()))
+                    .collect();
+                composed_path.append(&mut identity.path);
+                identity.path = composed_path;
+
+                Ok(crate::ViewPickHit {
+                    identity,
+                    position,
+                    view_plane,
+                })
+            })
+            .transpose()?;
+        Ok((view.root, hit))
+    }
+
     /// Prepare a normal queued CameraSystem command. No evaluation or authoring occurs here.
     /// No source constraint reads current completed state at mutation; an exact source never falls back.
     pub fn camera_navigation(

@@ -1,3 +1,5 @@
+import { applyClientSkin } from "../support/client-skin.js";
+import type { GuiContract } from "./gui-lifecycle.js";
 /** A 100000-item VirtualList through a generated client, independent of
  * process launch and wire layout.
  *
@@ -169,7 +171,10 @@ function changedIn(
  * Exercise a presented 100000-item VirtualList: ranges, anchoring, physical
  * wheel scrolling, semantic scroll-to-index, completed frames and restore.
  */
-export async function exerciseGuiVirtualList(host: GuiHost) {
+export async function exerciseGuiVirtualList(
+  host: GuiHost,
+  contract: GuiContract,
+) {
   const worlds: WorldReference[] = [];
   const sessions: Client[] = [];
   let presentation: PresentedGui | undefined;
@@ -223,6 +228,7 @@ export async function exerciseGuiVirtualList(host: GuiHost) {
       ]),
     );
     const list = aliasId(outcome, 3);
+    await applyClientSkin(client, contract, list, "scroll");
     presentation = await presentGui(host, [{ child: created.reference }]);
     const p = presentation;
 

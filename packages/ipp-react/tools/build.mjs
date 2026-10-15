@@ -18,6 +18,8 @@ const result = await build({
     canvas: resolve(directory, "src/canvas.ts"),
     gui: resolve(directory, "src/gui.ts"),
     "gui-kit": resolve(directory, "src/gui-kit.ts"),
+    "gui-glass": resolve(directory, "src/gui-glass.ts"),
+    "gui-cybertron": resolve(directory, "src/gui-cybertron.ts"),
   },
   outdir: output,
   chunkNames: "shared-[hash]",

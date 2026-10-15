@@ -62,6 +62,8 @@ ipp_schema_derive::component_registry! {
         CylinderSurface = 54,
         SphereSurface = 55,
         CanvasLayerTransition = 56,
+        GuiMetrics = 57,
+        PresentationGate = 58,
         BufferDataSourceBinding = 100,
         StreamingDataSourceBinding = 101,
         PlotFrame2d = 103,
@@ -73,6 +75,8 @@ ipp_schema_derive::component_registry! {
         PlotHeightSurface3d = 109,
         PlotPoints3d = 110,
         PlotPie3d = 111,
+        PlotCalloutStyle = 112,
+        PlotCalloutPaint = 113,
     }
 }
 
@@ -94,7 +98,7 @@ pub(crate) trait ComponentCellVisitor {
 
 /// Streams target/build identity and the compiled registry.
 pub fn write_contract(sink: &mut impl ContractSink) {
-    sink.write(&10u16.to_le_bytes());
+    sink.write(&11u16.to_le_bytes());
     write_string(sink, std::env::consts::ARCH);
     write_string(sink, std::env::consts::OS);
     sink.write(&[usize::BITS as u8]);

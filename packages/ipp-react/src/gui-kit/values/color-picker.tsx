@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A colour picker: the runtime's colour control, its saturation-value field,
  * hue rail, optional alpha rail and swatch, with the caption and the rails'
@@ -29,7 +30,7 @@
  * channels, the presets, the hex row and the error line.
  */
 import { useRef, useState, type ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import type {
   GuiFocusChangeEvent,
   GuiHsva,
@@ -72,7 +73,7 @@ export interface ColorPickerProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the picker's root entity; its parts extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** The caption naming the colour, such as COLOR, in the accent. */
   readonly label?: string;
   /** The colour, controlled; pair it with `onChange`. */
@@ -155,7 +156,7 @@ function geometry(kit: GuiKitScope, alpha: boolean) {
 }
 
 export function ColorPicker({
-  id,
+  id: providedId,
   layer = 0,
   label,
   value,
@@ -167,6 +168,7 @@ export function ColorPicker({
   layout,
   ref,
 }: ColorPickerProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const g = geometry(kit, alpha);
@@ -258,6 +260,7 @@ export function ColorPicker({
 
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -268,6 +271,7 @@ export function ColorPicker({
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         <Entity id={`${id}/caption`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_STACK} height={g.row} />
           <Children>
             {label !== undefined && (
@@ -300,9 +304,11 @@ export function ColorPicker({
           </Children>
         </Entity>
         <Entity id={`${id}/main`}>
+          <PresentationGate open />
           <Layout kind={LAYOUT_ROW} height={g.control[1]} />
           <Children>
             <Entity id={`${id}/control`}>
+              <PresentationGate open />
               <Layout
                 kind={LAYOUT_LEAF}
                 width={g.control[0]}
@@ -312,6 +318,9 @@ export function ColorPicker({
                 enabled={!disabled}
                 {...(label === undefined ? {} : { semantic_label: label })}
               />
+              {kit.controlTheme("color") && (
+                <Skin theme={kit.controlTheme("color")!} />
+              )}
               <Color
                 {...color.control}
                 alpha_rail={alpha}
@@ -324,6 +333,7 @@ export function ColorPicker({
               />
             </Entity>
             <Entity id={`${id}/channels`}>
+              <PresentationGate open />
               <Layout
                 kind={LAYOUT_COLUMN}
                 width={kit.unit(CHANNELS)}
@@ -360,6 +370,7 @@ export function ColorPicker({
         </Entity>
         {presetsRow && (
           <Entity id={`${id}/presets`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_ROW}
               height={g.swatch}
@@ -370,7 +381,7 @@ export function ColorPicker({
             <Children>
               <Row
                 id={`${id}/presets/caption`}
-                height={t.smallHeight}
+                height={kit.unit(t.smallHeight)}
                 layout={{
                   width: lineWidth("Presets", kit.typeSize("body")),
                 }}
@@ -395,7 +406,7 @@ export function ColorPicker({
         )}
         <Row
           id={`${id}/hex`}
-          height={t.controlHeight}
+          height={kit.unit(t.controlHeight)}
           layout={{ margin_top: g.gap }}
         >
           <TextLine
@@ -405,6 +416,7 @@ export function ColorPicker({
             layout={{ margin_left: g.labelInset }}
           />
           <Entity id={`${id}/hex/field`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_LEAF}
               height={g.field}
@@ -412,6 +424,9 @@ export function ColorPicker({
               margin_left={g.gap}
             />
             <Behavior enabled={!disabled} semantic_label="Hex" />
+            {kit.controlTheme("textInput") && (
+              <Skin theme={kit.controlTheme("textInput")!} />
+            )}
             <TextInput
               text={hex}
               ref={(handle) => {
@@ -458,7 +473,7 @@ export function ColorPicker({
 
 /** A box of a stack at `x` across, `height` high, centring its content. */
 function Placed({
-  id,
+  id: providedId,
   x,
   height,
   children,
@@ -468,6 +483,7 @@ function Placed({
   readonly height: number;
   readonly children: ReactNode;
 }) {
+  const id = useEntityId(providedId);
   return (
     <Row id={id} layout={{ height, margin_left: x, align_x: -1 }}>
       {children}
@@ -481,7 +497,7 @@ function Placed({
  * the unit beside it, or the unit's room.
  */
 function ChannelField({
-  id,
+  id: providedId,
   letter,
   max,
   units,
@@ -505,6 +521,7 @@ function ChannelField({
   readonly onDiscard: (event: { readonly tick: bigint }) => void;
   readonly onFocusChange: (event: GuiFocusChangeEvent) => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const body = kit.typeSize("body");
@@ -513,7 +530,7 @@ function ChannelField({
   return (
     <Row
       id={id}
-      height={t.controlHeight}
+      height={kit.unit(t.controlHeight)}
       {...(first ? {} : { layout: { margin_top: gap } })}
     >
       <TextLine
@@ -523,6 +540,7 @@ function ChannelField({
         layout={{ width: lineWidth(letter, body) }}
       />
       <Entity id={`${id}/field`}>
+        <PresentationGate open />
         <Layout
           kind={LAYOUT_LEAF}
           height={kit.unit(t.controlHeight)}
@@ -530,6 +548,9 @@ function ChannelField({
           margin_left={gap}
         />
         <Behavior enabled={!disabled} semantic_label={letter} />
+        {kit.controlTheme("textInput") && (
+          <Skin theme={kit.controlTheme("textInput")!} />
+        )}
         <TextInput
           numeric
           value={number}
@@ -559,7 +580,7 @@ function ChannelField({
  * secondary look's states, so hover and focus light its edge.
  */
 function Swatch({
-  id,
+  id: providedId,
   preset,
   disabled,
   onPress,
@@ -569,11 +590,13 @@ function Swatch({
   readonly disabled: boolean;
   readonly onPress: () => void;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const side = kit.unit(kit.tokens.smallHeight);
-  const parts = useOwnRow({ color: linearColor(preset.value) });
+  const parts = useOwnRow({ color: linearColor(preset.value), paint: false });
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout
         kind={LAYOUT_LEAF}
         width={side}

@@ -145,6 +145,17 @@ export async function exerciseCanvasWorlds(
         encoded(attachment.child) === encoded(world),
       `SurfaceCanvas attachment named an output: ${encoded(attachment)}`,
     );
+    const receipt = owned.attachment;
+    check(
+      receipt &&
+        encoded(receipt.parent) === encoded(parentWorld) &&
+        encoded(receipt.child) === encoded(world) &&
+        receipt.anchor ===
+          findEntity(await parent.inspect(), "panel-anchor")!.id &&
+        receipt.incarnation > 0n &&
+        receipt.revision > 0n,
+      "CanvasWorld did not expose its exact acknowledged attachment receipt",
+    );
     const child = await host.openWorld(world);
     sessions.push(child);
     check(
@@ -163,6 +174,10 @@ export async function exerciseCanvasWorlds(
         handle.current.world.incarnation === world.incarnation,
       "A changed extent recreated the CanvasWorld's World",
     );
+    check(
+      encoded(handle.current.attachment) === encoded(receipt),
+      "Updating canvas dimensions changed its structural attachment receipt",
+    );
     report.push(
       "changed CanvasWorld props update the Canvas state in place and omitted density keeps its value",
     );
@@ -170,6 +185,10 @@ export async function exerciseCanvasWorlds(
     const closed = handle.current.closed;
     await root.render(null);
     await closed;
+    check(
+      handle.current === null,
+      "Removing CanvasWorld retained its live ref",
+    );
     check(!(await exists(world)), "Removing CanvasWorld left its World");
     report.push("removing CanvasWorld destroys the World it created");
 

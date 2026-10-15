@@ -13,5 +13,4 @@ if (!contract)
     "Publish the runtime's generated module as globalThis.ippHostContract before importing the scenario",
   );
 
-export const GUI_SKIN_TOKENS = contract.GUI_SKIN_TOKENS;
 export const components = contract.components;

@@ -203,7 +203,7 @@ fn settle<D: RenderDevice>(
             host.root_output(selection.world().id())
                 .map(|(output, _, publication)| (output, publication)),
         )?;
-        host.progress_assets();
+        super::task_scheduler::progress(host);
     }
     let publication = host.root_output(selection.world().id()).unwrap().2;
     let summary = renderer.draw(host, selection, publication, viewport(), 1.0)?;
@@ -284,6 +284,7 @@ fn selected_roots<D: RenderDevice>(
     };
 
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let first = host.create_world(Default::default(), &super::selection::scene())?;
     let second = host.create_world(Default::default(), &super::selection::scene())?;
@@ -452,6 +453,7 @@ fn spatial_child_recovery<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::scene())?;
     let child = host.create_world(Default::default(), &super::selection::scene())?;
@@ -543,6 +545,7 @@ fn containing_debug_policy<D: RenderDevice>(
     use ipp_core::systems::geometry::{GeometryDefinition, GeometryShape};
 
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::scene())?;
     let child = host.create_world(Default::default(), &super::selection::scene())?;
@@ -728,6 +731,7 @@ fn transparency<D: RenderDevice>(
     output: &Path,
 ) -> Result<()> {
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::scene())?;
     let child = host.create_world(Default::default(), &super::selection::scene())?;
@@ -766,6 +770,7 @@ fn spatial_shadows<D: RenderDevice>(
 ) -> Result<()> {
     use ipp_core::components::{Light, PbrMaterial};
     let mut host = HostRuntime::new();
+    let _tasks = super::task_scheduler::SmokeAssetTasks::install(&mut host);
     renderer.install(&mut host)?;
     let parent = host.create_world(Default::default(), &super::selection::scene())?;
     let child = host.create_world(Default::default(), &super::selection::scene())?;

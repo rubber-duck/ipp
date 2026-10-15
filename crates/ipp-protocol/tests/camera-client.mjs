@@ -352,6 +352,7 @@ test("all motion variants conform to the canonical manifest and malformed fields
           tag: tag("REQUEST_CAMERA_NAVIGATE"),
           binding: bindingLayout,
           publication: publicationLayout(publication),
+          path: [],
           kind,
           first,
           second,

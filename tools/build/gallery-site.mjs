@@ -9,9 +9,10 @@ import { artifact, bundleBrowser, workspace } from "./helpers.mjs";
 const locations = [
   ["/target/browser-build/render/", "./runtime/"],
   ["/target/gallery-assets/", "./assets/"],
-  ["/target/gallery-gui-assets/", "./assets/gui/"],
   ["/target/font-assets/", "./assets/shared/"],
   ["/target/gallery-platformer-assets/", "./assets/platformer/"],
+  ["/target/demos-cockpit-assets/", "./assets/cockpit/"],
+  ["/target/demos-drawings/", "./assets/drawings/"],
 ];
 
 export async function buildGallerySite(output) {
@@ -21,7 +22,7 @@ export async function buildGallerySite(output) {
     await cp(resolve(workspace, source), target);
   };
   await bundleBrowser(
-    resolve(workspace, "examples/world-gallery/main.tsx"),
+    resolve(workspace, "examples/demos/main.tsx"),
     resolve(output, "gallery.js"),
     "production",
     {
@@ -36,7 +37,7 @@ export async function buildGallerySite(output) {
           name: "gallery-site-locations",
           setup(build) {
             build.onLoad(
-              { filter: /[/\\]examples[/\\]world-gallery[/\\].*\.[jt]sx?$/ },
+              { filter: /[/\\]examples[/\\]demos[/\\].*\.[jt]sx?$/ },
               async ({ path }) => {
                 let contents = await readFile(path, "utf8");
                 for (const [source, destination] of locations)
@@ -55,21 +56,15 @@ export async function buildGallerySite(output) {
   );
 
   const css = await transform(
-    await readFile(
-      resolve(workspace, "examples/world-gallery/styles.css"),
-      "utf8",
-    ),
+    await readFile(resolve(workspace, "examples/demos/styles.css"), "utf8"),
     { loader: "css", minify: true, legalComments: "none" },
   );
   await writeFile(resolve(output, "gallery.css"), css.code);
   const html = (
-    await readFile(
-      resolve(workspace, "examples/world-gallery/index.html"),
-      "utf8",
-    )
+    await readFile(resolve(workspace, "examples/demos/index.html"), "utf8")
   )
-    .replaceAll("/examples/world-gallery/styles.css", "./gallery.css")
-    .replaceAll("/target/gallery-build/world-gallery.js", "./gallery.js")
+    .replaceAll("/examples/demos/styles.css", "./gallery.css")
+    .replaceAll("/target/gallery-build/demos.js", "./gallery.js")
     .replace(/>\s+</g, "><");
   await writeFile(resolve(output, "index.html"), html);
   await writeFile(resolve(output, ".nojekyll"), "");
@@ -100,19 +95,6 @@ export async function buildGallerySite(output) {
     "target/font-assets/shure-tech-mono.ippf",
     "assets/shared/shure-tech-mono.ippf",
   );
-  for (const name of await readdir(
-    resolve(workspace, "target/gallery-gui-assets"),
-    { recursive: true, withFileTypes: true },
-  )) {
-    if (!name.isFile()) continue;
-    const source = resolve(name.parentPath, name.name);
-    const path = relative(
-      resolve(workspace, "target/gallery-gui-assets"),
-      source,
-    );
-    if ([".ippd", ".ippm", ".ippt", ".json"].includes(extname(path)))
-      await copy(source, `assets/gui/${path}`);
-  }
 
   const platformer = "target/gallery-platformer-assets";
   const catalog = JSON.parse(
@@ -123,8 +105,22 @@ export async function buildGallerySite(output) {
     "platformer.ipp",
     "manifest.json",
     "route.json",
+    "pose-origins.json",
   ])
     await copy(`${platformer}/${name}`, `assets/platformer/${name}`);
+
+  const cockpit = "target/demos-cockpit-assets";
+  const cockpitCatalog = JSON.parse(
+    await readFile(resolve(workspace, cockpit, "catalog.json"), "utf8"),
+  );
+  for (const name of [
+    ...Object.keys(cockpitCatalog),
+    "cockpit.ipp",
+    "manifest.json",
+  ])
+    await copy(`${cockpit}/${name}`, `assets/cockpit/${name}`);
+  for (const name of await readdir(resolve(workspace, "target/demos-drawings")))
+    await copy(`target/demos-drawings/${name}`, `assets/drawings/${name}`);
 
   for (const name of [
     "ShureTechMono-OFL.txt",
@@ -136,7 +132,7 @@ export async function buildGallerySite(output) {
     "LICENSE-Character-Animations.txt",
   ])
     await copy(
-      `examples/world-gallery/worlds/platformer/authoring/${name}`,
+      `examples/demos/scenes/platformer/authoring/${name}`,
       `notices/${name}`,
     );
   for (const name of ["react", "react-dom", "react-reconciler", "scheduler"])

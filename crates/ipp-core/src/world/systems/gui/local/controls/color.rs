@@ -7,16 +7,11 @@
 //!
 //! # Arrangement
 //!
-//! Lengths are ems of the control's font, so the arrangement keeps its
-//! proportions at every unit scale. The surfaces lie half an em inside the
-//! control's box, which keeps the marker and the thumbs inside it at every
-//! value, and one em apart. The saturation-value field takes the box's width
-//! less the rails beside it at its right, the hue rail and, when shown, the
-//! alpha rail, each 1.5 em wide and as tall as the field. The swatch runs
-//! along the bottom under all of them, 1.5 em tall. An unsized control has a
-//! square field 9 em across: 15 by 12.5 em with the alpha rail, and 12.5 em
-//! square without. A resized control grows or shrinks the field; the rails
-//! and the swatch keep their thickness.
+//! The skin supplies insets, gaps, rail and swatch thickness, and the preferred
+//! field size through GuiMetrics. Shared theme lengths scale with its em and
+//! the inherited font; control overrides are absolute. The saturation-value
+//! field fills the space left by the right-hand hue and optional alpha rails
+//! and the bottom swatch. Paint and input use the same resolved arrangement.
 //!
 //! # Values
 //!
@@ -43,27 +38,7 @@
 //! take it to 0 and 1. The wheel over the focused rail steps it; over the
 //! field it scrolls, as the field has no one axis to step.
 
-/// Margin of the surfaces from the control's box, in ems: half a gap, at
-/// least the marker's radius and half a thumb.
-pub(crate) const COLOR_INSET_EMS: f32 = 0.5;
-
-/// Gap between the surfaces, in ems.
-pub(crate) const COLOR_GAP_EMS: f32 = 1.0;
-
-/// Width of a rail, in ems.
-pub(crate) const COLOR_RAIL_EMS: f32 = 1.5;
-
-/// Height of the swatch, in ems.
-pub(crate) const COLOR_SWATCH_EMS: f32 = 1.5;
-
-/// Side of an unsized control's field, in ems.
-pub(crate) const COLOR_FIELD_EMS: f32 = 9.0;
-
-/// Diameter of the field's marker, in ems.
-pub(crate) const COLOR_MARKER_EMS: f32 = 0.75;
-
-/// Height of a rail's thumb, a bar across the rail, in ems.
-pub(crate) const COLOR_THUMB_EMS: f32 = 0.5;
+use crate::systems::gui::presentation::GuiMetrics;
 
 /// Step of the arrow keys and the wheel on every channel.
 pub(crate) const COLOR_STEP: f32 = 0.01;
@@ -77,13 +52,13 @@ pub(crate) const SATURATION: usize = 1;
 pub(crate) const VALUE: usize = 2;
 pub(crate) const ALPHA: usize = 3;
 
-/// The size of an unsized colour control with a font of `font_size`.
-pub(crate) fn intrinsic_size(font_size: f32, alpha_rail: bool) -> [f32; 2] {
+/// The size of an unsized colour control from its resolved skin metrics.
+pub(crate) fn intrinsic_size(metrics: &GuiMetrics, alpha_rail: bool) -> [f32; 2] {
     let rails = 1.0 + f32::from(u8::from(alpha_rail));
-    let side = 2.0 * COLOR_INSET_EMS + COLOR_FIELD_EMS;
+    let side = 2.0 * metrics.color_inset + metrics.color_field;
     [
-        (side + rails * (COLOR_GAP_EMS + COLOR_RAIL_EMS)) * font_size,
-        (side + COLOR_GAP_EMS + COLOR_SWATCH_EMS) * font_size,
+        side + rails * (metrics.color_gap + metrics.color_rail),
+        side + metrics.color_gap + metrics.color_swatch,
     ]
 }
 
@@ -109,15 +84,13 @@ pub(crate) struct GuiColorLayout {
 
 impl GuiColorLayout {
     /// The arrangement in a box of `size` for a font of `font_size`.
-    pub(crate) fn new(size: [f32; 2], font_size: f32, alpha_rail: bool) -> Self {
-        let em = |ems: f32| ems * font_size.max(0.0);
+    pub(crate) fn new(size: [f32; 2], metrics: &GuiMetrics, alpha_rail: bool) -> Self {
         let [inset, gap, rail, swatch] = [
-            COLOR_INSET_EMS,
-            COLOR_GAP_EMS,
-            COLOR_RAIL_EMS,
-            COLOR_SWATCH_EMS,
-        ]
-        .map(em);
+            metrics.color_inset,
+            metrics.color_gap,
+            metrics.color_rail,
+            metrics.color_swatch,
+        ];
         let width = (size[0] - 2.0 * inset).max(0.0);
         let height = (size[1] - 2.0 * inset).max(0.0);
         let rails = 1.0 + f32::from(u8::from(alpha_rail));
@@ -129,8 +102,8 @@ impl GuiColorLayout {
             hue,
             alpha: alpha_rail.then_some([hue[0] + rail + gap, inset, rail, tall]),
             swatch: [inset, inset + tall + gap, width, swatch],
-            marker: em(COLOR_MARKER_EMS),
-            thumb: em(COLOR_THUMB_EMS),
+            marker: metrics.color_marker,
+            thumb: metrics.color_thumb,
             gap,
         }
     }

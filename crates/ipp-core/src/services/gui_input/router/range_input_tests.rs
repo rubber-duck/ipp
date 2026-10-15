@@ -51,7 +51,7 @@ impl Scene {
             ([4.0, 12.0], [2.0, 10.0])
         };
         let (root, root_entity) = canvas_root(&mut host, world, extent[0], extent[1]);
-        let entity = create(
+        let entity = create_painted(
             &mut host,
             world,
             vec![
@@ -60,7 +60,7 @@ impl Scene {
             ],
             Some(root_entity),
         );
-        let button = create(
+        let button = create_painted(
             &mut host,
             world,
             vec![
@@ -83,7 +83,7 @@ impl Scene {
     /// a value fraction.
     fn at(&mut self, fraction: f32) -> [f32; 2] {
         let rect = self.rig.bounds(self.world, self.slider);
-        let thumb = slider_rail(rect, self.axis)
+        let thumb = slider_rail(rect, self.axis, 0.75)
             .unwrap()
             .thumb_rect(fraction)
             .unwrap();
@@ -268,23 +268,32 @@ fn overlapping_thumbs_inside_the_range_give_the_pointer_the_last_active_thumb() 
 }
 
 #[test]
-fn the_wheel_steps_the_focused_thumb() {
+fn the_wheel_steps_the_pointed_thumb_without_moving_keyboard_focus() {
     let mut scene = Scene::new(range(2.0, 8.0, 0));
-    let over = scene.at(0.5);
-    let wheel = |delta: f32, shift: bool| GuiPhysicalInput::Wheel {
-        point: over,
+    let wheel = |point: [f32; 2], delta: f32, shift: bool| GuiPhysicalInput::Wheel {
+        point,
         delta: [0.0, delta],
         shift,
     };
     scene.routed(key(Tab));
-    scene.routed(key(Tab));
-    scene.routed(wheel(1.0, false));
+    let upper = scene.at(0.8);
+    scene.routed(wheel(upper, 1.0, false));
     assert_eq!(scene.values(), [2.0, 7.0]);
-    scene.routed(wheel(-1.0, true));
+    assert_eq!(scene.focus_part(), Some(0));
+    let upper = scene.at(0.7);
+    scene.routed(wheel(upper, -1.0, true));
     assert_eq!(scene.values(), [2.0, 7.25]);
-    scene.routed(key(BackTab));
-    scene.routed(wheel(-1.0, false));
+    let lower = scene.at(0.2);
+    scene.routed(wheel(lower, -1.0, false));
     assert_eq!(scene.values(), [3.0, 7.25]);
+    assert_eq!(scene.focus_part(), Some(0));
+    scene.rig.send(key(Tab));
+    scene.rig.send(key(Tab));
+    assert!(scene.rig.snapshot(scene.world, scene.button).focused);
+    let lower = scene.at(0.3);
+    scene.routed(wheel(lower, -1.0, false));
+    assert_eq!(scene.values(), [4.0, 7.25]);
+    assert!(scene.rig.snapshot(scene.world, scene.button).focused);
     scene.finish();
 }
 

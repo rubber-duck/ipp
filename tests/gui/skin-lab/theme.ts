@@ -1,3 +1,8 @@
+import {
+  cybertronLooks,
+  cybertronControlMetrics,
+} from "@ipp/react/gui-cybertron";
+import type { MetricsProps } from "@ipp/react/gui";
 /**
  * Theme part rows written in the target contract's own field names. A row
  * names its paint key (part, optional state, optional checked/unchecked
@@ -13,16 +18,11 @@
  * `tests/react/gui-authoring/pages/gui-paint.tsx` shows each in use. Colours are linear RGBA: use
  * `srgb()` for sheet colours.
  *
- * Rows sit on the runtime's default look of the control they skin, property
- * by property, and their lengths are absolute logical units. A theme may
- * instead name a built-in look of the Host's generated contract
- * (`GUI_SKIN_LOOKS`), such as `{ look: "switch" }`: that look's rows with its
- * `em`, so its lengths follow each control's font, or, with a `scale`, its
- * rows drawn at that scale in absolute units, as a specimen of a sheet drawn
- * at another scale needs them. `rows` replace the look's properties at their
- * paint keys. Such a theme also carries the look's motion rows, so its
- * controls move between states as the look does; plain rows leave timing to
- * the default look of each control's kind.
+ * Plain rows enable only the appearance they declare, in absolute logical
+ * units. A theme may name a client Cybertron recipe, such as `{ look: "switch" }`.
+ * Its rows, measurements and motion are declared explicitly. A `scale` draws
+ * its lengths in absolute units; otherwise its em follows the inherited font.
+ * Additional rows replace the recipe's properties at their paint keys.
  */
 import { LENGTHS } from "./scale.js";
 
@@ -40,8 +40,8 @@ export type SkinRow = {
 /** Rows in absolute logical units. */
 export type SkinRows = readonly SkinRow[];
 
-/** A built-in look of the connected runtime, by its contract name. */
-export interface BuiltInLook {
+/** A client Cybertron recipe, by name. */
+export interface CybertronLook {
   readonly look: string;
   /** Draw the look's lengths this many times larger, in absolute units. */
   readonly scale?: number;
@@ -49,7 +49,7 @@ export interface BuiltInLook {
   readonly rows?: SkinRows;
 }
 
-export type SkinTheme = SkinRows | BuiltInLook;
+export type SkinTheme = SkinRows | CybertronLook;
 
 /** Named themes of one theme module; specimens reference them by name. */
 export type SkinThemes = Readonly<Record<string, SkinTheme>>;
@@ -58,6 +58,7 @@ export type SkinThemes = Readonly<Record<string, SkinTheme>>;
 export interface EncodedTheme {
   readonly parts: Uint8Array<ArrayBuffer>;
   readonly em: number;
+  readonly metrics?: MetricsProps | undefined;
   /** The look's motion rows, for a theme that names a look with any. */
   readonly motion?: Uint8Array<ArrayBuffer>;
 }
@@ -83,16 +84,6 @@ export interface ThemeContract {
   }[];
   readonly GuiTheme: RowsEncoder;
   readonly GuiThemeMotion: RowsEncoder;
-  readonly GUI_SKIN_LOOKS: Readonly<
-    Record<
-      string,
-      {
-        readonly em: number;
-        readonly parts: readonly ContractRow[];
-        readonly motion: readonly ContractRow[];
-      }
-    >
-  >;
 }
 
 const STATES: readonly SkinState[] = ["idle", "hovered", "pressed", "disabled"];
@@ -147,19 +138,28 @@ function scaled(row: ContractRow, factor: number): ContractRow {
   return result as ContractRow;
 }
 
-/** A built-in look's rows, scaled and replaced as `theme` asks. */
-function look(contract: ThemeContract, theme: BuiltInLook) {
-  const look = contract.GUI_SKIN_LOOKS[theme.look];
+/** A Cybertron recipe's rows, scaled and replaced as `theme` asks. */
+function look(contract: ThemeContract, theme: CybertronLook) {
+  const looks = cybertronLooks({
+    guiPaintPartIndex: (key) =>
+      paintIndex(contract, key.part, key.state ?? null, key.variant ?? null),
+  });
+  const look = looks[theme.look as keyof typeof looks];
   if (!look)
     throw new Error(
-      `Unknown built-in look ${theme.look}; looks: ${Object.keys(contract.GUI_SKIN_LOOKS).join(", ")}`,
+      `Unknown Cybertron look ${theme.look}; looks: ${Object.keys(looks).join(", ")}`,
     );
   const rows = new Map<number, ContractRow>();
   for (const row of look.parts)
     rows.set(row.part, theme.scale ? scaled(row, theme.scale) : row);
   for (const [index, row] of keyed(contract, theme.rows ?? []))
     rows.set(index, { ...rows.get(index), ...row });
-  return { rows, em: theme.scale ? 0 : look.em, motion: look.motion };
+  return {
+    rows,
+    em: theme.scale ? 0 : look.em,
+    motion: look.motion,
+    metrics: cybertronControlMetrics(theme.look),
+  };
 }
 
 /** Rows in slot order, encoded with `encoder`. */
@@ -181,10 +181,10 @@ export function encodeTheme(
   contract: ThemeContract,
   theme: SkinTheme,
 ): EncodedTheme | undefined {
-  const { rows, em, motion } =
+  const { rows, em, motion, metrics } =
     "look" in theme
       ? look(contract, theme)
-      : { rows: keyed(contract, theme), em: 0, motion: [] };
+      : { rows: keyed(contract, theme), em: 0, motion: [], metrics: undefined };
   if (!rows.size) return undefined;
   const ordered = [...rows.entries()].sort(([left], [right]) => left - right);
   return {
@@ -193,6 +193,7 @@ export function encodeTheme(
       ordered.map(([, row]) => row),
     ),
     em,
+    metrics,
     ...(motion.length
       ? { motion: encodeRows(contract.GuiThemeMotion, motion) }
       : {}),

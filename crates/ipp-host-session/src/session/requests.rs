@@ -226,7 +226,10 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
                     }
                 }
                 RequestBody::CameraProjectQuery(query) => {
-                    if !self
+                    if !matches!(
+                        &query.view,
+                        ipp_protocol::world::view_queries::ViewQueryTarget::CameraView { .. }
+                    ) && !self
                         .world
                         .manifest()
                         .supports_operation(ipp_core::systems::WorldOperation::Camera)

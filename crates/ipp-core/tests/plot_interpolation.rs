@@ -369,3 +369,331 @@ fn percentage_is_independent_of_shared_axes_and_fixed_chart_bounds() {
     assert_eq!(fixture.value("temperature", 0), 21.25);
     assert_eq!(fixture.value("offset", 0), 5.0);
 }
+
+#[test]
+fn sibling_paint_updates_and_replacement_keep_data_geometry_and_decoration() {
+    use ipp_core::systems::canvas::{
+        CanvasPaint, CanvasPaintEntry, CanvasPrimitive, CanvasPublication, CanvasShapeFill,
+    };
+    use std::sync::Arc;
+    use support::CanvasTestHost;
+
+    let mut fixture = Fixture::new([20.0, 40.0], 1.0);
+    let output = fixture.host.canvas_output(
+        fixture.host.world_ref(fixture.world).unwrap(),
+        [640.0, 480.0],
+        100.0,
+    );
+    fixture.step(0.0);
+    let geometry = fixture.geometry().charts[0].geometry.clone();
+    let canvas = |fixture: &Fixture| {
+        fixture
+            .host
+            .output(
+                fixture.host.latest_publication(fixture.world).unwrap(),
+                output,
+            )
+            .unwrap()
+            .data::<CanvasPublication>()
+            .unwrap()
+            .clone()
+    };
+    let flat = canvas(&fixture);
+    assert!(flat.paints.is_empty());
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::CanvasPaint(CanvasPaint::default()),
+    ));
+    fixture.step(0.0);
+    let painted = canvas(&fixture);
+    assert_eq!(painted.paints.len(), 1);
+    let target = painted.paints[0].target;
+    let marks = painted.entries.iter().filter(|entry| matches!(entry.as_ref(), CanvasPaintEntry::Primitive {primitive: CanvasPrimitive::Box {fill: CanvasShapeFill::Paint {paint,..},..},..} if *paint == target)).count();
+    assert_eq!(marks, 2);
+    assert_eq!(painted.entries.len(), flat.entries.len());
+    assert!(Arc::ptr_eq(
+        &geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+
+    fixture.command(Command::SetDynamicProperty {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::CANVAS_PAINT,
+        name: "light".into(),
+        value: V::Vec4([0.1, 0.2, 0.75, 1.0]),
+    });
+    fixture.step(0.0);
+    let updated = canvas(&fixture);
+    assert_eq!(updated.entries, painted.entries);
+    assert_ne!(updated.paints, painted.paints);
+    assert!(Arc::ptr_eq(
+        &geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::CANVAS_PAINT,
+    });
+    fixture.step(0.0);
+    let removed = canvas(&fixture);
+    assert!(removed.paints.is_empty());
+    for (removed, original) in removed.entries.iter().zip(flat.entries.iter()) {
+        let (
+            CanvasPaintEntry::Primitive {
+                primitive: removed,
+                ..
+            },
+            CanvasPaintEntry::Primitive {
+                primitive: original,
+                ..
+            },
+        ) = (removed.as_ref(), original.as_ref())
+        else {
+            panic!("primitive chart")
+        };
+        assert_eq!(removed, original);
+    }
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::CanvasPaint(CanvasPaint::default()),
+    ));
+    fixture.step(0.0);
+    let replaced = canvas(&fixture);
+    assert_eq!(replaced.paints.len(), 1);
+    assert_ne!(replaced.paints[0].target.incarnation, target.incarnation);
+    assert!(Arc::ptr_eq(
+        &geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+}
+
+#[test]
+fn sibling_paint_selects_line_and_sector_paths_without_painting_axes() {
+    use ipp_core::systems::canvas::{
+        CanvasPaint, CanvasPaintEntry, CanvasPrimitive, CanvasPublication,
+    };
+    use support::CanvasTestHost;
+    let mut fixture = Fixture::new([20.0, 40.0], 1.0);
+    let output = fixture.host.canvas_output(
+        fixture.host.world_ref(fixture.world).unwrap(),
+        [640.0, 480.0],
+        100.0,
+    );
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_BARS2D,
+    });
+    let series = PlotSeriesRow {
+        x: "position".into(),
+        y: "temperature".into(),
+        value: "temperature".into(),
+        ..Default::default()
+    };
+    let mut line = PlotLine2d {
+        interpolation: 1,
+        ..Default::default()
+    };
+    line.series.push(series.clone()).unwrap();
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PlotLine2d(line),
+    ));
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::CanvasPaint(CanvasPaint::default()),
+    ));
+    fixture.step(0.0);
+    let canvas = fixture
+        .host
+        .output(
+            fixture.host.latest_publication(fixture.world).unwrap(),
+            output,
+        )
+        .unwrap()
+        .data::<CanvasPublication>()
+        .unwrap();
+    assert_eq!(canvas.paints.len(), 1);
+    let painted = canvas
+        .entries
+        .iter()
+        .filter(|entry| {
+            matches!(
+                entry.as_ref(),
+                CanvasPaintEntry::Primitive {
+                    primitive: CanvasPrimitive::Path {
+                        paint: Some(_),
+                        ..
+                    },
+                    ..
+                }
+            )
+        })
+        .count();
+    assert_eq!(painted, 3);
+    assert!(canvas.entries.iter().any(|entry| matches!(
+        entry.as_ref(),
+        CanvasPaintEntry::Primitive {
+            primitive: CanvasPrimitive::Path {
+                paint: None,
+                ..
+            },
+            ..
+        }
+    )));
+    let line_geometry = fixture.geometry().charts[0].geometry.clone();
+    assert_eq!(line_geometry.hits.len(), 2);
+    fixture.command(Command::SetDynamicProperty {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::CANVAS_PAINT,
+        name: "profile".into(),
+        value: V::Vec4([1.0, 0.0, 1.0, 0.5]),
+    });
+    fixture.step(0.0);
+    assert!(std::sync::Arc::ptr_eq(
+        &line_geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_LINE2D,
+    });
+    let mut pie = PlotPie2d {
+        inner_radius: 0.35,
+        ..Default::default()
+    };
+    pie.series.push(series).unwrap();
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PlotPie2d(pie),
+    ));
+    fixture.step(0.0);
+    let canvas = fixture
+        .host
+        .output(
+            fixture.host.latest_publication(fixture.world).unwrap(),
+            output,
+        )
+        .unwrap()
+        .data::<CanvasPublication>()
+        .unwrap();
+    assert_eq!(canvas.paints.len(), 1);
+    assert_eq!(
+        canvas
+            .entries
+            .iter()
+            .filter(|entry| matches!(
+                entry.as_ref(),
+                CanvasPaintEntry::Primitive {
+                    primitive: CanvasPrimitive::Path {
+                        paint: Some(_),
+                        ..
+                    },
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
+    assert_eq!(fixture.geometry().charts[0].geometry.hits.len(), 2);
+}
+
+#[test]
+fn callout_paint_updates_and_lifetimes_do_not_rebuild_chart_geometry() {
+    use ipp_core::systems::canvas::{
+        CanvasPaintEntry, CanvasPrimitive, CanvasPublication, CanvasShapeFill,
+    };
+    use std::sync::Arc;
+    use support::CanvasTestHost;
+    let mut fixture = Fixture::new([20.0, 40.0], 1.0);
+    let output = fixture.host.canvas_output(
+        fixture.host.world_ref(fixture.world).unwrap(),
+        [640.0, 480.0],
+        100.0,
+    );
+    let mut bars = PlotBars2d::default();
+    bars.series
+        .push(PlotSeriesRow {
+            x: "position".into(),
+            y: "temperature".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    bars.labels
+        .push(PlotLabelRow {
+            row_id: "1".into(),
+            text: "Value\nSelected".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    for value in [
+        C::PlotBars2d(bars),
+        C::PlotCalloutStyle(PlotCalloutStyle::default()),
+        C::PlotCalloutPaint(PlotCalloutPaint::default()),
+    ] {
+        fixture.command(Command::insert_value(
+            EntityRef::Handle(fixture.entity),
+            value,
+        ));
+    }
+    fixture.step(0.0);
+    let geometry = fixture.geometry().charts[0].geometry.clone();
+    let canvas = |fixture: &Fixture| {
+        fixture
+            .host
+            .output(
+                fixture.host.latest_publication(fixture.world).unwrap(),
+                output,
+            )
+            .unwrap()
+            .data::<CanvasPublication>()
+            .unwrap()
+            .clone()
+    };
+    let before = canvas(&fixture);
+    assert_eq!(before.paints.len(), 1);
+    let target = before.paints[0].target;
+    assert_eq!(target.component, C::PLOT_CALLOUT_PAINT);
+    let panels = before.entries.iter().filter(|entry| matches!(entry.as_ref(), CanvasPaintEntry::Primitive { primitive: CanvasPrimitive::Box {fill: CanvasShapeFill::Paint {paint,..},..},..} if *paint == target)).count();
+    assert_eq!(panels, 1);
+    for value in [0.2, 0.8] {
+        fixture.command(Command::SetDynamicProperty {
+            entity: EntityRef::Handle(fixture.entity),
+            component: C::PLOT_CALLOUT_PAINT,
+            name: "light".into(),
+            value: V::Vec4([value, 0.2, 3.0, 1.0]),
+        });
+        fixture.step(0.0);
+        let updated = canvas(&fixture);
+        assert_eq!(updated.entries, before.entries);
+        assert_ne!(updated.paints, before.paints);
+        assert!(Arc::ptr_eq(
+            &geometry,
+            &fixture.geometry().charts[0].geometry
+        ));
+    }
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_CALLOUT_PAINT,
+    });
+    fixture.step(0.0);
+    assert!(canvas(&fixture).paints.is_empty());
+    assert!(Arc::ptr_eq(
+        &geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PlotCalloutPaint(PlotCalloutPaint::default()),
+    ));
+    fixture.step(0.0);
+    assert_ne!(
+        canvas(&fixture).paints[0].target.incarnation,
+        target.incarnation
+    );
+    assert!(Arc::ptr_eq(
+        &geometry,
+        &fixture.geometry().charts[0].geometry
+    ));
+}

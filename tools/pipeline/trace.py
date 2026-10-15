@@ -13,6 +13,7 @@ def register(tasks: dict[str, Task]) -> None:
         "Bundle the maintained gallery trace runner and instrumented application",
         (node(), "tools/products/gallery-trace-fixture.mjs"),
         (
+            "build:gallery",
             "build:gallery-fixtures",
             "build:browser:render-instrumentation",
             "build:native",

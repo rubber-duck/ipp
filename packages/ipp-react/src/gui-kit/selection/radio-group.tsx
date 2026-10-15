@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * One choice from a labelled set of options. The group is one Tab stop,
  * entered at its selected option, or its first; arrows move focus and select,
@@ -5,7 +6,7 @@
  * labels stay readable in the neutral colour. The runtime never clears the
  * last selection, so once an option is selected one always is.
  *
- * Each option's Button is its radio mark, a circle the icon size: a ring
+ * Each option's Button contains a compact circle inside its hit row: a ring
  * round a dark interior, lit with a filled dot while selected, the focus ring
  * glowing on the same circle. A Button lights its whole box, so the label
  * beside the mark is a second Button inside the mark, pointer-only, which
@@ -18,9 +19,9 @@
  * overlapping the circle and taking presses on its first letters only.
  *
  * The group is a column of the optional group label, in the accent, and the
- * options, stacked or in a row, each the small control height.
+ * options, stacked or in a row, each using the skin's choice target height.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Group, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -55,12 +56,14 @@ export interface RadioGroupProps extends ChoiceProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the group's root entity; options extend it. */
-  readonly id: string;
+  readonly id?: string;
   /** The group's label above its options, such as AXIS. */
   readonly label?: string;
   readonly options: readonly RadioOption[];
   /** Options in a row rather than stacked. */
   readonly horizontal?: boolean;
+  /** Space between choices; compact vertically, field spacing horizontally. */
+  readonly optionGap?: number;
   readonly layout?: GuiKitLayout;
 }
 
@@ -68,23 +71,24 @@ export interface RadioGroupProps extends ChoiceProps {
 function geometry(kit: GuiKitScope) {
   const t = kit.tokens;
   return {
-    mark: kit.unit(t.icon),
-    gap: kit.unit(t.inset / 2),
-    height: kit.unit(t.smallHeight),
-    spacing: kit.unit(t.inset),
+    mark: kit.unit(t.choiceTarget ?? t.icon),
+    gap: kit.spacing.label,
+    height: kit.unit(t.choiceTarget ?? t.smallHeight),
     caption: kit.unit(t.denseRow),
   };
 }
 
 export function RadioGroup({
-  id,
+  id: providedId,
   layer = 0,
   label,
   options,
   horizontal = false,
+  optionGap,
   layout,
   ...props
 }: RadioGroupProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
   const choice = useChoice(props);
@@ -92,26 +96,38 @@ export function RadioGroup({
   const widths = options.map(
     (option) => g.mark + g.gap + lineWidth(option.label, body),
   );
-  const optionsHeight = horizontal ? g.height : g.height * options.length;
+  const spacing =
+    optionGap ?? (horizontal ? kit.spacing.field : kit.spacing.compact);
+  const optionsHeight = horizontal
+    ? g.height
+    : g.height * options.length + spacing * Math.max(0, options.length - 1);
+  const captionGap =
+    label === undefined ? 0 : (layout?.gap ?? kit.spacing.label);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        height={(label === undefined ? 0 : g.caption) + optionsHeight}
+        height={
+          (label === undefined ? 0 : g.caption + captionGap) + optionsHeight
+        }
+        gap={captionGap}
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {label !== undefined && (
-          <Row id={`${id}/caption`} height={kit.tokens.denseRow}>
+          <Row id={`${id}/caption`} height={kit.unit(kit.tokens.denseRow)}>
             <TextLine id={`${id}/caption/text`} text={label} tone="accent" />
           </Row>
         )}
         <Entity id={`${id}/options`}>
+          <PresentationGate open />
           <Layout
             kind={horizontal ? LAYOUT_ROW : LAYOUT_COLUMN}
             height={optionsHeight}
+            gap={spacing}
           />
           <Group
             axis={horizontal ? GROUP_HORIZONTAL : GROUP_VERTICAL}
@@ -125,9 +141,6 @@ export function RadioGroup({
                 option={option}
                 choice={choice}
                 width={widths[index]!}
-                {...(horizontal && index > 0
-                  ? { layout: { margin_left: g.spacing } }
-                  : {})}
               />
             ))}
           </Children>
@@ -138,7 +151,7 @@ export function RadioGroup({
 }
 
 function Option({
-  id,
+  id: providedId,
   option,
   choice,
   width,
@@ -150,6 +163,7 @@ function Option({
   readonly width: number;
   readonly layout?: GuiKitLayout;
 }) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
   const item = choice.item(option.value);
@@ -159,10 +173,12 @@ function Option({
   const label = width - g.mark - g.gap;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Layout kind={LAYOUT_ROW} width={width} height={g.height} {...layout} />
       <Children>
         <Strut id={`${id}/strut`} height={g.height} />
         <Entity id={`${id}/mark`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_STACK}
             width={g.mark}
@@ -179,10 +195,11 @@ function Option({
           />
           <Children>
             <Entity id={`${id}/label`}>
+              <PresentationGate open />
               <Layout
                 kind={LAYOUT_STACK}
                 width={label}
-                height={g.mark}
+                height={g.height}
                 margin_left={g.mark + g.gap}
                 margin_right={-(g.gap + label)}
               />

@@ -346,6 +346,8 @@ export interface ShaderRecipe {
   shadowPass?: boolean;
   /** Vertex inputs include per-instance model transforms. */
   instancing?: boolean;
+  /** Canvas paint receives the presenting Surface/view context. */
+  presentation?: boolean;
 }
 
 export interface ShaderDefinition {
@@ -354,8 +356,8 @@ export interface ShaderDefinition {
   /**
    * Backend source. A material has `vertex` and `fragment` bodies; a canvas paint
    * has only a `paint` body, the statements of one function returning straight
-   * linear RGBA, with float scalar or vector parameters and no recipe flags or
-   * required streams.
+   * linear RGBA, with float scalar, vector or texture parameters and no required streams.
+   * Only presentation context and its optional lighting recipe flags apply.
    */
   backends: Record<
     string,
@@ -402,12 +404,15 @@ export function encodeShaderDefinition(
         recipeFlags.normals,
         recipeFlags.skinning,
         recipeFlags.meshPose,
-        recipeFlags.lighting,
         recipeFlags.shadowPass,
         recipeFlags.instancing,
       ].some(Boolean)
     )
-      throw new Error("A paint definition has no recipe flags or streams");
+      throw new Error(
+        "A paint permits only presentation/lighting flags and no required streams",
+      );
+    if (recipeFlags.lighting && !recipeFlags.presentation)
+      throw new Error("Paint lighting requires presentation context");
     if (
       Object.values(definition.parameters).some(
         (kind) => !paintKinds.includes(kind),
@@ -416,7 +421,8 @@ export function encodeShaderDefinition(
       throw new Error(
         "Paint parameters are float scalars, vectors or textures",
       );
-  }
+  } else if (definition.recipe?.presentation)
+    throw new Error("Presentation context is a canvas paint feature");
   chunks.push(new Uint8Array([73, 80, 80, 72]));
   u32(3);
   const recipe = definition.recipe ?? {};
@@ -427,6 +433,7 @@ export function encodeShaderDefinition(
     recipe.lighting,
     recipe.shadowPass,
     recipe.instancing,
+    recipe.presentation,
   ];
   if (flags.some((value) => value !== undefined && typeof value !== "boolean"))
     throw new Error("Invalid shader recipe flags");

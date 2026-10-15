@@ -23,7 +23,10 @@ pub(super) fn is_chart(component: u16) -> bool {
 }
 
 pub(super) fn is_frame(component: u16) -> bool {
-    matches!(component, C::PLOT_FRAME2D | C::PLOT_FRAME3D)
+    matches!(
+        component,
+        C::PLOT_FRAME2D | C::PLOT_FRAME3D | C::PLOT_CALLOUT_STYLE
+    )
 }
 
 impl PlotSystem {
@@ -120,6 +123,7 @@ impl PlotSystem {
                     .plot_frame2d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_BARS2D => plots_2d::prepare_bars(
                 storage
@@ -129,6 +133,7 @@ impl PlotSystem {
                     .plot_frame2d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_PIE2D => plots_2d::prepare_pie(
                 storage
@@ -138,6 +143,7 @@ impl PlotSystem {
                     .plot_frame2d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_GRID_BARS3D => plots_3d::prepare_bars(
                 storage
@@ -147,6 +153,7 @@ impl PlotSystem {
                     .plot_frame3d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_HEIGHT_SURFACE3D => plots_3d::prepare_surface(
                 storage
@@ -156,6 +163,7 @@ impl PlotSystem {
                     .plot_frame3d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_POINTS3D => plots_3d::prepare_points(
                 storage
@@ -165,6 +173,7 @@ impl PlotSystem {
                     .plot_frame3d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             C::PLOT_PIE3D => plots_3d::prepare_pie(
                 storage
@@ -174,6 +183,7 @@ impl PlotSystem {
                     .plot_frame3d(index)
                     .ok_or(ErrorReason::MissingComponent)?,
                 &input,
+                storage.plot_callout_style(index),
             ),
             _ => return Err(ErrorReason::InvalidValue),
         }?;

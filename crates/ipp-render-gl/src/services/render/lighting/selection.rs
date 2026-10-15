@@ -10,6 +10,54 @@ use std::collections::BTreeMap;
 
 type Candidate = (EntityId, [f32; 16], Light);
 
+/// The same bounded influence ranking and hysteresis for an authored Surface paint.
+pub(in crate::services::render) fn surface_lighting(
+    scene: &RenderScene<'_>,
+    surface: &super::super::outputs::scene::SceneOutputSurface,
+    enabled: bool,
+    previous: &[EntityId],
+) -> Result<(RenderLightingFrame, Vec<EntityId>), RenderError> {
+    entity_lighting(
+        scene,
+        surface.entity,
+        surface.model,
+        surface.layered(),
+        enabled,
+        previous,
+    )
+}
+
+/// Shared bounded light selection for a Surface or a native chart plane.
+pub(in crate::services::render) fn entity_lighting(
+    scene: &RenderScene<'_>,
+    entity: EntityId,
+    model: [f32; 16],
+    layered: bool,
+    enabled: bool,
+    previous: &[EntityId],
+) -> Result<(RenderLightingFrame, Vec<EntityId>), RenderError> {
+    if !enabled {
+        return Ok((RenderLightingFrame::prepare(scene, &[])?, Vec::new()));
+    }
+    let candidates: Vec<_> = scene.lights.iter().map(LightInfluence::new).collect();
+    let object = ObjectInfluence::new(
+        [model[12], model[13], model[14]].map(f64::from),
+        if layered {
+            None
+        } else {
+            scene.visual_bounds(entity)
+        },
+    );
+    let mut selected = Vec::new();
+    select_prepared_object(&candidates, &object, previous, &mut selected);
+    let sources: Vec<_> = selected
+        .iter()
+        .map(|s| candidates[s.index].source)
+        .collect();
+    let identities = selected.iter().map(|s| s.entity).collect();
+    Ok((RenderLightingFrame::prepare(scene, &sources)?, identities))
+}
+
 #[derive(Default)]
 pub(in crate::services::render) struct LightSelectionState {
     candidates: Vec<Candidate>,
@@ -295,7 +343,10 @@ impl LightSelectionState {
         &mut self,
         world: &RenderScene<'_>,
         items: &[RenderItem<'_>],
-        customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
+        customs: &BTreeMap<
+            super::super::materials::custom_material::CustomMaterialKey,
+            PreparedCustomMaterial,
+        >,
         frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
         shadow_capacity: usize,
     ) -> Result<PreparedLighting, RenderError> {
@@ -315,7 +366,10 @@ impl LightSelectionState {
         &mut self,
         world: &RenderScene<'_>,
         items: &[RenderItem<'_>],
-        customs: &BTreeMap<EntityId, PreparedCustomMaterial>,
+        customs: &BTreeMap<
+            super::super::materials::custom_material::CustomMaterialKey,
+            PreparedCustomMaterial,
+        >,
         frustum: &[ipp_core::systems::geometry::GeometryPlane; 6],
         shadow_capacity: usize,
         candidates: &[Candidate],
@@ -364,7 +418,7 @@ impl LightSelectionState {
                 continue;
             }
             let custom = if item.custom_material {
-                customs.get(&item.entity)
+                customs.get(&item.custom_material_key())
             } else {
                 None
             };

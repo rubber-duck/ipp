@@ -1,9 +1,10 @@
+import { exerciseChartSkins } from "./scenarios/gallery-chart-skins.js";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { DatasetPage, Inspection } from "@ipp/client";
+import type { DatasetPage } from "@ipp/client";
 import type { HostContract, HostState } from "../../tools/shared-host/host.js";
 import type { RgbaImage } from "../../tools/shared-host/images.js";
 import { runNativeEnvironment } from "../harness/native.js";
@@ -62,10 +63,6 @@ async function runGallery(
     readonly worlds: () => Promise<
       readonly { readonly id: bigint; readonly symbolicId: string }[]
     >;
-    readonly independentWorld: (
-      work: (probe: () => Promise<void>) => Promise<void>,
-    ) => Promise<void>;
-    readonly readGuiPanel: () => Promise<Inspection>;
     readonly readDataset: (name: string) => Promise<DatasetPage>;
     readonly record: (kind: string, value: unknown) => Promise<void>;
     readonly setSampleInterpolation: NonNullable<
@@ -140,51 +137,6 @@ async function runGallery(
           directory,
           signal: environment.signal,
           worlds: () => observer.listWorlds(),
-          readGuiPanel: async () => {
-            const panels = (await observer.listWorlds()).filter(
-              ({ symbolicId }) => symbolicId.startsWith("gui-demo-panel/"),
-            );
-            assert.equal(
-              panels.length,
-              1,
-              "one current scanner Canvas World is attached",
-            );
-            const reference = await observer.resolveWorld(panels[0]!.id);
-            const client = await observer.openWorld(reference);
-            try {
-              const before = await client.inspect();
-              await client.waitForFrame(before.tick);
-              return await client.inspect();
-            } finally {
-              await client.close();
-            }
-          },
-          independentWorld: async (work) => {
-            const peer = await observer.createWorld({
-              selectedSystems: [],
-              temporary: true,
-            });
-            const client = await observer.openWorld(peer.reference);
-            try {
-              await work(async () => {
-                const before = await client.inspect();
-                await client.waitForFrame(before.tick);
-                const after = await client.inspect();
-                assert.ok(
-                  after.tick > before.tick,
-                  "independent World continues evaluating after GUI selection",
-                );
-                await environment.evidence.record("gui-independent-world", {
-                  world: peer.reference,
-                  before: before.tick,
-                  after: after.tick,
-                });
-              });
-            } finally {
-              await client.close();
-              await observer.destroyWorld(peer.reference);
-            }
-          },
           readDataset: (name) => observer.datasets.read(name),
           setSampleInterpolation: (chart, rate) =>
             setChartSampleInterpolation(observer, chart, rate),
@@ -231,7 +183,7 @@ test("native gallery preserves options and current scene across failed reload, t
     "reload",
     async ({ driver, directory, signal, worlds, record }) => {
       const entry = join(directory, "selected-scene.ts");
-      const valid = `export {geometryScene as default} from ${JSON.stringify(resolve("examples/world-gallery/worlds/geometry/scene.tsx"))};\n`;
+      const valid = `export {geometryScene as default} from ${JSON.stringify(resolve("examples/demos/scenes/geometry/scene.tsx"))};\n`;
       await writeFile(entry, valid);
       await driver.start(
         "shapes",
@@ -239,7 +191,7 @@ test("native gallery preserves options and current scene across failed reload, t
         signal,
       );
       const initial = await worlds();
-      assert.equal(initial.length, 1);
+      assert.equal(initial.length, 2);
       const before = await driver.capture(join(directory, "before"), signal);
       assert.equal(before.width, 480);
       assert.equal(before.height, 320);
@@ -251,7 +203,7 @@ test("native gallery preserves options and current scene across failed reload, t
       await driver.call("action", ["resetCamera"], signal);
       await driver.call("reload", [], signal);
       let mounted = await worlds();
-      assert.equal(mounted.length, 1);
+      assert.equal(mounted.length, 2);
       assert.notEqual(
         mounted[0]!.id,
         initial[0]!.id,
@@ -292,8 +244,8 @@ test("native gallery preserves options and current scene across failed reload, t
         mounted = await worlds();
         assert.equal(
           mounted.length,
-          1,
-          "each reload releases the previous primary World",
+          2,
+          "each reload releases the previous Canvas and scene Worlds",
         );
       }
       await record("gallery_reload_evidence", {
@@ -313,26 +265,24 @@ test("native gallery captures all shared scenes, including moving particles and 
   await runGallery(
     context.signal,
     "scenes",
-    async ({
-      driver,
-      directory,
-      signal,
-      worlds,
-      record,
-      independentWorld,
-      readGuiPanel,
-    }) => {
+    async ({ driver, directory, signal, worlds, record }) => {
       for (const scene of [
         "shapes",
         "lighting",
         "particles",
         "platformer",
-        "gui",
         "charts",
       ]) {
         await driver.start(
           scene,
-          ["--width", "720", "--height", "480"],
+          [
+            "--width",
+            "720",
+            "--height",
+            "480",
+            "--options",
+            '{"skin":"cybertron"}',
+          ],
           signal,
         );
         try {
@@ -353,19 +303,7 @@ test("native gallery captures all shared scenes, including moving particles and 
               "running particles need no stationary-pixel barrier",
             );
           }
-          if (scene === "gui")
-            await independentWorld((probe) =>
-              exerciseNativeGalleryScene(
-                driver,
-                scene,
-                directory,
-                signal,
-                probe,
-                readGuiPanel,
-              ),
-            );
-          else
-            await exerciseNativeGalleryScene(driver, scene, directory, signal);
+          await exerciseNativeGalleryScene(driver, scene, directory, signal);
           await record("gallery_native_scene", {
             scene,
             worlds: await worlds(),
@@ -386,7 +324,7 @@ test("native gallery captures all shared scenes, including moving particles and 
 });
 
 test("native unified charts retain fixed samples, focus and pick World-qualified source rows without leaked participants", {
-  timeout: 180_000,
+  timeout: 270_000,
 }, async (context) => {
   await runGallery(
     context.signal,
@@ -394,13 +332,20 @@ test("native unified charts retain fixed samples, focus and pick World-qualified
     async ({ driver, directory, signal, worlds, record }) => {
       await driver.start(
         "charts",
-        ["--width", "720", "--height", "480"],
+        [
+          "--width",
+          "720",
+          "--height",
+          "480",
+          "--options",
+          '{"skin":"cybertron"}',
+        ],
         signal,
       );
       assert.equal(
         (await worlds()).length,
-        11,
-        "The root camera scene owns five Canvas charts and five spatial legend children",
+        12,
+        "The application Canvas and Camera scene own five charts and five spatial legends",
       );
       const chartsDriver: GalleryChartsDriver = {
         inspect: async () =>
@@ -422,10 +367,11 @@ test("native unified charts retain fixed samples, focus and pick World-qualified
         },
       };
       await exerciseGalleryCharts(chartsDriver);
+      await exerciseChartSkins(chartsDriver);
       await exerciseChartRow(chartsDriver, 720 / 480);
       const previous = (await worlds())[0]!;
       await driver.call("reload", [], signal);
-      assert.equal((await worlds()).length, 11);
+      assert.equal((await worlds()).length, 12);
       assert.notEqual((await worlds())[0]!.id, previous.id);
       await driver.capture(join(directory, "charts-reloaded"), signal);
       await driver.close();
@@ -468,7 +414,14 @@ for (const [slug, name, exercise] of [
       async ({ driver, directory, signal, record, setSampleInterpolation }) => {
         await driver.start(
           "charts",
-          ["--width", "720", "--height", "480"],
+          [
+            "--width",
+            "720",
+            "--height",
+            "480",
+            "--options",
+            '{"skin":"cybertron"}',
+          ],
           signal,
         );
         const charts: GalleryChartsDriver = {
@@ -554,7 +507,14 @@ test("native gallery streams bounded data windows and expires picked rows", {
     async ({ driver, directory, signal, worlds, readDataset, record }) => {
       await driver.start(
         "charts",
-        ["--width", "720", "--height", "480"],
+        [
+          "--width",
+          "720",
+          "--height",
+          "480",
+          "--options",
+          '{"skin":"cybertron"}',
+        ],
         signal,
       );
       const charts = streamingChartsDriver(driver, directory, signal, record);
@@ -581,7 +541,14 @@ test("native gallery reloads streaming charts and releases Worlds and sources", 
     async ({ driver, directory, signal, worlds, readDataset, record }) => {
       await driver.start(
         "charts",
-        ["--width", "720", "--height", "480"],
+        [
+          "--width",
+          "720",
+          "--height",
+          "480",
+          "--options",
+          '{"skin":"cybertron"}',
+        ],
         signal,
       );
       const charts = streamingChartsDriver(driver, directory, signal, record);
@@ -592,7 +559,7 @@ test("native gallery reloads streaming charts and releases Worlds and sources", 
         const previous = (await worlds()).map((world) => String(world.id));
         await driver.call("reload", [], signal);
         const replacements = await worlds();
-        assert.equal(replacements.length, 11);
+        assert.equal(replacements.length, 12);
         assert.ok(
           replacements.every((world) => !previous.includes(String(world.id))),
         );

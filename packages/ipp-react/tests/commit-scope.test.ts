@@ -10,7 +10,12 @@ import { createElement, Fragment, memo, useState } from "react";
 import type { BatchOutcome, Command } from "@ipp/client";
 import { Entity, Scalar, Transform, createRoot } from "../src/index.js";
 import type { ReactWorldClient } from "../src/index.js";
-import { commitCounters } from "../src/reconciler/tree.js";
+import {
+  commitCounters,
+  type ReactWorldDescription,
+} from "../src/reconciler/tree.js";
+import { ReactWorldCommits } from "../src/reconciler/commits.js";
+import type { InspectionPage } from "@ipp/client";
 
 const SCALAR = 17;
 const TRANSFORM = 3;
@@ -350,3 +355,160 @@ test("adding and removing a declaration after changes-only commits creates and d
     await root.unmount();
   }
 });
+
+test("structural sibling insertion preserves global validation without diffing unchanged plain fields", async () => {
+  for (const count of [100, 1000]) {
+    const world = new CommitWorld();
+    const root = createRoot(world, { onError: (error) => assert.fail(error) });
+    const scene = (extra: boolean) =>
+      createElement(
+        Fragment,
+        null,
+        createElement(StaticSubtree, { count }),
+        extra
+          ? createElement(
+              Entity,
+              { id: "inserted" },
+              createElement(Scalar, { value: 7 }),
+            )
+          : null,
+      );
+    try {
+      await root.render(scene(false));
+      const inserted = await counted(() => root.render(scene(true)));
+      assert.equal(
+        inserted.compared,
+        0,
+        `${count} stable components were needlessly field-diffed`,
+      );
+      assert.ok(
+        inserted.described >= count * 2,
+        "global structural validation must remain visible in work evidence",
+      );
+      assert.deepEqual(
+        world.calls.at(-1)!.map((operation) => operation.kind),
+        ["create", "insertComponent"],
+      );
+      const removed = await counted(() => root.render(scene(false)));
+      assert.equal(removed.compared, 0);
+      assert.deepEqual(
+        world.calls.at(-1)!.map((operation) => operation.kind),
+        ["delete"],
+      );
+    } finally {
+      await root.unmount();
+    }
+  }
+});
+
+for (const refuseGate of [false, true]) {
+  test(`a structural capture during ${refuseGate ? "rejected" : "accepted"} gate validation keeps its complete commit`, async () => {
+    let release!: (page: InspectionPage) => void;
+    let began!: () => void;
+    const waiting = new Promise<void>((resolve) => {
+      began = resolve;
+    });
+    const page = new Promise<InspectionPage>((resolve) => {
+      release = resolve;
+    });
+    const world = Object.assign(new CommitWorld(), {
+      inspectPage: async () => {
+        began();
+        return page;
+      },
+    });
+    const gate = 91;
+    world.components = {
+      ...world.components,
+      PresentationGate: { id: gate, fields: { open: { offset: 0, kind: 7 } } },
+    };
+    const errors: Error[] = [];
+    const commits = new ReactWorldCommits(world, {
+      onError: (error) => errors.push(error),
+    });
+    const scene = (serial: number, extra: boolean): ReactWorldDescription => ({
+      signature: String(serial),
+      serial,
+      assets: [],
+      animations: [],
+      links: [],
+      entities: [
+        {
+          identity: 1,
+          symbolicId: "leaf",
+          kind: "declared",
+          parent: undefined,
+        },
+      ],
+      components: [
+        {
+          identity: 2,
+          entity: 1,
+          component: SCALAR,
+          fields: new Map([[12, { kind: "f32", value: 1 }]]),
+        },
+        ...(!refuseGate || !extra
+          ? [
+              {
+                identity: 3,
+                entity: 1,
+                component: gate,
+                managedGate: true as const,
+                fields: new Map(),
+              },
+            ]
+          : []),
+        ...(extra
+          ? [
+              {
+                identity: 4,
+                entity: 1,
+                component: TRANSFORM,
+                fields: new Map(),
+              },
+            ]
+          : []),
+      ],
+    });
+    try {
+      const older = commits.capture(scene(1, false)).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await waiting;
+      const newer = commits.capture(scene(2, true));
+      release({
+        tick: 1n,
+        time: 0,
+        next: 0n,
+        entities: refuseGate
+          ? [
+              {
+                id: 777n,
+                metadata: { symbolicId: "leaf", classes: [] },
+                link: { parent: null, order: 0n },
+                components: [{ component: gate, fields: { open: true } }],
+              },
+            ]
+          : [],
+        resources: [],
+        renderDiagnostics: [],
+      });
+      const [failure] = await Promise.all([older, newer]);
+      assert.equal(failure instanceof Error, refuseGate);
+      assert.equal(errors.length, refuseGate ? 1 : 0);
+      assert.ok(
+        world.calls
+          .flat()
+          .some(
+            (command) =>
+              command.kind === "insertComponent" &&
+              command.component === TRANSFORM,
+          ),
+        "new structural component must survive the older validation continuation",
+      );
+    } finally {
+      await commits.dispose();
+    }
+  });
+}

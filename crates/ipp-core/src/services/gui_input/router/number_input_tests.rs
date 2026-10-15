@@ -54,13 +54,13 @@ impl Scene {
         let (mut host, _) = host();
         let world = world(&mut host);
         let (root, root_entity) = canvas_root(&mut host, world, 12.0, 4.0);
-        let entity = create(
+        let entity = create_painted(
             &mut host,
             world,
             vec![ComponentValue::GuiTextInput(input), sized(0, 10.0, 2.0)],
             Some(root_entity),
         );
-        let button = create(
+        let button = create_painted(
             &mut host,
             world,
             vec![

@@ -42,7 +42,7 @@ const productPlugin = {
   name: "instrumented-gallery-product",
   setup(builder) {
     builder.onLoad(
-      { filter: /examples[/\\]world-gallery[/\\]shared[/\\]runtime\.ts$/ },
+      { filter: /examples[/\\]demos[/\\]shared[/\\]runtime\.ts$/ },
       async ({ path }) => ({
         contents: (await readFile(path, "utf8")).replace(
           "/target/browser-build/render/",
@@ -55,8 +55,8 @@ const productPlugin = {
 };
 const inputs = {};
 for (const [source, file] of [
-  ["examples/world-gallery/main.tsx", "application.js"],
-  ["tests/gallery/pages/viewer.ts", "viewer-browser-helper.js"],
+  ["examples/demos/main.tsx", "application.js"],
+  ["tests/gallery/pages/application.ts", "application-browser-helper.js"],
 ]) {
   const result = await bundleBrowser(
     resolve(workspace, source),
@@ -79,12 +79,9 @@ await writeFile(
   JSON.stringify(inputs, null, 2),
 );
 const html = (
-  await readFile(
-    resolve(workspace, "examples/world-gallery/index.html"),
-    "utf8",
-  )
+  await readFile(resolve(workspace, "examples/demos/index.html"), "utf8")
 ).replace(
-  "/target/gallery-build/world-gallery.js",
+  "/target/gallery-build/demos.js",
   "/target/gallery-trace/application.js",
 );
 await writeFile(resolve(output, "index.html"), html);

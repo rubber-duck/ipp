@@ -31,6 +31,8 @@ import {
   type ConfirmationDialogProps,
 } from "../src/gui-kit.js";
 import { Button } from "../src/gui/controls.js";
+import { BehaviorWithRef } from "../src/gui/behavior-ref.js";
+import type { GuiControlHandle } from "../src/gui/control-ref.js";
 import {
   TOKENS,
   PART,
@@ -145,17 +147,13 @@ test("ToastStack is a top-level manual overlay of toasts in stable order", async
       .map((value, channel) => value * 0.99 + TOKENS.error[channel]! * 0.01),
     1,
   ];
-  assert.deepEqual(themeRows(world, "toastError").rows, [
+  for (const [key, expected] of [
     [
       PART.background,
-      {
-        part: PART.background,
-        color: interior,
-        border_color: TOKENS.error,
-      },
+      { part: PART.background, color: interior, border_color: TOKENS.error },
     ],
     [
-      1,
+      PRESSED,
       {
         part: PRESSED,
         color: interior,
@@ -164,10 +162,11 @@ test("ToastStack is a top-level manual overlay of toasts in stable order", async
       },
     ],
     [
-      2,
+      HOVERED,
       { part: HOVERED, border_color: TOKENS.error, glow_color: TOKENS.error },
     ],
-  ]);
+  ] as const)
+    assert.deepEqual(themeRow(world, "toastError", key), expected);
 
   // Only the success toast dismisses itself: it holds its opacity for six
   // seconds of the Host clock and fades out over a tenth of a second.
@@ -518,7 +517,7 @@ test("useOverlayOpen follows the runtime closing its overlay, not an earlier rep
   assert.equal(visible(), true);
   // The field's first report arrives after the opening and still shows the
   // declared closed state: it does not close the overlay again...
-  world.value("trigger/overlay", "GuiBehavior", { visible: false });
+  world.value("trigger/overlay", "GuiBehavior", { visible: false }, false);
   await settle(root);
   assert.equal(visible(), true);
   // ...but once the runtime reported it open, its closing is adopted, so the
@@ -651,16 +650,17 @@ test("Popover: a trigger with a caret opens a titled light surface of the applic
       h(TextLine, { id: "options-label", text: "Label" }),
     );
   const { world, root } = await render(popover());
-  // The trigger: a secondary button at the small size with a caret.
+  // The default trigger matches regular buttons in body type and control height.
   const label = `Options ${GUI_KIT_ICONS.sortDescending}`;
   assert.equal(world.fields("options", "GuiButton").get("label"), label);
   assert.equal(world.fields("options", "GuiButton").get("selected"), false);
-  assert.equal(world.skin("options"), "secondarySmall");
+  assert.equal(world.skin("options"), "secondary");
   near(
     world.fields("options", "GuiLayout").get("width"),
-    [...label].length * 0.54 * 13 + 32,
+    [...label].length * 0.54 * 16 + 32,
   );
-  assert.equal(world.fields("options", "GuiLayout").get("height"), 32);
+  assert.equal(world.fields("options", "GuiLayout").get("height"), 40);
+  assert.equal(world.fields("options", "GuiFont").get("font_size"), 16);
   // The surface below it, a quarter inset away, its header strip with the
   // title and a close button that takes no focus, then the content.
   assert.deepEqual(world.children("options"), ["options/popover"]);
@@ -870,7 +870,7 @@ test("ConfirmationDialog: a modal centred dialog whose answer is reported once p
 
   // Not destructive: the default primary look.
   await draw(dialog({ destructive: false }));
-  assert.equal(world.entity("confirm/action").components.has("GuiSkin"), false);
+  assert.equal(world.skin("confirm/action"), "secondary");
 });
 
 /**
@@ -966,6 +966,9 @@ test("useOverlayOpen adopts a closing only from the entity reported open", async
   const log: unknown[] = [];
   const { world, root } = await render(h(SharedOpenState, { log }));
   await settle(root);
+  // Both subscription seeds have been delivered; make the first overlay
+  // the latest entity actually reported open.
+  world.value("first", "GuiBehavior", { visible: false });
   world.value("first", "GuiBehavior", { visible: true });
   await settle(root);
   // Another entity's closing is ignored...
@@ -976,4 +979,136 @@ test("useOverlayOpen adopts a closing only from the entity reported open", async
   world.value("first", "GuiBehavior", { visible: false });
   await settle(root);
   assert.deepEqual(log, [false]);
+});
+
+test("controlled Floating restores repeated closes through its acknowledged Behavior lease", async () => {
+  const changes: boolean[] = [];
+  const { world, root, draw } = await render(
+    h(Floating, {
+      id: "controlled-overlay",
+      mode: "light",
+      controlled: true,
+      open: true,
+      onVisibleChange: (event) => {
+        if (!event.initial) changes.push(event.value);
+      },
+    }),
+  );
+  await settle(root);
+  for (let iteration = 0; iteration < 2; iteration++) {
+    world.value("controlled-overlay", "GuiBehavior", { visible: false });
+    await settle(root);
+    assert.equal(
+      world.fields("controlled-overlay", "GuiBehavior").get("visible"),
+      true,
+    );
+    world.value("controlled-overlay", "GuiBehavior", { visible: true });
+    await settle(root);
+  }
+  assert.deepEqual(changes, [false, false]);
+  assert.equal(world.compared.length, 2);
+  await draw(null);
+  await settle(root);
+  assert.equal(
+    world.compared.length,
+    2,
+    "unmount must not schedule another visibility write",
+  );
+});
+
+test("internal overlay Behavior refs replace leases and refuse writes after unmount", async () => {
+  const handles: GuiControlHandle[] = [];
+  const ref = (handle: GuiControlHandle | null) => {
+    if (handle) handles.push(handle);
+  };
+  const surface = (key: string) =>
+    h(
+      Entity,
+      { id: "leased-surface" },
+      h(BehaviorWithRef, { key, visible: true, controlRef: ref }),
+    );
+  const { world, root, draw } = await render(surface("first"));
+  await settle(root);
+  assert.equal(handles.length, 1);
+  const first = handles[0]!;
+  await draw(surface("replacement"));
+  await settle(root);
+  assert.equal(handles.length, 2);
+  assert.notEqual(first, handles[1]);
+  await assert.rejects(
+    first.compareAndSet("visible", true, false),
+    /no longer live/,
+  );
+  assert.equal(await handles[1]!.compareAndSet("visible", true, false), true);
+  assert.equal(
+    world.fields("leased-surface", "GuiBehavior").get("visible"),
+    false,
+  );
+  await draw(null);
+  await settle(root);
+  await assert.rejects(
+    handles[1]!.compareAndSet("visible", false, true),
+    /no longer live/,
+  );
+});
+
+test("controlled Popover reports native closes after an acknowledged application opening", async () => {
+  const changes: boolean[] = [];
+  const scene = (open: boolean) =>
+    h(
+      Popover.Root,
+      {
+        id: "controlled-popover",
+        open,
+        onOpenChange: (next) => changes.push(next),
+      },
+      h(Popover.Content, null, h(TextLine, { text: "Content" })),
+    );
+  const { world, root, draw } = await render(scene(false));
+  await settle(root);
+  await draw(scene(true));
+  await settle(root);
+  world.value("controlled-popover/popover", "GuiBehavior", { visible: true });
+  await settle(root);
+  assert.deepEqual(changes, []);
+  world.value("controlled-popover/popover", "GuiBehavior", { visible: false });
+  await settle(root);
+  assert.deepEqual(changes, [false]);
+  assert.equal(
+    world.fields("controlled-popover/popover", "GuiBehavior").get("visible"),
+    true,
+  );
+});
+
+test("Popover compact sizing is explicit and removing it restores the regular trigger", async () => {
+  const scene = (compact: boolean, fixed = false) =>
+    h(Popover, {
+      id: "sizes",
+      label: "Settings",
+      title: "Settings",
+      ...(compact ? { size: "compact" as const } : {}),
+      ...(fixed ? { layout: { height: 18 } } : {}),
+    });
+  const { world, draw } = await render(scene(false), { fontSize: 32 });
+  const trigger = world.entity("sizes");
+  assert.equal(world.fields("sizes", "GuiLayout").get("height"), 80);
+  assert.equal(world.fields("sizes", "GuiFont").get("font_size"), 32);
+  assert.equal(world.skin("sizes"), "secondary");
+  await draw(scene(true));
+  assert.equal(world.entity("sizes"), trigger);
+  assert.equal(world.fields("sizes", "GuiLayout").get("height"), 64);
+  assert.equal(world.fields("sizes", "GuiFont").get("font_size"), 26);
+  assert.equal(world.skin("sizes"), "secondarySmall");
+  await draw(scene(true, true));
+  assert.equal(
+    world.fields("sizes", "GuiLayout").get("height"),
+    18,
+    "explicit trigger geometry wins over the compact token",
+  );
+  assert.equal(world.fields("sizes", "GuiFont").get("font_size"), 26);
+  assert.equal(world.skin("sizes"), "secondarySmall");
+  await draw(scene(false));
+  assert.equal(world.fields("sizes", "GuiLayout").get("height"), 80);
+  assert.equal(world.fields("sizes", "GuiFont").get("font_size"), 32);
+  assert.equal(world.skin("sizes"), "secondary");
 });

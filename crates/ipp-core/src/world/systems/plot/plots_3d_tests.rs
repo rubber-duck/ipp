@@ -65,7 +65,7 @@ fn single_row_bars_keep_exact_source_ids_and_negative_zero_baseline() {
             },
         )
         .unwrap();
-    let output = prepare_bars(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let output = prepare_bars(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
     assert_eq!(output.hits.len(), 2);
     assert_eq!(
         output.hits[0].row,
@@ -86,6 +86,26 @@ fn single_row_bars_keep_exact_source_ids_and_negative_zero_baseline() {
     // Face geometry plus ordinary edge strips, still one compact mesh batch.
     assert_eq!(output.meshes.len(), 1);
     assert!(output.meshes[0].indices.len() > 72);
+    let sheet = prepare_bars(
+        &chart,
+        &PlotFrame3d {
+            mark_outlines: false,
+            ..fixed_frame()
+        },
+        &input(&rows, &columns),
+        None,
+    )
+    .unwrap();
+    assert_eq!(sheet.hits, output.hits);
+    assert_eq!(sheet.meshes[0].indices.len(), 72);
+    assert!(
+        sheet.meshes[0]
+            .material
+            .as_ref()
+            .unwrap()
+            .decoration_indices
+            .is_empty()
+    );
 }
 
 #[test]
@@ -103,6 +123,48 @@ fn cuboid_faces_are_outward_and_closed() {
 }
 
 #[test]
+fn material_streams_partition_data_and_decorations_without_changing_default_geometry() {
+    let mut builder = MeshBuilder::default();
+    let color = [0.2, 0.6, 0.9, 1.0];
+    builder.cuboid([-1.0; 3], [1.0; 3], color).unwrap();
+    builder
+        .line([0.0; 3], [0.0, 2.0, 0.0], 0.1, [1.0; 4])
+        .unwrap();
+    let mesh = &builder.chunks[0];
+    let material = mesh.material.as_ref().unwrap();
+    assert!(mesh.normals.is_empty());
+    assert_eq!(mesh.indices.len(), 72);
+    assert_eq!(material.data_indices, mesh.indices[..36]);
+    assert_eq!(material.decoration_indices, mesh.indices[36..]);
+    assert_eq!(material.colors.len(), mesh.positions.len());
+    assert_eq!(material.normals.len(), mesh.positions.len());
+    assert_eq!(material.uvs.len(), mesh.positions.len());
+    assert!(
+        material.colors[..36]
+            .iter()
+            .all(|value| *value == [0.2, 0.6, 0.9])
+    );
+    assert!(
+        material
+            .normals
+            .iter()
+            .all(|value| (dot(*value, *value) - 1.0).abs() < 1e-6)
+    );
+    assert_eq!(
+        material.uvs[..6],
+        [
+            [0.0, 1.0],
+            [1.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 0.0],
+            [0.0, 0.0]
+        ]
+    );
+    assert_ne!(mesh.colors[0], material.colors[0]);
+}
+
+#[test]
 fn disconnected_points_do_not_create_connecting_faces() {
     let rows = [DataRowId(4), DataRowId(19)];
     let x = numbers(&[1.0, 9.0]);
@@ -115,7 +177,7 @@ fn disconnected_points_do_not_create_connecting_faces() {
     ];
     let mut chart = PlotPoints3d::default();
     chart.series.push(PlotSeriesRow::default()).unwrap();
-    let output = prepare_points(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let output = prepare_points(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
     assert_eq!(output.hits.len(), 2);
     // Face geometry plus ordinary edge strips, still one compact mesh batch.
     assert_eq!(output.meshes.len(), 1);
@@ -176,6 +238,26 @@ fn irregular_surface_triangulates_without_adding_or_aggregating_sites() {
 }
 
 #[test]
+fn surface_optical_normals_share_vertex_directions_without_moving_data() {
+    let points = [
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0],
+        [1.0, 1.0, 1.0],
+    ];
+    let normals = surface_normals(&points, &[[0, 1, 2], [1, 3, 2]]);
+    assert_eq!(normals[0], [0.0, 1.0, 0.0]);
+    assert_eq!(normals[1], normals[2]);
+    let length = 6.0_f32.sqrt();
+    for (actual, expected) in normals[1]
+        .iter()
+        .zip([-1.0 / length, 2.0 / length, -1.0 / length])
+    {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+}
+
+#[test]
 fn invalid_grid_height_removes_incident_faces_and_retains_other_cells() {
     let rows: Vec<_> = (0..16).map(DataRowId).collect();
     let x = numbers(&(0..16).map(|i| (i / 4) as f32).collect::<Vec<_>>());
@@ -194,7 +276,15 @@ fn invalid_grid_height_removes_incident_faces_and_retains_other_cells() {
         ..PlotHeightSurface3d::default()
     };
     chart.series.push(PlotSeriesRow::default()).unwrap();
-    let output = prepare_surface(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let output = prepare_surface(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
+    for mesh in &output.meshes {
+        let material = mesh.material.as_ref().unwrap();
+        assert!(material.decoration_indices.is_empty());
+        for (point, uv) in mesh.positions.iter().zip(&material.uvs) {
+            assert_eq!(*uv, [6.0 + point[0] / 10.0, point[2] / 10.0]);
+        }
+        assert!(material.uvs.iter().all(|uv| uv[0] >= 6.0 && uv[0] <= 7.0));
+    }
     assert_eq!(output.hits.len(), 15);
     // A cell diagonal can leave its unaffected face; six faces touch this site.
     assert_eq!(
@@ -205,6 +295,17 @@ fn invalid_grid_height_removes_incident_faces_and_retains_other_cells() {
             .sum::<usize>(),
         12 * 3
     );
+    chart.wireframe = true;
+    let outlined = prepare_surface(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
+    assert!(outlined.meshes.iter().any(|mesh| {
+        !mesh
+            .material
+            .as_ref()
+            .unwrap()
+            .decoration_indices
+            .is_empty()
+    }));
+    assert_eq!(outlined.hits, output.hits);
 }
 
 #[test]
@@ -243,7 +344,7 @@ fn pie_extents_use_independent_physical_radius_and_height() {
         })
         .unwrap();
     let frame = fixed_frame();
-    let output = prepare_pie(&chart, &frame, &input(&rows, &columns)).unwrap();
+    let output = prepare_pie(&chart, &frame, &input(&rows, &columns), None).unwrap();
     let points: Vec<_> = output
         .meshes
         .iter()
@@ -257,6 +358,161 @@ fn pie_extents_use_independent_physical_radius_and_height() {
             - points.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
         assert!((extent - [4.0, 3.0, 4.0][axis]).abs() <= frame.line_width);
     }
+}
+
+#[test]
+fn pie_optical_normals_are_continuous_and_hidden_outlines_include_highlights() {
+    let rows = [DataRowId(1), DataRowId(2)];
+    let shares = numbers(&[2.0, 1.0]);
+    let columns = [("value", shares.as_slice())];
+    let mut chart = PlotPie3d::default();
+    chart.series.push(PlotSeriesRow::default()).unwrap();
+    chart
+        .labels
+        .push(PlotLabelRow {
+            row_id: "1".into(),
+            highlighted: true,
+            ..PlotLabelRow::default()
+        })
+        .unwrap();
+    let frame = PlotFrame3d {
+        mark_outlines: false,
+        ..fixed_frame()
+    };
+    let glass = prepare_pie(&chart, &frame, &input(&rows, &columns), None).unwrap();
+    let outlined = prepare_pie(
+        &chart,
+        &PlotFrame3d {
+            mark_outlines: true,
+            ..frame.clone()
+        },
+        &input(&rows, &columns),
+        None,
+    )
+    .unwrap();
+    assert_eq!(glass.hits, outlined.hits);
+    let data_points = |output: &PlotPreparedGeometry| -> Vec<[f32; 3]> {
+        output
+            .meshes
+            .iter()
+            .flat_map(|mesh| {
+                mesh.material
+                    .as_ref()
+                    .unwrap()
+                    .data_indices
+                    .iter()
+                    .map(|&index| mesh.positions[index as usize])
+            })
+            .collect()
+    };
+    assert_eq!(data_points(&glass), data_points(&outlined));
+    let center = [frame.width * 0.5, frame.depth * 0.5];
+    let mut arc_vertices = 0;
+    for mesh in &glass.meshes {
+        let material = mesh.material.as_ref().unwrap();
+        assert!(material.decoration_indices.is_empty());
+        for ((point, normal), uv) in mesh
+            .positions
+            .iter()
+            .zip(&material.normals)
+            .zip(&material.uvs)
+        {
+            let offset = [point[0] - center[0], point[2] - center[1]];
+            let angle = (f64::from(offset[0]).atan2(f64::from(offset[1]))
+                - f64::from(chart.start_angle))
+            .rem_euclid(TAU);
+            if normal[1].abs() < 1e-6
+                && uv[0] > 0.01
+                && uv[0] < 0.99
+                && (offset[0].hypot(offset[1]) - chart.radius).abs() < 1e-5
+                && angle > 1e-5
+                && (angle - TAU * 2.0 / 3.0).abs() > 1e-5
+                && angle < TAU - 1e-5
+            {
+                let radial = [
+                    (point[0] - center[0]) / chart.radius,
+                    (point[2] - center[1]) / chart.radius,
+                ];
+                assert!((normal[0] - radial[0]).abs() < 1e-5);
+                assert!((normal[2] - radial[1]).abs() < 1e-5);
+                arc_vertices += 1;
+            }
+        }
+    }
+    assert!(arc_vertices > 100);
+    chart.labels = Default::default();
+    let unselected = prepare_pie(&chart, &frame, &input(&rows, &columns), None).unwrap();
+    assert_eq!(glass.hits, unselected.hits);
+    assert_eq!(data_points(&glass), data_points(&unselected));
+    let mut feedback_vertices = 0;
+    for (selected, plain) in glass.meshes.iter().zip(&unselected.meshes) {
+        let selected = selected.material.as_ref().unwrap();
+        let plain = plain.material.as_ref().unwrap();
+        assert_eq!(selected.colors, plain.colors);
+        assert_eq!(selected.normals, plain.normals);
+        for (selected, plain) in selected.uvs.iter().zip(&plain.uvs) {
+            assert_eq!(selected[0], plain[0]);
+            let difference = selected[1] - plain[1];
+            assert!(difference.abs() < 1e-6 || (difference - 2.0).abs() < 1e-6);
+            if difference > 1.0 {
+                feedback_vertices += 1;
+            }
+        }
+    }
+    assert!(feedback_vertices > 100);
+}
+
+#[test]
+fn callout_style_changes_panels_without_changing_native_marks_or_picking() {
+    let rows = [DataRowId(1)];
+    let values = numbers(&[1.0]);
+    let columns = [("value", values.as_slice())];
+    let mut chart = PlotPie3d::default();
+    chart.series.push(PlotSeriesRow::default()).unwrap();
+    chart
+        .labels
+        .push(PlotLabelRow {
+            row_id: "1".into(),
+            text: "Compute\nSelected".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let frame = fixed_frame();
+    let original = prepare_pie(&chart, &frame, &input(&rows, &columns), None).unwrap();
+    let style = PlotCalloutStyle::default();
+    let styled = prepare_pie(&chart, &frame, &input(&rows, &columns), Some(&style)).unwrap();
+    assert_eq!(original.meshes, styled.meshes);
+    assert_eq!(original.hits, styled.hits);
+    let panel = styled
+        .planes
+        .iter()
+        .find(|plane| plane.layout == PlotPlaneLayout::Callout)
+        .unwrap();
+    let PlotPrimitiveKind::CalloutBox {
+        size,
+        radius,
+        border_width,
+    } = panel.primitives[0].kind
+    else {
+        panic!("styled panel");
+    };
+    assert_eq!(border_width, 0.0);
+    assert!(radius > 0.0 && size[1] > 16.0 * 2.4);
+    let PlotPrimitiveKind::Text {
+        font_size,
+        ref text,
+    } = panel.primitives[1].kind
+    else {
+        panic!("label");
+    };
+    assert_eq!(text.as_ref(), "Compute\nSelected");
+    assert!((font_size * panel.model[0] - frame.font_size).abs() < 1e-6);
+    let connector = styled
+        .planes
+        .iter()
+        .find(|plane| matches!(plane.layout, PlotPlaneLayout::Connector { .. }))
+        .unwrap();
+    assert_eq!(connector.primitives[0].color, style.leader_color());
 }
 
 #[test]
@@ -326,7 +582,7 @@ fn source_keyed_label_matches_full_u64_and_series_slot() {
             ..PlotLabelRow::default()
         })
         .unwrap();
-    let output = prepare_points(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let output = prepare_points(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
     let texts: Vec<_> = output
         .planes
         .iter()
@@ -386,7 +642,7 @@ fn pie_angles_follow_shares_while_radial_prisms_keep_independent_dimensions() {
             },
         )
         .unwrap();
-    let output = prepare_pie(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let output = prepare_pie(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
     assert_eq!(output.hits.len(), 2);
     for (i, hit) in output.hits.iter().enumerate() {
         let PlotHitShape::RadialPrism {
@@ -514,6 +770,7 @@ fn annotation_paint_shares_one_exact_data_anchor_and_rotation_enclosure() {
         },
         &fixed_frame(),
         0.0,
+        None,
     )
     .unwrap();
     assert_eq!(output.planes.len(), 2);
@@ -608,7 +865,7 @@ fn sparse_high_label_slots_do_not_collide_with_axis_planes_or_change_rows() {
         ("y", y.as_slice()),
         ("z", z.as_slice()),
     ];
-    let output = prepare_points(&chart, &fixed_frame(), &input(&row_ids, &columns)).unwrap();
+    let output = prepare_points(&chart, &fixed_frame(), &input(&row_ids, &columns), None).unwrap();
     let parts: std::collections::BTreeSet<_> = output.planes.iter().map(|p| p.part).collect();
     assert_eq!(parts.len(), output.planes.len());
     assert_eq!(
@@ -657,7 +914,7 @@ fn pie_radial_metadata_uses_each_slice_height_and_keeps_exact_anchor_and_identit
             })
             .unwrap();
     }
-    let result = prepare_pie(&chart, &fixed_frame(), &input(&rows, &columns)).unwrap();
+    let result = prepare_pie(&chart, &fixed_frame(), &input(&rows, &columns), None).unwrap();
     let panels: Vec<_> = result
         .planes
         .iter()

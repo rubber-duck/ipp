@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A collapsible section: a full-width header button showing a chevron, the
  * section's label and an optional summary, and the section's content while
@@ -14,7 +15,7 @@
  * `onExpandedChange`, or only `defaultExpanded` to let the expander keep it.
  */
 import { useState, type ReactNode } from "react";
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -32,7 +33,7 @@ export interface ExpanderProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the complete section; the control is `${id}/header`. */
-  readonly id: string;
+  readonly id?: string;
   readonly label: string;
   /** Secondary text at the header's end, such as how many options it holds. */
   readonly summary?: string;
@@ -51,7 +52,7 @@ export interface ExpanderProps {
 }
 
 export function Expander({
-  id,
+  id: providedId,
   layer = 0,
   label,
   summary,
@@ -63,6 +64,7 @@ export function Expander({
   layout,
   children,
 }: ExpanderProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const [own, setOwn] = useState(defaultExpanded);
@@ -73,14 +75,20 @@ export function Expander({
   };
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
         {...layout}
         {...(!open ? { height: kit.unit(t.controlHeight) } : {})}
       />
+      <Font source={kit.font} font_size={kit.fontSize} />
+      <Skin
+        theme={kit.theme(disabled ? "expanderBodyDisabled" : "expanderBody")}
+      />
       <Children>
         <Entity id={`${id}/header`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_ROW}
             height={kit.unit(t.controlHeight)}

@@ -336,7 +336,22 @@ fn a_thumb_dragged_to_the_end_settles_at_the_end_in_every_measurement_order() {
         // so each declared window shortens the content.
         let mut host = GuiRoutedHost::new();
         let world = host.world.id();
+        let (skin, motion, metrics) = crate::systems::gui::test_support::input_skin();
+        let theme = host.create(vec![
+            ComponentValue::GuiTheme(skin),
+            ComponentValue::GuiThemeMotion(motion),
+            ComponentValue::GuiMetrics(metrics),
+        ]);
         let list = host.create(vec![
+            ComponentValue::GuiSkin(crate::components::GuiSkin {
+                theme,
+                ..Default::default()
+            }),
+            ComponentValue::GuiMetrics(crate::components::GuiMetrics {
+                scroll_tip_ratio: 0.5,
+                scroll_min_thumb_ratio: 2.0,
+                ..Default::default()
+            }),
             ComponentValue::GuiLayout(GuiLayout {
                 width: 100.0,
                 height: 30.0,

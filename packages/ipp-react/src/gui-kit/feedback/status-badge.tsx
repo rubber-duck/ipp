@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * A read-only compact label of an observed state: a small part-cut frame in
  * the status's role colour, a marker and the application's word for the
@@ -8,7 +9,7 @@
  * badge is never focusable; an actionable badge is a labelled button instead.
  * Its width hugs its label.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiKitIcon } from "../icons.js";
@@ -36,7 +37,7 @@ export type StatusBadgeStatus =
 export interface StatusBadgeProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly status: StatusBadgeStatus;
   /** The state's word, such as Online. */
   readonly label: string;
@@ -72,12 +73,13 @@ const STATUSES: Readonly<
 };
 
 export function StatusBadge({
-  id,
+  id: providedId,
   layer = 0,
   status,
   label,
   layout,
 }: StatusBadgeProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const { tone, frame, marker } = STATUSES[status];
@@ -90,6 +92,7 @@ export function StatusBadge({
     textWidth(label, kit.typeSize("small"));
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
@@ -104,6 +107,7 @@ export function StatusBadge({
         <Strut id={`${id}/strut`} height={kit.unit(t.smallHeight)} />
         {"theme" in marker ? (
           <Entity id={`${id}/marker`}>
+            <PresentationGate open />
             <Layout
               kind={LAYOUT_LEAF}
               width={kit.unit(MARKER)}

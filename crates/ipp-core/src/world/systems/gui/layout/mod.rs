@@ -13,6 +13,7 @@
 mod component;
 mod entity_layout;
 mod geometry;
+mod joined_surface;
 mod overlay_placement;
 mod reveal;
 pub(crate) mod scroll_bars;

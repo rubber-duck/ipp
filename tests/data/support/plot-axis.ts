@@ -5,7 +5,7 @@ import type { PlotFrame } from "./plot-capture.js";
 import {
   componentFields,
   successfulBatch,
-} from "../../../examples/world-gallery/worlds/charts/shared/commands.js";
+} from "../../../examples/demos/scenes/charts/shared/commands.js";
 import { check } from "../../harness/page/checks.js";
 
 const DIMENSIONS = [10, 5, 10] as const;

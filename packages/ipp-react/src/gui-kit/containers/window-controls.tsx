@@ -1,3 +1,4 @@
+import { useEntityId } from "../../scope/identity.js";
 /**
  * Window controls: secondary buttons labelled with the Material outline glyph
  * of their action, in the text colour. Docked in a panel header or title bar
@@ -6,7 +7,7 @@
  * variant, for a destructive action such as a close that discards work, swaps
  * the accent and the idle line for amber in every state, as on every button.
  */
-import { Children, Entity } from "../../components.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -35,7 +36,7 @@ const LABELS: Readonly<Record<WindowControlKind, string>> = {
 export interface WindowControlProps extends GuiFeedbackListeners {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   readonly kind: WindowControlKind;
   readonly onPress?: GuiPressListener;
   readonly ref?: GuiControlRef;
@@ -55,7 +56,7 @@ export interface WindowControlProps extends GuiFeedbackListeners {
 }
 
 export function WindowControl({
-  id,
+  id: providedId,
   layer = 0,
   kind,
   onPress,
@@ -68,6 +69,7 @@ export function WindowControl({
   layout,
   ...feedback
 }: WindowControlProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const theme = docked
@@ -79,6 +81,7 @@ export function WindowControl({
       : "secondaryIcon";
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
@@ -107,7 +110,7 @@ export function WindowControl({
 export interface WindowControlsProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** Each given callback adds its control, in this order, half an inset apart. */
   readonly onMinimize?: GuiPressListener;
   readonly onMaximize?: GuiPressListener;
@@ -121,7 +124,7 @@ export interface WindowControlsProps {
  * minimise, maximise, restore and close, each present when its callback is.
  */
 export function WindowControls({
-  id,
+  id: providedId,
   layer = 0,
   onMinimize,
   onMaximize,
@@ -129,6 +132,7 @@ export function WindowControls({
   onClose,
   layout,
 }: WindowControlsProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const controls = (
@@ -142,6 +146,7 @@ export function WindowControls({
   const gap = t.inset / 2;
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}

@@ -10,6 +10,7 @@ pub mod world_failures;
 use ipp_core::{ErrorReason, WorldContext, WorldUpdateReport};
 
 pub mod gui_panel;
+pub mod skin_fixture;
 
 /// Select a World's canvas with its stored extent and density.
 pub trait CanvasTestHost {

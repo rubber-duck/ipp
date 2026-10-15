@@ -74,7 +74,11 @@ pub struct WorldSession {
 }
 
 enum WorldSessionReply {
-    CameraNavigate,
+    CameraNavigate(ipp_core::WorldId),
+    CompletedCameraNavigate {
+        body: ResponseBody,
+        tick: u64,
+    },
     LifecycleSubscription,
     LifecycleDiagnostics(ipp_protocol::world::lifecycle_diagnostics::LifecycleDiagnosticQuery),
     Batch {

@@ -59,7 +59,7 @@ fn curvature_and_separated_shells_raise_local_demand() {
 }
 
 #[test]
-fn near_plane_crossing_is_bounded_and_offscreen_clipping_keeps_density() {
+fn clipping_keeps_visible_density_without_reserving_offscreen_pixels() {
     let mut mvp = orthographic();
     mvp[2] = 1.0;
     mvp[14] = -2.0;
@@ -70,14 +70,40 @@ fn near_plane_crossing_is_bounded_and_offscreen_clipping_keeps_density() {
             2048,
             None
         ),
-        Some([2048, 1024])
+        Some([400, 200])
     );
     let mut offscreen = orthographic();
-    offscreen[12] = 1.8;
+    offscreen[12] = -1.8;
     assert_eq!(
         plane_demand([4.0, 2.0], offscreen, viewport(400, 400)).unwrap(),
         plane_demand([4.0, 2.0], orthographic(), viewport(400, 400)).unwrap()
     );
+    offscreen[12] = 1.8;
+    assert_eq!(
+        plane_demand([4.0, 2.0], offscreen, viewport(400, 400)).unwrap(),
+        [1.0; 2]
+    );
+}
+
+#[test]
+fn offscreen_perspective_magnification_does_not_exhaust_the_image_budget() {
+    let mut mvp = orthographic();
+    mvp[3] = -0.2;
+    let demand = plane_demand([4.0, 2.0], mvp, viewport(400, 400)).unwrap();
+    // Only x <= 10/7 reaches the viewport. The far edge at x=4 is offscreen,
+    // where magnification would otherwise request over 10,000 texels.
+    assert!(demand[0] >= 784.0 && demand[0] < 1200.0, "{demand:?}");
+    for y in 0..=10 {
+        for x in 0..=10 {
+            let (u, v) = (x as f64 / 7.0, y as f64 / 10.0);
+            let w = 1.0 - u * 0.2;
+            let jacobian = [
+                [100.0 / w.powi(2), 0.0],
+                [-20.0 * v / w.powi(2), -100.0 / w],
+            ];
+            assert!(spectral_norm(jacobian) <= demand[0] / 4.0 + 1e-3);
+        }
+    }
 }
 
 #[test]

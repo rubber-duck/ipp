@@ -1,3 +1,5 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
+import { GuiKit, ControlSkin } from "@ipp/react/gui-kit";
 import type { GuiTarget } from "@ipp/client";
 import { createElement as h } from "react";
 import {
@@ -48,42 +50,53 @@ export function colourPanel(origin: readonly [number, number]) {
     name: "colour",
     origin,
     extent: COLOUR_PANEL,
-    async build({ client, font, report }) {
+    async build({ client, font, contract, report }) {
       const records: ColourRecord[] = [];
       const root = createRoot(client as unknown as ReactWorldClient, {
         onError: report,
       });
+      const content = h(
+        Entity,
+        { id: "colour-root" },
+        h(Layout, {
+          kind: 3,
+          width: COLOUR_PANEL[0],
+          height: COLOUR_PANEL[1],
+        }),
+        h(Font, { source: font, font_size: COLOUR_FONT }),
+        h(
+          Children,
+          null,
+          h(
+            Entity,
+            { id: "colour" },
+            h(Layout, {
+              kind: 0,
+              width: COLOUR_SIZE[0],
+              height: COLOUR_SIZE[1],
+              align_x: -1,
+              align_y: -1,
+            }),
+            h(ControlSkin, { role: "color" }),
+            h(Color, {
+              ...COLOUR_START,
+              alpha_rail: true,
+              onColorCommit: ({ tick, value }) => records.push({ tick, value }),
+            }),
+          ),
+        ),
+      );
+
       await root.render(
         h(
-          Entity,
-          { id: "colour-root" },
-          h(Layout, {
-            kind: 3,
-            width: COLOUR_PANEL[0],
-            height: COLOUR_PANEL[1],
-          }),
-          h(Font, { source: font, font_size: COLOUR_FONT }),
-          h(
-            Children,
-            null,
-            h(
-              Entity,
-              { id: "colour" },
-              h(Layout, {
-                kind: 0,
-                width: COLOUR_SIZE[0],
-                height: COLOUR_SIZE[1],
-                align_x: -1,
-                align_y: -1,
-              }),
-              h(Color, {
-                ...COLOUR_START,
-                alpha_rail: true,
-                onColorCommit: ({ tick, value }) =>
-                  records.push({ tick, value }),
-              }),
-            ),
-          ),
+          GuiKit,
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font,
+            fontSize: COLOUR_FONT,
+          },
+          content,
         ),
       );
 

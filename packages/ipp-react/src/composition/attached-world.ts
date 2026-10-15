@@ -57,6 +57,8 @@ export interface AttachedWorldHandle {
   readonly world: WorldReference;
   /** The presented output: the child's canvas or its selected camera. */
   readonly output: OutputReference | undefined;
+  /** Exact acknowledged attachment; changes when its structural selection changes. */
+  readonly attachment: AttachmentReceipt;
   readonly closed: Promise<void>;
 }
 

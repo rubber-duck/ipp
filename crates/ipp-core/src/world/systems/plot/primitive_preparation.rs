@@ -29,6 +29,23 @@ pub(super) fn prepare(
             layer: 0,
         };
         output.push(match &item.kind {
+            PlotPrimitiveKind::CalloutBox {
+                size,
+                radius,
+                border_width,
+            } => CanvasPrimitive::Box {
+                style: CanvasPrimitiveStyle {
+                    color: [1.0; 4],
+                    ..style
+                },
+                size: *size,
+                corner_radius: [*radius; 2],
+                border_width: *border_width,
+                border_color: [0.65, 0.75, 0.8, 0.18],
+                fill: CanvasShapeFill::Solid(item.color),
+                glow: None,
+                shape: CanvasBoxShape::RECT,
+            },
             PlotPrimitiveKind::Box {
                 size,
                 border_width,
@@ -51,6 +68,7 @@ pub(super) fn prepare(
             PlotPrimitiveKind::Path(path) => CanvasPrimitive::Path {
                 style,
                 path: path.clone(),
+                paint: None,
             },
             PlotPrimitiveKind::Text {
                 text,
@@ -162,6 +180,7 @@ pub(super) fn bounds(items: &[CanvasPrimitive], font: Option<&FontAsset>) -> Opt
             CanvasPrimitive::Path {
                 style,
                 path,
+                ..
             } => include(path.bounds, style),
             _ => {}
         }
@@ -183,6 +202,7 @@ mod tests {
             incarnation: 1,
         };
         let items = [PlotPrimitive {
+            data_mark: false,
             part: 0,
             position: [0.0; 2],
             color: fill,

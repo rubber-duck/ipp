@@ -1,42 +1,4 @@
 {
-  "gallery-charts": {
-    "description": "Stationary Canvas and volumetric charts, smooth camera focus, source row interaction and faithful streaming through worker WASM/WebGL",
-    "sourceRoots": [
-      "examples/world-gallery/worlds/charts/",
-      "tests/gallery/scenarios/gallery-charts.ts",
-      "tests/gallery/scenarios/gallery-chart-streaming.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/gallery-charts.test.ts"
-    ],
-    "files": ["dist/tests/gallery/gallery-charts.test.js"]
-  },
-  "gallery-chart-input": {
-    "description": "Bounded chart gesture and hover work, newest focus and release behavior through real browser input and generated worker transport",
-    "sourceRoots": [
-      "examples/world-gallery/worlds/charts/",
-      "tests/gallery/scenarios/gallery-charts.ts",
-      "tests/gallery/scenarios/gallery-chart-streaming.ts",
-      "tests/gallery/gallery-chart-input.test.ts",
-      "tests/gallery/support/gallery-chart-observer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/pages/viewer.ts"
-    ],
-    "files": ["dist/tests/gallery/gallery-chart-input.test.js"]
-  },
-  "gallery-chart-changes": {
-    "description": "Regenerated hover, interaction-gated axes, growing numeric ranges, interpolated value picking and live snapshot smoothing through real browser input",
-    "sourceRoots": [
-      "examples/world-gallery/worlds/charts/",
-      "tests/gallery/scenarios/gallery-charts.ts",
-      "tests/gallery/scenarios/gallery-chart-changes.ts",
-      "tests/gallery/scenarios/gallery-chart-streaming.ts",
-      "tests/gallery/gallery-chart-changes.test.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/pages/viewer.ts"
-    ],
-    "files": ["dist/tests/gallery/gallery-chart-changes.test.js"]
-  },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
     "sourceRoots": [
@@ -74,8 +36,9 @@
       "tools/ipp-schema-gen/src/templates/codec.template.ts",
       "tools/products/composed-query-fixtures.mjs",
       "tests/runtime/composed-queries.test.ts",
+      "tests/rendering/scenarios/composed-camera.ts",
       "tests/runtime/tsconfig.composed-queries.json",
-      "examples/world-gallery/shared/camera-controls.ts"
+      "examples/demos/shared/camera-controls.ts"
     ],
     "commands": [
       {
@@ -141,6 +104,12 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "canvas-paints",
+        "command": ["cargo", "test", "-p", "ipp-render-gl", "--test", "canvas_paints", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
       },
       {
         "name": "wasm",
@@ -339,9 +308,9 @@
   "gallery-site": {
     "description": "Published gallery files render through HTTP, worker/WASM and WebGL at root and project URLs",
     "sourceRoots": [
-      "examples/world-gallery/",
+      "examples/demos/",
       "tools/build/",
-      "tools/assets/gallery_gui_assets.py",
+      "tools/assets/demos_drawings.py",
       "tools/performance/performance.mjs",
       "tools/performance/chart-data.mjs"
     ],
@@ -1044,7 +1013,7 @@
     ]
   },
   "gui-motion": {
-    "description": "Skin transitions through generated native/worker clients: the built-in looks' timing under physical input over Host time, a theme's own transitions in causally witnessed nested Canvas captures, and the React kit's one reduced-motion setting snapping them and stilling its spinner",
+    "description": "Skin transitions through generated native/worker clients: explicit client skin timing under physical input over Host time, a theme's own transitions in causally witnessed nested Canvas captures, and the React kit's one reduced-motion setting snapping them and stilling its spinner",
     "sourceRoots": [
       "tests/gui/motion/",
       "crates/ipp-core/src/world/systems/gui/motion/",
@@ -1056,21 +1025,39 @@
     "commands": [
       {
         "name": "development",
-        "command": ["@node", "--test", "--test-name-pattern", "development", "target/gui-motion/motion.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "development",
+          "target/gui-motion/motion.test.js"
+        ],
         "builds": ["browser:render", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "production",
-        "command": ["@node", "--test", "--test-name-pattern", "production", "target/gui-motion/motion.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "production",
+          "target/gui-motion/motion.test.js"
+        ],
         "builds": ["browser:render", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
-        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-motion/motion.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native",
+          "target/gui-motion/motion.test.js"
+        ],
         "builds": ["gles-host", "font-assets", "gui-motion-fixtures"],
         "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
@@ -1078,7 +1065,7 @@
     ]
   },
   "gui-default-skin": {
-    "description": "Unthemed controls in the runtime's default look: every skin-lab specimen in every state through real input, custom paints on panels with a property write and a broken paint, and overlays over text painted before them in draw order, captured on worker/WASM/WebGL and native GLES and checked by image regions",
+    "description": "Explicit client Cybertron: native control states, parameterized parts and custom paints captured on GLES and WebGL with independent image assertions",
     "sourceRoots": [
       "tests/gui/default-skin/",
       "tests/gui/skin-lab/",
@@ -1093,19 +1080,38 @@
       "crates/ipp-core/src/world/systems/gui/presentation/",
       "crates/ipp-core/src/world/systems/gui/layout/",
       "crates/ipp-core/src/world/systems/gui/local/controls/slider.rs",
-      "crates/ipp-core/src/world/systems/gui/local/scroll/component.rs"
+      "crates/ipp-core/src/world/systems/gui/local/scroll/component.rs",
+      "packages/ipp-react/src/gui-cybertron/",
+      "packages/ipp-react/src/gui/",
+      "packages/ipp-react/src/gui-kit/"
     ],
     "commands": [
       {
         "name": "worker",
-        "command": ["@node", "--test", "--test-name-pattern", "worker", "target/gui-default-skin/default-skin.test.js"],
-        "builds": ["browser:render", "font-assets", "gui-default-skin-fixtures"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker",
+          "target/gui-default-skin/default-skin.test.js"
+        ],
+        "builds": [
+          "browser:render",
+          "font-assets",
+          "gui-default-skin-fixtures"
+        ],
         "partitionExcludes": ["target/gles-host"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "native",
-        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-default-skin/default-skin.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native",
+          "target/gui-default-skin/default-skin.test.js"
+        ],
         "builds": ["gles-host", "font-assets", "gui-default-skin-fixtures"],
         "partitionExcludes": ["target/browser-build/render"],
         "requirements": ["node", "npm", "browser", "gles"]
@@ -1386,8 +1392,6 @@
   "animation": {
     "description": "Property playback and gallery skeleton poses through transports and completed WebGL frames",
     "sourceRoots": [
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
       "crates/ipp-core/src/world/systems/animation/",
       "crates/ipp-core/tests/animation.rs",
       "crates/ipp-core/tests/animation_transitions.rs",
@@ -1400,14 +1404,12 @@
       "crates/ipp-core/src/world/construction.rs",
       "crates/ipp-core/src/world/ingress.rs",
       "crates/ipp-core/src/world/update.rs",
-      "crates/ipp-core/src/world/mutation/",
-      "tests/gallery/support/gallery-server.ts"
+      "crates/ipp-core/src/world/mutation/"
     ],
     "files": [
       "dist/tests/runtime/world-host.native.test.js",
       "dist/tests/runtime/world-host.browser.test.js",
-      "dist/tests/rendering/animation.test.js",
-      "dist/tests/gallery/gallery-animation.test.js"
+      "dist/tests/rendering/animation.test.js"
     ],
     "commands": [
       {
@@ -1462,17 +1464,14 @@
   "cameras": {
     "description": "Camera/picking scenarios and completed WebGL frame assertions",
     "sourceRoots": [
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/support/gallery-server.ts"
+      "tests/rendering/pages/composed-camera.ts",
+      "tests/rendering/scenarios/composed-camera.ts"
     ],
     "files": [
       "dist/tests/runtime/world-host.native.test.js",
       "dist/tests/runtime/world-host.browser.test.js",
       "dist/tests/rendering/camera.test.js",
-      "dist/tests/gallery/gallery-picking.test.js",
-      "dist/tests/gallery/gallery-navigation.test.js",
-      "dist/tests/gallery/gallery-dragging.test.js"
+      "dist/tests/rendering/composed-camera.browser.test.js"
     ]
   },
   "geometry": {
@@ -1510,87 +1509,274 @@
       "tests/react/gui-authoring/scenarios/gui-projected-advanced.tsx",
       "tests/react/gui-authoring/scenarios/gui-layer-transitions.tsx",
       "tests/react/gui-authoring/projected-oracle.test.ts",
-      "tests/react/gui-authoring/gui-paint.test.ts"
+      "tests/react/gui-authoring/gui-paint.test.ts",
+      "tests/react/gui-authoring/scenarios/gui-widgets.tsx",
+      "tests/react/gui-authoring/scenarios/gui-field-observation.tsx",
+      "tests/react/gui-authoring/scenarios/gui-presentation-retention.tsx"
     ],
     "commands": [
       {
         "name": "projected-oracle",
-        "command": ["@node", "--test", "target/react-gui-authoring/projected-oracle.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "target/react-gui-authoring/projected-oracle.test.js"
+        ],
         "builds": ["react-gui-authoring"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "refs",
-        "command": ["@node", "--test", "target/react-gui-authoring/control-refs.test.js", "target/react-gui-authoring/gui-declaration.test.js", "target/react-gui-authoring/gui-callbacks.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "target/react-gui-authoring/control-refs.test.js",
+          "target/react-gui-authoring/gui-declaration.test.js",
+          "target/react-gui-authoring/gui-callbacks.test.js"
+        ],
         "builds": ["react-gui-authoring"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "native",
-        "command": ["@node", "--test", "--test-name-pattern=through native WebSocket", "target/react-gui-authoring/gui-authoring.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=through native WebSocket",
+          "target/react-gui-authoring/gui-authoring.test.js"
+        ],
         "builds": ["react-gui-authoring"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "worker",
-        "command": ["@node", "--test", "--test-name-pattern=through worker WASM", "target/react-gui-authoring/gui-authoring.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=through worker WASM",
+          "target/react-gui-authoring/gui-authoring.test.js"
+        ],
         "builds": ["react-gui-authoring", "browser:render"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "webgl",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl"],
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl"
+        ],
         "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
+        "partitionExcludes": [
+          "target/browser-build/render-instrumentation",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "gles",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl"],
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--egl-dir",
+          "@egl"
+        ],
         "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host-instrumentation"
+        ],
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
         "name": "projected-advanced-webgl",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "advanced"],
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl",
+          "--projected",
+          "advanced"
+        ],
         "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
+        "partitionExcludes": [
+          "target/browser-build/render-instrumentation",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "projected-advanced-gles",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "advanced", "--egl-dir", "@egl"],
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--projected",
+          "advanced",
+          "--egl-dir",
+          "@egl"
+        ],
         "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host-instrumentation"
+        ],
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
         "name": "projected-transitions-webgl",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "transitions"],
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl",
+          "--projected",
+          "transitions"
+        ],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render-instrumentation",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "projected-transitions-gles",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--projected",
+          "transitions",
+          "--egl-dir",
+          "@egl"
+        ],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "projected-recovery-webgl",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl",
+          "--projected",
+          "recovery"
+        ],
+        "builds": [
+          "react-gui-authoring",
+          "browser:render-instrumentation",
+          "surface-assets"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "projected-recovery-gles",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--projected",
+          "recovery",
+          "--egl-dir",
+          "@egl"
+        ],
+        "builds": [
+          "react-gui-authoring",
+          "gles-host-instrumentation",
+          "surface-assets"
+        ],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host"
+        ],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "components-webgl",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl",
+          "--components"
+        ],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render-instrumentation",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "sliders-webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--sliders"],
         "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
         "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
-        "name": "projected-transitions-gles",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "transitions", "--egl-dir", "@egl"],
+        "name": "sliders-gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl", "--sliders"],
         "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
         "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
-        "name": "projected-recovery-webgl",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--projected", "recovery"],
-        "builds": ["react-gui-authoring", "browser:render-instrumentation", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render", "target/gles-host", "target/gles-host-instrumentation"],
+        "name": "slider-wheel-webgl",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "webgl", "--slider-wheel"],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render-instrumentation", "target/gles-host", "target/gles-host-instrumentation"],
         "requirements": ["node", "npm", "browser"]
       },
       {
-        "name": "projected-recovery-gles",
-        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--projected", "recovery", "--egl-dir", "@egl"],
-        "builds": ["react-gui-authoring", "gles-host-instrumentation", "surface-assets"],
-        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host"],
+        "name": "slider-wheel-gles",
+        "command": ["@node", "target/react-gui-authoring/gui-paint.test.js", "--backend", "gles", "--egl-dir", "@egl", "--slider-wheel"],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation", "target/gles-host-instrumentation"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "components-gles",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--egl-dir",
+          "@egl",
+          "--components"
+        ],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host-instrumentation"
+        ],
         "requirements": ["node", "npm", "browser", "gles"]
       }
     ]
@@ -1628,7 +1814,28 @@
     "files": [
       "dist/tests/react/react.native.test.js",
       "dist/tests/react/react.browser.test.js",
-      "dist/packages/ipp-react/tests/renderer.test.js"
+      "dist/packages/ipp-react/tests/renderer.test.js",
+      "dist/packages/ipp-react/tests/entity-links.test.js",
+      "dist/packages/ipp-react/tests/commit-scope.test.js",
+      "dist/packages/ipp-react/tests/transform.test.js",
+      "dist/packages/ipp-react/tests/plot-rows.test.js",
+      "dist/packages/ipp-react/tests/world-scope.test.js"
+    ],
+    "commands": [
+      {
+        "name": "presentation-core",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--lib",
+          "presentation_gate",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": ["rust"]
+      }
     ]
   },
   "canvas": {
@@ -1683,20 +1890,12 @@
   "render": {
     "description": "Resources, gallery controls and actual WebGL frames",
     "sourceRoots": [
-      "crates/ipp-wasm/src/services/",
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/support/gallery-server.ts"
+      "crates/ipp-wasm/src/services/"
     ],
     "files": [
       "dist/tests/rendering/render.test.js",
       "dist/tests/rendering/fixtures.test.js",
-      "dist/tests/gallery/viewer.test.js",
       "dist/tests/rendering/ready-geometry.test.js",
-      "dist/tests/gallery/gallery-picking.test.js",
-      "dist/tests/gallery/gallery-navigation.test.js",
-      "dist/tests/gallery/gallery-particles.test.js",
-      "dist/tests/gallery/gallery-dragging.test.js",
       "dist/tests/rendering/debug-geometry.test.js",
       "dist/tests/rendering/geometry.test.js"
     ]
@@ -1704,9 +1903,6 @@
   "lighting": {
     "description": "Direct lights, smooth normals, spot shadows and context recovery",
     "sourceRoots": [
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/support/gallery-server.ts"
     ],
     "files": [
       "dist/tests/rendering/lighting.test.js"
@@ -1739,116 +1935,6 @@
       "integrations/blender/",
       "tests/blender/",
       "tools/pipeline/blender_addon.py"
-    ]
-  },
-  "gallery-particles": {
-    "description": "Interactive particle gallery controls, rendering and cleanup",
-    "sourceRoots": [
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/support/gallery-server.ts"
-    ],
-    "files": [
-      "dist/tests/gallery/gallery-particles.test.js"
-    ]
-  },
-  "gallery-gui": {
-    "description": "Scanner login, native editing, workspace, settings, recovery, curved layers, texture caching and cleanup",
-    "sourceRoots": [
-      "examples/world-gallery/worlds/gui/",
-      "packages/ipp-react/src/gui-kit/",
-      "packages/ipp-react/src/gui/theme.ts",
-      "packages/ipp-client/tools/assemble.mjs",
-      "tools/build/verify-browser.mjs",
-      "tests/gallery/gallery-gui.test.ts",
-      "tests/gallery/gallery-scanner.test.ts",
-      "tests/gallery/support/gallery-scanner.ts",
-      "tests/gallery/gallery-gui-workbench.test.ts",
-      "tests/gallery/gallery-gui-shield.test.ts",
-      "tests/gallery/gallery-gui-oracle.ts",
-      "tests/gallery/support/gallery-gui.ts",
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/support/viewer-observation.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tools/assets/gallery_gui_assets.py",
-      "tests/gallery/support/gallery-server.ts"
-    ],
-    "commands": [
-      {
-        "name": "scanner",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner logs in", "dist/tests/gallery/gallery-scanner.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "workspace",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery scanner protects", "dist/tests/gallery/gallery-scanner.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "cache",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI panel caches", "dist/tests/gallery/gallery-gui.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "exploded",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation layer", "dist/tests/gallery/gallery-gui-workbench.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "recovery",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI keeps stage selections", "dist/tests/gallery/gallery-gui-workbench.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "presentation",
-        "command": ["@node", "--test", "--test-name-pattern=^Gallery GUI retains presentation on all", "dist/tests/gallery/gallery-gui-workbench.test.js"],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      },
-      {
-        "name": "shield",
-        "command": [
-          "@node",
-          "--test",
-          "dist/tests/gallery/gallery-gui-shield.test.js"
-        ],
-        "builds": ["typescript", "gallery-fixtures"],
-        "requirements": ["node", "npm", "browser"]
-      }
-    ]
-  },
-  "gallery-gui-camera": {
-    "description": "Runtime-routed Surface GUI and background camera gestures",
-    "sourceRoots": [
-      "examples/world-gallery/worlds/gui/",
-      "packages/ipp-react/src/gui-kit/",
-      "tests/gallery/gallery-gui-oracle.ts",
-      "tests/gallery/support/gallery-gui.ts",
-      "tests/gallery/support/gallery-scanner.ts",
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/support/viewer-observation.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tools/assets/gallery_gui_assets.py",
-      "tests/gallery/support/gallery-server.ts"
-    ],
-    "files": [
-      "dist/tests/gallery/gallery-gui-camera.test.js"
-    ]
-  },
-  "gallery-platformer": {
-    "description": "Imported platformer locomotion, smooth turning with a forward gait, following camera, lighting and lifecycle cleanup",
-    "sourceRoots": [
-      "tests/gallery/pages/viewer.ts",
-      "tests/gallery/drivers/browser-gallery.ts",
-      "tests/gallery/support/gallery-server.ts"
-    ],
-    "files": [
-      "dist/tests/gallery/gallery-platformer.test.js"
     ]
   },
   "particles": {
@@ -2026,6 +2112,7 @@
       "dist/packages/ipp-react/tests/gui-kit-feedback.test.js",
       "dist/packages/ipp-react/tests/gui-kit-overlays.test.js",
       "dist/packages/ipp-react/tests/gui-kit-selection.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-controlled-values.test.js",
       "dist/packages/ipp-react/tests/gui-kit-values.test.js",
       "dist/packages/ipp-react/tests/gui-ime.test.js",
       "dist/packages/ipp-react/tests/gui-input.test.js",
@@ -2035,9 +2122,20 @@
       "crates/ipp-protocol/tests/gui-semantics-client.mjs",
       "dist/tests/gui/gui.native.test.js",
       "dist/tests/gui/gui-react-root.test.js",
-      "dist/tests/gui/gui.browser.test.js"
+      "dist/tests/gui/gui.browser.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-refs.test.js",
+      "dist/packages/ipp-react/tests/skin-provider-composition.test.js",
+      "dist/packages/ipp-react/tests/plot-skin.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-widgets.test.js"
     ],
     "commands": [
+      {
+        "name": "flow-native",
+        "command": ["@node", "--test", "--test-name-pattern=native flow spacing", "dist/tests/gui/gui.native.test.js"],
+        "builds": ["typescript", "gles-host"],
+        "partitionExcludes": ["target/font-assets"],
+        "requirements": ["node", "npm", "rust", "gles"]
+      },
       {
         "name": "skin-motion",
         "command": [
@@ -2080,9 +2178,7 @@
           "gui_"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "reliable-output",
@@ -2097,9 +2193,7 @@
           "services::reliable_output::"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "input-foundation",
@@ -2114,37 +2208,68 @@
           "services::gui_input::"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "input-sdk",
-        "command": ["@node", "--test", "target/multiplex-tests/gui-input.test.js", "target/multiplex-tests/gui-text-bridge.test.js", "target/multiplex-tests/gui-ime.test.js", "target/multiplex-tests/gui-clipboard.test.js", "target/multiplex-tests/gui-soft-keyboard.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "target/multiplex-tests/gui-input.test.js",
+          "target/multiplex-tests/gui-text-bridge.test.js",
+          "target/multiplex-tests/gui-ime.test.js",
+          "target/multiplex-tests/gui-clipboard.test.js",
+          "target/multiplex-tests/gui-soft-keyboard.test.js"
+        ],
         "builds": ["transport-fixtures"],
         "requirements": ["node", "npm"]
       },
       {
         "name": "input-wire",
-        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked", "wire_manifest::tests::"],
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-protocol",
+          "--lib",
+          "--locked",
+          "wire_manifest::tests::"
+        ],
         "builds": [],
         "requirements": ["rust"]
       },
       {
         "name": "input-codec",
-        "command": ["@node", "--experimental-strip-types", "--test", "crates/ipp-protocol/tests/physical-input-client.mjs"],
+        "command": [
+          "@node",
+          "--experimental-strip-types",
+          "--test",
+          "crates/ipp-protocol/tests/physical-input-client.mjs"
+        ],
         "builds": ["browser:render", "gles-host"],
         "requirements": ["node", "npm", "rust"]
       },
       {
         "name": "physical-webgl",
-        "command": ["@node", "--test", "--test-name-pattern", "worker WASM/WebGL", "target/multiplex-tests/physical-input.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "worker WASM/WebGL",
+          "target/multiplex-tests/physical-input.test.js"
+        ],
         "builds": ["browser:render", "transport-fixtures", "font-assets"],
         "requirements": ["node", "npm", "browser"]
       },
       {
         "name": "physical-gles",
-        "command": ["@node", "--test", "--test-name-pattern", "native WebSocket/GLES", "target/multiplex-tests/physical-input.test.js"],
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "native WebSocket/GLES",
+          "target/multiplex-tests/physical-input.test.js"
+        ],
         "builds": ["gles-host", "transport-fixtures", "font-assets"],
         "requirements": ["node", "npm", "browser", "gles"]
       },
@@ -2162,24 +2287,13 @@
           "warnings"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "input-foundation-check",
-        "command": [
-          "cargo",
-          "check",
-          "-p",
-          "ipp-core",
-          "--lib",
-          "--locked"
-        ],
+        "command": ["cargo", "check", "-p", "ipp-core", "--lib", "--locked"],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "core",
@@ -2204,12 +2318,11 @@
           "canvas_output_changes",
           "--test",
           "schema_rows",
-          "--locked"
+          "--locked",
+          "--no-fail-fast"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "core-lib",
@@ -2227,9 +2340,7 @@
           "world::component_state::"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "protocol",
@@ -2243,9 +2354,7 @@
           "--locked"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       }
     ],
     "sourceRoots": [
@@ -2945,7 +3054,15 @@
       "tests/data/tsconfig.plots.json",
       "tools/products/plots-fixtures.mjs",
       "tests/data/scenarios/plot-percentage.ts",
-      "crates/ipp-core/tests/plot_interpolation.rs"
+      "crates/ipp-core/tests/plot_interpolation.rs",
+      "packages/ipp-react/src/gui-glass/",
+      "packages/ipp-react/src/gui-glass.ts",
+      "tests/data/scenarios/plot-glass.ts",
+      "tests/data/scenarios/plot-glass-order.tsx",
+      "tests/data/support/plot-glass-oracle.ts",
+      "tests/data/support/plot-glass-scene.tsx",
+      "tests/data/support/plot-contour-oracle.ts",
+      "tests/gui/glass-skin/chart-material/"
     ],
     "commands": [
       {
@@ -2960,9 +3077,7 @@
           "--locked"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "interpolation-core",
@@ -2976,24 +3091,13 @@
           "--locked"
         ],
         "builds": [],
-        "requirements": [
-          "rust"
-        ]
+        "requirements": ["rust"]
       },
       {
         "name": "authoring",
-        "command": [
-          "@node",
-          "--test",
-          "target/plots/plot-authoring.test.js"
-        ],
-        "builds": [
-          "plots-fixtures"
-        ],
-        "requirements": [
-          "node",
-          "npm"
-        ]
+        "command": ["@node", "--test", "target/plots/plot-authoring.test.js"],
+        "builds": ["plots-fixtures"],
+        "requirements": ["node", "npm"]
       },
       {
         "name": "native",
@@ -3003,20 +3107,9 @@
           "--test-name-pattern=^(2d|react) Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "dense-native",
@@ -3026,20 +3119,9 @@
           "--test-name-pattern=^dense Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "browser",
@@ -3049,21 +3131,9 @@
           "--test-name-pattern=^(2d|react) Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "dense-browser",
@@ -3073,21 +3143,9 @@
           "--test-name-pattern=^dense Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "views-native",
@@ -3097,20 +3155,9 @@
           "--test-name-pattern=^view Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "views-browser",
@@ -3120,21 +3167,9 @@
           "--test-name-pattern=^view Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "3d-native",
@@ -3144,20 +3179,9 @@
           "--test-name-pattern=^3d Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "3d-browser",
@@ -3167,21 +3191,9 @@
           "--test-name-pattern=^3d Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "axis-native",
@@ -3191,20 +3203,9 @@
           "--test-name-pattern=^axis(?:-motion)? Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "axis-browser",
@@ -3214,21 +3215,9 @@
           "--test-name-pattern=^axis(?:-motion)? Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "axis-gating-native",
@@ -3238,20 +3227,9 @@
           "--test-name-pattern=^axis-gating Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "axis-gating-browser",
@@ -3261,21 +3239,9 @@
           "--test-name-pattern=^axis-gating Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
-        ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       },
       {
         "name": "percentage-native",
@@ -3285,20 +3251,9 @@
           "--test-name-pattern=^percentage Plot through native WebSocket/GLES",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "gles-host",
-          "font-assets"
-        ],
-        "requirements": [
-          "rust",
-          "node",
-          "npm",
-          "gles"
-        ],
-        "partitionExcludes": [
-          "target/browser-build/render"
-        ]
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
       },
       {
         "name": "percentage-browser",
@@ -3308,28 +3263,88 @@
           "--test-name-pattern=^percentage Plot through worker WASM/WebGL",
           "target/plots/plots-runtime.test.js"
         ],
-        "builds": [
-          "plots-fixtures",
-          "browser:render",
-          "font-assets"
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
+      },
+      {
+        "name": "glass-2d-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-2d Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
         ],
-        "requirements": [
-          "rust",
-          "wasm",
-          "node",
-          "npm",
-          "browser"
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
+      },
+      {
+        "name": "glass-2d-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-2d Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
         ],
-        "partitionExcludes": [
-          "target/gles-host"
-        ]
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
+      },
+      {
+        "name": "glass-3d-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-3d Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
+      },
+      {
+        "name": "glass-3d-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-3d Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
+      },
+      {
+        "name": "glass-lifecycle-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-lifecycle Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render"]
+      },
+      {
+        "name": "glass-lifecycle-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^glass-lifecycle Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host"]
       }
     ]
   },
   "native-gallery": {
     "description": "Shared gallery scenes through native GLES with persistent sessions, actions, reload failure and cleanup",
     "sourceRoots": [
-      "examples/world-gallery/",
+      "examples/demos/",
       "tools/shared-host/",
       "tools/build/native-blender-import.mjs",
       "tests/gallery/native-gallery.test.ts",
@@ -3337,9 +3352,33 @@
       "tests/gallery/support/native-gallery-scene-assertions.ts",
       "tests/gallery/scenarios/gallery-charts.ts",
       "tests/gallery/scenarios/gallery-chart-streaming.ts",
-      "tests/gallery/scenarios/gallery-chart-changes.ts"
+      "tests/gallery/scenarios/gallery-chart-changes.ts",
+      "tests/gallery/frame-rate.test.ts",
+      "tests/gallery/application.native.test.ts",
+      "tests/gallery/drivers/native-application.ts",
+      "tests/gallery/scenarios/application.ts",
+      "tests/gallery/scenarios/application-layout.ts",
+      "tests/gallery/fixtures/application-scenes.ts",
+      "tests/gallery/gallery-platformer-controls.test.ts",
+      "tests/gallery/drivers/native-platformer-controls.ts",
+      "tests/gallery/scenarios/platformer-controls.ts",
+      "tests/gallery/scenarios/platformer-poses.ts",
+      "tests/gallery/scenarios/chart-input.ts",
+      "tests/gallery/scenarios/particle-lifetime.ts",
+      "tests/gallery/scenarios/controls-dropdown.ts",
+      "tests/gallery/drivers/native-behavior.ts",
+      "tests/gallery/gallery-platformer-streaming.native.test.ts",
+      "tests/gallery/drivers/native-platformer-streaming.ts",
+      "tests/gallery/scenarios/platformer-streaming.ts",
+      "tests/gallery/fixtures/platformer-streaming-scene.ts"
     ],
     "commands": [
+      {
+        "name": "diagnostics",
+        "command": ["@node", "--test", "dist/tests/gallery/frame-rate.test.js"],
+        "builds": ["typescript"],
+        "requirements": ["node", "npm"]
+      },
       {
         "name": "chart-changes",
         "command": [
@@ -3356,7 +3395,11 @@
           "gallery-platformer-native-assets",
           "shared-host"
         ],
-        "requirements": ["node", "npm", "gles"]
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
       },
       {
         "name": "charts",
@@ -3374,7 +3417,11 @@
           "gallery-platformer-native-assets",
           "shared-host"
         ],
-        "requirements": ["node", "npm", "gles"]
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
       },
       {
         "name": "chart-streaming",
@@ -3392,7 +3439,11 @@
           "gallery-platformer-native-assets",
           "shared-host"
         ],
-        "requirements": ["node", "npm", "gles"]
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
       },
       {
         "name": "chart-reload",
@@ -3429,9 +3480,135 @@
           "gles-host",
           "font-assets",
           "gallery-assets",
-          "gallery-gui-assets",
           "gallery-platformer-native-assets",
           "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "application",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=routes toolbar input",
+          "dist/tests/gallery/application.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "application-layout",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=toolbar layout",
+          "dist/tests/gallery/application.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "robot-controls",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/gallery/gallery-platformer-controls.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "robot-streaming",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/gallery/gallery-platformer-streaming.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "behavior",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/gallery/behavior.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "gallery-assets"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "controls-dropdown",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=Controls dropdown",
+          "dist/tests/gallery/behavior.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "gallery-assets"
         ],
         "requirements": [
           "node",
@@ -3447,7 +3624,9 @@
       "tests/profiling/gallery-gui-trace.ts",
       "tools/performance/profile-trace.mjs",
       "tools/products/gallery-trace-fixture.mjs",
-      "tools/pipeline/trace.py"
+      "tools/pipeline/trace.py",
+      "tests/gallery/pages/application.ts",
+      "tests/gallery/drivers/browser-application.ts"
     ],
     "commands": [
       {
@@ -3644,7 +3823,7 @@
     "commands": [
       {
         "name": "native",
-        "partitionExcludes": ["target/gallery-platformer-native-assets"],
+        "partitionExcludes": ["target/gallery-platformer-native-assets", "target/demos-cockpit-native-assets"],
         "command": [
           "@node",
           "--experimental-strip-types",
@@ -3655,6 +3834,623 @@
           "gles-host",
           "font-assets",
           "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      }
+    ]
+  },
+  "gui-glass-skin": {
+    "description": "Optional production glass skin: native states, controls, palette and lighting with completed GLES/WebGL frames",
+    "sourceRoots": [
+      "tests/gui/glass-skin/",
+      "tests/gui/skin-lab/",
+      "crates/ipp-core/src/world/systems/canvas/",
+      "crates/ipp-render-gl/src/services/render/canvas/paint.rs",
+      "crates/ipp-render-gl/src/services/render/retained/",
+      "crates/ipp-render-gl/src/services/render/device/",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_gui.vert",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_glyph.vert",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_glyph.frag",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_gui.frag",
+      "crates/ipp-core/src/world/systems/gui/presentation/",
+      "crates/ipp-core/src/world/systems/gui/layout/",
+      "crates/ipp-core/src/world/systems/gui/local/controls/slider.rs",
+      "crates/ipp-core/src/world/systems/gui/local/scroll/component.rs",
+      "packages/ipp-react/src/gui-kit/",
+      "packages/ipp-react/src/gui-glass/",
+      "packages/ipp-react/src/gui-glass.ts",
+      "packages/ipp-react/src/gui/",
+      "packages/ipp-react/src/gui-cybertron/"
+    ],
+    "commands": [
+      {
+        "name": "appearance-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker appearance$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "editing-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker editing$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "values-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker values$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "reference-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker reference$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "focus-scale-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker focus-scale$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "material-sharing-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker material-sharing$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "composite-values-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker composite-values$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "composite-containers-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker composite-containers$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "composite-selection-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker composite-selection$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "appearance-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native appearance$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "editing-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native editing$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "values-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native values$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "reference-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native reference$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "focus-scale-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native focus-scale$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "material-sharing-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native material-sharing$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "composite-values-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native composite-values$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "composite-containers-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native composite-containers$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "composite-selection-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native composite-selection$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "overlays-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker composite-overlays$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "overlays-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native composite-overlays$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "ownership-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker skin-ownership$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "ownership-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native skin-ownership$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "optical-context-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native optical-context$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "optical-context-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker optical-context$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "liquid-optics-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native liquid-optics$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "liquid-optics-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker liquid-optics$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "optical-components-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native optical-components$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "optical-components-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker optical-components$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "optical-contracts",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-core",
+          "--test",
+          "canvas_paint",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "production-optics-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native production-optics$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "production-optics-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker production-optics$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "panel-backgrounds-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native panel-backgrounds$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "panel-backgrounds-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker panel-backgrounds$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "preview-dpi",
+        "command": [
+          "@node",
+          "--test",
+          "target/gui-glass-skin/preview.browser.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
+  "gallery-browser": {
+    "description": "Shared engine GUI application through browser input, worker WASM, composed camera, DPR and owned cleanup",
+    "sourceRoots": [
+      "examples/demos/main.tsx",
+      "examples/demos/application.tsx",
+      "tests/gallery/pages/application.ts",
+      "tests/gallery/drivers/browser-application.ts",
+      "packages/ipp-react/src/gui/",
+      "packages/ipp-react/src/gui-kit/",
+      "packages/ipp-react/src/gui-glass/",
+      "packages/ipp-react/src/gui-cybertron/",
+      "packages/ipp-client/tools/assemble.mjs",
+      "tools/build/verify-browser.mjs",
+      "tests/gallery/drivers/browser-chart-programs.ts",
+      "tests/gallery/scenarios/gallery-chart-visibility.ts"
+    ],
+    "files": [
+      "dist/tests/gallery/application.browser.test.js",
+      "dist/tests/gallery/render-scale.browser.test.js",
+      "dist/tests/gallery/chart-programs.browser.test.js"
+    ]
+  },
+  "gallery-cockpit": {
+    "description": "Blender cockpit with native projected GUI controls, skin identity and owned cleanup",
+    "sourceRoots": [
+      "examples/demos/scenes/cockpit/",
+      "tests/gallery/cockpit-oracle.ts",
+      "tests/gallery/cockpit.native.test.ts",
+      "tests/gallery/scenarios/cockpit.ts",
+      "tests/gallery/drivers/native-cockpit.ts",
+      "tests/gallery/scenarios/cockpit-wheel.ts",
+      "tests/gallery/scenarios/cockpit-quality.ts"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit (presentation|exterior) ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "carousel",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit carousel ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "wheel",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit wheel ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "forms",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit forms ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "quality",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit quality ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
         ],
         "requirements": [
           "node",

@@ -476,6 +476,7 @@ pub(super) fn scroll_fields(
 )> {
     use crate::systems::gui::layout::scroll_bars::{GuiScrollBarStyle, GuiScrollExtent};
     let index = entity.index() as usize;
+    let metrics = crate::systems::gui::presentation::GuiMetrics::resolve(world, entity, font_size);
     // Axis fields: horizontal 0, vertical 1, both 2.
     let axes = |axis: u32| [axis == 0 || axis == 2, axis == 1 || axis == 2];
     if let Some(list) = world.components.gui_virtual_list(index) {
@@ -489,7 +490,7 @@ pub(super) fn scroll_fields(
             [list.offset_x, list.offset_y],
             GuiScrollBarStyle::from_fields(
                 [list.bar_thickness, list.bar_inset, list.bar_end_inset],
-                font_size,
+                &metrics,
             ),
         ));
     }
@@ -504,7 +505,7 @@ pub(super) fn scroll_fields(
             [view.offset_x, view.offset_y],
             GuiScrollBarStyle::from_fields(
                 [view.bar_thickness, view.bar_inset, view.bar_end_inset],
-                font_size,
+                &metrics,
             ),
         )
     })
@@ -702,7 +703,11 @@ pub(in crate::world::systems) fn prepare_constrained_geometry(
 }
 
 /// The CanvasPaint component lifetime of `entity`, if it has one.
-pub(super) fn paint_target(world: &WorldSimulationState, entity: EntityId) -> Option<CanvasTarget> {
+pub(in crate::world::systems) fn paint_target(
+    world: &WorldSimulationState,
+    entity: EntityId,
+) -> Option<CanvasTarget> {
+    world.state.entities.get(&entity)?;
     world.components.canvas_paint(entity.index() as usize)?;
     Some(CanvasTarget {
         entity,
@@ -726,6 +731,14 @@ pub(super) fn entry_paint(entry: &CanvasPaintEntry) -> Option<CanvasTarget> {
                 },
             ..
         } => Some(*paint),
+        CanvasPaintEntry::Primitive {
+            primitive:
+                CanvasPrimitive::Path {
+                    paint,
+                    ..
+                },
+            ..
+        } => *paint,
         _ => None,
     }
 }
@@ -754,6 +767,12 @@ pub(super) fn paint_instance(
     assets: &AssetManagementService,
     target: CanvasTarget,
 ) -> Option<CanvasPaintInstance> {
+    if target.component == ComponentValue::PLOT_CALLOUT_PAINT {
+        return crate::systems::plot::callout::paint_instance(world, assets, target);
+    }
+    if paint_target(world, target.entity)? != target {
+        return None;
+    }
     let component = world
         .components
         .canvas_paint(target.entity.index() as usize)?;

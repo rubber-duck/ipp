@@ -1104,10 +1104,11 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
     }
     case "cameraNavigate": {
       const request = body.request;
-      exactFields(request, ["binding", "publication", "motion"]);
+      exactFields(request, ["binding", "publication", "motion", "path"]);
       w.u8(WIRE.REQUEST_CAMERA_NAVIGATE);
       writeCameraBinding(w, request.binding);
       writeViewSource(w, request.publication);
+      writeCameraPath(w, request.path ?? []);
       const motion = request.motion;
       if (motion.kind === "rotate") {
         exactFields(motion, ["kind", "yaw", "pitch"]);
@@ -1489,7 +1490,14 @@ function writeViewViewport(writer: Writer, viewport: ViewViewport): void {
 
 function writeViewTarget(writer: Writer, view: ViewQueryTarget): void {
   if (typeof view !== "object" || view === null) fail("view target required");
-  if (view.kind === "bound") {
+  if (view.kind === "camera") {
+    exactFields(view, ["kind", "root", "path"]);
+    if ((view.root as ViewQueryTarget).kind === "camera")
+      fail("camera root target must be nonrecursive");
+    writer.u8(WIRE.VIEW_CAMERA);
+    writeViewTarget(writer, view.root);
+    writeCameraPath(writer, view.path);
+  } else if (view.kind === "bound") {
     exactFields(view, ["kind", "binding", "publication"]);
     writer.u8(WIRE.VIEW_BOUND);
     writeCameraBinding(writer, view.binding);
@@ -1508,6 +1516,22 @@ function writeViewTarget(writer: Writer, view: ViewQueryTarget): void {
     writer.u64(view.publication.revision);
     writeViewViewport(writer, view.viewport);
   } else fail("view target required");
+}
+
+function writeCameraPath(
+  writer: Writer,
+  path: readonly import("./types.js").CameraAttachmentReference[],
+): void {
+  if (!Array.isArray(path) || path.length > CAMERA_PATH_DEPTH)
+    fail("camera path depth");
+  writer.u32(path.length);
+  for (const reference of path) {
+    exactFields(reference, ["parent", "anchor", "incarnation", "revision"]);
+    writeWorldReference(writer, reference.parent);
+    writer.u64(reference.anchor);
+    writer.u64(reference.incarnation);
+    writer.u64(reference.revision);
+  }
 }
 
 function writeViewSource(

@@ -40,23 +40,28 @@ compositeTests<typeof prepare>("sliders", { budget: 60 }, async (run) => {
   });
 
   await run.case("slider wheel in a scroll view", async () => {
-    // The wheel over a slider that does not hold focus scrolls the scroll
-    // view around it and leaves the value.
+    // Hovered sliders consume the wheel without taking keyboard focus or
+    // scrolling their enclosing view.
+    const previousFocus = await step("focus");
+    const previousOffset = await step("scrollOffset", "scroll");
     let cut = await step("cut");
     const unfocusedAt = await run.at("slider", [0.25, 0.5]);
     await page.mouse.move(unfocusedAt.page[0], unfocusedAt.page[1]);
     await page.mouse.wheel(0, 100);
     const passed = await step("wheelOutcome", cut);
     check(
-      passed.disposition === "routed" && passed.remaining !== undefined,
+      passed.disposition === "routed" && passed.remaining === undefined,
       `A wheel over an unfocused slider was ${json(passed)}`,
     );
-    const scrolled = await step("expectScrolledPast", "scroll", 0);
-    const unfocusedValue = await step("scalar", "slider");
+    const scrolled = await step("scrollOffset", "scroll");
+    const unfocusedValue = await step("expectScalar", "slider", 4);
+    check(scrolled === previousOffset, "Hovered slider scrolled its parent");
     check(
-      unfocusedValue === 5,
-      `A wheel over an unfocused slider moved it to ${unfocusedValue}`,
+      json(await step("focus")) === json(previousFocus),
+      "Wheel stole slider focus",
     );
+    await page.mouse.wheel(0, -100);
+    await step("expectScalar", "slider", 5);
 
     // Once a press on its thumb focuses it, the wheel over it steps it, down
     // decreasing and Shift taking the fine half, and the scroll view stays;
@@ -107,23 +112,27 @@ compositeTests<typeof prepare>("sliders", { budget: 60 }, async (run) => {
   });
 
   await run.case("dial wheel, press, relative drags and keys", async () => {
-    // A dial in its own scroll view. The wheel over it while it does not hold
-    // focus scrolls the view and leaves the value.
+    // Dials also adjust on hover while leaving focus and parent scroll alone.
+    const previousFocus = await step("focus");
+    const previousOffset = await step("scrollOffset", "dial-scroll");
     let cut = await step("cut");
     const centre = await run.at("dial", [0.5, 0.5]);
     await page.mouse.move(centre.page[0], centre.page[1]);
     await page.mouse.wheel(0, 100);
     const passed = await step("wheelOutcome", cut);
     check(
-      passed.disposition === "routed" && passed.remaining !== undefined,
+      passed.disposition === "routed" && passed.remaining === undefined,
       `A wheel over an unfocused dial was ${json(passed)}`,
     );
-    const scrolled = await step("expectScrolledPast", "dial-scroll", 0);
-    const unwheeled = await step("scalar", "dial");
+    const scrolled = await step("scrollOffset", "dial-scroll");
+    const unwheeled = await step("expectScalar", "dial", 4);
+    check(scrolled === previousOffset, "Hovered dial scrolled its parent");
     check(
-      unwheeled === 5,
-      `A wheel over an unfocused dial moved it to ${unwheeled}`,
+      json(await step("focus")) === json(previousFocus),
+      "Wheel stole dial focus",
     );
+    await page.mouse.wheel(0, -100);
+    await step("expectScalar", "dial", 5);
 
     // A press alone, even towards the minimum's end of the sweep, leaves the
     // value and focuses the dial without its ring.
@@ -193,7 +202,7 @@ compositeTests<typeof prepare>("sliders", { budget: 60 }, async (run) => {
     );
     const beside = await run.at("dial-scroll", [0.8, 0.5]);
     await page.mouse.move(beside.page[0], beside.page[1]);
-    await page.mouse.wheel(0, -100);
+    await page.mouse.wheel(0, 100);
     const scrolledOff = await step("expectScrollMoved", "dial-scroll", offset);
     const keptValue = await step("scalar", "dial");
     check(

@@ -27,7 +27,13 @@ impl SystemFactory for HierarchySystemFactory {
     }
 
     fn capabilities(&self) -> crate::systems::SystemCapabilities {
-        crate::systems::SystemCapabilities::new([crate::ComponentValue::TRANSFORM], [])
+        crate::systems::SystemCapabilities::new(
+            [
+                crate::ComponentValue::TRANSFORM,
+                crate::ComponentValue::PRESENTATION_GATE,
+            ],
+            [],
+        )
     }
 
     fn dependencies(&self) -> &[SystemDependency] {

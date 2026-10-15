@@ -1,3 +1,4 @@
+import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import { createElement as h, useState } from "react";
 import {
   Children,
@@ -181,7 +182,12 @@ export function kitOverlaysPanel(origin: readonly [number, number]) {
       await root.render(
         h(
           GuiKit,
-          { contract, font, fontSize: FONT_SIZE },
+          {
+            contract,
+            skin: cybertronSkin(contract),
+            font,
+            fontSize: FONT_SIZE,
+          },
           h(Overlays, { font, reports }),
         ),
       );

@@ -1,16 +1,16 @@
 /**
  * `@ipp/react/gui-kit`: reusable GUI compositions built only from the
- * ordinary declarations of `@ipp/react` and `@ipp/react/gui`, drawn in the
- * built-in looks' design language from the receiving runtime's exported
- * tokens and looks. Declare one `GuiKit` in each World that uses them.
+ * ordinary declarations of `@ipp/react` and `@ipp/react/gui`, drawn with an
+ * explicitly selected client skin. Declare one `GuiKit` in each World that
+ * uses them.
  *
  * A composition is one file in a family directory of `gui-kit/`
  * (`values/`, `selection/`, `overlays/`, `feedback/`, `containers/`),
  * exported here. It reads the kit through `useGuiKit()`: tokens, `unit()`
  * for its lengths, `typeSize()`, `color()`, `theme()` and `reducedMotion`,
  * the one setting every motion of the kit honours, never a prop of its own.
- * Its looks are tables in `gui-kit/themes.ts`, built from tokens and
- * built-in looks, never from literal colours or copied rows; the shared
+ * Skins supply its tokens and theme tables; reusable recipe builders live in
+ * `gui-kit/themes.ts`. The shared
  * parts at the `gui-kit/` root are `layout.tsx` (rows that centre their
  * children, layout operations), `text.tsx` (text lines, icon glyphs and the
  * check mark), `icons.ts`, `separator.tsx`, `secondary-button.tsx`,
@@ -32,6 +32,8 @@
  */
 export {
   GuiKit,
+  type GuiKitAppearance,
+  type GuiKitControlName,
   type GuiKitColor,
   type GuiKitContract,
   type GuiKitLook,
@@ -44,6 +46,13 @@ export {
 export { GUI_KIT_ICONS, type GuiKitIcon } from "./gui-kit/icons.js";
 export {
   Row,
+  Toolbar,
+  Column,
+  Stack,
+  type ContainerProps,
+  type GuiKitLayoutProps,
+  type GuiKitFlowLayoutProps,
+  type ToolbarProps,
   type GuiKitLayout,
   type RowProps,
 } from "./gui-kit/layout.js";
@@ -67,12 +76,18 @@ export {
 } from "./gui-kit/secondary-button.js";
 export {
   Panel,
+  PanelBody,
   PanelFooter,
   PanelHeader,
   type PanelFooterProps,
   type PanelHeaderProps,
   type PanelProps,
+  type PanelBodyProps,
 } from "./gui-kit/containers/panel.js";
+export {
+  ScrollArea,
+  type ScrollAreaProps,
+} from "./gui-kit/containers/scroll-area.js";
 export {
   WindowControl,
   WindowControls,
@@ -241,3 +256,40 @@ export {
   type ColorRgba,
 } from "./gui-kit/values/color-value.js";
 export type { ChoiceProps } from "./gui-kit/choice.js";
+
+export type { GuiSkinDefinition, GuiSkinTheme } from "./gui/skin-types.js";
+export { ControlSkin } from "./gui-kit/control-skin.js";
+export { useGuiKit, type GuiKitScope } from "./gui-kit/kit.js";
+
+export { Button, type ButtonProps } from "./gui-kit/button.js";
+export {
+  Checkbox,
+  Switch,
+  type CheckboxProps,
+  type SwitchProps,
+} from "./gui-kit/checkbox.js";
+export { TextField, type TextFieldProps } from "./gui-kit/text-field.js";
+export {
+  Dialog,
+  type DialogRootProps,
+  type DialogTriggerProps,
+  type DialogContentProps,
+  type DialogHeaderProps,
+  type DialogSectionProps,
+  type DialogCloseProps,
+} from "./gui-kit/overlays/dialog.js";
+
+export type { PlotSkinAppearance } from "./plots/skin-types.js";
+
+export type {
+  GuiKitSpacing,
+  GuiKitSpacingOverrides,
+} from "./gui-kit/spacing.js";
+export {
+  Form,
+  Field,
+  FormSection,
+  type FormProps,
+  type FieldProps,
+  type FormSectionProps,
+} from "./gui-kit/containers/form.js";

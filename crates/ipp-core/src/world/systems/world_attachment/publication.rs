@@ -8,7 +8,11 @@ impl WorldAttachmentSystem {
         world: &WorldContext<'_>,
         output: &mut Vec<PublishedWorldAttachment>,
     ) {
+        let mut presentation = systems::hierarchy::PresentationEligibility::default();
         for &entity in world.world.state.entities.keys() {
+            if !presentation.open(world.world, entity) {
+                continue;
+            }
             let Some(value) = world
                 .world
                 .components

@@ -1,18 +1,12 @@
-/**
- * The trigger of a dropdown, searchable dropdown or multi-select: a field of
- * the control height, the frame cut and idle line of a text field, showing
- * its value, or its placeholder in the neutral tone, at the content inset and
- * a chevron at its end. It is a Button: a press, or Enter or Space while it
- * holds focus, toggles its list. While the list is open it takes the open
- * look of an invoker, its checked variant: the lit edge, which focus, the
- * full glow, still outshines, and its chevron points up.
- *
- * The list is the trigger's child, an anchored light overlay below it as
- * wide as the trigger, a quarter inset away, flipping above it where the
- * canvas has more room there.
+import { useFormLayout } from "../containers/form.js";
+import { useEntityId } from "../../scope/identity.js";
+/** Dropdown trigger and anchored list shared by the selection controls.
+ * Trigger and list form one surface in every skin. Native layout handles
+ * placement and flipping; Button and overlay behavior own interaction.
  */
-import { useCallback, type ReactNode, type Ref, type RefObject } from "react";
-import { Children, Entity } from "../../components.js";
+import { useMemo, type ReactNode, type Ref, type RefObject } from "react";
+import { useComposedControlRef } from "../../gui/control-refs.js";
+import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
@@ -40,7 +34,7 @@ const CHEVRON = 16;
 export interface SelectTriggerProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** The value shown, or the placeholder while `placeholder` is set. */
   readonly text: string;
   readonly placeholder?: boolean;
@@ -70,7 +64,7 @@ export function selectTextRoom(
 }
 
 export function SelectTrigger({
-  id,
+  id: providedId,
   layer = 0,
   text,
   placeholder = false,
@@ -82,16 +76,20 @@ export function SelectTrigger({
   layout,
   children,
 }: SelectTriggerProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
+  const inForm = useFormLayout();
   const t = kit.tokens;
   const height = kit.unit(t.controlHeight);
   const inset = kit.unit(t.inset);
+  const connectedSkin = useConnectedSelectSkin(open);
   return (
     <Entity id={id}>
+      <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_ROW}
-        width={kit.unit(SELECT_WIDTH)}
+        width={inForm ? -1 : kit.unit(SELECT_WIDTH)}
         height={height}
         padding_left={inset}
         padding_right={inset}
@@ -99,7 +97,7 @@ export function SelectTrigger({
         {...layout}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
-      <Skin theme={kit.theme("selectTrigger")} />
+      <Skin theme={kit.theme("selectTrigger")} {...connectedSkin} />
       <Behavior
         enabled={!disabled}
         semantic_label={label === undefined ? text : `${label}: ${text}`}
@@ -119,6 +117,7 @@ export function SelectTrigger({
           layout={{ flex: 1, clip: true }}
         />
         <Entity id={`${id}/chevron`}>
+          <PresentationGate open />
           <Layout
             kind={LAYOUT_LEAF}
             width={kit.unit(CHEVRON)}
@@ -143,29 +142,28 @@ export function SelectTrigger({
 }
 
 export interface SelectListProps {
+  readonly controlled?: boolean;
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
-  readonly id: string;
+  readonly id?: string;
   /** Its `Behavior.visible` as declared: open, with anything to show. */
   readonly open: boolean;
   readonly onVisibleChange?: GuiVisibleChangeListener;
   readonly children?: ReactNode;
 }
 
-/**
- * The list of a trigger or field: a light floating surface below its
- * parent, stretched to the parent's width a quarter inset away. Its content
- * stays declared while it is closed, so the runtime can return focus from
- * it.
+/** A native light overlay stretched to its trigger. Content remains declared
+ * while closed so native focus can return to the invoker.
  */
 export function SelectList({
-  id,
+  id: providedId,
   layer = 0,
   open,
   onVisibleChange,
   children,
+  controlled = false,
 }: SelectListProps) {
-  const kit = useGuiKit();
+  const id = useEntityId(providedId);
   return (
     <Floating
       id={id}
@@ -173,8 +171,10 @@ export function SelectList({
       mode="light"
       align="stretch"
       open={open}
+      controlled={controlled}
       {...(onVisibleChange ? { onVisibleChange } : {})}
-      offset={[0, kit.unit(kit.tokens.inset / 4)]}
+      joinAnchor
+      offset={[0, 0]}
     >
       {children}
     </Floating>
@@ -189,12 +189,27 @@ export function useControlRef(
   own: RefObject<GuiControlHandle | null>,
   ref: Ref<GuiControlHandle> | undefined,
 ) {
-  return useCallback(
-    (handle: GuiControlHandle | null) => {
-      own.current = handle;
-      if (typeof ref === "function") ref(handle);
-      else if (ref) ref.current = handle;
-    },
-    [own, ref],
+  return useComposedControlRef(own, ref);
+}
+
+/** The open trigger and its list use the same finish; rows retain native feedback. */
+export function useConnectedSelectSkin(open: boolean) {
+  const kit = useGuiKit();
+  const parts = useMemo(
+    () =>
+      kit.contract.GuiSkin.encodeParts({
+        nextSlot: 1,
+        rows: new Map([
+          [
+            0,
+            {
+              part: kit.contract.guiPaintPartIndex({ part: "background" }),
+              paint_data: [0, 0, 0, 0],
+            },
+          ],
+        ]),
+      }),
+    [kit.contract],
   );
+  return open ? { theme: kit.theme("floating"), parts } : {};
 }

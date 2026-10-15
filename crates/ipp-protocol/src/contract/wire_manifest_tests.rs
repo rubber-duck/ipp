@@ -432,3 +432,41 @@ fn expression_asset_metadata_names_the_reviewed_shared_core_codec() {
     assert_eq!(ipp_core::expressions::EXPRESSION_FORMAT_VERSION, 1);
     assert!(format.format.starts_with("IPPE;version-u32=1;"));
 }
+
+#[test]
+fn physical_wheel_hit_layout_and_path_bound_participate_in_the_contract_hash() {
+    let routed = LAYOUTS
+        .iter()
+        .find(|layout| layout.name == "gui-physical-routed")
+        .unwrap();
+    let field = routed
+        .fields
+        .iter()
+        .find(|field| field.name == "hit")
+        .unwrap();
+    assert_eq!(field.encoding, FieldEncoding::Option);
+    assert_eq!(field.target, "gui-input-hit");
+    let hit = LAYOUTS
+        .iter()
+        .find(|layout| layout.name == "gui-input-hit")
+        .unwrap();
+    assert_eq!(hit.fields[0].target, "gui-target");
+    assert_eq!(hit.fields[1].target, "camera-attachment-reference");
+    assert_eq!(
+        hit.fields[1].limit,
+        crate::world::view_queries::MAX_CAMERA_PATH_DEPTH as u32
+    );
+    let changed = WireLayout {
+        name: "gui-input-hit",
+        fields: &[
+            field!("target", Named => "gui-target"),
+            field!("path", List, crate::world::view_queries::MAX_CAMERA_PATH_DEPTH as u32 + 1 => "camera-attachment-reference"),
+        ],
+    };
+    let hash = |layout: &WireLayout| {
+        let mut hash = ContractHash::default();
+        write_layout(&mut hash, layout);
+        hash.0
+    };
+    assert_ne!(hash(hit), hash(&changed));
+}

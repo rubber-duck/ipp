@@ -13,16 +13,14 @@ fn find<'a>(
     rows.find(|row| row.part == index)
 }
 
-/// A control's motion rows: its theme's, then its kind's default look's.
+/// A control's explicitly authored theme motion rows.
 #[derive(Clone, Copy)]
 pub(super) struct GuiMotionRows<'a> {
     pub theme: Option<&'a GuiThemeMotion>,
-    pub look: &'a [GuiMotionPart],
 }
 
 impl GuiMotionRows<'_> {
-    /// The first value of `property` along `chain`: theme rows over the whole
-    /// chain, then look rows over it, as appearance properties resolve.
+    /// The first authored value of `property` along the theme identity chain.
     fn resolve<T>(
         &self,
         chain: impl Iterator<Item = GuiPartId> + Clone,
@@ -37,9 +35,7 @@ impl GuiMotionRows<'_> {
                 }
             }
         }
-        chain
-            .filter_map(|identity| find(self.look.iter(), identity))
-            .find_map(property)
+        None
     }
 
     /// Duration and easing resolved along `chain`; no duration is no transition.
@@ -119,7 +115,7 @@ mod tests {
     fn entering_takes_the_destination_and_leaving_downward_takes_the_exit() {
         use GuiSkinState::*;
 
-        let look = [
+        let authored = [
             row(GuiPartId::base(BACKGROUND), Some(0.12), None),
             row(GuiPartId::state(BACKGROUND, Hovered), Some(0.08), None),
             row(GuiPartId::state(BACKGROUND, Pressed), Some(0.0), Some(0.1)),
@@ -130,9 +126,15 @@ mod tests {
                 None,
             ),
         ];
+        let mut parts = Rows::new();
+        for row in authored {
+            parts.push(row).unwrap();
+        }
+        let theme = GuiThemeMotion {
+            parts,
+        };
         let rows = GuiMotionRows {
-            theme: None,
-            look: &look,
+            theme: Some(&theme),
         };
         let seconds = |from, to| {
             rows.timing(BACKGROUND, key(from, None), key(to, None))
@@ -171,10 +173,10 @@ mod tests {
     }
 
     #[test]
-    fn theme_rows_sit_on_the_look_property_by_property_and_no_duration_is_no_transition() {
+    fn rows_resolve_property_by_property_and_no_duration_is_no_transition() {
         use GuiSkinState::*;
 
-        let look = [
+        let authored = [
             row(GuiPartId::base(BACKGROUND), Some(0.12), None),
             GuiMotionPart {
                 easing: Some(1),
@@ -182,15 +184,18 @@ mod tests {
             },
         ];
         let mut parts = Rows::new();
+        parts.push(authored[0].clone()).unwrap();
         parts
-            .push(row(GuiPartId::state(BACKGROUND, Hovered), Some(2.0), None))
+            .push(GuiMotionPart {
+                duration: Some(2.0),
+                ..authored[1].clone()
+            })
             .unwrap();
         let theme = GuiThemeMotion {
             parts,
         };
         let rows = GuiMotionRows {
             theme: Some(&theme),
-            look: &look,
         };
         assert_eq!(
             rows.timing(BACKGROUND, key(Idle, None), key(Hovered, None)),

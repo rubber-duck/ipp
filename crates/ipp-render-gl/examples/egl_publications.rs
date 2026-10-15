@@ -13,6 +13,7 @@ mod smoke {
     #[allow(dead_code)]
     pub mod selection;
     pub mod surface_visibility;
+    pub(crate) mod task_scheduler;
 }
 
 #[cfg(target_os = "linux")]

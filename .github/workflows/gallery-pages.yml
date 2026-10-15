@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BLENDER_BIN: /snap/bin/blender
+      IPP_EGL_LIBRARY_DIR: /usr/lib/x86_64-linux-gnu
+      LIBGL_ALWAYS_SOFTWARE: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -36,11 +38,13 @@ jobs:
           python tools/ipp.py setup python
           python tools/ipp.py setup browser --with-deps
           sudo apt-get update
-          sudo apt-get install -y libxi6 libxrender1 libxkbcommon0 libgl1 libegl1 snapd
+          sudo apt-get install -y libxi6 libxrender1 libxkbcommon0 libgl1 libegl1 libgles2 snapd
           sudo systemctl start snapd.socket
           sudo snap wait system seed.loaded
           sudo snap install blender --classic --channel=latest/stable
           /snap/bin/blender --version | head -1 | grep '^Blender 5\.2\.'
+      - name: Require the native GLES environment
+        run: python tools/ipp.py doctor --for gallery-cockpit
       - name: Validate the shared gallery in browser and native GLES
         # The build graph fetches pinned fonts and exports the packed Blender scenes.
         run: python tools/ipp.py regression --suite gallery-site --suite gallery-browser --suite gallery-cockpit --suite native-gallery --suite shared-host --software

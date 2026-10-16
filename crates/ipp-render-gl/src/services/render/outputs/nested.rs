@@ -115,7 +115,11 @@ impl<D: RenderDevice> RenderService<D> {
         let mut interactive = std::collections::BTreeSet::new();
         while let Some((job, visited)) = pending.pop() {
             if visited {
-                if job.selection != selection {
+                if job.selection != selection
+                    && !self
+                        .fullscreen_camera
+                        .is_some_and(|camera| camera.selection == job.selection)
+                {
                     prepared.push(job);
                 }
                 continue;
@@ -329,19 +333,27 @@ impl<D: RenderDevice> RenderService<D> {
                             view.raster_viewport,
                         )?;
                         let policy = attachment.edge.and_then(|edge| edge.surface_cache_policy);
-                        let Some(size) = super::super::surface::quality::image_size(
-                            pixel_demand,
-                            policy.map_or(1.0, |p| p.resolution_scale),
-                            self.device.borrow().surface_cache_limit(),
-                            (selection.kind() == OutputKind::Camera)
-                                .then(|| {
-                                    self.camera_targets
-                                        .get(&selection)
-                                        .map(|(_, size, _)| *size)
-                                })
-                                .flatten(),
-                        ) else {
-                            continue;
+                        let size = if self
+                            .fullscreen_camera
+                            .is_some_and(|camera| camera.selection == selection)
+                        {
+                            [job.viewport.width, job.viewport.height]
+                        } else {
+                            let Some(size) = super::super::surface::quality::image_size(
+                                pixel_demand,
+                                policy.map_or(1.0, |p| p.resolution_scale),
+                                self.device.borrow().surface_cache_limit(),
+                                (selection.kind() == OutputKind::Camera)
+                                    .then(|| {
+                                        self.camera_targets
+                                            .get(&selection)
+                                            .map(|(_, size, _)| *size)
+                                    })
+                                    .flatten(),
+                            ) else {
+                                continue;
+                            };
+                            size
                         };
                         let viewport = WorldViewport {
                             width: size[0],

@@ -385,6 +385,9 @@ impl<D: RenderDevice> RenderService<D> {
             .borrow()
             .surface_cache_limit()
             .min(SURFACE_CACHE_MAX_DIMENSION);
+        let limit = surface
+            .cache_policy
+            .map_or(limit, |policy| policy.texture_limit(limit));
         let scale = surface.cache_policy.map_or(1.0, |p| p.resolution_scale);
         let demand = if let Some(state) = previous {
             let mut demand = [1.0_f64; 2];
@@ -479,6 +482,9 @@ impl<D: RenderDevice> RenderService<D> {
             .borrow()
             .surface_cache_limit()
             .min(SURFACE_CACHE_MAX_DIMENSION);
+        let limit = surface
+            .cache_policy
+            .map_or(limit, |policy| policy.texture_limit(limit));
         if limit == 0 {
             if let Some(state) = previous {
                 self.release_projected(state);
@@ -595,7 +601,8 @@ impl<D: RenderDevice> RenderService<D> {
                     .iter()
                     .map(|g| g.plane)
                     .ne(planes.iter().map(|p| p.0));
-            let quality_changed = state.requested != requested;
+            let quality_changed =
+                state.requested != requested || state.capacity.iter().any(|value| *value > limit);
             // Inactive allocations are expendable before a visible image loses quality.
             let active_bytes = if selection.kind() == OutputKind::Canvas {
                 planes.len() * requested[0] as usize * requested[1] as usize * 4
@@ -660,7 +667,9 @@ impl<D: RenderDevice> RenderService<D> {
                     } else {
                         0
                     };
-                    let mut capacity = if super::quality::fits(size, state.capacity) {
+                    let mut capacity = if super::quality::fits(size, state.capacity)
+                        && state.capacity.iter().all(|value| *value <= limit)
+                    {
                         state.capacity
                     } else {
                         super::quality::image_capacity(size, limit)

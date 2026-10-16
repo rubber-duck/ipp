@@ -30,7 +30,7 @@ export function SceneChoice({
   label: string;
   value: string;
   choices: readonly { key: string; label: string }[];
-  change(value: string): void;
+  change(value: string): void | Promise<void>;
 }) {
   return (
     <PanelBody id={`${id}/field`} padding={0}>

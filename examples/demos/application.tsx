@@ -380,7 +380,7 @@ export class DemoApplication implements GallerySceneMount {
     const narrow = width < 400;
     const toolbarWidth = Math.min(width - 32, 450);
     const run = (work: Promise<unknown>) => {
-      void work.catch(this.report);
+      return work.then(() => {}, this.report);
     };
     const scenePicker = (
       <Dropdown

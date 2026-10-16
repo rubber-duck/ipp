@@ -366,6 +366,56 @@ function GuiControls({
           </FormSection>
         </Form>
       </Row>
+      <FormSection
+        title="Surface caching"
+        description="Compare refresh cost and texture resolution. Active controls stay live."
+      >
+        <Row gap={kit.spacing.section} alignItems="start">
+          <Form flex={1}>
+            <Field label="Cache mode">
+              <SegmentedControl
+                id="cockpit-surface-caching"
+                value={state.surfaceCaching}
+                options={[
+                  { value: "off", label: "Off" },
+                  { value: "auto", label: "Auto" },
+                  { value: "force", label: "Force" },
+                ]}
+                onChange={(surfaceCaching) => update({ surfaceCaching })}
+              />
+            </Field>
+          </Form>
+          <Form flex={1}>
+            <LabelledSlider
+              id="cockpit-surface-refresh"
+              label="Refresh limit"
+              value={state.surfaceRefreshHz}
+              min={0.5}
+              max={30}
+              step={0.5}
+              units="Hz"
+              bounds={false}
+              onChange={(surfaceRefreshHz) => update({ surfaceRefreshHz })}
+            />
+          </Form>
+          <Form flex={1}>
+            <Field label="Texture size cap">
+              <Dropdown
+                id="cockpit-surface-texture-size"
+                label="Texture size cap"
+                value={String(state.surfaceTextureSize)}
+                options={[256, 512, 1024, 2048].map((size) => ({
+                  key: String(size),
+                  label: `${size} px`,
+                }))}
+                onChange={(value) =>
+                  update({ surfaceTextureSize: Number(value) })
+                }
+              />
+            </Field>
+          </Form>
+        </Row>
+      </FormSection>
       <Separator />
       <TextLine
         text="Controls · System monitor · Terminal"

@@ -1867,6 +1867,8 @@ fn parent_surface_cache_policy_is_owned_validated_and_current() {
         direct_distance: 12.0,
         resolution_scale: 1.0,
         max_refresh_hz: 15.0,
+        max_texture_size: 0,
+        force_cache: false,
     };
     apply(
         &mut host,

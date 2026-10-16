@@ -737,6 +737,22 @@
     "builds": ["typescript", "gallery", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]
   },
+  "dist/tests/gallery/surface-quality.browser.test.js": {
+    "builds": [
+      "typescript",
+      "gallery",
+      "gallery-fixtures"
+    ],
+    "requirements": [
+      "node",
+      "npm",
+      "browser"
+    ]
+  },
+  "dist/tests/gallery/frame-rate.browser.test.js": {
+    "builds": ["typescript", "gallery", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
+  },
   "dist/tests/gallery/application.browser.test.js": {
     "builds": [
       "typescript",
@@ -748,6 +764,14 @@
       "npm",
       "browser"
     ]
+  },
+  "dist/tests/gallery/platformer.browser.test.js": {
+    "builds": ["typescript", "gallery", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
+  },
+  "dist/tests/gallery/cockpit-lights.browser.test.js": {
+    "builds": ["typescript", "gallery", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
   },
   "dist/tests/rendering/composed-camera.browser.test.js": {
     "builds": [

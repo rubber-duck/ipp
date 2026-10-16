@@ -2634,6 +2634,18 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
     draw_pose: drawMesh,
     create_mesh: createMesh,
+    clear_depth(): number {
+      return status(() => {
+        const previous = depthWrite;
+        setDepthMask(true);
+        gl.disable(gl.SCISSOR_TEST);
+        gl.clearDepth(1);
+        gl.clear(gl.DEPTH_BUFFER_BIT);
+        setDepthMask(previous);
+        checkDraw();
+        return 1;
+      });
+    },
     begin_frame(
       width: number,
       height: number,

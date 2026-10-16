@@ -273,6 +273,10 @@ export class PlatformerSession {
       changed,
     );
     try {
+      // Registration acknowledges before loading finishes. Prepare pose assets
+      // before creating controllers so the base pose also precedes the gait.
+      await session.render(false);
+      await session.preparePoseOrigins(signal);
       await session.render();
       await session.prepareGaits(["walk"], signal);
       await session.originRef.current?.seek(POSE_ORIGIN_HOLD_TIME);
@@ -349,7 +353,7 @@ export class PlatformerSession {
     }
   }
 
-  private render() {
+  private render(playback = true) {
     return this.root.render(
       <>
         <AnimationAsset id="platformer-route" clip={this.routeAsset} />
@@ -368,61 +372,86 @@ export class PlatformerSession {
           id="platformer-facing-reverse"
           clip={this.facingClip(Math.PI)}
         />
-        <Animation
-          ref={this.routeRef}
-          bindings={this.routeAsset.tracks.map((track, index) => ({
-            source: assetRef("platformer-route"),
-            track: index,
-            target: this.routeTarget,
-            property: track.property ?? { joints: track.joints! },
-          }))}
-          speed={this.routeSpeed()}
-          looping
-          autoPlay={false}
-        />
-        <Animation
-          ref={this.originRef}
-          source={assetRef("platformer-pose-origin-" + this.state.mode)}
-          target={this.gaitDrivers.walk[0]!.target}
-          speed={0}
-          autoPlay={false}
-          transition={{
-            duration: TRANSITION_SECONDS,
-            easing: "smoothstep",
-            startTime: { policy: "seek", time: POSE_ORIGIN_HOLD_TIME },
-          }}
-        />
-        <Animation
-          ref={this.gaitRef}
-          bindings={this.gaitDrivers[this.state.mode]}
-          speed={1}
-          looping
-          autoPlay={false}
-          transition={{
-            duration: TRANSITION_SECONDS,
-            easing: "smoothstep",
-            startTime: { policy: "matchPhase" },
-          }}
-        />
-        <Animation
-          ref={this.facingRef}
-          source={assetRef(
-            this.state.direction === 1
-              ? "platformer-facing-forward"
-              : "platformer-facing-reverse",
-          )}
-          target={this.gaitDrivers.walk[0]!.target}
-          speed={0}
-          looping
-          autoPlay={false}
-          transition={{
-            duration: TRANSITION_SECONDS,
-            easing: "smoothstep",
-            startTime: { policy: "seek", time: FACING_HOLD_TIME },
-          }}
-        />
+        {playback && (
+          <>
+            <Animation
+              ref={this.routeRef}
+              bindings={this.routeAsset.tracks.map((track, index) => ({
+                source: assetRef("platformer-route"),
+                track: index,
+                target: this.routeTarget,
+                property: track.property ?? { joints: track.joints! },
+              }))}
+              speed={this.routeSpeed()}
+              looping
+              autoPlay={false}
+            />
+            <Animation
+              ref={this.originRef}
+              source={assetRef("platformer-pose-origin-" + this.state.mode)}
+              target={this.gaitDrivers.walk[0]!.target}
+              speed={0}
+              autoPlay={false}
+              transition={{
+                duration: TRANSITION_SECONDS,
+                easing: "smoothstep",
+                startTime: { policy: "seek", time: POSE_ORIGIN_HOLD_TIME },
+              }}
+            />
+            <Animation
+              ref={this.gaitRef}
+              bindings={this.gaitDrivers[this.state.mode]}
+              speed={1}
+              looping
+              autoPlay={false}
+              transition={{
+                duration: TRANSITION_SECONDS,
+                easing: "smoothstep",
+                startTime: { policy: "matchPhase" },
+              }}
+            />
+            <Animation
+              ref={this.facingRef}
+              source={assetRef(
+                this.state.direction === 1
+                  ? "platformer-facing-forward"
+                  : "platformer-facing-reverse",
+              )}
+              target={this.gaitDrivers.walk[0]!.target}
+              speed={0}
+              looping
+              autoPlay={false}
+              transition={{
+                duration: TRANSITION_SECONDS,
+                easing: "smoothstep",
+                startTime: { policy: "seek", time: FACING_HOLD_TIME },
+              }}
+            />
+          </>
+        )}
       </>,
     );
+  }
+
+  private async preparePoseOrigins(signal: AbortSignal) {
+    const deadline = performance.now() + 60_000;
+    for (;;) {
+      signal.throwIfAborted();
+      const frame = await this.client.inspect();
+      const assets = (["walk", "run", "crawl"] as const).map((mode) =>
+        this.root.getAsset("platformer-pose-origin-" + mode),
+      );
+      const failed = assets.find((asset) => asset?.status === "failed");
+      if (failed)
+        throw new Error(
+          `Platformer pose ${failed.id}: ${failed.error ?? "Loading failed"}`,
+        );
+      if (assets.every((asset) => asset?.status === "loaded" && asset.current))
+        return;
+      if (performance.now() > deadline)
+        throw new Error("Timed out preparing platformer pose origins");
+      await this.client.waitForFrame(frame.tick);
+    }
   }
 
   private enqueue(operation: () => Promise<void>) {

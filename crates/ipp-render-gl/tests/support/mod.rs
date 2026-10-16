@@ -711,6 +711,10 @@ impl RenderDevice for TestDevice {
         }
     }
 
+    fn clear_depth(&mut self) -> Result<(), RenderError> {
+        Ok(())
+    }
+
     fn begin_frame(
         &mut self,
         _width: u32,

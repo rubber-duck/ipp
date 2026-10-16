@@ -161,6 +161,13 @@ impl<D: RenderDevice> RenderService<D> {
                         }
                     }
                     SurfaceOp::Attachment(index, _) => {
+                        if index == 0
+                            && self
+                                .fullscreen_camera
+                                .is_some_and(|camera| camera.root == frame.scene.canvas.selection)
+                        {
+                            continue;
+                        }
                         match canvas_attachment(
                             &frame.scene,
                             index,

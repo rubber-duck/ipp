@@ -95,6 +95,7 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) particle_quad: Option<GlMeshData<D>>,
     pub(super) shadow_map: Option<D::ShadowMap>,
     pub(super) shadow_map_size: u32,
+    pub(super) fullscreen_camera: Option<super::outputs::fullscreen::FullscreenCamera>,
     pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, CameraTarget<D::SurfaceCacheTarget>>,
     pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
     pub(super) debug: crate::services::render::frame::debug_geometry::DebugGeometryRenderCache<D>,

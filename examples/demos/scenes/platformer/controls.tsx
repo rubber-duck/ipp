@@ -24,8 +24,9 @@ export function PlatformerMovementControls({
   readonly movement: PlatformerMovement;
 }) {
   const demo = useSyncExternalStore(movement.subscribe, movement.read);
-  const run = (name: string, args?: unknown) => {
-    void movement.action(name, args).catch(movement.report);
+  // Keep controlled selection pending while the requested gait is loading.
+  const run = async (name: string, args?: unknown) => {
+    await movement.action(name, args).catch(movement.report);
   };
   return (
     <Column id="platformer-movement" width={420} padding={12}>

@@ -282,6 +282,8 @@ unsafe extern "C" {
 
     pub(super) fn viewport_limit(axis: u32) -> u32;
 
+    pub(super) fn clear_depth() -> u32;
+
     pub(super) fn end_frame(check: u32) -> u32;
 
     pub(super) fn delete_mesh(id: u32);

@@ -85,13 +85,30 @@ function driver(
     fraction: number,
   ) => {
     const client = panel === "shell" ? state.root : state.panels[panel]!;
-    const snapshot = await client.inspect();
     const header = id.startsWith("cockpit-header-");
-    const rect = fields(
-      snapshot,
-      header ? `cockpit-grip-${panel}` : id,
-      client.components.CanvasBounds!.id,
-    );
+    const symbol = header ? `cockpit-grip-${panel}` : id;
+    // Native pointer-up can finish before its React callback mounts new tab
+    // content. Observe the resulting layout before targeting the next control.
+    let snapshot = await client.inspect();
+    const deadline = performance.now() + 15_000;
+    for (;;) {
+      const target = snapshot.entities.find(
+        (entity) => entity.metadata.symbolicId === symbol,
+      );
+      const bounds = target?.components.find(
+        (component) =>
+          component.component === client.components.CanvasBounds!.id,
+      )?.fields;
+      if (bounds && Number(bounds.width) > 0 && Number(bounds.height) > 0)
+        break;
+      assert.ok(
+        performance.now() < deadline,
+        `${symbol} has a completed layout`,
+      );
+      await client.waitForFrame(snapshot.tick);
+      snapshot = await client.inspect();
+    }
+    const rect = fields(snapshot, symbol, client.components.CanvasBounds!.id);
     const x = Number(rect.x) + Number(rect.width) * fraction;
     const targetHeight = header
       ? fields(snapshot, id, client.components.GuiLayout!.id).height

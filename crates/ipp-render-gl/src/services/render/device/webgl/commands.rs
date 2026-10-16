@@ -964,6 +964,11 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(status)
     }
 
+    fn clear_depth(&mut self) -> Result<(), RenderError> {
+        // SAFETY: Import changes only GL state; no memory or handles cross it.
+        self.check(unsafe { clear_depth() })
+    }
+
     fn begin_frame(
         &mut self,
         width: u32,

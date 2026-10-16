@@ -9,6 +9,7 @@ import {
 import { Animation, AnimationAsset, SurfaceCache, assetRef } from "@ipp/react";
 import type { AnimationClipSource } from "@ipp/client";
 import type { CockpitNavigationSource } from "./control-screen.js";
+import type { CockpitOptions } from "./options.js";
 
 export const COCKPIT_PANE_COUNT = 3;
 export const CAROUSEL_ENTITY = "cockpit-carousel";
@@ -21,9 +22,15 @@ export const CAROUSEL_GAP = 0.07;
 export function CarouselQuality({
   index,
   navigation,
+  caching,
+  refreshHz,
+  textureSize,
 }: {
   index: number;
   navigation: CockpitNavigationSource;
+  caching: CockpitOptions["surfaceCaching"];
+  refreshHz: number;
+  textureSize: number;
 }) {
   const near = useSyncExternalStore(
     navigation.subscribe,
@@ -40,12 +47,18 @@ export function CarouselQuality({
     const timer = setTimeout(() => setRetained(false), 400);
     return () => clearTimeout(timer);
   }, [near]);
-  const sharp = near || retained;
+  // Disabling optional caching keeps even side panes current. Curved geometry
+  // still needs rasterization, with the same sharp resolution as a focused pane.
+  const current =
+    caching === "off" || (caching === "auto" && (near || retained));
+  const sharp = caching !== "auto" || near || retained;
   return (
     <SurfaceCache
       resolution_scale={sharp ? 1.5 : 0.75}
-      direct_distance={sharp ? 100 : 0}
-      max_refresh_hz={15}
+      direct_distance={current ? 100 : 0}
+      max_refresh_hz={refreshHz}
+      max_texture_size={textureSize}
+      force_cache={caching === "force"}
     />
   );
 }

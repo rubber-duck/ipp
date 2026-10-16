@@ -657,6 +657,13 @@ pub trait RenderDevice: 'static {
     /// Release staging only while its creating context is current.
     fn delete_texture_readback(&mut self, _readback: Self::TextureReadback) {}
 
+    /// Clear only depth before root GUI overlays a directly composed Camera.
+    fn clear_depth(&mut self) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "device does not support depth isolation".into(),
+        ))
+    }
+
     /// Set viewport, opaque depth/culling state and clear the host target.
     fn begin_frame(&mut self, width: u32, height: u32, clear: &[f32; 4])
     -> Result<(), RenderError>;

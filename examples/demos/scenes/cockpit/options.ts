@@ -5,6 +5,9 @@ export interface CockpitOptions {
   skin: "glass" | "cybertron";
   projection: number;
   surface: "flat" | "curved";
+  surfaceCaching: "off" | "auto" | "force";
+  surfaceRefreshHz: number;
+  surfaceTextureSize: number;
   carousel: number;
   carouselDragging: boolean;
   flightMode: string;
@@ -38,6 +41,9 @@ export const COCKPIT_DEFAULTS: CockpitOptions = {
   skin: "glass",
   projection: COCKPIT_SCREEN_DISTANCE.min,
   surface: "curved",
+  surfaceCaching: "off",
+  surfaceRefreshHz: 5,
+  surfaceTextureSize: 2048,
   carousel: 0,
   carouselDragging: false,
   flightMode: "cruise",
@@ -78,6 +84,12 @@ export function cockpitOptions(
     panelOpacity: number("panelOpacity", 0.55, 1),
     skin: value.skin === "cybertron" ? "cybertron" : "glass",
     surface: value.surface === "flat" ? "flat" : "curved",
+    surfaceCaching:
+      value.surfaceCaching === "auto" || value.surfaceCaching === "force"
+        ? value.surfaceCaching
+        : "off",
+    surfaceRefreshHz: number("surfaceRefreshHz", 0.5, 30),
+    surfaceTextureSize: Math.round(number("surfaceTextureSize", 256, 2048)),
     projection: number(
       "projection",
       COCKPIT_SCREEN_DISTANCE.min,

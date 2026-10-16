@@ -55,6 +55,8 @@ export const componentContract = {
       direct_distance: "number",
       resolution_scale: "number",
       max_refresh_hz: "number",
+      max_texture_size: "number",
+      force_cache: "boolean",
     },
   },
   ParticleEmitter: {
@@ -345,6 +347,10 @@ export type SurfaceCacheProps = ComponentProps & {
    * positive. Pending content changes wait for the next refresh.
    */
   max_refresh_hz?: number | undefined;
+  /** Per-image dimension cap in pixels; 0 uses renderer/device limits. */
+  max_texture_size?: number | undefined;
+  /** Keep animated paint cached; distance, interaction and safety still apply. */
+  force_cache?: boolean | undefined;
 };
 
 export function SurfaceCache(props: SurfaceCacheProps) {

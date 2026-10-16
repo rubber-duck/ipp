@@ -43,6 +43,10 @@ pub struct SurfaceCachePolicy {
     pub resolution_scale: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
+    /// Optional authored image dimension cap; zero retains device/renderer limits.
+    pub max_texture_size: u32,
+    /// Keep animated content cached without overriding interaction or distance.
+    pub force_cache: bool,
 }
 
 impl SurfaceCachePolicy {
@@ -54,6 +58,8 @@ impl SurfaceCachePolicy {
             direct_distance,
             resolution_scale,
             max_refresh_hz,
+            max_texture_size,
+            force_cache,
         } = *component;
         if !(0.0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE).contains(&direct_distance)
             || !(resolution_scale > 0.0 && resolution_scale <= SURFACE_CACHE_MAX_RESOLUTION_SCALE)
@@ -66,7 +72,18 @@ impl SurfaceCachePolicy {
             direct_distance,
             resolution_scale,
             max_refresh_hz,
+            max_texture_size,
+            force_cache,
         })
+    }
+
+    /// Apply an optional authored cap without raising renderer/device limits.
+    pub fn texture_limit(&self, device_limit: u32) -> u32 {
+        if self.max_texture_size == 0 {
+            device_limit
+        } else {
+            device_limit.min(self.max_texture_size)
+        }
     }
 
     /// Band for a Surface without a previous selection: 0 uses near/current quality

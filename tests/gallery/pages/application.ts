@@ -7,6 +7,7 @@ import {
   rgbaDataUrl,
   summarizeImage,
 } from "../../harness/page/images.js";
+import { renderDiagnostics } from "@ipp/client/diagnostics";
 import { hostProfiling } from "../../../packages/ipp-client/src/profiling.js";
 import type { Inspection, WorldReference } from "@ipp/client";
 
@@ -110,6 +111,41 @@ export async function action(name: string, value?: unknown) {
 export async function inspect() {
   await settle();
   return application().sceneClient!.inspect();
+}
+
+/** Observe the robot's actual projected control hits, independently of camera math. */
+export async function platformerControls() {
+  await settle();
+  const app = application();
+  const world = (app.controller as { movementWorld?: WorldReference })
+    .movementWorld;
+  if (!world) throw new Error("Robot movement World is not ready");
+  const client = await canvas().host.openWorld(world);
+  try {
+    const panel = await client.inspect();
+    const feedback = await client.inspectPage({ collection: "guiPointers" });
+    const hovered = new Set(
+      feedback.guiPointers
+        ?.filter((record) => record.state.hovered)
+        .map((record) => record.target.entity),
+    );
+    return {
+      scene: await app.sceneClient!.inspect(),
+      panel,
+      options: app.options,
+      componentIds: Object.fromEntries(
+        Object.entries(client.components).map(([name, descriptor]) => [
+          name,
+          descriptor!.id,
+        ]),
+      ),
+      hovered: panel.entities
+        .filter((entity) => hovered.has(entity.id))
+        .map((entity) => entity.metadata.symbolicId),
+    };
+  } finally {
+    await client.close();
+  }
 }
 
 /** Projected widget input uses evaluated scene and Canvas geometry, including the rotor. */
@@ -310,4 +346,9 @@ export async function cockpitInputDiagnostics() {
       .querySelector<HTMLCanvasElement>("#ipp-demo-canvas")!
       .hasPointerCapture(1),
   };
+}
+
+/** Read-only image sizing evidence after a completed frame. */
+export async function renderStatistics() {
+  return renderDiagnostics(canvas().host)!.statistics();
 }

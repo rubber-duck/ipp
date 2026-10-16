@@ -49,6 +49,8 @@ fn policy() -> SurfaceCachePolicy {
         direct_distance: 4.0,
         resolution_scale: 1.0,
         max_refresh_hz: 10.0,
+        max_texture_size: 0,
+        force_cache: false,
     }
 }
 
@@ -951,4 +953,48 @@ fn active_growth_within_headroom_and_shrink_repaint_without_allocating() {
     assert_eq!(store.frame(0.04, &[larger]), counts(1, 0, 0, 0, 1));
     assert_eq!(store.diagnostic(1).capacity, [208, 104]);
     assert_eq!(store.diagnostic(1).resident_bytes, 4 * 208 * 104);
+}
+
+#[test]
+fn forced_cache_recovers_from_animated_fallback_but_keeps_interaction_current() {
+    let mut store = Store::new();
+    for frame in 0u32..20 {
+        store.frame(f64::from(frame) / 30.0, &[fast(1, u64::from(frame + 1))]);
+    }
+    assert_eq!(
+        store.diagnostic(1).presentation,
+        SurfaceCachePresentation::Animated
+    );
+    for frame in 20u32..40 {
+        let mut value = fast(1, u64::from(frame + 1));
+        value.policy.force_cache = true;
+        let counts = store.frame(f64::from(frame) / 30.0, &[value]);
+        assert_eq!((counts.repaints, counts.animated), (1, 0));
+    }
+    let mut value = fast(1, 41);
+    value.policy.force_cache = true;
+    value.interaction = true;
+    assert_eq!(store.frame(2.0, &[value]).direct, 1);
+    assert_eq!(
+        store.diagnostic(1).presentation,
+        SurfaceCachePresentation::Interaction
+    );
+}
+
+#[test]
+fn lowering_texture_cap_shrinks_existing_capacity_and_raising_it_recovers() {
+    let mut store = Store::new();
+    let mut value = input(1, 5.0, 1, 1);
+    value.pixel_demand = [1024.0, 512.0];
+    store.frame(0.0, &[value]);
+    assert!(store.diagnostic(1).capacity[0] > 1024);
+    value.policy.max_texture_size = 256;
+    let counts = store.frame(0.01, &[value]);
+    assert_eq!(counts.repaints, 1);
+    assert_eq!(store.diagnostic(1).size, [256, 128]);
+    assert!(store.diagnostic(1).capacity.iter().all(|size| *size <= 256));
+    assert_eq!(store.targets.resizes, 1);
+    value.policy.max_texture_size = 2048;
+    store.frame(0.02, &[value]);
+    assert_eq!(store.diagnostic(1).size, [1024, 512]);
 }

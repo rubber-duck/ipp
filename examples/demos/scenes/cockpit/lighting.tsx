@@ -33,18 +33,30 @@ const PARAMETERS = {
 function fragment(zones: CockpitRuntime["lighting"]["zones"]): string {
   // These constants are authored UV classification, independent of the viewport.
   const rectangles = zones
+    .filter(({ group }) => group === "buttons" || group === "dials")
     .map(({ rect, group }) => {
       const value = rect.map((number) => number.toFixed(9));
-      return `if (all(greaterThanEqual(v_uv,vec2(${value[0]},${value[1]}))) && all(lessThanEqual(v_uv,vec2(${value[2]},${value[3]})))) cyanGain = ${group}Gain;`;
+      const motion =
+        group === "dials"
+          ? `float angle = atan(local.y - 0.5, local.x - 0.5);
+           float sweep = pow(max(0.0, cos(angle - p_dialsPhase - ${value[0]} * 6.2831853)), 4.0);
+           cyanGain = p_dialsTint * (0.22 + 0.78 * sweep);`
+          : `float lamp = floor(min(local.x, 0.999) * 6.0);
+           float wave = 0.5 + 0.5 * cos(p_buttonsPhase - lamp * 0.9 - ${value[0]} * 6.2831853);
+           cyanGain = p_buttonsTint * (0.25 + 0.75 * wave * wave);`;
+      return `if (all(greaterThanEqual(v_uv,vec2(${value[0]},${value[1]}))) && all(lessThanEqual(v_uv,vec2(${value[2]},${value[3]})))) {
+        vec2 local = (v_uv - vec2(${value[0]},${value[1]})) / vec2(${(rect[2] - rect[0]).toFixed(9)},${(rect[3] - rect[1]).toFixed(9)});
+        ${motion}
+      }`;
     })
     .join("\n");
   return `vec4 materialFragment() {
     vec3 base = texture(p_base, v_uv).rgb;
-    vec3 cabinGain = p_cabinTint * (0.96 + 0.04 * cos(p_cabinPhase));
-    vec3 dashboardGain = p_dashboardTint * (0.96 + 0.04 * cos(p_dashboardPhase));
-    vec3 buttonsGain = p_buttonsTint * (0.90 + 0.10 * cos(p_buttonsPhase));
-    vec3 dialsGain = p_dialsTint * (0.94 + 0.06 * cos(p_dialsPhase));
-    vec3 cyanGain = buttonsGain;
+    // Keep peaks at the authored exposure. Motion comes from attenuation,
+    // with spatial sweeps on instruments rather than flashing the whole cabin.
+    vec3 cabinGain = p_cabinTint * (0.91 + 0.09 * cos(p_cabinPhase + v_uv.x));
+    vec3 dashboardGain = p_dashboardTint * (0.82 + 0.18 * cos(p_dashboardPhase));
+    vec3 cyanGain = p_buttonsTint;
     ${rectangles}
     vec3 emission = texture(p_cabin,v_uv).rgb * cabinGain
       + texture(p_dashboard,v_uv).rgb * dashboardGain
@@ -71,7 +83,7 @@ export function CockpitLighting({
   const shader = useMemo(() => fragment(runtime.lighting.zones), [runtime]);
   const clip = useMemo<AnimationClipSource>(
     () => ({
-      duration: 8,
+      duration: 12,
       tracks: GROUPS.map((group, index) => ({
         property: { component, name: `${group}Phase` },
         keys: [
@@ -81,10 +93,10 @@ export function CockpitLighting({
             interpolation: { kind: "linear" },
           },
           {
-            time: 8,
+            time: 12,
             value: {
               kind: "dynamic",
-              value: { kind: "f32", value: Math.PI * 2 * (index + 1) },
+              value: { kind: "f32", value: Math.PI * 2 * [1, 2, 4, 2][index]! },
             },
           },
         ],

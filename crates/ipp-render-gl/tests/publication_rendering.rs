@@ -567,3 +567,76 @@ fn forgotten_descendant_releases_canvas_image_without_another_prepare() {
     renderer.forget_world(grandchild);
     assert_eq!(state.cache_deletes.get(), 2);
 }
+
+#[test]
+fn fullscreen_camera_bypasses_images_and_embedded_or_translucent_views_retain_them() {
+    let mut host = support::task_scheduler::host();
+    let state = Rc::new(DeviceState::default());
+    state.cache_limit.set(256);
+    let mut renderer = RenderService::new(TestDevice(state.clone())).unwrap();
+    renderer.install(&mut host).unwrap();
+    let mut options = ipp_core::WorldCreateOptions::new(select(&[ATTACHMENTS, CANVAS, SURFACE]));
+    options.canvas = Some(ipp_core::CanvasState {
+        extent: [100.0, 100.0],
+        units_per_metre: 100.0,
+    });
+    let parent = host
+        .create_world_with_options(Default::default(), options)
+        .unwrap();
+    let root = OutputRef::canvas(host.world_ref(parent).unwrap());
+    let child = host
+        .create_world(Default::default(), &select(&[CAMERA, RENDER]))
+        .unwrap();
+    let nested = camera(&mut host, child);
+    let anchor = attach(&mut host, parent, nested);
+    host.set_root_output(root, viewport()).unwrap();
+    for (width, opacity, expected_targets) in
+        [(1.0, 1.0, 0), (0.8, 1.0, 1), (1.0, 0.5, 1), (1.0, 1.0, 0)]
+    {
+        support::canvas::apply(
+            &mut host,
+            parent,
+            vec![
+                ipp_core::Command::insert_value(
+                    ipp_core::EntityRef::Handle(anchor),
+                    ComponentValue::FlatSurface(ipp_core::FlatSurface {
+                        width,
+                        ..Default::default()
+                    }),
+                ),
+                ipp_core::Command::insert_value(
+                    ipp_core::EntityRef::Handle(anchor),
+                    ComponentValue::CanvasStyle(ipp_core::components::CanvasStyle {
+                        opacity,
+                        ..Default::default()
+                    }),
+                ),
+            ],
+        );
+        frame(&mut host, &mut renderer, parent);
+        let publication = host.root_output(parent).unwrap().2;
+        let summary = renderer
+            .draw(&host, root, publication, viewport(), 0.0)
+            .unwrap();
+        assert_eq!(summary.failed_draw_calls, 0);
+        assert_eq!(
+            state.cache_targets_live.get(),
+            expected_targets,
+            "width={width}, opacity={opacity}"
+        );
+    }
+    // No image budget or texture capability is required for this fullscreen camera.
+    state.cache_limit.set(0);
+    #[cfg(feature = "instrumentation")]
+    renderer.set_surface_cache_budget(0);
+    frame(&mut host, &mut renderer, parent);
+    let publication = host.root_output(parent).unwrap().2;
+    assert_eq!(
+        renderer
+            .draw(&host, root, publication, viewport(), 0.0)
+            .unwrap()
+            .failed_draw_calls,
+        0
+    );
+    assert_eq!(state.cache_targets_live.get(), 0);
+}

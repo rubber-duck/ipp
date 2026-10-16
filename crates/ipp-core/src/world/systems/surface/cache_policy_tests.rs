@@ -5,6 +5,8 @@ fn policy(direct_distance: f32) -> SurfaceCachePolicy {
         direct_distance,
         resolution_scale: 1.0,
         max_refresh_hz: 30.0,
+        max_texture_size: 0,
+        force_cache: false,
     })
     .unwrap()
 }
@@ -136,6 +138,8 @@ fn refresh_caps_never_increase_with_distance() {
             direct_distance: 1.0,
             resolution_scale: 0.5,
             max_refresh_hz: 0.25,
+            max_texture_size: 0,
+            force_cache: false,
         })
         .unwrap(),
     ] {
@@ -163,6 +167,8 @@ fn floors_stop_halving_without_raising_low_authored_values() {
         direct_distance: 1.0,
         resolution_scale: 1.0,
         max_refresh_hz: 1.5,
+        max_texture_size: 0,
+        force_cache: false,
     })
     .unwrap();
     assert_eq!(policy.refresh_interval_at(2), 1.0 / 0.75);
@@ -175,7 +181,19 @@ fn floors_stop_halving_without_raising_low_authored_values() {
         direct_distance: 1.0,
         resolution_scale: 0.5,
         max_refresh_hz: 0.25,
+        max_texture_size: 0,
+        force_cache: false,
     })
     .unwrap();
     assert_eq!(low.refresh_interval_at(SURFACE_CACHE_MAX_BANDS), 4.0);
+}
+
+#[test]
+fn authored_texture_cap_only_lowers_the_device_limit() {
+    let mut value = policy(0.0);
+    assert_eq!(value.texture_limit(2048), 2048);
+    value.max_texture_size = 512;
+    assert_eq!(value.texture_limit(2048), 512);
+    assert_eq!(value.texture_limit(256), 256);
+    assert_eq!(value.texture_limit(0), 0);
 }

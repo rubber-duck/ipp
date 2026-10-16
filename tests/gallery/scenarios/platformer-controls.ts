@@ -134,12 +134,7 @@ export async function exercisePlatformerControls(
   const initialIds = controls.map((id) => entity(before.panel, id).id);
   visible(await driver.capture("robot-root-controls"));
 
-  await driver.press("platformer-mode/run");
-  assert.equal(
-    await option("mode", "run"),
-    "run",
-    "physical gait button changes actual playback intent",
-  );
+  await exercisePlatformerGaitSelection(driver);
   await driver.press("platformer-reverse");
   assert.equal(await option("direction", -1), -1);
   await driver.press("platformer-pause");
@@ -183,4 +178,42 @@ export async function exercisePlatformerControls(
     1,
     "skin changes preserve reset playback intent",
   );
+}
+
+/** Returning to earlier choices must keep native selection and actual playback aligned. */
+export async function exercisePlatformerGaitSelection(
+  driver: Pick<PlatformerControlsDriver, "state" | "press" | "advance">,
+) {
+  for (const mode of ["run", "walk", "crawl", "run", "walk", "run"]) {
+    await driver.press(`platformer-mode/${mode}`);
+    const deadline = performance.now() + 20_000;
+    while ((await driver.state()).options.mode !== mode) {
+      assert.ok(
+        performance.now() < deadline,
+        `mode becomes ${mode} after routed input`,
+      );
+      await driver.advance(0.03);
+    }
+    const state = await driver.state();
+    assert.deepEqual(
+      ["walk", "run", "crawl"].filter(
+        (key) =>
+          fields(
+            state.panel,
+            `platformer-mode/${key}`,
+            state.componentIds.GuiButton!,
+          ).selected,
+      ),
+      [mode],
+      "the native selected button agrees with playback after returning to a gait",
+    );
+    assert.ok(
+      state.scene.controllers?.some(({ description }) =>
+        description.drivers.some(({ source }) =>
+          String(source).includes(`platformer-pose-origin-${mode}`),
+        ),
+      ),
+      "the selected gait's actual pose controller is active",
+    );
+  }
 }

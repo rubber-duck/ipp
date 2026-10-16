@@ -96,6 +96,8 @@ export function FrameRateChart({
       <PlotLine2d
         contract={contract}
         interpolation="straight"
+        // Dense history is a trace: per-sample dots obscure it and add 600 draws.
+        marker_size={0}
         series={{
           nextSlot: 1,
           rows: new Map([

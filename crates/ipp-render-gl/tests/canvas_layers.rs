@@ -366,6 +366,8 @@ fn a_cached_surface_that_separates_layers_presents_directly() {
             direct_distance: 0.0,
             resolution_scale: 1.0,
             max_refresh_hz: 10.0,
+            max_texture_size: 0,
+            force_cache: false,
         })],
     );
     let presentation = |renderer: &RenderService<TestDevice>| {
@@ -405,6 +407,8 @@ fn a_single_occupied_priority_is_rank_zero_and_can_cache() {
             direct_distance: 0.0,
             resolution_scale: 1.0,
             max_refresh_hz: 10.0,
+            max_texture_size: 0,
+            force_cache: false,
         })],
     );
     let presentation = |renderer: &RenderService<TestDevice>| {

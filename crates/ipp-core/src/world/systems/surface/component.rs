@@ -102,6 +102,10 @@ pub struct SurfaceCache {
     pub resolution_scale: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
+    /// Optional per-image dimension cap in pixels; zero uses renderer/device limits.
+    pub max_texture_size: u32,
+    /// Suppress the animated-content direct fallback. Distance and interaction still apply.
+    pub force_cache: bool,
 }
 
 impl Default for SurfaceCache {
@@ -110,6 +114,8 @@ impl Default for SurfaceCache {
             direct_distance: 4.0,
             resolution_scale: 1.0,
             max_refresh_hz: 30.0,
+            max_texture_size: 0,
+            force_cache: false,
         }
     }
 }

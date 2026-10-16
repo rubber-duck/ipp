@@ -9,6 +9,7 @@ impl<D: RenderDevice> RenderService<D> {
         let device = Rc::new(RefCell::new(device));
         Ok(Self {
             inclusions: Default::default(),
+            fullscreen_camera: None,
             #[cfg(feature = "instrumentation")]
             gpu_capture: Default::default(),
             generated_paths: super::assets::generated_paths::GeneratedPathCache::new(

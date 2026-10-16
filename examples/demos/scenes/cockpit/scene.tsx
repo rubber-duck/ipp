@@ -143,7 +143,13 @@ function CockpitWorld({
       <Entity key={name} {...identity}>
         {!dashboard && <Transform {...placement!.pose} />}
         {!dashboard && (
-          <CarouselQuality index={index} navigation={navigation} />
+          <CarouselQuality
+            index={index}
+            navigation={navigation}
+            caching={state.surfaceCaching}
+            refreshHz={state.surfaceRefreshHz}
+            textureSize={state.surfaceTextureSize}
+          />
         )}
         {!dashboard && state.surface === "curved" ? (
           <CylinderSurface

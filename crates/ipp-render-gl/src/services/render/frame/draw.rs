@@ -137,6 +137,16 @@ impl<D: RenderDevice> RenderService<D> {
             host.output(publication, selection)
                 .ok_or(RenderError::UnavailableOutput)
         });
+        self.fullscreen_camera = if available.is_ok() {
+            super::super::outputs::fullscreen::select(host, selection, publication)?
+        } else {
+            None
+        };
+        if let Some(fullscreen) = self.fullscreen_camera
+            && let Some((target, _, _)) = self.camera_targets.remove(&fullscreen.selection)
+        {
+            self.device.borrow_mut().delete_surface_cache_target(target);
+        }
         let prepass = {
             self.camera_completed.clear();
             self.glyph_frame.clear();
@@ -169,6 +179,26 @@ impl<D: RenderDevice> RenderService<D> {
                     [2.0 / f64::from(width), -2.0 / f64::from(height)],
                 )?;
                 let mut work = prepass;
+                if let Some(fullscreen) = self.fullscreen_camera {
+                    let camera_scene =
+                        RenderScene::new(host, fullscreen.selection, fullscreen.publication)?;
+                    self.debug.retain(&camera_scene.debug);
+                    if let Ok(camera) = camera_scene.camera.prepare_for_extent(fullscreen.extent) {
+                        work = self.draw_items(
+                            &camera_scene,
+                            Some(Ok(camera.view_projection)),
+                            work,
+                            viewport,
+                            presentation_time,
+                        )?;
+                        self.inclusions
+                            .record(fullscreen.selection, fullscreen.publication);
+                    } else {
+                        work.failed_draw();
+                    }
+                    // Scene depth must not reject the painter-ordered root GUI.
+                    self.device.borrow_mut().clear_depth()?;
+                }
                 self.draw_canvas(
                     &scene,
                     mvp,

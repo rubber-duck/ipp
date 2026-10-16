@@ -22,6 +22,8 @@ const ALWAYS: SurfaceCache = SurfaceCache {
     direct_distance: 0.0,
     resolution_scale: 1.0,
     max_refresh_hz: 10.0,
+    max_texture_size: 0,
+    force_cache: false,
 };
 
 /// Direct below 2 m; band 1 covers [2, 4) m and band 2 [4, 8) m.
@@ -2671,4 +2673,35 @@ fn failed_required_padding_resize_deletes_partial_storage_and_recovers() {
         frame(&mut renderer, &mut host, world, 0.0).surface_cache_reuses,
         1
     );
+}
+
+#[test]
+fn authored_texture_cap_limits_and_shrinks_flat_and_curved_images() {
+    for curved in [false, true] {
+        let mut host = support::task_scheduler::host();
+        let (mut renderer, _, world, panel) = scene(&mut host);
+        if curved {
+            projected(&mut host, panel, 0.5, 0.0);
+        }
+        cache_policy(&mut host, panel, Some(ALWAYS));
+        frame(&mut renderer, &mut host, world, 0.0);
+        let original = record(&renderer, world, panel.anchor).size;
+        assert!(original[0] > 16);
+        cache_policy(
+            &mut host,
+            panel,
+            Some(SurfaceCache {
+                max_texture_size: 16,
+                force_cache: true,
+                ..ALWAYS
+            }),
+        );
+        frame(&mut renderer, &mut host, world, 0.0);
+        let capped = record(&renderer, world, panel.anchor);
+        assert!(capped.size.iter().all(|size| *size <= 16), "{capped:?}");
+        assert!(capped.capacity.iter().all(|size| *size <= 16), "{capped:?}");
+        cache_policy(&mut host, panel, Some(ALWAYS));
+        frame(&mut renderer, &mut host, world, 0.0);
+        assert_eq!(record(&renderer, world, panel.anchor).size, original);
+    }
 }

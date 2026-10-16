@@ -35,7 +35,10 @@ function clearance(state: CockpitState) {
   }
 }
 
-function chartInk(frame: RgbaImage, state: CockpitState) {
+export function assertCockpitChartPixels(
+  frame: RgbaImage,
+  state: Pick<CockpitState, "panels" | "scene" | "componentIds">,
+) {
   const panel = state.panels[1]!;
   const rect = cockpitFields(
     panel,
@@ -106,6 +109,9 @@ function chartInk(frame: RgbaImage, state: CockpitState) {
 export async function exerciseCockpitQuality(
   driver: CockpitDriver & { statistics(): Promise<RenderStatisticsSnapshot> },
 ) {
+  const initial = await driver.state();
+  assert.equal(initial.options.surfaceCaching, "off");
+  const panelWorlds = initial.panelWorlds;
   for (const surface of ["flat", "curved"]) {
     await driver.options({ surface, projection: 100 });
     assert.equal((await driver.state()).options.projection, 12);
@@ -118,7 +124,86 @@ export async function exerciseCockpitQuality(
     );
     clearance(state);
     await driver.capture(`clearance-${surface}`);
+    await driver.press(0, "cockpit-control-tab/gui");
+    const deadline = performance.now() + 10_000;
+    while (
+      !(await driver.state()).panels[0]!.entities.some(
+        (entity) =>
+          entity.metadata.symbolicId === "cockpit-surface-caching/off",
+      )
+    ) {
+      assert.ok(performance.now() < deadline, "GUI tab mounts cache controls");
+      await driver.advance(0.025);
+    }
+    for (const caching of ["auto", "force", "off"]) {
+      await driver.press(0, `cockpit-surface-caching/${caching}`);
+      await driver.advance(0.5);
+      const changed = await driver.state();
+      assert.equal(changed.options.surfaceCaching, caching);
+      assert.deepEqual(
+        changed.panelWorlds,
+        panelWorlds,
+        "cache controls preserve the panel Worlds and their state",
+      );
+      for (let panel = 0; panel < 3; panel++) {
+        const policy = cockpitFields(
+          changed.scene,
+          `cockpit-screen-${panel}`,
+          changed.componentIds.SurfaceCache!,
+        );
+        const live = caching === "off" || (caching === "auto" && panel === 0);
+        const sharp = caching !== "auto" || panel === 0;
+        assert.equal(
+          policy.resolution_scale,
+          sharp ? 1.5 : 0.75,
+          "Off preserves focused quality on every panel; Automatic restores side-panel quality",
+        );
+        assert.ok(
+          live
+            ? Number(policy.direct_distance) > 12
+            : policy.direct_distance === 0,
+          "the native cache policy follows the routed GUI selection",
+        );
+      }
+      await driver.capture(`caching-${surface}-${caching}`);
+    }
+    await driver.press(0, "cockpit-surface-refresh/slider", 0.25);
+    const refresh = Number((await driver.state()).options.surfaceRefreshHz);
+    assert.ok(refresh >= 6 && refresh <= 10, `slider selected ${refresh} Hz`);
+    let smallAllocation = 0;
+    for (const cap of [256, 2048]) {
+      await driver.options({ surfaceCaching: "force" });
+      await driver.press(0, "cockpit-surface-texture-size");
+      await driver.advance(0.1);
+      await driver.press(0, `cockpit-surface-texture-size/options/${cap}`);
+      await driver.advance(0.5);
+      const changed = await driver.state();
+      assert.deepEqual(changed.panelWorlds, panelWorlds);
+      for (let panel = 0; panel < 3; panel++) {
+        const policy = cockpitFields(
+          changed.scene,
+          `cockpit-screen-${panel}`,
+          changed.componentIds.SurfaceCache!,
+        );
+        assert.equal(policy.max_texture_size, cap);
+        assert.equal(policy.max_refresh_hz, refresh);
+        assert.equal(policy.force_cache, true);
+      }
+      await driver.capture(`texture-cap-${surface}-${cap}`);
+      const bytes = (await driver.statistics()).surfaces
+        .surfaceCacheResidentBytes;
+      if (surface === "curved") {
+        assert.ok(bytes > 0, "curved panels have actual image allocations");
+        if (cap === 256) smallAllocation = bytes;
+        else
+          assert.ok(
+            bytes > smallAllocation,
+            "raising the cap restores image resolution and allocation",
+          );
+      }
+    }
   }
+  await driver.options({ surfaceCaching: "auto", surfaceRefreshHz: 5 });
   const observations = [];
   for (const focus of [0, 0.5, 1, 1.5, 2, 1]) {
     await driver.options({ carousel: focus });
@@ -143,12 +228,13 @@ export async function exerciseCockpitQuality(
           : policy.direct_distance === 0,
         "focused images refresh with current content",
       );
-      assert.equal(policy.max_refresh_hz, 15);
+      assert.equal(policy.max_refresh_hz, 5);
     }
     const frame = await driver.capture(
       `quality-${observations.length}-${focus}`,
     );
-    const ink = focus === 1 ? chartInk(frame, state) : undefined;
+    const ink =
+      focus === 1 ? assertCockpitChartPixels(frame, state) : undefined;
     const statistics = await driver.statistics();
     assert.ok(
       statistics.surfaces.surfaceCacheResidentBytes <= 32 * 1024 * 1024,

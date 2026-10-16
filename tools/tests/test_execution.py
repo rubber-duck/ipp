@@ -1,6 +1,7 @@
 """Real subprocess, evidence, retry, environment probe and workspace lock lifecycle."""
 
 from contextlib import redirect_stderr
+import errno
 import io
 import json
 from pathlib import Path
@@ -124,9 +125,16 @@ class ExecutionTests(unittest.TestCase):
         report = self.run_tasks([self.command("launcher", parent, timeout=10)])
         self.assertEqual(report["status"], "passed")
         port = int((self.root / "port").read_text())
-        with socket.socket() as connection:
-            connection.settimeout(1)
-            self.assertNotEqual(connection.connect_ex(("127.0.0.1", port)), 0)
+        # Killing the process group is asynchronous; observe the descendant's
+        # socket closing rather than racing the kernel immediately after SIGKILL.
+        deadline = time.monotonic() + 5
+        while True:
+            with socket.socket() as connection:
+                connection.settimeout(0.1)
+                if connection.connect_ex(("127.0.0.1", port)) == errno.ECONNREFUSED:
+                    break
+            self.assertLess(time.monotonic(), deadline, "Descendant still listening")
+            time.sleep(0.01)
 
     def test_environment_probe_is_cancellable(self):
         ready = self.root / "probe-ready"

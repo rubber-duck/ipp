@@ -783,6 +783,20 @@ impl RenderDevice for GlesRenderDevice {
         self.begin_camera_target(target, clear)
     }
 
+    fn clear_depth(&mut self) -> Result<(), RenderError> {
+        let previous = self.current_target().depth_mask;
+        self.set_depth_mask(true);
+        // SAFETY: The Host keeps this context current; scalar GL state only,
+        // with no borrowed storage or pointers surviving these calls.
+        unsafe {
+            self.gl.disable(0x0C11); // SCISSOR_TEST
+            self.gl.clear_depth(1.0);
+            self.gl.clear(0x00000100); // DEPTH_BUFFER_BIT
+        }
+        self.set_depth_mask(previous);
+        self.check_draw()
+    }
+
     fn begin_frame(
         &mut self,
         width: u32,

@@ -2795,6 +2795,12 @@
     ],
     "commands": [
       {
+        "name": "policy",
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "--locked", "--", "surface::cache_policy"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
         "name": "store",
         "command": [
           "cargo",
@@ -4315,6 +4321,18 @@
       "examples/demos/main.tsx",
       "examples/demos/application.tsx",
       "tests/gallery/pages/application.ts",
+      "tests/gallery/pages/frame-rate.ts",
+      "tests/gallery/scenarios/frame-rate-history.ts",
+      "tests/gallery/surface-quality.browser.test.ts",
+      "tests/gallery/scenarios/surface-quality.ts",
+      "tests/gallery/platformer.browser.test.ts",
+      "tests/gallery/cockpit-lights.browser.test.ts",
+      "tests/gallery/scenarios/cockpit-lights.ts",
+      "tests/gallery/scenarios/platformer-startup.ts",
+      "tests/gallery/scenarios/platformer-controls.ts",
+      "tests/gallery/drivers/browser-platformer.ts",
+      "examples/demos/scenes/platformer/",
+      "examples/demos/frame-rate-panel.tsx",
       "tests/gallery/drivers/browser-application.ts",
       "packages/ipp-react/src/gui/",
       "packages/ipp-react/src/gui-kit/",
@@ -4327,6 +4345,10 @@
     ],
     "files": [
       "dist/tests/gallery/application.browser.test.js",
+      "dist/tests/gallery/frame-rate.browser.test.js",
+      "dist/tests/gallery/surface-quality.browser.test.js",
+      "dist/tests/gallery/platformer.browser.test.js",
+      "dist/tests/gallery/cockpit-lights.browser.test.js",
       "dist/tests/gallery/render-scale.browser.test.js",
       "dist/tests/gallery/chart-programs.browser.test.js"
     ]
@@ -4338,6 +4360,7 @@
       "tests/gallery/cockpit-oracle.ts",
       "tests/gallery/cockpit.native.test.ts",
       "tests/gallery/scenarios/cockpit.ts",
+      "tests/gallery/scenarios/cockpit-lights.ts",
       "tests/gallery/drivers/native-cockpit.ts",
       "tests/gallery/scenarios/cockpit-wheel.ts",
       "tests/gallery/scenarios/cockpit-quality.ts"

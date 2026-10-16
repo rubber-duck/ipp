@@ -468,6 +468,7 @@ impl<T> SurfaceTextureCache<T> {
     fn select(&mut self, world: WorldId, time: f64, limit: u32, input: &SurfaceCacheInput) {
         use SurfaceCachePresentation as P;
 
+        let limit = input.policy.texture_limit(limit);
         let stamp = self.stamp;
         let budget = self.budget_bytes.saturating_sub(self.reserved_bytes);
         let entry = self
@@ -524,6 +525,10 @@ impl<T> SurfaceTextureCache<T> {
 
         // An animated Surface draws directly until its paint holds, then repaints
         // its stale image through the ordinary rules below.
+        if input.policy.force_cache {
+            entry.animated = false;
+            entry.repaint_streak = 0;
+        }
         if entry.animated {
             entry.settled = if paint_changed {
                 0
@@ -544,7 +549,10 @@ impl<T> SurfaceTextureCache<T> {
         entry.desired_capacity = entry
             .image
             .as_ref()
-            .filter(|image| super::quality::fits(desired, image.capacity))
+            .filter(|image| {
+                super::quality::fits(desired, image.capacity)
+                    && image.capacity.iter().all(|value| *value <= limit)
+            })
             .map_or_else(
                 || super::quality::image_capacity(desired, limit),
                 |image| image.capacity,
@@ -552,7 +560,7 @@ impl<T> SurfaceTextureCache<T> {
         let resized = entry
             .image
             .as_ref()
-            .is_none_or(|image| image.size != desired);
+            .is_none_or(|image| image.size != desired || image.capacity != entry.desired_capacity);
         // Whether an out-of-date image repaints because its refresh interval elapsed.
         let mut capped = false;
         let repaint = match entry.painted {
@@ -585,7 +593,10 @@ impl<T> SurfaceTextureCache<T> {
         // costs more cached than direct: after that many repaints, the next one
         // presents directly instead until the paint settles.
         let capped_repaint = capped && paint_changed;
-        if capped_repaint && entry.repaint_streak >= SURFACE_CACHE_ANIMATED_FRAMES {
+        if !input.policy.force_cache
+            && capped_repaint
+            && entry.repaint_streak >= SURFACE_CACHE_ANIMATED_FRAMES
+        {
             entry.animated = true;
             entry.settled = 0;
             entry.action = SurfaceCacheAction::Direct;

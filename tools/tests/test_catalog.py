@@ -23,7 +23,7 @@ from support import plan
 
 
 class CatalogTests(unittest.TestCase):
-    def test_ci_runs_retained_gui_as_its_own_bounded_cached_job(self):
+    def test_gallery_ci_only_builds_and_deploys_the_artifact(self):
         # Job blocks at two-space indentation below `jobs:`; no YAML dependency.
         jobs: dict[str, list[str]] = {}
         current = None
@@ -34,24 +34,25 @@ class CatalogTests(unittest.TestCase):
                 jobs[current] = []
             elif current:
                 jobs[current].append(line.strip())
-        retained = jobs["retained-gui"]
-        self.assertTrue(any(line.startswith("timeout-minutes: ") for line in retained))
+        self.assertEqual(set(jobs), {"build", "deploy"})
+        build = jobs["build"]
+        self.assertTrue(any(line.startswith("timeout-minutes: ") for line in build))
         for step in (
-            "run: python tools/ipp.py doctor --for retained-gui surface-cache",
-            "run: python tools/ipp.py test retained-gui",
-            "run: python tools/ipp.py test surface-cache",
+            "run: python tools/ipp.py build gallery-site",
             "~/.cargo/registry/cache/",
-            "target/integration-artifacts/retained-gui/",
-            "target/integration-artifacts/surface-cache/",
-            "if: always()",
+            "target/wasm32-unknown-unknown/",
+            "path: target/gallery-site",
+            "path: target/pipeline/runs/",
         ):
-            self.assertIn(step, retained)
-        self.assertTrue(
-            any(line.startswith("uses: actions/cache@") for line in retained)
+            self.assertIn(step, build)
+        self.assertTrue(any(line.startswith("uses: actions/cache@") for line in build))
+        self.assertFalse(
+            any(
+                "tools/ipp.py test " in line or "tools/ipp.py regression" in line
+                for line in build
+            )
         )
-        # Deployment waits for the visible retained GUI job, not a hidden step.
-        self.assertIn("needs: [build, retained-gui]", jobs["deploy"])
-        self.assertFalse(any("retained-gui" in line for line in jobs["build"]))
+        self.assertIn("needs: build", jobs["deploy"])
 
     def test_every_suite_and_full_selection_resolves(self):
         validate_catalog()

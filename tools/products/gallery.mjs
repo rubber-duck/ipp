@@ -211,6 +211,10 @@ if (selection === "assets") {
       resolve(workspace, "tests/gallery/pages/application.ts"),
       resolve(output, "application-browser-helper.js"),
     ),
+    bundleGallery(
+      resolve(workspace, "tests/gallery/pages/frame-rate.ts"),
+      resolve(output, "frame-rate-browser-helper.js"),
+    ),
     ...["development", "production"].map((mode) =>
       bundleGallery(
         resolve(workspace, "tests/rendering/pages/ready-geometry.tsx"),
@@ -235,6 +239,7 @@ if (selection === "assets") {
       "fixture.js",
       "fixture-production.js",
       "application-browser-helper.js",
+      "frame-rate-browser-helper.js",
       "ready-geometry-development.js",
       "ready-geometry-production.js",
       "replacement.mesh",

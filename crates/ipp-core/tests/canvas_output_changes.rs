@@ -723,6 +723,8 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
         direct_distance: 0.5,
         resolution_scale: 1.0,
         max_refresh_hz: 2.0,
+        max_texture_size: 0,
+        force_cache: false,
     };
     create(
         &mut host,

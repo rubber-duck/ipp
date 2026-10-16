@@ -7,6 +7,7 @@ import {
   COCKPIT_ANCHORS,
 } from "../cockpit-oracle.js";
 import { assertFrameRateData } from "./frame-rate.js";
+import { exerciseCockpitLights } from "./cockpit-lights.js";
 
 export interface CockpitState {
   readonly options: Readonly<Record<string, unknown>>;
@@ -699,6 +700,7 @@ export async function exerciseCockpit(
     };
   }
   if (part === "exterior") {
+    const motion = await exerciseCockpitLights(driver);
     await driver.action("scan", false);
     await driver.action("atmospherePlayback", false);
     await driver.action("skin", "glass");
@@ -743,7 +745,7 @@ export async function exerciseCockpit(
     await driver.advance(0.12);
     assert.notEqual(phase(await driver.state()), resumed);
     visible(await driver.capture("cockpit-restored"));
-    return { worlds: (await driver.state()).panelWorlds.length };
+    return { worlds: (await driver.state()).panelWorlds.length, motion };
   }
   await driver.options({ carousel: 0, charge: 0.7 });
   await driver.advance(0.3);

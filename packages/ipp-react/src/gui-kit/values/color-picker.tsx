@@ -1,3 +1,14 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A colour picker: the runtime's colour control, its saturation-value field,
@@ -51,14 +62,7 @@ import {
 } from "./color-value.js";
 import { InlineAlert } from "../feedback/inline-alert.js";
 import { useGuiKit, type GuiKitScope, type GuiKitTone } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { useOwnRow } from "../row-motion.js";
 import { TextLine, lineWidth } from "../text.js";
 
@@ -69,7 +73,7 @@ export interface ColorPreset {
   readonly label?: string;
 }
 
-export interface ColorPickerProps {
+export interface ColorPickerProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the picker's root entity; its parts extend it. */
@@ -88,7 +92,7 @@ export interface ColorPickerProps {
   readonly presets?: readonly ColorPreset[];
   /** Keep the colour and look but refuse input; every text turns neutral. */
   readonly disabled?: boolean;
-  readonly layout?: GuiKitLayout;
+
   /** The colour control's handle. */
   readonly ref?: GuiControlRef;
 }
@@ -155,19 +159,20 @@ function geometry(kit: GuiKitScope, alpha: boolean) {
   };
 }
 
-export function ColorPicker({
-  id: providedId,
-  layer = 0,
-  label,
-  value,
-  defaultValue = WHITE,
-  onChange,
-  alpha = true,
-  presets,
-  disabled = false,
-  layout,
-  ref,
-}: ColorPickerProps) {
+export function ColorPicker(props: ColorPickerProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    value,
+    defaultValue = WHITE,
+    onChange,
+    alpha = true,
+    presets,
+    disabled = false,
+    layout,
+    ref,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -262,7 +267,7 @@ export function ColorPicker({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         width={g.width}
         height={height}
@@ -380,6 +385,7 @@ export function ColorPicker({
             <Group axis={0} selection={0} />
             <Children>
               <Row
+                gap={0}
                 id={`${id}/presets/caption`}
                 height={kit.unit(t.smallHeight)}
                 layout={{
@@ -405,6 +411,7 @@ export function ColorPicker({
           </Entity>
         )}
         <Row
+          gap={0}
           id={`${id}/hex`}
           height={kit.unit(t.controlHeight)}
           layout={{ margin_top: g.gap }}
@@ -485,7 +492,7 @@ function Placed({
 }) {
   const id = useEntityId(providedId);
   return (
-    <Row id={id} layout={{ height, margin_left: x, align_x: -1 }}>
+    <Row gap={0} id={id} layout={{ height, margin_left: x, align_x: -1 }}>
       {children}
     </Row>
   );
@@ -529,6 +536,7 @@ function ChannelField({
   const tone: GuiKitTone = disabled ? "neutral" : "text";
   return (
     <Row
+      gap={0}
       id={id}
       height={kit.unit(t.controlHeight)}
       {...(first ? {} : { layout: { margin_top: gap } })}

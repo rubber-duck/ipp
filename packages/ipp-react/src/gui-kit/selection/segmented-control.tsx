@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A small set of mutually exclusive modes as adjacent segments, with the
@@ -26,7 +34,7 @@ import {
   type ChoiceProps,
 } from "../choice.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_LEAF, LAYOUT_ROW, type GuiKitLayout } from "../layout.js";
+
 import type { KitThemeName } from "../themes.js";
 
 export interface SegmentedOption {
@@ -36,13 +44,12 @@ export interface SegmentedOption {
   readonly disabled?: boolean;
 }
 
-export interface SegmentedControlProps extends ChoiceProps {
+export interface SegmentedControlProps extends ChoiceProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the control's frame; segments extend it. */
   readonly id?: string;
   readonly options: readonly SegmentedOption[];
-  readonly layout?: GuiKitLayout;
 }
 
 /** The look of the segment at `index` of `count`: cut where the frame is. */
@@ -52,13 +59,14 @@ function segmentTheme(index: number, count: number): KitThemeName {
   return index === count - 1 ? "segmentLast" : "segment";
 }
 
-export function SegmentedControl({
-  id: providedId,
-  layer = 0,
-  options,
-  layout,
-  ...props
-}: SegmentedControlProps) {
+export function SegmentedControl(inputProps: SegmentedControlProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    options,
+    layout,
+    ...props
+  } = useGuiKitLayout(inputProps);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const choice = useChoice(props);
@@ -66,7 +74,7 @@ export function SegmentedControl({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         height={kit.unit(kit.tokens.controlHeight)}
         {...layout}

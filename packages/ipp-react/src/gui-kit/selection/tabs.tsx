@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Tabs: a strip of tabs over a content area that shows the selected tab's
@@ -40,12 +49,7 @@ import {
 import { GUI_KIT_ICONS } from "../icons.js";
 import { usePanelSurface } from "../containers/panel.js";
 import { useGuiKit } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Menu } from "../overlays/menu.js";
 import { Floating, useOverlayOpen } from "../overlays/overlay.js";
 import { lineWidth } from "../text.js";
@@ -59,7 +63,7 @@ export interface TabItem {
   readonly content?: ReactNode;
 }
 
-export interface TabsProps extends ChoiceProps {
+export interface TabsProps extends ChoiceProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the root column; the strip and tabs extend it. */
@@ -72,21 +76,21 @@ export interface TabsProps extends ChoiceProps {
   readonly overflowMenu?: boolean;
   /** Entity declarations at the strip's end, after its buttons. */
   readonly more?: ReactNode;
-  readonly layout?: GuiKitLayout;
 }
 
 /** `GuiScrollView.axis`: horizontal. */
 const SCROLL_HORIZONTAL = 0;
 
-export function Tabs({
-  id: providedId,
-  layer = 0,
-  tabs,
-  overflowMenu = false,
-  more,
-  layout,
-  ...props
-}: TabsProps) {
+export function Tabs(inputProps: TabsProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    tabs,
+    overflowMenu = false,
+    more,
+    layout,
+    ...props
+  } = useGuiKitLayout(inputProps);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -128,7 +132,7 @@ export function Tabs({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout kind={LAYOUT_COLUMN} {...layout} />
+      <KitLayout kind={LAYOUT_COLUMN} {...layout} />
       {!parentSurface && <Skin theme={kit.theme("tabSurface")} />}
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>

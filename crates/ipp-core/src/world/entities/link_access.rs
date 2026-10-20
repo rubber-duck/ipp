@@ -57,6 +57,7 @@ impl SystemRuntimeAccess<'_> {
             Some(current),
             self.asset_acquisition,
             self.data,
+            self.web_content,
             true,
         );
         validation.and(committed)

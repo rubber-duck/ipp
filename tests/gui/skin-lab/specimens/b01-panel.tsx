@@ -163,8 +163,10 @@ export default defineSpecimen({
                 {lines("panel/events", "PULSE SENT", "GAIN UPDATED")}
               </Children>
             </Entity>
-            <PanelFooter id="panel/footer">
-              <TextLine id="panel/count" text="2 EVENTS" layout={{ flex: 1 }} />
+            <PanelFooter
+              id="panel/footer"
+              leading={<TextLine id="panel/count" text="2 EVENTS" />}
+            >
               <SecondaryButton id="panel/clear" label="CLEAR" />
             </PanelFooter>
           </Panel>

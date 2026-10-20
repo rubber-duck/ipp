@@ -501,7 +501,7 @@ pub const MAX_GUI_TEXT_BYTES: usize = 65_536;
 pub(in crate::world::systems::gui) const CONTROL_REQUIREMENTS: [u16; 2] =
     [ComponentValue::GUI_BEHAVIOR, ComponentValue::CANVAS_BOUNDS];
 
-pub(in crate::world::systems::gui) const CONTROL_COMPONENTS: [u16; 7] = [
+pub(in crate::world::systems::gui) const CONTROL_COMPONENTS: [u16; 8] = [
     ComponentValue::GUI_BUTTON,
     ComponentValue::GUI_CHECKBOX,
     ComponentValue::GUI_SLIDER,
@@ -509,6 +509,7 @@ pub(in crate::world::systems::gui) const CONTROL_COMPONENTS: [u16; 7] = [
     ComponentValue::GUI_SCROLL_VIEW,
     ComponentValue::GUI_VIRTUAL_LIST,
     ComponentValue::GUI_COLOR,
+    ComponentValue::GUI_INPUT_TARGET,
 ];
 
 pub(super) fn bounded_text(text: &str) -> Result<(), ErrorReason> {

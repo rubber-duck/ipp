@@ -31,6 +31,7 @@ impl HostRuntime {
                 .expect("valid compiled factory graph"),
             io: crate::services::io::IoService::new(),
             data: crate::services::data::DataService::new(),
+            web_content: Default::default(),
             assets: crate::services::asset_management::service::AssetManagementService::new(),
             topology: Default::default(),
             publications: Default::default(),
@@ -213,6 +214,7 @@ impl HostRuntime {
             &mut self.io,
             &mut self.data,
             &mut self.topology,
+            &mut self.web_content,
         );
         context.publications = Some(&self.publications);
         Some(context)
@@ -233,6 +235,7 @@ impl HostRuntime {
         let Some(mut world) = self.worlds.remove(&id) else {
             return false;
         };
+        self.web_content.invalidate_world(world.runtime_ref());
         self.topology.destroy(id);
         self.publications.latest.remove(&id);
         for entry in self.publications.completed.values_mut() {

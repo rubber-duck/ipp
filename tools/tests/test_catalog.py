@@ -136,6 +136,30 @@ class CatalogTests(unittest.TestCase):
             ["check:gles-retained-gui"],
         )
 
+    def test_cef_selection_is_narrow_and_full_group_includes_its_checks(self):
+        ids, _ = affected(["crates/ipp-render-gl/src/lib.rs"], ["surfaces"])
+        self.assertNotIn("test:cef-surface:native", ids)
+        for path in (
+            "tests/rendering/cef/driver.rs",
+            "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/copy.rs",
+            "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/copy.frag",
+            "crates/ipp-render-gl/src/services/render/device/gles/completion_fences.rs",
+            "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.vert",
+            "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.frag",
+            "crates/ipp-render-gl/examples/smoke/egl.rs",
+        ):
+            with self.subTest(path=path):
+                ids, _ = affected([path], [])
+                self.assertIn("test:cef-surface:native", ids)
+        expected = {
+            "test:cef-surface:native",
+            "check:cef-format",
+            "check:cef-clippy",
+            "check:cef-cache",
+        }
+        self.assertTrue(expected.issubset(regression_group_ids(["cef"])))
+        self.assertTrue(expected.issubset(regression_ids(catalog(), full=True)))
+
     def test_catalog_rejects_invalid_gles_source_roots(self):
         for root in ("../outside.rs", "crates/ipp-render-gl/examples/missing.rs"):
             with (

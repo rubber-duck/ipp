@@ -245,7 +245,8 @@ fn control_text(
                 control.text.clone()
             }
         }),
-        GuiControlKind::Slider
+        GuiControlKind::InputTarget
+        | GuiControlKind::Slider
         | GuiControlKind::ScrollView
         | GuiControlKind::VirtualList
         | GuiControlKind::Color => None,

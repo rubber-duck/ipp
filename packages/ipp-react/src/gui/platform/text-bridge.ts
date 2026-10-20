@@ -66,6 +66,8 @@ export interface TextBridgeCommitted {
   readonly composing?: boolean;
   /** Mask native presentation while preserving the editable Unicode buffer. */
   readonly masked?: boolean;
+  /** The native buffer captures input without an editable core value. */
+  readonly clientInput?: boolean;
   /** Runtime fence stamped on edits made against this text. */
   readonly fence?: GuiTextFence;
 }
@@ -78,6 +80,7 @@ export function stampTextFence(
 ): BrowserGuiInputCommand {
   if (fence === undefined) return command;
   switch (command.kind) {
+    case "clientInput":
     case "text":
     case "selection":
     case "composition":
@@ -105,6 +108,8 @@ export interface TextBridgeOptions {
   readonly onLocalSelection?: (selection: TextBridgeLocalSelection) => void;
   /** `inputmode` for soft keyboards; defaults to `"text"`. */
   readonly inputMode?: string;
+  /** Transfer native focus to an authorized client DOM editor without blurring core. */
+  readonly retainFocus?: (target: EventTarget | null) => boolean;
 }
 
 export interface TextBridgeHandle {
@@ -308,6 +313,7 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
       return {
         text: current.text,
         masked: current.masked,
+        ...(current.clientInput ? { clientInput: true } : {}),
         caretUtf8: clampUtf8Offset(current.text, current.selectionEnd),
         anchorUtf8: clampUtf8Offset(current.text, current.selectionStart),
         fence: textFenceOf(current),
@@ -461,11 +467,58 @@ export function attachTextBridge(
     }
   };
 
+  const sendClientKey = (event: KeyboardEvent, pressed: boolean) => {
+    send(
+      stampTextFence(
+        {
+          kind: "clientInput",
+          input: {
+            kind: "key",
+            key: event.key,
+            code: event.code || event.key,
+            modifiers:
+              (event.shiftKey ? 1 : 0) |
+              (event.ctrlKey ? 2 : 0) |
+              (event.altKey ? 4 : 0) |
+              (event.metaKey ? 8 : 0),
+            repeat: event.repeat,
+            pressed,
+          },
+        },
+        readCommitted?.()?.fence,
+      ),
+    );
+  };
+  const onKeyUp = (event: KeyboardEvent): void => {
+    if (
+      !disposed &&
+      readCommitted?.()?.clientInput &&
+      !isComposingKeyEvent(event) &&
+      !ime.isComposing()
+    )
+      sendClientKey(event, false);
+  };
   const onKeyDown = (event: KeyboardEvent): void => {
     if (disposed) return;
     // Keys during composition belong to the IME: Enter confirming a
     // candidate must not submit, and arrows move within the candidate.
     if (isComposingKeyEvent(event) || ime.isComposing()) return;
+    if (readCommitted?.()?.clientInput) {
+      // Printable text and IME use beforeinput; command keys use Ghostty's encoder.
+      if (
+        !event.ctrlKey &&
+        !event.altKey &&
+        !event.metaKey &&
+        [...event.key].length === 1
+      )
+        return;
+      // Keep the platform paste gesture; the paste listener sends its fenced payload.
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v")
+        return;
+      event.preventDefault();
+      sendClientKey(event, true);
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       send({ kind: "key", key: "selectAll" });
@@ -497,7 +550,13 @@ export function attachTextBridge(
   let lastSentSelection: TextBridgeLocalSelection | null = null;
 
   const onSelect = (): void => {
-    if (disposed || suppressSelection || ime.isComposing()) return;
+    if (
+      disposed ||
+      suppressSelection ||
+      ime.isComposing() ||
+      readCommitted?.()?.clientInput
+    )
+      return;
     if (document.activeElement !== null && document.activeElement !== area) {
       return;
     }
@@ -534,8 +593,13 @@ export function attachTextBridge(
     send({ kind: "selection", start, end });
   };
 
-  const onBlur = (): void => {
-    if (disposed || suppressSelection) return;
+  const onBlur = (event: FocusEvent): void => {
+    if (
+      disposed ||
+      suppressSelection ||
+      options.retainFocus?.(event.relatedTarget)
+    )
+      return;
     ime.blur();
     send({ kind: "blur" });
   };
@@ -551,12 +615,37 @@ export function attachTextBridge(
         report(new Error("Clipboard text exceeds the ingress bound"));
         return;
       }
-      send({ kind: "text", text });
+      send(
+        readCommitted?.()?.clientInput
+          ? stampTextFence(
+              {
+                kind: "clientInput",
+                input: { kind: "text", text, paste: true },
+              },
+              readCommitted?.()?.fence,
+            )
+          : { kind: "text", text },
+      );
       return;
     }
-    const fence = readCommitted?.()?.fence;
+    const committed = readCommitted?.();
+    const fence = committed?.fence;
+    const pasteSink = sinkFencedAt(fence);
     void pasteClipboardToFocusedInput(
-      sinkFencedAt(fence),
+      committed?.clientInput
+        ? {
+            send(command) {
+              pasteSink.send(
+                command.kind === "text"
+                  ? {
+                      kind: "clientInput",
+                      input: { kind: "text", text: command.text, paste: true },
+                    }
+                  : command,
+              );
+            },
+          }
+        : pasteSink,
       resolveClipboardReader(),
       {
         ...(getFocusToken === undefined ? {} : { getFocusToken }),
@@ -601,6 +690,7 @@ export function attachTextBridge(
 
   area.addEventListener("beforeinput", onBeforeInput as EventListener);
   area.addEventListener("keydown", onKeyDown as EventListener);
+  area.addEventListener("keyup", onKeyUp as EventListener);
   area.addEventListener("compositionstart", onCompositionStart);
   area.addEventListener("compositionupdate", onCompositionUpdate);
   area.addEventListener("compositionend", onCompositionEnd);
@@ -702,6 +792,7 @@ export function attachTextBridge(
       disposed = true;
       area.removeEventListener("beforeinput", onBeforeInput as EventListener);
       area.removeEventListener("keydown", onKeyDown as EventListener);
+      area.removeEventListener("keyup", onKeyUp as EventListener);
       area.removeEventListener("compositionstart", onCompositionStart);
       area.removeEventListener("compositionupdate", onCompositionUpdate);
       area.removeEventListener("compositionend", onCompositionEnd);

@@ -790,3 +790,88 @@ fn camera_domain_discovers_canvas_slots_but_not_unattached_canvases() {
         [nested, panel, root]
     );
 }
+
+#[test]
+fn web_cache_dependencies_follow_authority_not_frame_order_or_known_absence() {
+    use ipp_core::components::CanvasHtml;
+    use ipp_core::services::web_content::WebContentImageDescription;
+
+    let mut host = HostRuntime::new();
+    let output = canvas(&mut host);
+    let first_source = host.web_content_mut().register_source("first");
+    host.web_content_mut().register_source("second");
+    for source in ["first", "second"] {
+        create(
+            &mut host,
+            output.world().id(),
+            None,
+            vec![ComponentValue::CanvasHtml(CanvasHtml {
+                source: source.into(),
+                width: 20.0,
+                height: 20.0,
+            })],
+        );
+    }
+    frame(&mut host);
+    let requests: Vec<_> = host
+        .web_content()
+        .requests()
+        .map(|request| request.id)
+        .collect();
+    for request in &requests {
+        let image = host
+            .web_content_mut()
+            .reserve_image(
+                *request,
+                WebContentImageDescription {
+                    pixel_size: [20, 20],
+                },
+            )
+            .unwrap();
+        host.web_content_mut()
+            .complete_image(*request, image)
+            .unwrap();
+    }
+    frame(&mut host);
+    let first = OutputContentStamp::read(
+        &host,
+        output,
+        host.latest_publication(output.world().id()).unwrap(),
+    )
+    .unwrap();
+    // Update only the first image. Sorted image IDs now reverse the authorities'
+    // order, but both sources and component lifetimes remain unchanged.
+    let image = host
+        .web_content_mut()
+        .reserve_image(
+            requests[0],
+            WebContentImageDescription {
+                pixel_size: [20, 20],
+            },
+        )
+        .unwrap();
+    host.web_content_mut()
+        .complete_image(requests[0], image)
+        .unwrap();
+    frame(&mut host);
+    let second = OutputContentStamp::read(
+        &host,
+        output,
+        host.latest_publication(output.world().id()).unwrap(),
+    )
+    .unwrap();
+    assert_ne!(first, second);
+    assert!(first.same_dependencies(&second));
+    host.web_content_mut().revoke_source(first_source);
+    // No evaluation is required for mandatory cached-pixel revocation.
+    let unavailable = OutputContentStamp::read(
+        &host,
+        output,
+        host.latest_publication(output.world().id()).unwrap(),
+    )
+    .unwrap();
+    assert!(!first.same_dependencies(&unavailable));
+    assert!(!second.same_dependencies(&unavailable));
+    assert!(unavailable.web_images_valid());
+    assert!(unavailable.same_dependencies(&unavailable));
+}

@@ -221,6 +221,8 @@ export interface ConnectOptions {
 /** Worker connection transfers the optional canvas to its owning runtime host. */
 export interface WorkerConnectOptions extends ConnectOptions {
   canvas?: OffscreenCanvas;
+  /** DOM owner of the transferred presentation canvas for static HTML capture. */
+  htmlCanvas?: HTMLCanvasElement;
   /**
    * Soft target in bytes for completed assets the Host keeps after their last
    * consumer. Omitted keeps the Host default (64 MiB); 0 evicts on release.

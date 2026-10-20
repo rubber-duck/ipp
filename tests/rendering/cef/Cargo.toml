@@ -1,0 +1,15 @@
+[package]
+name = "ipp-cef-surface-prototype"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ipp-cef-surface-prototype"
+path = "driver.rs"
+
+[dependencies]
+cef = { version = "=154.5.0", default-features = false }
+ipp-render-gl = { path = "../../../crates/ipp-render-gl" }
+
+[workspace]

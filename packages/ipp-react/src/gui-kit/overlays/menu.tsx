@@ -1,3 +1,13 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A menu: the command rows of a light overlay, such as a context menu or an
@@ -24,13 +34,7 @@ import { Behavior, Group, Layout, Style, Text } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { GROUP_VERTICAL } from "../choice.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import type { OverlayOpen } from "./overlay.js";
 import { Separator } from "../separator.js";
 import { TextLine, lineWidth } from "../text.js";
@@ -49,7 +53,7 @@ export interface MenuItem {
   readonly separator?: boolean;
 }
 
-export interface MenuProps {
+export interface MenuProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
@@ -59,7 +63,6 @@ export interface MenuProps {
   readonly overlay?: OverlayOpen;
   /** A command was activated: its key. */
   readonly onSelect?: (key: string) => void;
-  readonly layout?: GuiKitLayout;
 }
 
 /** The narrowest menu, at the tokens' `em`: four control heights. */
@@ -92,14 +95,15 @@ function geometry(kit: GuiKitScope, items: readonly MenuItem[]) {
   };
 }
 
-export function Menu({
-  id: providedId,
-  layer = 0,
-  items,
-  overlay,
-  onSelect,
-  layout,
-}: MenuProps) {
+export function Menu(props: MenuProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    items,
+    overlay,
+    onSelect,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit, items);
@@ -116,7 +120,7 @@ export function Menu({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         width={g.width}
         height={g.height}

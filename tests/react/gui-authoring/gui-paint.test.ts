@@ -367,7 +367,7 @@ for (const variant of native || instrumentation
       }
       if (result.value.components) {
         assert.equal(result.value.widgets?.failure, null);
-        assert.equal(result.value.widgets?.images.length, 8);
+        assert.equal(result.value.widgets?.images.length, 12);
         assert.equal(result.value.retention?.failure, null);
         assert.equal(result.value.retention?.images.length, 3);
         assert.equal(result.value.fields?.failure, null);

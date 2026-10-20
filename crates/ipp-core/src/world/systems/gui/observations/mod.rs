@@ -36,6 +36,8 @@ pub enum GuiObservationClasses {
     Feedback,
     /// Both classes, in their single World commit order.
     All,
+    /// Exclusive input and focus feedback for one exact client-managed target.
+    Input(super::local::GuiEntityTarget),
 }
 
 /// Opaque output lifetime and subscription generation, unrelated to input sessions.

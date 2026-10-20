@@ -1,6 +1,10 @@
 //! Immutable evaluated chunks, explicit output producers and exact resource leases.
 
 use crate::services::asset_management::{AssetKey, AssetPublicationId};
+use crate::services::web_content::{
+    WebContentImageDescription, WebContentImageId, WebContentImageValidity,
+    WebContentPublicationLease,
+};
 use crate::systems::SystemId;
 use crate::{EntityId, ErrorReason, OutputRef, WorldAttachmentMode, WorldRef};
 use std::{
@@ -94,6 +98,7 @@ pub struct WorldPublication {
     pub(crate) chunks: BTreeMap<SystemId, WorldDerivedChunk>,
     pub(crate) outputs: BTreeMap<OutputRef, WorldDerivedChunk>,
     pub(crate) resources: BTreeSet<AssetKey>,
+    pub(crate) web_images: BTreeSet<WebContentImageId>,
 }
 
 impl WorldPublication {
@@ -120,6 +125,7 @@ pub struct WorldOutputBuilder<'a> {
     pub(crate) chunks: BTreeMap<SystemId, WorldDerivedChunk>,
     pub(crate) outputs: BTreeMap<OutputRef, WorldDerivedChunk>,
     pub(crate) resources: BTreeSet<AssetKey>,
+    pub(crate) web_images: BTreeSet<WebContentImageId>,
 }
 
 impl WorldOutputBuilder<'_> {
@@ -146,6 +152,11 @@ impl WorldOutputBuilder<'_> {
         self.resources.insert(resource);
     }
 
+    /// Retain one exact immutable web image in this completed output.
+    pub fn retain_web_image(&mut self, image: WebContentImageId) {
+        self.web_images.insert(image);
+    }
+
     fn share<T: Any + Send + Sync + PartialEq>(
         previous: Option<&WorldDerivedChunk>,
         version: u64,
@@ -164,6 +175,7 @@ impl WorldOutputBuilder<'_> {
 pub(crate) struct RetainedPublication {
     pub data: WorldPublication,
     pub lease: AssetPublicationId,
+    pub web_lease: WebContentPublicationLease,
     pub available: bool,
     pub readers: std::rc::Rc<()>,
 }
@@ -289,6 +301,45 @@ impl super::HostRuntime {
         self.assets.publication_resource(entry.lease, resource)
     }
 
+    /// Validate exact image authority under a still-available publication lease.
+    pub fn publication_web_image(
+        &self,
+        publication: WorldPublicationId,
+        image: WebContentImageId,
+    ) -> Option<WebContentImageDescription> {
+        let entry = self
+            .publications
+            .completed
+            .get(&publication)
+            .filter(|entry| entry.available)?;
+        self.web_content.publication_image(entry.web_lease, image)
+    }
+
+    /// Obtain a revocation witness under an exact, still-available publication
+    /// lease. The witness can outlive ordinary publication and image retirement.
+    pub fn publication_web_image_validity(
+        &self,
+        publication: WorldPublicationId,
+        image: WebContentImageId,
+    ) -> Option<WebContentImageValidity> {
+        let entry = self
+            .publications
+            .completed
+            .get(&publication)
+            .filter(|entry| entry.available)?;
+        self.web_content
+            .publication_image_validity(entry.web_lease, image)
+    }
+
+    /// Exact selected image identities, including images since revoked or lost.
+    /// Render cache stamps must pair each identity with its current validity.
+    pub fn publication_web_images(
+        &self,
+        publication: WorldPublicationId,
+    ) -> Option<&BTreeSet<WebContentImageId>> {
+        Some(&self.publication(publication)?.web_images)
+    }
+
     pub(crate) fn invalidate_publication_resources(
         &mut self,
         event: &crate::services::asset_management::AssetLifecycleEvent,
@@ -352,6 +403,7 @@ impl super::HostRuntime {
         for id in retired {
             if let Some(entry) = self.publications.completed.remove(&id) {
                 self.assets.release_publication(entry.lease);
+                self.web_content.release_publication(entry.web_lease);
             }
         }
         let published_tokens = self

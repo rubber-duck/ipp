@@ -8,6 +8,7 @@ pub mod lifecycle_watch;
 pub mod view_queries;
 
 mod animation;
+mod client_input;
 mod lifecycle;
 mod requests;
 mod responses;

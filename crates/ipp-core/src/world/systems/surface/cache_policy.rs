@@ -41,6 +41,8 @@ pub struct SurfaceCachePolicy {
     pub direct_distance: f32,
     /// Multiplier of projected device-pixel demand; 1 matches presentation density.
     pub resolution_scale: f32,
+    /// Positive finite multiplier of projected screen coverage for image allocation.
+    pub allocation_priority: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
     /// Optional authored image dimension cap; zero retains device/renderer limits.
@@ -52,17 +54,21 @@ pub struct SurfaceCachePolicy {
 impl SurfaceCachePolicy {
     /// Validate an authored component: a finite direct distance in
     /// `0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE`, and positive finite resolution scale
-    /// and refresh values no larger than their maxima.
+    /// and refresh values no larger than their maxima. Allocation priority must
+    /// be positive and finite; it changes rank, never the requested resolution.
     pub fn new(component: &SurfaceCache) -> Result<Self, ErrorReason> {
         let SurfaceCache {
             direct_distance,
             resolution_scale,
+            allocation_priority,
             max_refresh_hz,
             max_texture_size,
             force_cache,
         } = *component;
         if !(0.0..=SURFACE_CACHE_MAX_DIRECT_DISTANCE).contains(&direct_distance)
             || !(resolution_scale > 0.0 && resolution_scale <= SURFACE_CACHE_MAX_RESOLUTION_SCALE)
+            || !allocation_priority.is_finite()
+            || allocation_priority <= 0.0
             || !(max_refresh_hz > 0.0 && max_refresh_hz <= SURFACE_CACHE_MAX_REFRESH_HZ)
         {
             return Err(ErrorReason::InvalidValue);
@@ -71,6 +77,7 @@ impl SurfaceCachePolicy {
         Ok(Self {
             direct_distance,
             resolution_scale,
+            allocation_priority,
             max_refresh_hz,
             max_texture_size,
             force_cache,

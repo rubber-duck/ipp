@@ -9,6 +9,8 @@ import type {
 import type { GallerySceneInput } from "../../shared/scene.js";
 import { cameraForward, cameraRayAngle, type Pose } from "./placement.js";
 
+import { COCKPIT_PANE_COUNT } from "./options.js";
+
 const WHEEL_LOGICAL_UNITS_PER_PANE = 160;
 
 interface Grab {
@@ -163,7 +165,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
       const focus = Math.max(
         0,
         Math.min(
-          2,
+          COCKPIT_PANE_COUNT - 1,
           (this.wheelIntent ?? this.controls.focus()) +
             delta / WHEEL_LOGICAL_UNITS_PER_PANE,
         ),

@@ -1,0 +1,10 @@
+{
+  "credit": "The Hipparcos and Tycho Catalogues (ESA 1997), CDS I/239",
+  "catalogue": "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239",
+  "query": "https://vizier.cds.unistra.fr/viz-bin/asu-tsv?-source=I/239/hip_main&Vmag=%3C6&-out=HIP,RAICRS,DEICRS,Vmag,B-V&-out.max=10000",
+  "selection": "Johnson V magnitude < 6; ICRS positions, epoch J1991.25",
+  "processing": "Rows without positions omitted; positions rounded to 0.00001 degree; missing B-V defaults to 0.65. Runtime exposure is artistic, not photometric calibration.",
+  "rows": 4992,
+  "sourceSha256": "5396a0fa8301639c5566fb3ccd8453749015783a2744f30439e983cbf6e44340",
+  "preparedSha256": "c20cb410391880d84d1967b86ebb5993981261b8c1d03f83a497583cc0b27df4"
+}

@@ -52,6 +52,7 @@ struct CanvasPatchOutput {
     interaction: [i64; 4],
     /// A replaced entry changed the resource it retains.
     resources: bool,
+    web_images: bool,
     /// A replaced entry changed the paint it names.
     paint_targets: bool,
     layout: bool,
@@ -285,6 +286,8 @@ impl CanvasSystem {
                 continue;
             }
             output.resources |= resource(before) != resource(after);
+            output.web_images |=
+                super::web_content::image(before) != super::web_content::image(after);
             output.paint_targets |= entry_paint(before) != entry_paint(after);
             output.entries.push((at, after.clone()));
         }
@@ -420,6 +423,11 @@ impl CanvasSystem {
         .then(|| retained_resources(current, &paints))
         .filter(|resources| *resources != previous.resources);
 
+        let web_images = output
+            .web_images
+            .then(|| super::web_content::retained_images(current))
+            .filter(|images| *images != previous.web_images);
+
         let view = self.state.gui.view().expect("patched canvas view");
         let changed_input =
             !output.hits.is_empty() || !output.controls.is_empty() || !output.overlays.is_empty();
@@ -466,6 +474,7 @@ impl CanvasSystem {
                 interaction: self.state.walk.priority(),
                 paints: changed_paints.then(|| paints.into()),
                 resources,
+                web_images,
             },
         );
         if let Some((controls, overlays)) = observations {

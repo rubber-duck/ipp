@@ -2,9 +2,8 @@ import {
   Button,
   Dropdown,
   LabelledSlider,
-  PanelBody,
+  Field,
   Toolbar,
-  TextLine,
 } from "@ipp/react/gui-kit";
 import type { GallerySceneControlsProps } from "./scene.js";
 
@@ -33,17 +32,15 @@ export function SceneChoice({
   change(value: string): void | Promise<void>;
 }) {
   return (
-    <PanelBody id={`${id}/field`} padding={0}>
-      <TextLine id={`${id}/label`} text={label} tone="accent" />
+    <Field id={`${id}/field`} label={label}>
       <Dropdown
         id={id}
         label={label}
         value={value}
         options={choices}
         onChange={change}
-        layout={{ width: -1 }}
       />
-    </PanelBody>
+    </Field>
   );
 }
 
@@ -74,7 +71,7 @@ export function SceneSlider({
       step={step}
       onChange={change}
       bounds={false}
-      layout={{ width: -1 }}
+      width={-1}
     />
   );
 }

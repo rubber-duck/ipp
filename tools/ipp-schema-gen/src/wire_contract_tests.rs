@@ -56,7 +56,9 @@ fn animation_transition_tag_spaces_are_known_by_id_and_name() {
         assert_eq!(tag_space_name(id).unwrap(), name);
         assert!(is_tag_space_name(name));
     }
-    assert!(tag_space_name(67).is_err());
+    assert_eq!(tag_space_name(67).unwrap(), "gui-client-input");
+    assert!(is_tag_space_name("gui-client-input"));
+    assert!(tag_space_name(68).is_err());
     assert!(!is_tag_space_name("animation-transition-unknown"));
     assert!(!is_tag_space_name("lifecycle-watch-unknown"));
 }

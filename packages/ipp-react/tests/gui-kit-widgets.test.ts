@@ -7,10 +7,12 @@ import {
   Switch,
   TextField,
   Column,
-  Stack,
+  OverlayStack,
   Row,
   TextLine,
   Autocomplete,
+  Dropdown,
+  NumericStepper,
   Popover,
   Dialog,
   LabelledSlider,
@@ -174,7 +176,7 @@ test("complete widgets own their entities, fonts, layout and native handles", as
         error: "Required",
       }),
       h(
-        Stack,
+        OverlayStack,
         { id: "stack", height: 30 },
         h(TextLine, { id: "line", text: "Ready" }),
       ),
@@ -192,10 +194,11 @@ test("complete widgets own their entities, fonts, layout and native handles", as
     world.fields("name/input", "GuiBehavior").get("semantic_label"),
     "Name",
   );
-  assert.deepEqual(world.children("name"), [
-    "name/label",
+  assert.deepEqual(world.children("name"), ["name/field"]);
+  assert.deepEqual(world.children("name/field"), [
+    "name/field/label",
     "name/row",
-    "name/error",
+    "name/field/error",
   ]);
   assert.equal(world.fields("stack", "GuiLayout").get("kind"), 3);
   await root.unmount();
@@ -576,4 +579,84 @@ test("intrinsic kit containers author fit flags and reset named omission default
   assert.equal(world.fields("fit-column", "GuiLayout").get("fit_width"), false);
   for (const id of ["fit-field", "fit-popover", "fit-popover/trigger"])
     assert.equal(world.fields(id, "GuiLayout").get("fit_height"), true);
+});
+
+test("named layout props share logical units, skin spacing, raw precedence and omission resets", async () => {
+  const scene = (configured: boolean) =>
+    h(
+      Column,
+      { gap: "section" },
+      h(Dropdown, {
+        id: "layout-select",
+        options: [{ key: "a", label: "A" }],
+        ...(configured
+          ? {
+              width: 180,
+              minWidth: 100,
+              padding: "compact" as const,
+              layout: { width: 160 },
+            }
+          : {}),
+      }),
+      h(NumericStepper, {
+        id: "layout-number",
+        min: 0,
+        max: 10,
+        ...(configured ? { width: 180, margin: "label" as const } : {}),
+      }),
+      h(TextLine, {
+        id: "layout-text",
+        text: "Caption",
+        ...(configured ? { width: 180, maxWidth: 200 } : {}),
+      }),
+      h(Popover, {
+        id: "layout-popup",
+        label: "Open",
+        title: "Options",
+        width: 100,
+        contentWidth: 260,
+      }),
+    );
+  const { world, root, draw } = await render(scene(true), { fontSize: 32 });
+  const select = world.entity("layout-select");
+  try {
+    assert.equal(world.fields("layout-select", "GuiLayout").get("width"), 160);
+    assert.equal(
+      world.fields("layout-select", "GuiLayout").get("min_width"),
+      100,
+    );
+    assert.equal(
+      world.fields("layout-select", "GuiLayout").get("padding_left"),
+      8,
+    );
+    assert.equal(world.fields("layout-number", "GuiLayout").get("width"), 180);
+    assert.equal(
+      world.fields("layout-number", "GuiLayout").get("margin_left"),
+      16,
+    );
+    assert.equal(world.fields("layout-text", "GuiLayout").get("width"), 180);
+    assert.equal(world.fields("layout-popup", "GuiLayout").get("width"), 100);
+    assert.equal(
+      world.fields("layout-popup/popover", "GuiLayout").get("width"),
+      260,
+    );
+    await draw(scene(false));
+    assert.equal(world.entity("layout-select"), select);
+    assert.equal(world.fields("layout-select", "GuiLayout").get("width"), 480);
+    assert.equal(
+      world.fields("layout-select", "GuiLayout").get("min_width"),
+      0,
+    );
+    assert.equal(
+      world.fields("layout-select", "GuiLayout").get("padding_left"),
+      32,
+    );
+    assert.equal(
+      world.fields("layout-number", "GuiLayout").get("margin_left"),
+      0,
+    );
+    assert.equal(world.fields("layout-text", "GuiLayout").get("max_width"), -1);
+  } finally {
+    await root.unmount();
+  }
 });

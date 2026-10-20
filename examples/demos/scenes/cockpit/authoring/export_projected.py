@@ -1,21 +1,21 @@
-"""Export supported opaque textures, meshes and the cockpit runtime metadata.
+"""Export scene meshes, RGBA material inputs and cockpit runtime metadata.
 
 blender -b cockpit-projected.blend --python export_projected.py -- OUTPUT_DIRECTORY
 """
 
 import json
-import runpy
 import sys
 from pathlib import Path
 
 import bpy
+import numpy as np
 
 AUTHORING = Path(__file__).resolve().parent
 REPOSITORY = AUTHORING.parents[4]
 
 
 def export():
-    scene = bpy.data.scenes.get("Cockpit projected presentation")
+    scene = bpy.data.scenes.get("Cockpit spatial bridge")
     if scene is None:
         raise RuntimeError(
             "Run project_cockpit.py before exporting the projected cockpit"
@@ -23,12 +23,13 @@ def export():
     bpy.context.window.scene = scene
     output = Path(sys.argv[sys.argv.index("--") + 1])
     anchors = json.loads((AUTHORING / "cockpit-projected-anchors.json").read_text())
-    lights = runpy.run_path(str(AUTHORING / "projected_lights.py"))
     carriers = []
     bodies = []
     exterior_carriers = []
     exterior_bodies = []
     material_copies = {}
+    apertures = {}
+    planetary_layers = {}
     for obj in scene.objects:
         if obj.get("cockpit_preview_only"):
             obj.hide_render = True
@@ -42,8 +43,11 @@ def export():
             (exterior_carriers if obj.get("exterior_layer") else carriers).append(
                 obj.name
             )
+        elif obj.get("environment_role"):
+            obj.hide_render = False
+            exterior_bodies.append(obj.name)
         elif not obj.get("additive_layer"):
-            (exterior_bodies if obj.get("exterior_body") else bodies).append(obj.name)
+            bodies.append(obj.name)
         for slot in obj.material_slots:
             original = slot.material
             if original.name not in material_copies:
@@ -51,6 +55,35 @@ def export():
                 image = bsdf.inputs["Base Color"].links[0].from_node.image
                 if image.colorspace_settings.name != "sRGB" or image.is_float:
                     raise ValueError(f"Unsupported export image: {image.name}")
+                if obj.get("cloud_map"):
+                    width, height = image.size
+                    pixels = np.empty(width * height * 4, np.float32)
+                    image.pixels.foreach_get(pixels)
+                    clouds = bpy.data.images.load(
+                        str(AUTHORING / obj["cloud_map"]), check_existing=True
+                    )
+                    if tuple(clouds.size) != (width, height):
+                        raise ValueError("Earth surface and cloud extents must match")
+                    coverage = np.empty(width * height * 4, np.float32)
+                    clouds.pixels.foreach_get(coverage)
+                    pixels.reshape(-1, 4)[:, 3] = coverage.reshape(-1, 4)[:, 0]
+                    apertures[obj.name] = (width, height, pixels)
+                    planetary_layers[obj.name] = [width, height]
+                    image = bpy.data.images.new("Earth export placeholder", 1, 1)
+                    image.pixels[:] = (0.1, 0.1, 0.1, 1)
+                elif obj.get("environment_role") == "atmosphere":
+                    # The analytic atmosphere never samples its export carrier.
+                    image = bpy.data.images.new("Atmosphere placeholder", 1, 1)
+                    image.pixels[:] = (0.1, 0.1, 0.1, 1)
+                elif obj.get("environment_role") == "bridge" or obj.get("alpha_cutout"):
+                    # The standard Blender material is opaque. Preserve RGBA for
+                    # the app-owned cutout shader in a separate texture input.
+                    width, height = image.size
+                    pixels = np.empty(width * height * 4, np.float32)
+                    image.pixels.foreach_get(pixels)
+                    apertures[obj.name] = (width, height, pixels.copy())
+                    image = bpy.data.images.new("Opaque export placeholder", 1, 1)
+                    image.pixels[:] = (0.1, 0.1, 0.1, 1)
                 material = bpy.data.materials.new(original.name + " export")
                 material.use_nodes = True
                 material["ipp_unlit"] = True
@@ -63,66 +96,91 @@ def export():
                 )
                 material_copies[original.name] = material
             slot.material = material_copies[original.name]
-    runpy.run_path(
-        str(REPOSITORY / "integrations/blender/export_scene.py"), run_name="__main__"
-    )
-    snapshot = json.loads((output / "scene.json").read_text())["scene"]
-    if snapshot["diagnostics"]:
-        raise RuntimeError(f"Cockpit export diagnostics: {snapshot['diagnostics']}")
+    sys.path.insert(0, str(REPOSITORY / "integrations/blender"))
+    from ipp_blender.exporter import export_scene
+    from ipp_blender.asset_store import AssetStore
+    from ipp_blender.assets import texture_asset
+
+    output.mkdir(parents=True, exist_ok=True)
+    store = AssetStore(output / "assets")
+    snapshot = export_scene(store.publish)
+    unsupported = [d for d in snapshot["diagnostics"] if d["code"] != "modifiers-baked"]
+    if unsupported:
+        raise RuntimeError(f"Cockpit export diagnostics: {unsupported}")
     entities = {entity["id"]: entity for entity in snapshot["entities"]}
-    textures = {}
-    for record in anchors["lights"]:
-        if "category" in record:
-            category = ("cabin", "dashboard", "cyan")[record["category"]]
-            textures[category] = entities[record["id"]]["texture"]["source"]
-    zones = []
-    for name, category, (x0, y0, x1, y1), _, surface in lights["ZONES"]:
-        zones.append(
-            {
-                "name": name,
-                "rect": [
-                    x0 / lights["WIDTH"],
-                    y0 / lights["HEIGHT"],
-                    x1 / lights["WIDTH"],
-                    y1 / lights["HEIGHT"],
-                ],
-                "group": "cabin"
-                if category == 0
-                else "dashboard"
-                if category == 1
-                else "dials"
-                if surface == "dial"
-                else "buttons",
-                "texture": ("cabin", "dashboard", "cyan")[category],
-            }
+    aperture_sources = {}
+    for name, (width, height, pixels) in apertures.items():
+        rgba = np.rint(
+            np.clip(pixels.reshape(height, width, 4)[::-1], 0, 1) * 255
+        ).astype(np.uint8)
+        aperture_sources[name] = store.publish(
+            texture_asset(width, height, rgba.tobytes())
         )
+    (output / "scene.json").write_text(
+        json.dumps(
+            {
+                "type": "snapshot",
+                "session": store.session,
+                "revision": 1,
+                "scene": snapshot,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+    (output / "catalog.json").write_text(
+        json.dumps(
+            {
+                name: {"bytes": size, "contentType": content_type}
+                for name, (_, size, content_type) in store.entries.items()
+            },
+            indent=2,
+        )
+        + "\n"
+    )
     metadata = {
-        "reference": {"width": lights["WIDTH"], "height": lights["HEIGHT"]},
+        "reference": {"width": 1672, "height": 941},
         "camera": {"entity": "cockpit-camera", "locked": True},
         "surfaces": anchors["surfaces"],
+        "bridge": {
+            "entity": anchors["exterior"]["bridge"],
+            "carouselMount": anchors["exterior"]["mount"],
+            "paneExtent": anchors["exterior"]["paneExtent"],
+            "paneElevation": anchors["exterior"]["paneElevation"],
+        },
         "lighting": {
             "uvOrigin": "top-left",
-            "encoding": "sRGB-encoded positive linear RGB emission",
+            "encoding": "sRGB console with authored lamp regions and alpha silhouette",
             "bodies": [
-                {"entity": name, "baseTexture": entities[name]["texture"]["source"]}
+                {"entity": name, "baseTexture": aperture_sources[name]}
                 for name in bodies
             ],
-            "textures": textures,
-            "zones": zones,
+            "zones": anchors["console"]["zones"],
             "carrierEntityNames": carriers,
         },
         "exterior": {
+            "planetMap": {
+                "dimensions": planetary_layers[anchors["exterior"]["planet"]],
+                "surface": "NASA Blue Marble Next Generation, July 2004",
+                "clouds": "NASA Blue Marble, 2002",
+                "cities": "NASA Black Marble, 2016",
+            },
             "bodies": [
-                {"entity": name, "baseTexture": entities[name]["texture"]["source"]}
+                {
+                    "entity": name,
+                    "baseTexture": aperture_sources.get(
+                        name, entities[name]["texture"]["source"]
+                    ),
+                    "role": scene.objects[name]["environment_role"],
+                }
                 for name in exterior_bodies
             ],
             "textures": {
-                record["layer"]: entities[record["id"]]["texture"]["source"]
-                for record in anchors["exterior"]["layers"]
+                "cities": entities[anchors["exterior"]["cities"]]["texture"]["source"],
             },
             "carrierEntityNames": exterior_carriers,
             "uvOrigin": "top-left",
-            "encoding": anchors["exterior"]["encoding"],
+            "encoding": "sRGB textures; alpha-cut bridge apertures; linear planet shading",
             "defaultGains": {"cities": 1.0, "atmosphere": 1.0, "stars": 1.0},
         },
     }

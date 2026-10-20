@@ -347,10 +347,34 @@ export default defineClient<NativeGallerySession>({
             history = (await app.inspectApplication()).frameRate;
           }
           assertFrameRateData(history);
-          assertFrameRatePixels(
-            await driver.capture("fps-history"),
-            await bounds("demo-frame-rate-chart"),
-          );
+          await driver.layout([
+            "demo-frame-rate-chart",
+            "demo-frame-rate-panel",
+          ]);
+          const chart = await bounds("demo-frame-rate-chart");
+          const panel = await bounds("demo-frame-rate-panel");
+          // The compact skin's container inset is 24 at the reference font
+          // size 16; the application uses font size 14.
+          const inset = 21;
+          for (const [name, actual, expected] of [
+            ["left inset", chart[0]! - panel[0]!, inset],
+            [
+              "right inset",
+              panel[0]! + panel[2]! - chart[0]! - chart[2]!,
+              inset,
+            ],
+            [
+              "bottom inset",
+              panel[1]! + panel[3]! - chart[1]! - chart[3]!,
+              inset,
+            ],
+            ["plot height", chart[3]!, 140],
+          ] as const)
+            assert.ok(
+              Math.abs(actual - expected) < 0.1,
+              `FPS ${name}: expected ${expected}, got ${actual}`,
+            );
+          assertFrameRatePixels(await driver.capture("fps-history"), chart);
           await app.action("performance", false);
           assert.equal((await app.inspectApplication()).frameRate, undefined);
           await assert.rejects(context.host.datasets.read(history!.name));

@@ -1645,6 +1645,10 @@ fn unclipped(mut primitive: CanvasPrimitive) -> CanvasPrimitive {
             style,
             ..
         }
+        | CanvasPrimitive::Html {
+            style,
+            ..
+        }
         | CanvasPrimitive::Bitmap {
             style,
             ..

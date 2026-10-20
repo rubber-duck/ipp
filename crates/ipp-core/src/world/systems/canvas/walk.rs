@@ -20,11 +20,12 @@ use crate::{ComponentValue, EntityId, WorldRef};
 use std::sync::Arc;
 
 /// Leaf components in the order an entity paints them.
-pub(super) const LEAF_COMPONENTS: [u16; 5] = [
+pub(super) const LEAF_COMPONENTS: [u16; 6] = [
     ComponentValue::CANVAS_TEXT,
     ComponentValue::CANVAS_GLYPH_RUN,
     ComponentValue::CANVAS_DRAWING,
     ComponentValue::CANVAS_BITMAP,
+    ComponentValue::CANVAS_HTML,
     ComponentValue::CANVAS_BOX,
 ];
 
@@ -527,8 +528,14 @@ impl CanvasSystem {
                 gui.part_interaction(control.target, painted.interaction),
                 |identity| self.state.gui.retained_resource(identity),
             );
-            let available =
-                placed.available && eligibility.available && control_primitives.is_some();
+            let input_binding = gui.client_input_binding(control.target);
+            let receiver_available = control.kind
+                != crate::systems::gui::local::GuiControlKind::InputTarget
+                || input_binding.is_some();
+            let available = placed.available
+                && eligibility.available
+                && control_primitives.is_some()
+                && receiver_available;
             let bounds = placed.bounds([0.0, 0.0, mapping.size[0], mapping.size[1]]);
             let ancestry = ancestry(&walk.stack, entity);
             let hit = CanvasHit {
@@ -580,6 +587,11 @@ impl CanvasSystem {
             let metrics =
                 crate::systems::gui::presentation::GuiMetrics::resolve(world, entity, font_size);
             let control = self.state.gui.observation(GuiControlObservation {
+                input_binding,
+                input: world
+                    .components
+                    .gui_input_target(entity.index() as usize)
+                    .copied(),
                 text: layout
                     .and_then(|view| view.control_labels.get(&entity))
                     .and_then(|label| Some((label.layout.clone()?, label.origin()))),
@@ -598,7 +610,7 @@ impl CanvasSystem {
                     enabled: eligibility.enabled,
                     visible: eligibility.visible,
                     available: eligibility.available,
-                    focusable: controls::identity::focusable(world, entity),
+                    focusable: receiver_available && controls::identity::focusable(world, entity),
                     focus_parts: controls::identity::focus_parts(world, control),
                     ancestry,
                 },
@@ -811,6 +823,10 @@ impl CanvasSystem {
                         size,
                         ..
                     }
+                    | CanvasGeometry::Html {
+                        size,
+                        ..
+                    }
                     | CanvasGeometry::Bitmap {
                         size,
                         ..
@@ -819,6 +835,24 @@ impl CanvasSystem {
             {
                 *size = layout_size;
             }
+            if let Some(CanvasGeometry::Html {
+                image,
+                ..
+            }) = &mut geometry
+            {
+                *image = match context.web_content.status(
+                    crate::services::web_content::WebContentTarget {
+                        world: WorldRef {
+                            id: world.id,
+                            incarnation: world.identity,
+                        },
+                        canvas: target,
+                    },
+                ) {
+                    crate::services::web_content::WebContentStatus::Ready(value) => Some(value),
+                    _ => None,
+                };
+            }
             let changed_geometry = (rebuild_geometry || override_geometry.is_some())
                 && previous
                     .as_ref()
@@ -826,7 +860,23 @@ impl CanvasSystem {
             let changed_style = previous
                 .as_ref()
                 .is_none_or(|leaf| leaf.style != style || leaf.paint != leaf_paint);
-            walk.layout_changed |= changed_geometry
+            let changed_extent = match (
+                previous.as_ref().and_then(|leaf| leaf.geometry.as_ref()),
+                geometry.as_ref(),
+            ) {
+                (
+                    Some(CanvasGeometry::Html {
+                        size: before,
+                        ..
+                    }),
+                    Some(CanvasGeometry::Html {
+                        size: after,
+                        ..
+                    }),
+                ) => before != after,
+                _ => changed_geometry,
+            };
+            walk.layout_changed |= changed_extent
                 || previous.as_ref().is_none_or(|leaf| {
                     leaf.style.position != style.position
                         || leaf.style.scale != style.scale
@@ -990,6 +1040,14 @@ impl CanvasGeometry {
             } => CanvasPrimitive::Bitmap {
                 style,
                 bitmap: *bitmap,
+                size: *size,
+            },
+            Self::Html {
+                size,
+                image,
+            } => CanvasPrimitive::Html {
+                style,
+                image: *image,
                 size: *size,
             },
             Self::Box {

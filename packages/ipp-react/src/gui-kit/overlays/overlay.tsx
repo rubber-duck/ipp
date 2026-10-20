@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * What the kit's overlays share: semantic priority bands, a client
@@ -20,7 +27,7 @@ import {
   type ReactNode,
 } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Font, Layout, Overlay, Style } from "../../gui/components.js";
+import { Font, Overlay, Style } from "../../gui/components.js";
 import { useComposedControlRef } from "../../gui/control-refs.js";
 import type { GuiControlHandle } from "../../gui/control-ref.js";
 import { useValueSynchronization } from "../values/value-synchronization.js";
@@ -31,7 +38,6 @@ import type {
   GuiVisibleChangeListener,
 } from "../../gui/callbacks.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_COLUMN, type GuiKitLayout } from "../layout.js";
 
 /** Semantic overlay priorities, independent of interaction mode and content offsets. */
 export const GUI_KIT_OVERLAY_BANDS = {
@@ -174,7 +180,7 @@ export function useOverlayOpen({
   };
 }
 
-export interface FloatingProps {
+export interface FloatingProps extends GuiKitLayoutProps {
   /** Share a touching anchor's background paint coordinates without raising its surface. */
   readonly joinAnchor?: boolean;
   /** Restore application open intent after native closes; adapters pass their ownership. */
@@ -197,8 +203,6 @@ export interface FloatingProps {
   readonly offset?: readonly [number, number];
   /** The part cut, for a small surface such as a tooltip. */
   readonly small?: boolean;
-  /** Layout of its column, such as its `width`; content fixes its height. */
-  readonly layout?: GuiKitLayout;
   readonly children?: ReactNode;
 }
 
@@ -209,22 +213,23 @@ export interface FloatingProps {
  * overlay inherits none. Declare an anchored one inside its parent's
  * `Children` and a top-level one outside any `Children`.
  */
-export function Floating({
-  id: providedId,
-  side = "bottom",
-  align = "start",
-  mode,
-  band = "popup",
-  layer = 0,
-  open,
-  onVisibleChange,
-  offset,
-  small = false,
-  joinAnchor = false,
-  layout,
-  children,
-  controlled = false,
-}: FloatingProps) {
+export function Floating(props: FloatingProps) {
+  const {
+    id: providedId,
+    side = "bottom",
+    align = "start",
+    mode,
+    band = "popup",
+    layer = 0,
+    open,
+    onVisibleChange,
+    offset,
+    small = false,
+    joinAnchor = false,
+    layout,
+    children,
+    controlled = false,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const line = kit.unit(kit.tokens.lineWidth);
@@ -281,7 +286,7 @@ export function Floating({
         }}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         padding_left={line}
         padding_right={line}

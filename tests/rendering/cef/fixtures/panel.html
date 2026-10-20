@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>IPP · Chromium surface</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; }
+body { color: #e2e8f0; font: 14px sans-serif; background: #111827; }
+header { height: 20%; padding: 20px 26px; background: #172554; border-bottom: 1px solid #334155; }
+small { display: block; color: #93c5fd; font-size: 10px; letter-spacing: 2px; margin-bottom: 6px; }
+h1 { margin: 0; font-size: 24px; font-weight: 600; }
+main { position: absolute; top: 25%; left: 4%; width: 92%; height: 58%; display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+article { background: #1e293b; border: 1px solid #334155; border-radius: 12px; padding: 18px; }
+h2 { margin: 0 0 12px; font-size: 14px; font-weight: 500; }
+p { color: #94a3b8; line-height: 1.6; margin: 8px 0; }
+button { position: absolute; left: 7%; top: 64%; width: 34%; height: 12%; border: 0; border-radius: 6px; background: #2563eb; color: white; font-weight: 600; cursor: pointer; }
+canvas { width: 100%; height: 120px; }
+footer { position: absolute; bottom: 8%; left: 4%; color: #64748b; font-size: 11px; }
+.marker { position: absolute; bottom: 0; width: 25%; height: 5%; }
+#red { left: 0; background: #dc2626; }
+#green { left: 25%; background: #22c55e; }
+#blue { left: 50%; background: #2563eb; }
+#yellow { left: 75%; background: #facc15; }
+</style>
+</head>
+<body>
+<header><small>IPP / LIVE WEB CONTENT</small><h1>Chromium, on a Surface.</h1></header>
+<main>
+<article><h2>Real HTML + CSS</h2><p>A local page rendered by CEF.<br>Shared GPU buffers into GLES.</p><p id="status">Ready for input</p></article>
+<article><h2>HTML canvas</h2><canvas width="250" height="120"></canvas></article>
+</main>
+<button onclick="setPhase(1)">Update the live texture →</button>
+<footer>CEF accelerated paint · GPU copy · IPP bitmap renderer</footer>
+<div id="red" class="marker"></div><div id="green" class="marker"></div><div id="blue" class="marker"></div><div id="yellow" class="marker"></div>
+<script src="panel.js"></script>
+</body>
+</html>

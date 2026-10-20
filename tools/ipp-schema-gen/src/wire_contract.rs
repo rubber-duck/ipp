@@ -248,18 +248,20 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         64 => Ok("asset-export-response"),
         65 => Ok("asset-representation"),
         66 => Ok("asset-export-format"),
+        67 => Ok("gui-client-input"),
 
         _ => Err("unknown wire tag space".into()),
     }
 }
 
 fn is_tag_space_name(name: &str) -> bool {
-    (1..=66).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
+    (1..=67).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
 }
 
 impl WireEncoding {
     fn parse(value: u8) -> Result<Self, String> {
         Ok(match value {
+            1 => Self::U8,
             2 => Self::U16,
             3 => Self::U32,
             4 => Self::U64,
@@ -281,6 +283,7 @@ impl WireEncoding {
 
     pub(super) const fn name(self) -> &'static str {
         match self {
+            Self::U8 => "u8",
             Self::U16 => "u16",
             Self::U32 => "u32",
             Self::U64 => "u64",

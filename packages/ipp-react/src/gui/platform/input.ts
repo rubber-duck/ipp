@@ -1,3 +1,4 @@
+import { htmlInputFor, type HtmlInputBinding } from "@ipp/client";
 import type {
   GuiPhysicalContext,
   GuiPhysicalInput,
@@ -26,6 +27,13 @@ import { keyboardKeyToGuiKey } from "./keys.js";
 export type GuiViewportPoint = readonly [number, number];
 export type BrowserGuiInputCommand = (
   | GuiNativeEdit
+  | {
+      kind: "clientInput";
+      input: Extract<
+        import("@ipp/client").GuiClientInput,
+        { kind: "key" | "text" }
+      >;
+    }
   | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
   | { kind: "blur" }
 ) & { readonly fence?: GuiTextFence };
@@ -120,12 +128,18 @@ export function attachCanvasGuiInput(
   options: CanvasGuiInputOptions,
 ): () => void {
   let live = true;
+  let htmlInput: HtmlInputBinding | undefined;
   const gateGeneration = openUnhandledInputGate(options.unhandledInputGate);
   const model = createTextBridgeModel(context.identity);
   let epoch = 0;
+  let clientComposition = "";
   let working = false;
-  const nativePending: { command: BrowserGuiInputCommand; epoch: number }[] =
-    [];
+  let nativePendingBytes = 0;
+  const nativePending: {
+    command: BrowserGuiInputCommand;
+    epoch: number;
+    bytes: number;
+  }[] = [];
   const report = (error: unknown) =>
     options.onError(error instanceof Error ? error : new Error(String(error)));
   // An invalid step is reported once and scrolls by the default instead.
@@ -144,8 +158,79 @@ export function attachCanvasGuiInput(
     try {
       while (live && !context.isClosed && nativePending.length) {
         const entry = nativePending.shift()!;
+        nativePendingBytes -= entry.bytes;
         if (entry.epoch !== epoch) continue;
         const command = entry.command;
+        const clientState = context.nativeText;
+        if (clientState?.clientInput && command.kind !== "blur") {
+          const fence = command.fence ?? clientState.fence;
+          let input:
+            | Extract<
+                import("@ipp/client").GuiClientInput,
+                { kind: "key" | "text" }
+              >
+            | undefined;
+          switch (command.kind) {
+            case "clientInput":
+              input = command.input;
+              break;
+            case "text":
+              input = { kind: "text", text: command.text };
+              break;
+            case "composition":
+              clientComposition = command.text;
+              break;
+            case "commitComposition":
+              input = { kind: "text", text: clientComposition };
+              clientComposition = "";
+              break;
+            case "cancelComposition":
+              clientComposition = "";
+              break;
+            case "selection":
+              break;
+            case "key": {
+              const key = {
+                backspace: "Backspace",
+                delete: "Delete",
+                enter: "Enter",
+                tab: "Tab",
+                backTab: "Tab",
+                escape: "Escape",
+                left: "ArrowLeft",
+                right: "ArrowRight",
+                up: "ArrowUp",
+                down: "ArrowDown",
+                home: "Home",
+                end: "End",
+                space: " ",
+                contextMenu: "ContextMenu",
+                f10: "F10",
+                selectAll: "a",
+              }[command.key];
+              input = {
+                kind: "key",
+                key,
+                code: command.key === "selectAll" ? "KeyA" : key,
+                modifiers: command.key === "selectAll" ? 2 : 0,
+                repeat: false,
+                pressed: true,
+              };
+              break;
+            }
+          }
+          if (input) {
+            const outcome = await context.send({
+              kind: "clientInput",
+              fence,
+              input,
+            });
+            if (outcome.rejected || outcome.cancelled || outcome.error)
+              throw new Error(outcome.error ?? "Client input cancelled");
+          }
+          continue;
+        }
+        if (command.kind === "clientInput") continue;
         if (
           command.kind === "blur" ||
           (command.kind === "key" && routedKeys.has(command.key))
@@ -161,11 +246,13 @@ export function attachCanvasGuiInput(
         );
         if (outcome.rejected || outcome.cancelled || outcome.error) {
           nativePending.length = 0;
+          nativePendingBytes = 0;
           report(new Error(outcome.error ?? "Native text edit cancelled"));
         }
       }
     } catch (error) {
       nativePending.length = 0;
+      nativePendingBytes = 0;
       if (live) report(error);
     } finally {
       working = false;
@@ -174,14 +261,24 @@ export function attachCanvasGuiInput(
   const sink: GuiInputSink = {
     send(command) {
       if (!live || context.isClosed) return;
-      if (nativePending.length >= 32)
+      const payload = command.kind === "clientInput" ? command.input : command;
+      const bytes =
+        payload.kind === "text" || payload.kind === "composition"
+          ? new TextEncoder().encode(payload.text).length
+          : 128;
+      if (
+        nativePending.length >= (context.nativeText?.clientInput ? 1024 : 32) ||
+        nativePendingBytes + bytes > 1024 * 1024
+      )
         throw new Error("Native text ingress capacity exceeded");
-      nativePending.push({ command, epoch });
+      nativePendingBytes += bytes;
+      nativePending.push({ command, epoch, bytes });
       void drainNative();
     },
   };
   const bridge = attachTextBridge(canvas.parentElement ?? document.body, sink, {
     onError: report,
+    retainFocus: (target) => htmlInput?.contains(target) ?? false,
     getFocusToken: model.token,
     readCommitted: model.committed,
     onLocalSelection: (selection) =>
@@ -190,11 +287,24 @@ export function attachCanvasGuiInput(
   const textSubscription = context.onText((state, origin) => {
     if (origin === "notification") {
       epoch += 1;
+      clientComposition = "";
       nativePending.length = 0;
+      nativePendingBytes = 0;
       bridge.invalidate();
     }
+    const nextHtmlInput = state?.clientInput
+      ? htmlInputFor(canvas, state.fence.target)
+      : undefined;
+    if (htmlInput !== nextHtmlInput) htmlInput?.deactivate();
+    htmlInput = nextHtmlInput;
     const ownedFocus = document.activeElement === bridge.element;
     model.observe(state);
+    if (htmlInput) {
+      htmlInput.activate(() => {
+        void context.send({ kind: "blur" }).catch(report);
+      });
+      return;
+    }
     bridge.syncFromCore();
     if (state && document.hasFocus())
       bridge.element.focus({ preventScroll: true });
@@ -470,6 +580,7 @@ export function attachCanvasGuiInput(
     if (!context.nativeText) canvas.focus({ preventScroll: true });
     epoch += 1;
     nativePending.length = 0;
+    nativePendingBytes = 0;
     model.noteActivation();
     captures.add(event.pointerId);
     canvas.setPointerCapture(event.pointerId);
@@ -512,7 +623,7 @@ export function attachCanvasGuiInput(
       point: point(event),
     });
     release(event.pointerId);
-    if (context.nativeText) {
+    if (context.nativeText && !htmlInput) {
       const container = canvas.parentElement ?? document.body;
       const offset = viewportToBridgeOffset(
         point(event),
@@ -560,7 +671,11 @@ export function attachCanvasGuiInput(
     for (const pointer of [...captures]) release(pointer);
   };
   const canvasBlur = (event: FocusEvent) => {
-    if (event.relatedTarget !== bridge.element) blur();
+    if (
+      event.relatedTarget !== bridge.element &&
+      !htmlInput?.contains(event.relatedTarget)
+    )
+      blur();
   };
   const bridgeKey = (event: KeyboardEvent) => {
     if (event.key === "Tab") {
@@ -590,10 +705,13 @@ export function attachCanvasGuiInput(
     for (const pointer of endings.keys()) pointers.add(pointer);
     for (const pointer of pointers) notifyCancellation(pointer);
     live = false;
+    htmlInput?.deactivate();
+    htmlInput = undefined;
     cancelAdmissions();
     closeUnhandledInputGate(options.unhandledInputGate, gateGeneration);
     epoch += 1;
     nativePending.length = 0;
+    nativePendingBytes = 0;
     textSubscription();
     bridge.element.removeEventListener("keydown", bridgeKey);
     bridge.element.removeEventListener("contextmenu", contextMenu);

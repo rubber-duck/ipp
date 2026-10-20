@@ -271,6 +271,7 @@ const TAG_SPACES = {
   52: "gui-physical-disposition",
   53: "gui-action",
   54: "output-target",
+  67: "gui-client-input",
 };
 
 export function manifestVariant(client, name) {
@@ -296,7 +297,8 @@ export function encodeManifestLayout(client, name, values) {
       if (Boolean(values.mask & field.limit) !== (value !== null))
         throw new Error("manifest presence mask");
       if (value !== null) chunks.push(nested(client, field.target, value));
-    } else if (field.encoding === "u16") chunks.push(integer(value, 2));
+    } else if (field.encoding === "u8") chunks.push(integer(value, 1));
+    else if (field.encoding === "u16") chunks.push(integer(value, 2));
     else if (field.encoding === "u32") chunks.push(integer(value, 4));
     else if (field.encoding === "u64") chunks.push(integer(value, 8));
     else if (field.encoding === "finite-f32") chunks.push(float(value, 4));

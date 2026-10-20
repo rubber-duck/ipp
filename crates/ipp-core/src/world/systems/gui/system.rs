@@ -20,6 +20,13 @@ impl GuiSystem {
     /// Stable system identity.
     pub const ID: SystemId = SystemId("ipp.gui");
 
+    pub(in crate::world::systems) fn client_input_binding(
+        &self,
+        target: super::local::GuiEntityTarget,
+    ) -> Option<super::observations::GuiObservationSubscriptionId> {
+        self.local.observations.input_binding(target)
+    }
+
     pub(in crate::world::systems) fn local_presentation_revision(&self) -> u64 {
         self.local.presentation_revision
     }
@@ -251,6 +258,7 @@ impl SystemFactory for GuiSystemFactory {
         // paints it admits and writes.
         capabilities.components.extend(
             [
+                ComponentValue::GUI_INPUT_TARGET,
                 ComponentValue::GUI_BUTTON,
                 ComponentValue::GUI_CHECKBOX,
                 ComponentValue::GUI_SLIDER,
@@ -384,7 +392,9 @@ impl System for GuiSystem {
     }
 
     fn update(&mut self, context: &mut crate::systems::SystemUpdateContext<'_, '_>) {
-        self.local.observations.prune();
+        if self.local.observations.prune() {
+            self.local.presentation_changed(false);
+        }
         self.local.initialize(context.world.world);
         self.local
             .revalidate_focus(context.world.world, &context.world.world.state);
@@ -478,6 +488,19 @@ impl System for GuiSystem {
     ) -> Result<(), ErrorReason> {
         if let Some(command) = command.downcast_ref::<super::observations::GuiObservationCommand>()
         {
+            if let Some(target) = command.input_target() {
+                let current = super::local::controls::identity::entity_control(
+                    context.world.world,
+                    &context.world.world.state,
+                    target.entity,
+                );
+                if current.is_none_or(|control| control.target != target) {
+                    command.reject_stale_target();
+                    return Ok(());
+                }
+            }
+            let target = command.input_binding_target();
+            let previous = target.and_then(|target| self.local.observations.input_binding(target));
             self.local.observations.command(
                 crate::WorldRef {
                     id: context.world.world.id,
@@ -485,6 +508,9 @@ impl System for GuiSystem {
                 },
                 command,
             );
+            if previous != target.and_then(|target| self.local.observations.input_binding(target)) {
+                self.local.presentation_changed(false);
+            }
             return Ok(());
         }
         if let Some(command) = command.downcast_ref::<super::local::GuiLocalCommand>() {

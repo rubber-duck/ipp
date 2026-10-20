@@ -89,11 +89,13 @@ pub(crate) enum TagSpace {
     AssetExportResponse = 64,
     AssetRepresentation = 65,
     AssetExportFormat = 66,
+    GuiClientInput = 67,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub(crate) enum FieldEncoding {
+    U8 = 1,
     U16 = 2,
     U32 = 3,
     U64 = 4,
@@ -318,6 +320,11 @@ layouts! {
     "gui-physical-open" => [field!("tag", Variant => "gui-physical-request"), field!("view", Named => "presentation-view"), field!("blockers", List, MESSAGE_BYTES / 32 => "gui-picking-blocker")];
     "gui-physical-close" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64)];
     "gui-physical-event" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("input", Union => "gui-physical-event")];
+    "gui-physical-client" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("event", Union => "gui-client-input")];
+    "gui-client-key" => [field!("tag", Variant => "gui-client-input"), field!("key", Utf8, 64), field!("code", Utf8, 64), field!("modifiers", U8), field!("repeat", Bool), field!("pressed", Bool)];
+    "gui-client-text" => [field!("tag", Variant => "gui-client-input"), field!("text", Utf8, 65536), field!("paste", Bool)];
+    "gui-client-pointer" => [field!("tag", Variant => "gui-client-input"), field!("pointer", U64), field!("phase", U8), field!("button", U8), field!("point", Named => "gui-input-vector")];
+    "gui-client-wheel" => [field!("tag", Variant => "gui-client-input"), field!("point", Named => "gui-input-vector"), field!("delta", Named => "gui-input-vector")];
     "gui-physical-text" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("edit", Union => "gui-native-edit")];
     "gui-physical-pointer-down" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64), field!("point", Named => "gui-input-vector"), field!("button", Variant => "gui-physical-button")];
     "gui-physical-pointer-move" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64), field!("point", Named => "gui-input-vector")];
@@ -372,7 +379,7 @@ layouts! {
     "gui-physical-target" => [field!("world", Named => "world-reference"), field!("entity", U64), field!("component", U16), field!("incarnation", U64)];
     "gui-native-buffer" => [field!("byte_length", U32), field!("state", Named => "gui-native-state")];
     "gui-native-composition" => [field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32)];
-    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("masked", Bool), field!("composition", Option => "gui-native-composition")];
+    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("masked", Bool), field!("client_input", Bool), field!("composition", Option => "gui-native-composition")];
     "host-request-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body_bytes", U32), field!("body", Union => "gui-physical-request")];
     "host-response-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("body_bytes", U32), field!("body", Union => "gui-physical-response")];
     "host-request-get-root-output-binding" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("world", Named => "world-reference")];
@@ -1247,6 +1254,10 @@ macro_rules! tags {
 }
 
 tags! {
+    GuiClientInput GUI_CLIENT_INPUT_KEY = 0 => "gui-client-key";
+    GuiClientInput GUI_CLIENT_INPUT_TEXT = 1 => "gui-client-text";
+    GuiClientInput GUI_CLIENT_INPUT_POINTER = 2 => "gui-client-pointer";
+    GuiClientInput GUI_CLIENT_INPUT_WHEEL = 3 => "gui-client-wheel";
     DatasetRequest DATASET_REQUEST_CREATE = 0 => "dataset-create";
     DatasetRequest DATASET_REQUEST_BEGIN = 1 => "dataset-begin";
     DatasetRequest DATASET_REQUEST_CHUNK = 2 => "dataset-chunk";
@@ -1287,6 +1298,7 @@ tags! {
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_CLOSE = 1 => "gui-physical-close";
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_EVENT = 2 => "gui-physical-event";
     GuiPhysicalRequest GUI_PHYSICAL_REQUEST_TEXT = 3 => "gui-physical-text";
+    GuiPhysicalRequest GUI_PHYSICAL_REQUEST_CLIENT = 4 => "gui-physical-client";
     GuiPhysicalEvent GUI_PHYSICAL_EVENT_POINTER_DOWN = 0 => "gui-physical-pointer-down";
     GuiPhysicalEvent GUI_PHYSICAL_EVENT_POINTER_MOVE = 1 => "gui-physical-pointer-move";
     GuiPhysicalEvent GUI_PHYSICAL_EVENT_POINTER_UP = 2 => "gui-physical-pointer-up";

@@ -265,6 +265,11 @@ def inspect(
                 detail = (
                     "configured certificate files exist; browser scenarios verify trust"
                 )
+            elif name == "cef-display":
+                remedy = "Install Weston 15 or set IPP_CEF_WESTON_ROOT; see tests/rendering/cef/README.md."
+                detail = inspect_command(
+                    [sys.executable, "tests/rendering/cef/run.py", "--probe"]
+                )
             elif name == "gles":
                 remedy = "Set IPP_EGL_LIBRARY_DIR or pass --egl-dir with the EGL/GLES library directory."
                 if not egl_directory:

@@ -10,7 +10,7 @@ macro_rules! gl_functions {
         }
 
         impl Functions {
-            #[cfg(all(test, feature = "instrumentation"))]
+            #[cfg(test)]
             pub(super) fn test_pointer(symbol: &CStr) -> *const c_void {
                     $(if symbol == $symbol {
                         unsafe extern "system" fn stub($($argument: $arg),*) -> $result {
@@ -57,6 +57,10 @@ macro_rules! gl_functions {
 gl_functions! {
     get_string: c"glGetString"(arg0: u32) -> *const u8 => Other;
     get_integer: c"glGetIntegerv"(arg0: u32, arg1: *mut i32) -> () => Other;
+    #[cfg(target_os = "linux")]
+    is_enabled: c"glIsEnabled"(arg0: u32) -> u8 => Other;
+    #[cfg(target_os = "linux")]
+    finish: c"glFinish"() -> () => Other;
     get_error: c"glGetError"() -> u32 => Other;
     create_shader: c"glCreateShader"(arg0: u32) -> u32 => Other;
     shader_source: c"glShaderSource"(arg0: u32, arg1: i32, arg2: *const *const c_char, arg3: *const i32) -> () => Other;

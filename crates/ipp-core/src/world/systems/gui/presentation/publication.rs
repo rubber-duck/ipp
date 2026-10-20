@@ -211,6 +211,10 @@ pub struct GuiGroupItem {
 /// Immutable control observation joined by exact CanvasTarget, never a live component lookup.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GuiControlObservation {
+    /// Exclusive client consumer in this completed publication, fencing replacement bindings.
+    pub input_binding: Option<super::super::observations::GuiObservationSubscriptionId>,
+    /// Client input consumption policy from this completed publication.
+    pub input: Option<super::super::local::GuiInputTarget>,
     /// The exact measured single-line layout used by label, caret and pointer selection.
     pub text: Option<(Arc<crate::text::TextLayout>, [f32; 2])>,
     pub(crate) scroll_bars: [Option<super::super::layout::scroll_bars::GuiScrollBar>; 2],
@@ -289,6 +293,7 @@ impl GuiControlObservation {
     pub fn supported_actions(&self) -> &'static [GuiSemanticActionKind] {
         use GuiSemanticActionKind::*;
         match self.record.kind {
+            GuiControlKind::InputTarget => &[Focus, Blur],
             GuiControlKind::Button => &[Press, Focus, Blur],
             GuiControlKind::Checkbox => &[Toggle, Focus, Blur],
             GuiControlKind::Slider => &[SetScalar, Focus, Blur],

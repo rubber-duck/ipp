@@ -10,9 +10,10 @@ import {
 /** Wait for demanded resources; animation is allowed to keep producing frames. */
 export async function waitForGalleryResources(
   context: GallerySceneContext,
+  timeoutMs = 30_000,
 ): Promise<void> {
   const client = context.canvas.client as AssetWorldClient;
-  const deadline = performance.now() + 30_000;
+  const deadline = performance.now() + timeoutMs;
   for (;;) {
     context.signal.throwIfAborted();
     const inspection = await client.inspect();
@@ -25,7 +26,7 @@ export async function waitForGalleryResources(
       );
     if (performance.now() >= deadline)
       throw new Error(
-        "Gallery resources did not become ready within 30 seconds",
+        `Gallery resources did not become ready within ${timeoutMs / 1000} seconds`,
       );
     if (inspection.resources.every((resource) => resource.status === "loaded"))
       return;
@@ -56,6 +57,7 @@ export async function mountGalleryScene(
     readonly options: GalleryOptions;
     readonly output: OutputReference;
     readonly render: (options: GalleryOptions) => ReactNode;
+    readonly resourceTimeoutMs?: number;
     /** Specialized scenes may prepare replacements while retaining usable output. */
     readonly awaitResourcesOnUpdate?: boolean;
     readonly actions?: Readonly<
@@ -91,7 +93,7 @@ export async function mountGalleryScene(
     await root.unmount();
     throw error;
   }
-  const ready = waitForGalleryResources(context);
+  const ready = waitForGalleryResources(context, config.resourceTimeoutMs);
   void ready.catch(() => {});
   return {
     output: config.output,
@@ -121,7 +123,7 @@ export async function mountGalleryScene(
         await render();
         await context.canvas.flush();
         if (config.awaitResourcesOnUpdate !== false)
-          await waitForGalleryResources(context);
+          await waitForGalleryResources(context, config.resourceTimeoutMs);
       });
       return pendingUpdate;
     },

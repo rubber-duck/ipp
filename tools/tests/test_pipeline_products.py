@@ -97,6 +97,18 @@ class ProductTests(unittest.TestCase):
                 path = root / "target" / directory
                 path.mkdir(parents=True)
                 (path / "helper.js").write_text("export const diagnostic = true;")
+            terminal_assets = {
+                "terminal-worker.js": (
+                    b"self.onmessage = () => {};",
+                    "text/javascript",
+                ),
+                "ghostty-vt.wasm": (b"\x00asm\x01\x00\x00\x00", "application/wasm"),
+                "terminal-font.json": (b'{"advance": 10}', "application/json"),
+            }
+            terminal = root / "target/terminal-build"
+            terminal.mkdir(parents=True)
+            for name, (content, _) in terminal_assets.items():
+                (terminal / name).write_bytes(content)
             (root / "private.txt").write_text("not public")
             with ThreadingHTTPServer(
                 ("127.0.0.1", 0), handler("gallery", root)
@@ -133,6 +145,12 @@ class ProductTests(unittest.TestCase):
                         response = connection.getresponse()
                         self.assertEqual(response.status, 200)
                         response.read()
+                    for name, (content, mime_type) in terminal_assets.items():
+                        connection.request("GET", f"/target/terminal-build/{name}")
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        self.assertIn(mime_type, response.headers["Content-Type"])
+                        self.assertEqual(response.read(), content)
                     for path in (
                         "/private.txt",
                         "/target/gallery-fixtures/%2e%2e/%2e%2e/private.txt",

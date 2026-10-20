@@ -29,13 +29,13 @@ export function PlatformerMovementControls({
     await movement.action(name, args).catch(movement.report);
   };
   return (
-    <Column id="platformer-movement" width={420} padding={12}>
-      <Row id="platformer-movement-heading" width={396} height={26}>
+    <Column id="platformer-movement" padding="inset" gap="label">
+      <Row id="platformer-movement-heading">
         <TextLine
           id="platformer-movement-label"
           text="Movement"
           tone="accent"
-          layout={{ flex: 1 }}
+          flex={1}
         />
         <TextLine
           id="platformer-direction"
@@ -52,14 +52,9 @@ export function PlatformerMovementControls({
         ]}
         value={demo.playback.mode}
         onChange={(value) => run("setMode", value as PlatformerMode)}
-        layout={{ width: 396, height: 36, margin_top: 6 }}
+        width={-1}
       />
-      <Row
-        id="platformer-movement-actions"
-        width={396}
-        height={36}
-        layout={{ margin_top: 8 }}
-      >
+      <Row id="platformer-movement-actions" gap="label">
         <Button
           id="platformer-reverse"
           label="Reverse"
@@ -67,8 +62,8 @@ export function PlatformerMovementControls({
           disabled={!demo.session}
           onPress={() => run("reverse")}
           variant="secondary"
-          width={126}
-          layout={{ margin_right: 8 }}
+          width={0}
+          flex={1}
         />
         <Button
           id="platformer-pause"
@@ -77,8 +72,8 @@ export function PlatformerMovementControls({
           disabled={!demo.session}
           onPress={() => run("playback", !demo.playback.playing)}
           variant="secondary"
-          width={126}
-          layout={{ margin_right: 8 }}
+          width={0}
+          flex={1}
         />
         <Button
           id="platformer-reset"
@@ -86,7 +81,8 @@ export function PlatformerMovementControls({
           disabled={!demo.session}
           onPress={() => run("reset")}
           variant="secondary"
-          width={128}
+          width={0}
+          flex={1}
         />
       </Row>
     </Column>
@@ -103,7 +99,8 @@ export function PlatformerControls({
       <TextLine
         id="platformer-controls-location"
         text="Movement controls stay above the robot. Choose a gait, reverse, pause or reset there."
-        layout={{ width: -1, height: 84 }}
+        tone="neutral"
+        size="small"
       />
       <Button
         id="platformer-reset-camera"

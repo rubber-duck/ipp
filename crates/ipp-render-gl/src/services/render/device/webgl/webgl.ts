@@ -1,3 +1,8 @@
+import {
+  createWebGlWebImages,
+  type WebGlElementImage,
+} from "./webgl-web-images.js";
+import { createWebGlCompletionFences } from "./webgl-completion-fences.js";
 import { createWebGlTextureReadback } from "./webgl-texture-readback.js";
 import { createWebGlCallCounts } from "./webgl-call-counts.js";
 import { createWebGlGpuQueries } from "./webgl-gpu-queries.js";
@@ -13,6 +18,11 @@ const REQUIRED_VERTEX_ATTRIBUTES = 14;
 export interface WebGlHostExports {
   imports: WebAssembly.Imports[string];
   setMemory(memory: WebAssembly.Memory): void;
+  /** Takes ownership, including when staging fails. Host capacity is reserved first. */
+  stageWebImage(image: ImageBitmap): number;
+  stageHtmlImage(image: WebGlElementImage): number;
+  /** Releases an unconsumed staging name; stale names are inert. */
+  releaseWebImage(id: number): void;
   resize(width: number, height: number): void;
   /**
    * Completed drawing buffer RGBA bytes in top-left row order. The drawing
@@ -244,6 +254,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   const programs = new Map<number, WebGlRenderProgram>();
   const meshes = new Map<number, WebGlRenderMesh>();
   const textures = new Map<number, WebGLTexture>();
+  const textureExtents = new Map<number, readonly [number, number]>();
   const surfacePaths = new Map<
     number,
     {
@@ -987,6 +998,20 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     bind: bindFramebuffers,
   });
 
+  const webImages = createWebGlWebImages(gl, {
+    id,
+    live,
+    check,
+    texture: (id) => {
+      const object = textures.get(id);
+      const size = textureExtents.get(id);
+      return object && size
+        ? { object, width: size[0], height: size[1] }
+        : undefined;
+    },
+  });
+  const completionFences = createWebGlCompletionFences(gl, { id, live, check });
+
   function lost(event: Event): void {
     linearTarget = undefined;
     presentationTarget = undefined;
@@ -1015,7 +1040,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     programs.clear();
     meshes.clear();
     textureReadback.reset(true);
+    webImages.reset();
+    completionFences.reset(true);
     textures.clear();
+    textureExtents.clear();
     shadows.clear();
     shadowTarget = undefined;
   }
@@ -1032,7 +1060,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     programs.clear();
     meshes.clear();
     textureReadback.reset(true);
+    webImages.reset();
+    completionFences.reset(true);
     textures.clear();
+    textureExtents.clear();
     surfacePaths.clear();
     surfaceQuadVao = null;
     surfaceInstanceStreams.clear();
@@ -3015,6 +3046,36 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       status(() => textureReadback.copy(id, offset, pointer, length));
     imports.texture_readback_delete = (id: number): void =>
       textureReadback.remove(id >>> 0, disposed || gl.isContextLost());
+    imports.completion_fence_create = (): number =>
+      status(() => completionFences.create());
+    imports.completion_fence_poll = (id: number): number =>
+      status(() => completionFences.poll(id >>> 0));
+    imports.completion_fence_delete = (id: number): void =>
+      completionFences.remove(id >>> 0, disposed || gl.isContextLost());
+    imports.finish_submitted_work = (): number =>
+      status(() => {
+        live();
+        gl.finish();
+        check();
+        return 1;
+      });
+    imports.web_image_copy = (
+      image: number,
+      destination: number,
+      width: number,
+      height: number,
+    ): number => {
+      image >>>= 0;
+      destination >>>= 0;
+      width >>>= 0;
+      height >>>= 0;
+      try {
+        return status(() => webImages.copy(image, destination, width, height));
+      } finally {
+        // status() may reject loss/disposal before entering the copy operation.
+        webImages.release(image);
+      }
+    };
     imports.create_texture = (
       width: number,
       height: number,
@@ -3078,6 +3139,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           check();
           const handle = id();
           textures.set(handle, texture);
+          textureExtents.set(handle, [width, height]);
           retained = true;
           return handle;
         } finally {
@@ -3145,6 +3207,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     imports.delete_texture = (handle: number): void => {
       const texture = textures.get(handle >>> 0);
       textures.delete(handle >>> 0);
+      textureExtents.delete(handle >>> 0);
       if (texture && !disposed && !gl.isContextLost())
         gl.deleteTexture(texture);
     };
@@ -3153,6 +3216,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   check();
   return {
     imports,
+    stageWebImage: (image) => webImages.stage(image),
+    stageHtmlImage: (image) => webImages.stage(image, true),
+    releaseWebImage: (id) => webImages.release(id),
     setMemory(value) {
       if (disposed) throw new Error("WebGL device disposed");
       memory = value;
@@ -3190,6 +3256,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       instanceBuffer = null;
       instanceCount = 0;
       if (disposed) return;
+      webImages.reset();
+      completionFences.reset(gl.isContextLost());
       canvas.removeEventListener("webglcontextlost", lost);
       canvas.removeEventListener("webglcontextrestored", restored);
       if (!gl.isContextLost()) {
@@ -3243,6 +3311,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       meshes.clear();
       textureReadback.reset(true);
       textures.clear();
+      textureExtents.clear();
       shadows.clear();
       shadowTarget = undefined;
       programs.clear();

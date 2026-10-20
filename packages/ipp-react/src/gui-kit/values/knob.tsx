@@ -1,3 +1,5 @@
+import { KitLayout, useGuiKitLayout, LAYOUT_COLUMN, Row } from "../layout.js";
+
 import type { ValueChangeHandler } from "./value-synchronization.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
@@ -36,7 +38,7 @@ import type { ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_COLUMN, Row } from "../layout.js";
+
 import {
   SliderControl,
   railGeometry,
@@ -70,7 +72,8 @@ export interface KnobProps extends SliderCompositeProps {
  */
 const TICK_INSET_EMS = 0.5;
 
-export function Knob(props: KnobProps) {
+export function Knob(inputProps: KnobProps) {
+  const props = useGuiKitLayout(inputProps);
   const {
     id: providedId,
     layer = 0,
@@ -126,6 +129,7 @@ export function Knob(props: KnobProps) {
     const x = side / 2 + Math.min(reach, room) * (name === "min" ? -1 : 1);
     return (
       <Row
+        gap={0}
         id={`${id}/${name}`}
         layout={{
           width,
@@ -151,7 +155,7 @@ export function Knob(props: KnobProps) {
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         width={Math.max(side, caption)}
         height={-1}
@@ -163,6 +167,7 @@ export function Knob(props: KnobProps) {
       <Children>
         {label !== undefined && (
           <Row
+            gap={0}
             id={`${id}/caption`}
             height={kit.unit(t.denseRow)}
             layout={{ width: caption, align_x: 0 }}
@@ -186,6 +191,7 @@ export function Knob(props: KnobProps) {
           {bounds && end("min", min)}
           {bounds && end("max", max)}
           <Row
+            gap={0}
             id={`${id}/readout`}
             layout={{
               width: lineWidth(readout, readoutSize),

@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  Row,
+} from "../layout.js";
+
 import type { ValueChangeHandler } from "./value-synchronization.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
@@ -36,17 +45,12 @@ import { TextInput } from "../../gui/controls.js";
 import { InlineAlert } from "../feedback/inline-alert.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  Row,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { textTones } from "./slider-rail.js";
 import { formatValue, useScalarValue, withUnits } from "./scalar-value.js";
 import { TextLine, lineWidth } from "../text.js";
 
-export interface NumericStepperProps {
+export interface NumericStepperProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the stepper's root entity; its parts extend it. */
@@ -80,7 +84,7 @@ export interface NumericStepperProps {
   readonly stepParts?: boolean;
   /** The error shown for an entry that does not parse. */
   readonly invalidMessage?: (text: string) => string;
-  readonly layout?: GuiKitLayout;
+
   /** The TextInput's control handle. */
   readonly ref?: GuiControlRef;
   readonly onFocusChange?: GuiFocusChangeListener;
@@ -88,28 +92,29 @@ export interface NumericStepperProps {
 
 const notANumber = () => "Not a number";
 
-export function NumericStepper({
-  id: providedId,
-  layer = 0,
-  label,
-  min,
-  max,
-  step = 1,
-  fineStep = 0,
-  precision = 0,
-  units,
-  value,
-  defaultValue,
-  onChange,
-  disabled = false,
-  bounds = true,
-  reserveErrorSpace = false,
-  stepParts = true,
-  invalidMessage = notANumber,
-  layout,
-  ref,
-  onFocusChange,
-}: NumericStepperProps) {
+export function NumericStepper(props: NumericStepperProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    min,
+    max,
+    step = 1,
+    fineStep = 0,
+    precision = 0,
+    units,
+    value,
+    defaultValue,
+    onChange,
+    disabled = false,
+    bounds = true,
+    reserveErrorSpace = false,
+    stepParts = true,
+    invalidMessage = notANumber,
+    layout,
+    ref,
+    onFocusChange,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -167,7 +172,7 @@ export function NumericStepper({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         height={contentHeight}
         gap={gap}
@@ -176,7 +181,7 @@ export function NumericStepper({
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {caption && (
-          <Row id={`${id}/caption`} height={kit.unit(t.denseRow)}>
+          <Row gap={0} id={`${id}/caption`} height={kit.unit(t.denseRow)}>
             {label === undefined ? (
               <Entity id={`${id}/space`}>
                 <PresentationGate open />
@@ -201,6 +206,7 @@ export function NumericStepper({
           </Row>
         )}
         <Row
+          gap={0}
           id={`${id}/row`}
           width={rowWidth}
           height={kit.unit(t.controlHeight)}

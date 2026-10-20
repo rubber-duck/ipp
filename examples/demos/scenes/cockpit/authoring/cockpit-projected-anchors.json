@@ -1,80 +1,118 @@
 {
-  "scene": "Cockpit projected presentation",
+  "scene": "Cockpit spatial bridge",
   "meshes": [
     [
-      "cockpit-space",
-      117
+      "cockpit-bridge-front",
+      1
+    ],
+    [
+      "cockpit-bridge-right",
+      1
+    ],
+    [
+      "cockpit-bridge-back",
+      1
+    ],
+    [
+      "cockpit-bridge-left",
+      1
+    ],
+    [
+      "cockpit-bridge-top",
+      1
+    ],
+    [
+      "cockpit-bridge-bottom",
+      1
     ],
     [
       "cockpit-planet",
-      138
+      4608
     ],
     [
-      "cockpit-exterior-cities",
-      12
+      "cockpit-atmosphere",
+      4608
     ],
     [
-      "cockpit-exterior-atmosphere",
-      12
+      "cockpit-space",
+      512
     ],
     [
-      "cockpit-exterior-stars",
-      12
+      "cockpit-starfield",
+      4992
     ],
     [
-      "cockpit-window-shell",
-      169
+      "cockpit-planet-cities",
+      32
     ],
     [
       "cockpit-console-shell",
-      2007
-    ],
-    [
-      "cockpit-dial-left",
-      158
-    ],
-    [
-      "cockpit-dial-centre",
-      336
-    ],
-    [
-      "cockpit-dial-right",
-      160
-    ],
-    [
-      "cockpit-light-white-cabin-port",
-      84
-    ],
-    [
-      "cockpit-light-white-cabin-starboard",
-      84
-    ],
-    [
-      "cockpit-light-white-dashboard",
-      879
-    ],
-    [
-      "cockpit-light-cyan-port-bank",
-      145
-    ],
-    [
-      "cockpit-light-cyan-starboard-bank",
-      138
-    ],
-    [
-      "cockpit-light-cyan-dial-left",
-      69
-    ],
-    [
-      "cockpit-light-cyan-dial-centre",
-      177
-    ],
-    [
-      "cockpit-light-cyan-dial-right",
-      69
+      1602
     ]
   ],
   "anchors": [
+    {
+      "id": "cockpit-pulse-surface",
+      "width": 0.7278319006300041,
+      "height": 0.519152026054849,
+      "matrix_blender": [
+        [
+          0.9795910716056824,
+          0.009812770411372185,
+          -0.20076097548007965,
+          -3.006319046020508
+        ],
+        [
+          0.16725070774555206,
+          0.51418536901474,
+          0.8412137031555176,
+          -0.6666247844696045
+        ],
+        [
+          0.11148300021886826,
+          -0.8576229214668274,
+          0.5020501613616943,
+          1.3337342739105225
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    {
+      "id": "cockpit-scanner-surface",
+      "width": 0.727831884635195,
+      "height": 0.519152026054849,
+      "matrix_blender": [
+        [
+          0.9795910716056824,
+          -0.009812724776566029,
+          0.20076090097427368,
+          3.006319046020508
+        ],
+        [
+          -0.16725066304206848,
+          0.5141853094100952,
+          0.8412137627601624,
+          -0.6666247844696045
+        ],
+        [
+          -0.11148291081190109,
+          -0.8576228618621826,
+          0.5020502209663391,
+          1.3337342739105225
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
     {
       "id": "cockpit-screen-0",
       "width": 2.5928508139952204,
@@ -167,71 +205,17 @@
           1.0
         ]
       ]
-    },
-    {
-      "id": "cockpit-pulse-surface",
-      "width": 0.6957014399610975,
-      "height": 0.6257881704226387,
-      "matrix_blender": [
-        [
-          0.9947344660758972,
-          0.09624920040369034,
-          -0.03520495444536209,
-          -3.2958731651306152
-        ],
-        [
-          1.481540667924719e-09,
-          0.3435112535953522,
-          0.9391484260559082,
-          -1.125
-        ],
-        [
-          0.10248559713363647,
-          -0.9342034459114075,
-          0.3417024612426758,
-          1.6106936931610107
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ]
-    },
-    {
-      "id": "cockpit-scanner-surface",
-      "width": 0.6978861913814234,
-      "height": 0.6168462788447732,
-      "matrix_blender": [
-        [
-          0.9947673678398132,
-          -0.09616043418645859,
-          0.03450788930058479,
-          3.27884578704834
-        ],
-        [
-          2.56561238920483e-09,
-          0.3377673029899597,
-          0.9412296414375305,
-          -1.125
-        ],
-        [
-          -0.10216467082500458,
-          -0.9363046884536743,
-          0.3359999358654022,
-          1.6106936931610107
-        ],
-        [
-          0.0,
-          0.0,
-          0.0,
-          1.0
-        ]
-      ]
     }
   ],
   "surfaces": {
+    "cockpit-pulse-surface": {
+      "width": 0.7278319006300041,
+      "height": 0.519152026054849
+    },
+    "cockpit-scanner-surface": {
+      "width": 0.727831884635195,
+      "height": 0.519152026054849
+    },
     "cockpit-screen-0": {
       "width": 2.5928508139952204,
       "height": 2.557721579616271
@@ -243,265 +227,140 @@
     "cockpit-screen-2": {
       "width": 2.6072202283059465,
       "height": 2.5632912308818856
-    },
-    "cockpit-pulse-surface": {
-      "width": 0.6957014399610975,
-      "height": 0.6257881704226387
-    },
-    "cockpit-scanner-surface": {
-      "width": 0.6978861913814234,
-      "height": 0.6168462788447732
     }
   },
-  "lights": [
-    {
-      "id": "cockpit-light-white-cabin-port",
-      "channel": -1,
-      "category": 0,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-white-cabin.png"
-    },
-    {
-      "id": "cockpit-light-white-cabin-starboard",
-      "channel": -1,
-      "category": 0,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-white-cabin.png"
-    },
-    {
-      "id": "cockpit-light-white-dashboard",
-      "channel": -1,
-      "category": 1,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-white-dashboard.png"
-    },
-    {
-      "id": "cockpit-light-cyan-port-bank",
-      "channel": -1,
-      "category": 2,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-cyan.png"
-    },
-    {
-      "id": "cockpit-light-cyan-starboard-bank",
-      "channel": -1,
-      "category": 2,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-cyan.png"
-    },
-    {
-      "id": "cockpit-light-cyan-dial-left",
-      "channel": -1,
-      "category": 2,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-cyan.png"
-    },
-    {
-      "id": "cockpit-light-cyan-dial-centre",
-      "channel": -1,
-      "category": 2,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-cyan.png"
-    },
-    {
-      "id": "cockpit-light-cyan-dial-right",
-      "channel": -1,
-      "category": 2,
-      "tint": [
-        1,
-        1,
-        1
-      ],
-      "default_gain": 1.0,
-      "texture": "cockpit-emission-cyan.png"
-    }
-  ],
-  "exterior": {
-    "layers": [
+  "console": {
+    "zones": [
       {
-        "id": "cockpit-exterior-cities",
-        "layer": "cities",
-        "texture": "cockpit-exterior-cities-emission.png"
+        "name": "centre-white",
+        "group": "dashboard",
+        "rect": [
+          0.43,
+          0.29,
+          0.57,
+          0.35
+        ]
       },
       {
-        "id": "cockpit-exterior-atmosphere",
-        "layer": "atmosphere",
-        "texture": "cockpit-exterior-atmosphere-emission.png"
+        "name": "port-white",
+        "group": "dashboard",
+        "rect": [
+          0.18,
+          0.47,
+          0.205,
+          0.56
+        ]
       },
       {
-        "id": "cockpit-exterior-stars",
-        "layer": "stars",
-        "texture": "cockpit-exterior-stars-emission.png"
+        "name": "starboard-white",
+        "group": "dashboard",
+        "rect": [
+          0.795,
+          0.47,
+          0.82,
+          0.56
+        ]
+      },
+      {
+        "name": "port-buttons",
+        "group": "buttons",
+        "rect": [
+          0.185,
+          0.35,
+          0.375,
+          0.47
+        ]
+      },
+      {
+        "name": "starboard-buttons",
+        "group": "buttons",
+        "rect": [
+          0.625,
+          0.35,
+          0.815,
+          0.47
+        ]
+      },
+      {
+        "name": "left-dial",
+        "group": "dials",
+        "rect": [
+          0.31,
+          0.47,
+          0.375,
+          0.59
+        ]
+      },
+      {
+        "name": "centre-dial",
+        "group": "dials",
+        "rect": [
+          0.435,
+          0.405,
+          0.565,
+          0.615
+        ]
+      },
+      {
+        "name": "right-dial",
+        "group": "dials",
+        "rect": [
+          0.625,
+          0.47,
+          0.69,
+          0.59
+        ]
+      },
+      {
+        "name": "port-edge",
+        "group": "cabin",
+        "rect": [
+          0.0,
+          0.66,
+          0.065,
+          0.76
+        ]
+      },
+      {
+        "name": "starboard-edge",
+        "group": "cabin",
+        "rect": [
+          0.935,
+          0.66,
+          1.0,
+          0.76
+        ]
       }
     ],
-    "limb_fit_max_error_pixels": 20.429257595860687,
-    "encoding": "sRGB-encoded positive linear RGB; original colors retained"
+    "source": "//console-standalone.png",
+    "referenceBounds": [
+      64,
+      587,
+      1608,
+      1101.6666666666665
+    ]
   },
-  "mask_registration": [
-    {
-      "zone": "white-cabin-port",
-      "source_bounds": [
-        0,
-        70,
-        836,
-        740
-      ],
-      "registration_pixels": [
-        0,
-        5
-      ]
-    },
-    {
-      "zone": "white-cabin-starboard",
-      "source_bounds": [
-        836,
-        70,
-        1672,
-        740
-      ],
-      "registration_pixels": [
-        0,
-        5
-      ]
-    },
-    {
-      "zone": "white-dashboard",
-      "source_bounds": [
-        720,
-        730,
-        949,
-        773
-      ],
-      "registration_pixels": [
-        0,
-        4
-      ]
-    },
-    {
-      "zone": "white-dashboard",
-      "source_bounds": [
-        260,
-        809,
-        307,
-        858
-      ],
-      "registration_pixels": [
-        3,
-        3
-      ]
-    },
-    {
-      "zone": "white-dashboard",
-      "source_bounds": [
-        1369,
-        808,
-        1405,
-        858
-      ],
-      "registration_pixels": [
-        -2,
-        4
-      ]
-    },
-    {
-      "zone": "cyan-port-bank",
-      "source_bounds": [
-        260,
-        754,
-        646,
-        812
-      ],
-      "registration_pixels": [
-        0,
-        7
-      ]
-    },
-    {
-      "zone": "cyan-starboard-bank",
-      "source_bounds": [
-        1035,
-        754,
-        1403,
-        812
-      ],
-      "registration_pixels": [
-        0,
-        7
-      ]
-    },
-    {
-      "zone": "cyan-dial-left",
-      "source_bounds": [
-        495,
-        810,
-        630,
-        888
-      ],
-      "registration_pixels": [
-        -1,
-        5
-      ]
-    },
-    {
-      "zone": "cyan-dial-centre",
-      "source_bounds": [
-        710,
-        785,
-        960,
-        901
-      ],
-      "registration_pixels": [
-        0,
-        1
-      ]
-    },
-    {
-      "zone": "cyan-dial-right",
-      "source_bounds": [
-        1040,
-        810,
-        1180,
-        888
-      ],
-      "registration_pixels": [
-        2,
-        4
-      ]
-    }
-  ]
+  "exterior": {
+    "bridge": "cockpit-bridge",
+    "mount": "cockpit-carousel-mount",
+    "paneExtent": [
+      4.8,
+      4.0
+    ],
+    "paneElevation": 0.65,
+    "cubemap": [
+      "cockpit-bridge-front",
+      "cockpit-bridge-right",
+      "cockpit-bridge-back",
+      "cockpit-bridge-left",
+      "cockpit-bridge-top",
+      "cockpit-bridge-bottom"
+    ],
+    "planet": "cockpit-planet",
+    "atmosphere": "cockpit-atmosphere",
+    "stars": "cockpit-space",
+    "cities": "cockpit-planet-cities",
+    "radius": 183,
+    "polarRatio": 0.985
+  }
 }

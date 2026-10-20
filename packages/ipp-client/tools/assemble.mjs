@@ -32,6 +32,8 @@ export const CLIENT_SUPPORT_MODULES = [
   "transport.ts",
   "types.ts",
   "worker.ts",
+  "html-content.ts",
+  "html-input.ts",
   "world-persistence-client.ts",
 ];
 
@@ -45,6 +47,7 @@ const BROWSER_HOST_ONLY_MODULES = [
   "resource-worker.ts",
   "source-availability.ts",
   "render-worker.ts",
+  "html-worker.ts",
   "profile-worker.ts",
   "render-testing.ts",
 ];
@@ -127,7 +130,9 @@ export async function assembleBrowserHost(
     "resource-worker.ts",
     "source-availability.ts",
     "resource-urls.ts",
-    ...(rendering ? ["render-worker.ts", "presentation.ts"] : []),
+    ...(rendering
+      ? ["render-worker.ts", "html-worker.ts", "presentation.ts"]
+      : []),
     ...(instrumentation ? ["profile-worker.ts"] : []),
     ...(rendering && instrumentation ? ["render-testing.ts"] : []),
   ];
@@ -135,6 +140,7 @@ export async function assembleBrowserHost(
   // omits; the client support modules beside it stay.
   for (const name of [
     "render-worker.ts",
+    "html-worker.ts",
     "profile-worker.ts",
     "render-testing.ts",
   ])

@@ -1,0 +1,17 @@
+{
+  "name": "@ipp/terminal",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Ghostty terminal authoring through the standard IPP client protocol",
+  "exports": {
+    ".": "./src/index.ts",
+    "./headless": "./src/headless.ts"
+  },
+  "dependencies": {
+    "@ipp/client": "0.1.0",
+    "@everruns/bashkit-wasm": "0.19.0",
+    "@gespenst/core": "0.1.2"
+  },
+  "sideEffects": false
+}

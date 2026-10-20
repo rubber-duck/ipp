@@ -1,3 +1,4 @@
+import { COCKPIT_PANE_COUNT } from "./options.js";
 /** The same task-oriented controls are rendered flat for review and on the bridge. */
 import { useState, useSyncExternalStore } from "react";
 import {
@@ -464,11 +465,11 @@ function CarouselNavigation({
         label="Next"
         variant="secondary"
         flex={1}
-        disabled={focus >= 2}
+        disabled={focus >= COCKPIT_PANE_COUNT - 1}
         onPress={() =>
           update({
             carousel: Math.min(
-              2,
+              COCKPIT_PANE_COUNT - 1,
               Math.round(navigation?.focus() ?? carousel) + 1,
             ),
             carouselDragging: false,

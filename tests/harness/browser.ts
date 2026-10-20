@@ -54,6 +54,8 @@ export interface BrowserHarnessConfiguration {
   readonly evidenceParent?: string;
   readonly deviceScaleFactor?: number;
   readonly hasTouch?: boolean;
+  readonly htmlInCanvas?: boolean;
+  readonly userAgent?: string;
   /** Whether the build presents frames; defaults to render-prefixed build names. */
   readonly rendering?: boolean;
   /** Enable shared generated buffers in an explicitly isolated worker environment. */
@@ -380,7 +382,9 @@ class BrowserEnvironment {
     this.#configuration.onStartup?.("server-ready", origin);
     checkActive();
     this.#launching = chromium.launch({
-      ...browserLaunchOptions(this.#rendering),
+      ...browserLaunchOptions(this.#rendering, {
+        htmlInCanvas: this.#configuration.htmlInCanvas ?? true,
+      }),
       timeout:
         this.#configuration.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
     });
@@ -395,6 +399,9 @@ class BrowserEnvironment {
     });
     checkActive();
     const context = await browser.newContext({
+      ...(this.#configuration.userAgent
+        ? { userAgent: this.#configuration.userAgent }
+        : {}),
       ...(this.#configuration.deviceScaleFactor === undefined
         ? {}
         : { deviceScaleFactor: this.#configuration.deviceScaleFactor }),
@@ -431,7 +438,9 @@ class BrowserEnvironment {
     const urls = this.#urls(origin);
     await this.#evidence.record("browser_ready", {
       chromium: browser.version(),
-      launchOptions: browserLaunchOptions(this.#rendering),
+      launchOptions: browserLaunchOptions(this.#rendering, {
+        htmlInCanvas: this.#configuration.htmlInCanvas ?? true,
+      }),
       page: page.url(),
       urls,
       deviceScaleFactor: await page.evaluate(() => window.devicePixelRatio),

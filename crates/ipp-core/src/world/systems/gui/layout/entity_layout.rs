@@ -118,6 +118,7 @@ pub(in crate::world::systems::gui) fn entity_layout_input(component: u16) -> boo
                 | ComponentValue::CANVAS_GLYPH_RUN
                 | ComponentValue::CANVAS_DRAWING
                 | ComponentValue::CANVAS_BITMAP
+                | ComponentValue::CANVAS_HTML
                 | ComponentValue::GUI_BUTTON
                 | ComponentValue::GUI_CHECKBOX
                 | ComponentValue::GUI_SLIDER
@@ -168,6 +169,7 @@ impl GuiEntityLayoutState {
                 | ComponentValue::CANVAS_GLYPH_RUN
                 | ComponentValue::CANVAS_DRAWING
                 | ComponentValue::CANVAS_BITMAP
+                | ComponentValue::CANVAS_HTML
         ) {
             self.geometry_dirty.insert(entity);
         }

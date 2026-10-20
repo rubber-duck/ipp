@@ -22,14 +22,14 @@ import {
 import { Style, Layout } from "@ipp/react/gui";
 import {
   GuiKit,
-  useGuiKit,
   Button,
   Checkbox,
   Dropdown,
   Column,
   Toolbar,
   Panel,
-  PanelBody,
+  Form,
+  Field,
   ScrollArea,
   Popover,
   TextLine,
@@ -88,6 +88,8 @@ export const DEMO_SYSTEMS = [
   "ipp.plot",
 ] as const;
 export const DEMO_FONT = "/target/font-assets/shure-tech-mono.ippf";
+const DEMO_FONT_SIZE = 14;
+const DEMO_CHROME_MARGIN = 16;
 
 interface OwnedAssets extends GalleryAssets {
   close?(): Promise<void>;
@@ -180,7 +182,7 @@ interface OwnedScene {
   unsubscribe?: (() => void) | undefined;
 }
 
-/** A compact heading and form share the enclosing Panel's padded surface. */
+/** A compact heading and form share the scroll area's padded content. */
 function DemoControlScroll({
   title,
   description,
@@ -190,10 +192,9 @@ function DemoControlScroll({
   readonly description: string;
   readonly children: ReactNode;
 }) {
-  const kit = useGuiKit();
   return (
     <ScrollArea id="demo-controls-scroll">
-      <Column id="demo-controls-heading" gap={kit.unit(4)}>
+      <Column id="demo-controls-heading" gap="compact">
         <TextLine id="demo-scene-title" text={title} tone="accent" />
         <TextLine
           id="demo-scene-description"
@@ -202,9 +203,7 @@ function DemoControlScroll({
           size="small"
         />
       </Column>
-      <Column id="demo-controls-fields" gap={kit.spacing.field}>
-        {children}
-      </Column>
+      <Form id="demo-controls-fields">{children}</Form>
     </ScrollArea>
   );
 }
@@ -369,6 +368,28 @@ export class DemoApplication implements GallerySceneMount {
     return pending;
   }
 
+  /** Cockpit navigation occupies its own strip above the scene's camera output. */
+  private sceneViewport(id: string): PresentationViewport {
+    if (id !== "cockpit") return this.viewport;
+    const { tokens } = this.skins[this.skin];
+    const scale = DEMO_FONT_SIZE / tokens.em;
+    const inset = (tokens.spacing?.inset ?? tokens.inset) * scale;
+    const gap = (tokens.spacing?.label ?? tokens.inset / 2) * scale;
+    const narrow = this.viewport.width / this.viewport.devicePixelRatio < 400;
+    const rowHeight = Math.max(tokens.controlHeight, tokens.row) * scale;
+    const toolbarHeight =
+      2 * inset + rowHeight * (narrow ? 2 : 1) + (narrow ? gap : 0);
+    return {
+      ...this.viewport,
+      height: Math.max(
+        1,
+        this.viewport.height -
+          (2 * DEMO_CHROME_MARGIN + toolbarHeight) *
+            this.viewport.devicePixelRatio,
+      ),
+    };
+  }
+
   private declarations() {
     const contract = this.context.contract as unknown as GuiKitContract;
     const skin = this.skins[this.skin];
@@ -394,7 +415,8 @@ export class DemoApplication implements GallerySceneMount {
         }))}
         value={this.active?.definition.id ?? this.pending ?? "shapes"}
         onChange={(id) => run(this.navigate(id))}
-        layout={{ width: -1, flex: 1 }}
+        width={-1}
+        flex={1}
       />
     );
     const toolbarActions = (
@@ -403,36 +425,36 @@ export class DemoApplication implements GallerySceneMount {
           id="demo-display"
           label="Display"
           title="DISPLAY"
-          width={248}
-          layout={{ ...(narrow ? { width: 0, flex: 1 } : {}) }}
+          contentWidth={248}
+          {...(narrow ? { width: 0, flex: 1 } : {})}
         >
-          <PanelBody id="demo-display-content" padding={0}>
-            <TextLine id="demo-skin-label" text="Skin" tone="accent" />
-            <Dropdown
-              id="demo-skin-picker"
-              label="Skin"
-              options={[
-                { key: "glass", label: "Glass" },
-                { key: "cybertron", label: "Cybertron" },
-              ]}
-              value={this.skin}
-              onChange={(value) => run(this.action("skin", value))}
-              layout={{ width: -1 }}
-            />
-            <TextLine id="demo-scale-label" text="Render scale" tone="accent" />
-            <Dropdown
-              id="demo-render-scale"
-              label="Render scale"
-              options={DEMO_RENDER_SCALES.map((value) => ({
-                key: String(value),
-                label: `${value}× pixels`,
-              }))}
-              value={String(this.scale)}
-              onChange={(value) =>
-                run(this.action("renderScale", Number(value)))
-              }
-              layout={{ width: -1 }}
-            />
+          <Form id="demo-display-content">
+            <Field id="demo-skin-field" label="Skin">
+              <Dropdown
+                id="demo-skin-picker"
+                label="Skin"
+                options={[
+                  { key: "glass", label: "Glass" },
+                  { key: "cybertron", label: "Cybertron" },
+                ]}
+                value={this.skin}
+                onChange={(value) => run(this.action("skin", value))}
+              />
+            </Field>
+            <Field id="demo-scale" label="Render scale">
+              <Dropdown
+                id="demo-render-scale"
+                label="Render scale"
+                options={DEMO_RENDER_SCALES.map((value) => ({
+                  key: String(value),
+                  label: `${value}× pixels`,
+                }))}
+                value={String(this.scale)}
+                onChange={(value) =>
+                  run(this.action("renderScale", Number(value)))
+                }
+              />
+            </Field>
             <Toolbar id="demo-reset-row">
               <Button
                 id="demo-reset-view"
@@ -452,7 +474,7 @@ export class DemoApplication implements GallerySceneMount {
             >
               FPS history
             </Checkbox>
-          </PanelBody>
+          </Form>
         </Popover>
         <Button
           id="demo-controls-toggle"
@@ -472,33 +494,42 @@ export class DemoApplication implements GallerySceneMount {
       <>
         {[this.active, this.preparing]
           .filter((scene): scene is OwnedScene => !!scene)
-          .map((scene) => (
-            <Entity
-              key={scene.generation}
-              id={`demo-scene-${scene.generation}`}
-            >
-              <Style x={0} y={0} layer={scene === this.active ? 1 : 0} />
-              <FlatSurface width={width} height={height} />
-              <AttachedWorld
-                anchor={`demo-scene-${scene.generation}`}
-                child={{ borrow: scene.worlds[0]! }}
-                attachment={{
-                  mode: "surface-camera",
-                  output: scene.mount.output as CameraOutputReference,
-                }}
-                onReady={(handle) => scene.canvas.bind(handle)}
-              />
-            </Entity>
-          ))}
+          .map((scene) => {
+            const sceneViewport = this.sceneViewport(scene.definition.id);
+            const sceneHeight =
+              sceneViewport.height / sceneViewport.devicePixelRatio;
+            return (
+              <Entity
+                key={scene.generation}
+                id={`demo-scene-${scene.generation}`}
+              >
+                <Style
+                  x={0}
+                  y={height - sceneHeight}
+                  layer={scene === this.active ? 1 : 0}
+                />
+                <FlatSurface width={width} height={sceneHeight} />
+                <AttachedWorld
+                  anchor={`demo-scene-${scene.generation}`}
+                  child={{ borrow: scene.worlds[0]! }}
+                  attachment={{
+                    mode: "surface-camera",
+                    output: scene.mount.output as CameraOutputReference,
+                  }}
+                  onReady={(handle) => scene.canvas.bind(handle)}
+                />
+              </Entity>
+            );
+          })}
         <GuiKit
           id="demo-skin"
           contract={contract}
           skin={skin}
           font={this.context.assets.url(DEMO_FONT)}
-          fontSize={14}
+          fontSize={DEMO_FONT_SIZE}
         >
           <Entity id="demo-toolbar">
-            <Style x={16} y={16} layer={100} />
+            <Style x={DEMO_CHROME_MARGIN} y={DEMO_CHROME_MARGIN} layer={100} />
             <Children>
               <Column
                 id="demo-chrome"
@@ -507,8 +538,13 @@ export class DemoApplication implements GallerySceneMount {
                 fitHeight={false}
                 gap={12}
               >
-                <Panel id="demo-toolbar-panel" width={toolbarWidth} fitHeight>
-                  <Column id="demo-toolbar-lines" gap={8}>
+                <Panel
+                  id="demo-toolbar-panel"
+                  width={toolbarWidth}
+                  padding="inset"
+                  fitHeight
+                >
+                  <Column id="demo-toolbar-lines" gap="label">
                     <Toolbar id="demo-toolbar-row">
                       {scenePicker}
                       {!narrow && toolbarActions}
@@ -761,7 +797,9 @@ export class DemoApplication implements GallerySceneMount {
         await candidate.mount.ready;
         candidate.lifetime.signal.throwIfAborted();
         candidate.prepared();
-        await candidate.mount.resize?.(this.viewport);
+        await candidate.mount.resize?.(
+          this.sceneViewport(candidate.definition.id),
+        );
         await this.context.canvas.frame({
           afterOutputs: [this.output, candidate.mount.output],
         });
@@ -890,7 +928,10 @@ export class DemoApplication implements GallerySceneMount {
 
   async resize(viewport: PresentationViewport) {
     this.viewport = viewport;
-    await this.active?.mount.resize?.(viewport);
+    if (this.active)
+      await this.active.mount.resize?.(
+        this.sceneViewport(this.active.definition.id),
+      );
     await this.render();
   }
   async update(patch: GalleryOptions): Promise<void> {
@@ -958,6 +999,8 @@ export class DemoApplication implements GallerySceneMount {
           throw new Error("Unknown demo skin");
         this.skin = args;
         await this.active?.mount.update({ skin: args });
+        if (this.active?.definition.id === "cockpit")
+          await this.active.mount.resize?.(this.sceneViewport("cockpit"));
       } else if (name === "renderScale") {
         const value = Number(args);
         if (!DEMO_RENDER_SCALES.some((scale) => scale === value))

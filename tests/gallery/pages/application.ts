@@ -152,6 +152,20 @@ export async function platformerControls() {
 export async function cockpitGeometry() {
   await settle();
   const app = application();
+  const shell = await app.inspectApplication();
+  const anchor = shell.shell.entities.find(
+    (entity) => entity.id === shell.cameraPath[0]?.anchor,
+  );
+  const placement = anchor?.components.find(
+    (component) =>
+      component.component === app.sceneClient!.components.CanvasStyle!.id,
+  )?.fields;
+  const surface = anchor?.components.find(
+    (component) =>
+      component.component === app.sceneClient!.components.FlatSurface!.id,
+  )?.fields;
+  if (!placement || !surface)
+    throw new Error("The scene Camera Surface is absent");
   const snapshot = (await app.inspect()) as {
     scene: Inspection;
     panels: (Inspection & { world: WorldReference })[];
@@ -173,6 +187,12 @@ export async function cockpitGeometry() {
   return {
     ...snapshot,
     panels,
+    cameraSurface: {
+      x: Number(placement.x),
+      y: Number(placement.y),
+      width: Number(surface.width),
+      height: Number(surface.height),
+    },
     componentIds: Object.fromEntries(
       Object.entries(app.sceneClient!.components).map(([name, descriptor]) => [
         name,
@@ -186,6 +206,27 @@ export async function cockpitGeometry() {
 export async function options(patch: Readonly<Record<string, unknown>>) {
   await application().update(patch);
   await settle();
+}
+
+/** Browser pane state without opening six extra Canvas observation sessions. */
+export async function cockpitBrowserState() {
+  await settle();
+  const snapshot = (await application().inspect()) as { panels: Inspection[] };
+  const entities = snapshot.panels[3]?.entities ?? [];
+  const field = (id: string, name: string) =>
+    String(
+      entities
+        .find((entity) => entity.metadata.symbolicId === id)
+        ?.components.find((component) => name in component.fields)?.fields[
+        name
+      ] ?? "",
+    );
+  return {
+    source: field("cockpit-browser-page", "source"),
+    status: field("cockpit-browser-status", "text"),
+    address: field("cockpit-browser-address/input", "text"),
+    domSources: document.querySelectorAll("canvas > [drawable]").length,
+  };
 }
 export async function capture(label: string) {
   await settle();

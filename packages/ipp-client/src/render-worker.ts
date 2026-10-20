@@ -1,3 +1,5 @@
+import { HtmlWorkerService } from "./html-worker.js";
+import type { HtmlElementImage } from "./html-content.js";
 import { SURFACE_CACHE_MODES, validateViewport } from "./presentation.js";
 import type {
   IngressStatistics,
@@ -13,6 +15,8 @@ import type { RenderTesting } from "./render-testing.js";
 /** Imported only by a worker initialized with an OffscreenCanvas. */
 interface WebGlHostExports {
   imports: WebAssembly.Imports[string];
+  stageHtmlImage(image: HtmlElementImage): number;
+  releaseWebImage(id: number): void;
   setMemory(memory: WebAssembly.Memory): void;
   resize(width: number, height: number): void;
   capture(): Uint8Array<ArrayBuffer>;
@@ -110,6 +114,7 @@ function pick<K extends keyof typeof RECORD>(
 export class RenderWorkerService {
   readonly imports: WebAssembly.Imports;
   private runtime: RenderHostExports | undefined;
+  private html: HtmlWorkerService | undefined;
   private ingress: IngressStatistics | undefined;
   /** Testing controls; present only in instrumentation distributions. */
   private readonly testing: RenderTesting | undefined;
@@ -238,6 +243,11 @@ export class RenderWorkerService {
         );
     }
     this.runtime = exports as RenderHostExports;
+    this.html = new HtmlWorkerService(
+      exports as ConstructorParameters<typeof HtmlWorkerService>[0],
+      this.device,
+      this.post,
+    );
     this.ingress = ingress;
     this.session = session;
     this.device.setMemory(this.runtime.memory);
@@ -313,6 +323,7 @@ export class RenderWorkerService {
   beforeFrame(): void {
     // Loss may become observable before the browser dispatches its event.
     if (this.device.isContextLost()) this.suspend();
+    else this.html?.poll();
   }
 
   /** Read the packed statistics record on request. */
@@ -442,6 +453,7 @@ export class RenderWorkerService {
   }
 
   receive(data: Record<string, unknown>): boolean {
+    if (this.html?.receive(data)) return true;
     if (data.type === "render-statistics") {
       const runtime = this.runtime;
       if (!runtime)

@@ -1,8 +1,15 @@
+import {
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  type GuiKitFlowLayoutProps,
+  Column,
+  ActionRow,
+} from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
 import { Resources } from "../../resources.js";
 import { createContext, useContext, type ReactNode } from "react";
 import { Button, type ButtonProps } from "../button.js";
-import { Column, Row, type GuiKitLayout } from "../layout.js";
+
 import { PanelHeader } from "../containers/panel.js";
 import { useGuiKit } from "../kit.js";
 import {
@@ -55,18 +62,13 @@ export function DialogTrigger({ onPress, ...props }: DialogTriggerProps) {
   );
 }
 
-export interface DialogContentProps {
-  readonly width?: number;
-  readonly layout?: GuiKitLayout;
+export interface DialogContentProps extends GuiKitLayoutProps {
   readonly children?: ReactNode;
 }
 
 /** A modal confined to this World's canvas; runtime owns focus trapping and return. */
-export function DialogContent({
-  width = 368,
-  layout,
-  children,
-}: DialogContentProps) {
+export function DialogContent(props: DialogContentProps) {
+  const { width, layout, children } = useGuiKitLayout(props);
   const { id, overlay } = useDialog();
   const kit = useGuiKit();
   return (
@@ -80,7 +82,7 @@ export function DialogContent({
         open={overlay.open}
         controlled={overlay.controlled}
         onVisibleChange={overlay.onVisibleChange}
-        layout={{ width: kit.unit(width), ...layout }}
+        layout={{ width: width ?? kit.unit(368), ...layout }}
       >
         {children}
       </Floating>
@@ -88,51 +90,45 @@ export function DialogContent({
   );
 }
 
-export interface DialogHeaderProps {
+export interface DialogHeaderProps extends GuiKitLayoutProps {
   readonly title: string;
   readonly children?: ReactNode;
 }
 
-export function DialogHeader({ title, children }: DialogHeaderProps) {
+export function DialogHeader({
+  title,
+  children,
+  ...layout
+}: DialogHeaderProps) {
   const { id } = useDialog();
   return (
-    <PanelHeader id={`${id}/header`} title={title}>
+    <PanelHeader id={`${id}/header`} title={title} {...layout}>
       {children}
     </PanelHeader>
   );
 }
 
-export interface DialogSectionProps {
-  readonly layout?: GuiKitLayout;
+export interface DialogSectionProps extends GuiKitFlowLayoutProps {
   readonly children?: ReactNode;
 }
 
-export function DialogBody({ layout, children }: DialogSectionProps) {
+export function DialogBody(props: DialogSectionProps) {
+  const { layout, children } = useGuiKitLayout(props);
   const { id } = useDialog();
-  const kit = useGuiKit();
   return (
-    <Column
-      id={`${id}/body`}
-      padding={kit.unit(kit.tokens.inset)}
-      layout={layout}
-    >
+    <Column id={`${id}/body`} padding="inset" layout={layout}>
       {children}
     </Column>
   );
 }
 
-export function DialogActions({ layout, children }: DialogSectionProps) {
+export function DialogActions(props: DialogSectionProps) {
+  const { layout, children } = useGuiKitLayout(props);
   const { id } = useDialog();
-  const kit = useGuiKit();
   return (
-    <Row
-      id={`${id}/actions`}
-      height={kit.unit(kit.tokens.controlHeight + 2 * kit.tokens.inset)}
-      padding={kit.unit(kit.tokens.inset)}
-      layout={layout}
-    >
+    <ActionRow id={`${id}/actions`} padding="inset" layout={layout}>
       {children}
-    </Row>
+    </ActionRow>
   );
 }
 

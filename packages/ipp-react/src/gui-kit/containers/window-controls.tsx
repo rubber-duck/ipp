@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Window controls: secondary buttons labelled with the Material outline glyph
@@ -9,7 +17,7 @@ import { useEntityId } from "../../scope/identity.js";
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
-import { Style, Behavior, Font, Layout } from "../../gui/components.js";
+import { Style, Behavior, Font } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type {
   GuiFeedbackListeners,
@@ -18,7 +26,6 @@ import type {
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { GUI_KIT_ICONS } from "../icons.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_LEAF, LAYOUT_ROW, type GuiKitLayout } from "../layout.js";
 
 export type WindowControlKind = "minimize" | "maximize" | "restore" | "close";
 
@@ -33,7 +40,9 @@ const LABELS: Readonly<Record<WindowControlKind, string>> = {
   close: "Close",
 };
 
-export interface WindowControlProps extends GuiFeedbackListeners {
+export interface WindowControlProps
+  extends GuiFeedbackListeners,
+    GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -52,23 +61,24 @@ export interface WindowControlProps extends GuiFeedbackListeners {
   readonly focusable?: boolean;
   /** Semantic label; the action's English name by default. */
   readonly label?: string;
-  readonly layout?: GuiKitLayout;
 }
 
-export function WindowControl({
-  id: providedId,
-  layer = 0,
-  kind,
-  onPress,
-  ref,
-  disabled = false,
-  amber = false,
-  docked = true,
-  focusable = true,
-  label = LABELS[kind],
-  layout,
-  ...feedback
-}: WindowControlProps) {
+export function WindowControl(props: WindowControlProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    kind,
+    onPress,
+    ref,
+    disabled = false,
+    amber = false,
+    docked = true,
+    focusable = true,
+    label = LABELS[kind],
+    layout,
+    onFocusChange,
+    onInteractionChange,
+  }: WindowControlProps = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -83,7 +93,7 @@ export function WindowControl({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_LEAF}
         width={kit.unit(docked ? t.dockedWidth : FREE_WIDTH)}
         height={kit.unit(docked ? t.dockedHeight : t.controlHeight)}
@@ -99,7 +109,8 @@ export function WindowControl({
       />
       <Button
         label={GUI_KIT_ICONS[kind]}
-        {...feedback}
+        {...(onFocusChange ? { onFocusChange } : {})}
+        {...(onInteractionChange ? { onInteractionChange } : {})}
         {...(onPress ? { onPress } : {})}
         {...(ref ? { ref } : {})}
       />
@@ -107,7 +118,7 @@ export function WindowControl({
   );
 }
 
-export interface WindowControlsProps {
+export interface WindowControlsProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -116,22 +127,22 @@ export interface WindowControlsProps {
   readonly onMaximize?: GuiPressListener;
   readonly onRestore?: GuiPressListener;
   readonly onClose?: GuiPressListener;
-  readonly layout?: GuiKitLayout;
 }
 
 /**
  * The docked window controls an application asks for, for a panel header:
  * minimise, maximise, restore and close, each present when its callback is.
  */
-export function WindowControls({
-  id: providedId,
-  layer = 0,
-  onMinimize,
-  onMaximize,
-  onRestore,
-  onClose,
-  layout,
-}: WindowControlsProps) {
+export function WindowControls(props: WindowControlsProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    onMinimize,
+    onMaximize,
+    onRestore,
+    onClose,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -148,7 +159,7 @@ export function WindowControls({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         width={kit.unit(
           controls.length * t.dockedWidth +

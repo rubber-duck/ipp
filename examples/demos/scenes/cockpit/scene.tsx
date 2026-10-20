@@ -1,3 +1,5 @@
+import { startBrowserTerminal, type BrowserTerminal } from "@ipp/terminal";
+import { GALLERY_RUNTIME } from "../../shared/runtime.js";
 import type { GalleryDiagnosticsMonitor } from "../../frame-rate.js";
 import type { FrameRateContract } from "../../frame-rate-panel.js";
 import type {
@@ -28,6 +30,7 @@ import type {
 } from "../../shared/scene.js";
 import {
   COCKPIT_DEFAULTS,
+  COCKPIT_PANE_COUNT,
   cockpitOptions,
   type CockpitOptions,
 } from "./options.js";
@@ -93,12 +96,12 @@ interface Anchor {
 function CockpitWorld({
   context,
   anchors,
-  camera,
   material,
   state,
   update,
   report,
   ready,
+  startTerminal,
   monitor,
   wheelTarget,
   runtime,
@@ -109,11 +112,11 @@ function CockpitWorld({
   monitor?: GalleryDiagnosticsMonitor | undefined;
   context: GallerySceneContext;
   anchors: readonly Anchor[];
-  camera: Pose;
   material: number;
   state: CockpitOptions;
   update(patch: GalleryOptions): void | Promise<void>;
   report(error: unknown): void;
+  startTerminal?: (() => Promise<void>) | undefined;
   ready(index: number, handle: CanvasWorldHandle | null): void;
   wheelTarget(
     index: number,
@@ -122,10 +125,7 @@ function CockpitWorld({
   ): void;
 }) {
   const contract = context.contract as unknown as InstrumentContract;
-  const placements = carouselScreenMounts(
-    anchors.slice(0, 3),
-    state.projection,
-  );
+  const placements = carouselScreenMounts(runtime.bridge, state.projection);
   const transform = context.canvas.client.components.Transform!;
   const pane = (index: number) => {
     const dashboard = index >= 6;
@@ -188,6 +188,8 @@ function CockpitWorld({
             ) : (
               <CockpitPane
                 index={index}
+                startTerminal={startTerminal}
+                browserHost={context.canvas.host}
                 navigation={navigation}
                 wheelTarget={(role, target) => wheelTarget(index, role, target)}
                 width={width}
@@ -208,19 +210,25 @@ function CockpitWorld({
     <>
       <CockpitExterior runtime={runtime} component={material} state={state} />
       <CockpitLighting runtime={runtime} component={material} state={state} />
-      <Entity id={CAROUSEL_ENTITY}>
-        <Transform {...camera} />
-        <CarouselRotation
-          component={transform.id}
-          offsets={["qx", "qy", "qz", "qw"].map(
-            (field) => transform.fields[field]!.offset,
-          )}
-          step={carouselStep(placements[0]!.extent[0], state.projection)}
-          focus={state.carousel}
-          dragging={state.carouselDragging}
-        />
+      <Entity bindTo={runtime.bridge.carouselMount}>
         <Children>
-          {Array.from({ length: 3 }, (_, index) => pane(index))}
+          <Entity id={CAROUSEL_ENTITY}>
+            <Transform />
+            <CarouselRotation
+              component={transform.id}
+              offsets={["qx", "qy", "qz", "qw"].map(
+                (field) => transform.fields[field]!.offset,
+              )}
+              step={carouselStep(placements[0]!.extent[0], state.projection)}
+              focus={state.carousel}
+              dragging={state.carouselDragging}
+            />
+            <Children>
+              {Array.from({ length: COCKPIT_PANE_COUNT }, (_, index) =>
+                pane(index),
+              )}
+            </Children>
+          </Entity>
         </Children>
       </Entity>
       {pane(6)}
@@ -356,6 +364,8 @@ export const cockpitScene: GallerySceneDefinition = {
       if (!removed.ok) throw new Error(removed.error.reason);
     }
     const camera = named("cockpit-camera");
+    named(runtime.bridge.entity);
+    named(runtime.bridge.carouselMount);
     const cameraProjection = camera.components.find(
       (component) => component.component === client.components.Camera!.id,
     )?.fields;
@@ -375,6 +385,70 @@ export const cockpitScene: GallerySceneDefinition = {
     );
     const panels = new Map<number, WorldReference>();
     const observers: Client[] = [];
+    let terminal: BrowserTerminal | undefined;
+    let terminalStarting: Promise<void> | undefined;
+    let terminalDisposed = false;
+    const startTerminal =
+      typeof Worker === "undefined"
+        ? undefined
+        : () => {
+            if (terminal) return terminal.ready;
+            return (terminalStarting ??= (async () => {
+              if (terminalDisposed)
+                throw new Error("Cockpit terminal is disposed");
+              const world = panels.get(2);
+              if (!world) throw new Error("Terminal panel is not ready");
+              const observer = await context.canvas.host.openWorld(world);
+              try {
+                const target = (await observer.inspect()).entities.find(
+                  (entity) => entity.metadata.symbolicId === "cockpit-terminal",
+                );
+                if (!target)
+                  throw new Error("Terminal input target is missing");
+                if (terminalDisposed)
+                  throw new Error("Cockpit terminal is disposed");
+                const asset = (name: string) =>
+                  context.assets.url(`/target/terminal-build/${name}`);
+                terminal = startBrowserTerminal(
+                  context.canvas.host,
+                  asset("terminal-worker.js"),
+                  new URL(
+                    `${GALLERY_RUNTIME}generated.js`,
+                    window.location.href,
+                  ).href,
+                  {
+                    world,
+                    target: target.id,
+                    fontSource: context.assets.url(COCKPIT_FONT),
+                    fontMetricsUrl: asset("terminal-font.json"),
+                    fontSize: 16,
+                    lineHeight: 20,
+                    transparentBackground: true,
+                    wasm: asset("ghostty-vt.wasm"),
+                    callbacksWasm: asset("ghostty-callbacks.wasm"),
+                    bashkit: asset("bashkit.wasm"),
+                    shell: {
+                      cwd: "/home/pilot",
+                      files: {
+                        "/home/pilot/bridge.txt":
+                          "Welcome aboard IPP Explorer.\nThis shell runs locally in your browser.\nTry pipelines, vi notes.txt, or ANSI colors with printf.\n",
+                      },
+                    },
+                  },
+                  (error) => context.onError?.(error),
+                );
+                await terminal.ready;
+              } catch (error) {
+                await terminal?.close().catch(() => {});
+                terminal = undefined;
+                throw error;
+              } finally {
+                await observer.close();
+              }
+            })().finally(() => {
+              terminalStarting = undefined;
+            }));
+          };
     const gripIds: bigint[] = [];
     const wheelTargets = new Map<string, GuiTarget>();
     const panelHandles = new Map<number, CanvasWorldHandle>();
@@ -401,7 +475,7 @@ export const cockpitScene: GallerySceneDefinition = {
       }
       panelHandles.set(index, handle);
       panels.set(index, handle.world);
-      if (panels.size === 5) resolvePanels();
+      if (panels.size === COCKPIT_PANE_COUNT + 2) resolvePanels();
     };
     const notifyNavigation = () => {
       for (const listener of navigationListeners) listener();
@@ -430,18 +504,21 @@ export const cockpitScene: GallerySceneDefinition = {
     const base: GallerySceneMount = await (async () => {
       return mountGalleryScene(context, {
         output,
+        // The Earth textures can take longer on a cold software renderer.
+        // The application's scene-preparation deadline still bounds startup.
+        resourceTimeoutMs: 60_000,
         options: { ...cockpitOptions({ ...COCKPIT_DEFAULTS, ...options }) },
         render: (value) => (
           <CockpitWorld
             runtime={runtime}
             context={context}
             anchors={anchors}
-            camera={readPose(cameraPose)}
             material={client.components.CustomMaterial!.id}
             state={cockpitOptions(value)}
             update={update}
             report={report}
             ready={onReady}
+            startTerminal={startTerminal}
             navigation={navigation}
             wheelTarget={(index, role, target) => {
               const key = `${index}/${role}`;
@@ -460,7 +537,7 @@ export const cockpitScene: GallerySceneDefinition = {
               carousel: Math.max(
                 0,
                 Math.min(
-                  2,
+                  COCKPIT_PANE_COUNT - 1,
                   Math.round(Number(mount.options.carousel)) +
                     (Number(direction) || 1),
                 ),
@@ -517,7 +594,7 @@ export const cockpitScene: GallerySceneDefinition = {
       current: () => boolean,
     ) => {
       if (!current()) return;
-      const carousel = Math.max(0, Math.min(2, focus));
+      const carousel = Math.max(0, Math.min(COCKPIT_PANE_COUNT - 1, focus));
       if (trackingKind !== kind) {
         ++trackingEpoch;
         trackingDescription = undefined;
@@ -536,7 +613,7 @@ export const cockpitScene: GallerySceneDefinition = {
               await Promise.allSettled([...pendingTracking]);
             if (preparing !== trackingEpoch || context.signal.aborted) return;
             // Freeze declaration-owned seek once. Both pointer and wheel tracking
-            // then reuse the prepared clip without rendering the five pane Worlds.
+            // then reuse the prepared clip without rendering the panel Worlds.
             await base.update({
               ...cockpitOptions({
                 ...base.options,
@@ -589,7 +666,7 @@ export const cockpitScene: GallerySceneDefinition = {
       // Submit in pointer order without waiting for acknowledgments; the Host
       // interpolates while later input arrives. Release drains submitted work.
       // trackingFocus exposes the latest application intent immediately.
-      // Publish React state once on release, keeping all five Canvas Worlds
+      // Publish React state once on release, keeping all panel Canvas Worlds
       // out of the pointer tracking path.
     };
     const ready = Promise.all([base.ready, panelReady]).then(async () => {
@@ -597,7 +674,9 @@ export const cockpitScene: GallerySceneDefinition = {
         context.signal.throwIfAborted();
         observers.push(await context.canvas.host.openWorld(world));
       }
-      for (const [index, observer] of observers.slice(0, 3).entries()) {
+      for (const [index, observer] of observers
+        .slice(0, COCKPIT_PANE_COUNT)
+        .entries()) {
         const { entities } = await observer.inspect();
         const grip = entities.find(
           (entity) => entity.metadata.symbolicId === `cockpit-grip-${index}`,
@@ -657,7 +736,7 @@ export const cockpitScene: GallerySceneDefinition = {
           return context.cameraView();
         },
         panes: () =>
-          observers.slice(0, 3).map((observer, index) => ({
+          observers.slice(0, COCKPIT_PANE_COUNT).map((observer, index) => ({
             client: observer,
             grip: gripIds[index]!,
           })),
@@ -678,7 +757,7 @@ export const cockpitScene: GallerySceneDefinition = {
             !prefix.every((token, index) => sameToken(hit.path[index]!, token))
           )
             return false;
-          return observers.slice(0, 3).some((_, index) => {
+          return observers.slice(0, COCKPIT_PANE_COUNT).some((_, index) => {
             const handle = panelHandles.get(index);
             const attachment = handle?.attachment;
             const target = hit.target;
@@ -718,7 +797,7 @@ export const cockpitScene: GallerySceneDefinition = {
           current = () => !context.signal.aborted,
         ) => {
           if (!current()) return;
-          const carousel = Math.max(0, Math.min(2, focus));
+          const carousel = Math.max(0, Math.min(COCKPIT_PANE_COUNT - 1, focus));
           if (!dragging) {
             const ending = ++trackingEpoch;
             trackingDescription = undefined;
@@ -758,13 +837,13 @@ export const cockpitScene: GallerySceneDefinition = {
       },
       async resize(viewport) {
         const aspect = viewport.width / viewport.height;
-        const authoredAspect =
-          runtime.reference.width / runtime.reference.height;
+        // Fit a central panel on narrow displays; surrounding scenery and other
+        // carousel segments naturally leave the view. World geometry stays fixed.
         const fov =
           2 *
           Math.atan(
             Math.tan(Number(cameraProjection.fov_y) / 2) *
-              Math.max(1, authoredAspect / aspect),
+              Math.max(1, 1 / aspect),
           );
         const result = await client.batch([
           {
@@ -814,6 +893,13 @@ export const cockpitScene: GallerySceneDefinition = {
         rejectPanels(new Error("Cockpit disposed"));
         const failures: unknown[] = [];
         await ready.catch(() => {});
+        terminalDisposed = true;
+        await terminalStarting?.catch(() => {});
+        try {
+          await terminal?.close();
+        } catch (failure) {
+          failures.push(failure);
+        }
         for (const observer of observers) {
           try {
             await observer.close();

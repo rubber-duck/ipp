@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_STACK,
+  Row,
+  type GuiKitLayout,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * The rail the kit's slider composites share: the runtime's slider, at the
@@ -22,7 +30,7 @@ import type { GuiControlRef } from "../../gui/control-ref.js";
 import { Slider } from "../../gui/controls.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitScope, type GuiKitTone } from "../kit.js";
-import { LAYOUT_STACK, Row, type GuiKitLayout } from "../layout.js";
+
 import type { ScalarValue } from "./scalar-value.js";
 import { TextLine, lineWidth } from "../text.js";
 
@@ -39,7 +47,7 @@ const THUMB_EDGE = 0.75;
 export const SLIDER_LENGTH = 128;
 
 /** What every slider composite takes besides its values. */
-export interface SliderCompositeProps {
+export interface SliderCompositeProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the composite's root entity; its parts extend it. */
@@ -58,7 +66,7 @@ export interface SliderCompositeProps {
   readonly units?: string;
   /** Keep the value and look but refuse input; every text turns neutral. */
   readonly disabled?: boolean;
-  readonly layout?: GuiKitLayout;
+
   /** The Slider's control handle. */
   readonly ref?: GuiControlRef;
   /** Focus moved to or from the slider, or between a range's thumbs. */
@@ -168,6 +176,7 @@ export function MarkText({
   const end = thumb - length - start;
   return (
     <Row
+      gap={0}
       id={id}
       layout={
         vertical
@@ -227,7 +236,7 @@ export function SliderControl({
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout kind={LAYOUT_STACK} {...layout} />
+      <KitLayout kind={LAYOUT_STACK} {...layout} />
       <Behavior
         enabled={!disabled}
         {...(label === undefined ? {} : { semantic_label: label })}
@@ -282,6 +291,7 @@ export function EndCaption({
   const { depth } = railGeometry(kit);
   return (
     <Row
+      gap={0}
       id={id}
       layout={{
         width: lineWidth(text, kit.typeSize("small")),
@@ -314,6 +324,7 @@ export function CentredLine({
   const kit = useGuiKit();
   return (
     <Row
+      gap={0}
       id={id}
       height={kit.unit(kit.tokens.denseRow)}
       layout={{ width: lineWidth(text, kit.typeSize(size)), align_x: 0 }}

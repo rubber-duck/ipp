@@ -54,6 +54,49 @@ function visible(frame: RgbaImage) {
   );
 }
 
+/** Independent intended geometry: font 16 controls inside a 420 × 160 canvas. */
+function movementGeometry(state: PlatformerControlsState) {
+  const boxes = [
+    "platformer-reverse",
+    "platformer-pause",
+    "platformer-reset",
+  ].map((id) => fields(state.panel, id, state.componentIds.CanvasBounds!));
+  for (const box of boxes) {
+    assert.ok(
+      Math.abs(Number(box.height) - 36) < 0.1,
+      "movement actions retain the full control height",
+    );
+    assert.ok(
+      Number(box.x) >= 24 - 0.1 &&
+        Number(box.x) + Number(box.width) <= 420 - 24 + 0.1,
+      "movement actions retain horizontal container insets",
+    );
+    assert.ok(
+      Number(box.y) >= 24 &&
+        Number(box.y) + Number(box.height) <= 160 - 24 + 0.1,
+      "movement actions fit above the bottom container inset",
+    );
+    assert.ok(
+      Math.abs(Number(box.width) - Number(boxes[0]!.width)) < 0.1,
+      "movement actions have equal widths",
+    );
+  }
+  const surface = fields(
+    state.scene,
+    "platformer-movement-surface",
+    state.componentIds.FlatSurface!,
+  );
+  const placement = fields(
+    state.scene,
+    "platformer-movement-facing",
+    state.componentIds.Transform!,
+  );
+  assert.ok(
+    Number(placement.y) - Number(surface.height) / 2 > 2.2,
+    "resized panel still clears the standing robot head",
+  );
+}
+
 export async function exercisePlatformerControls(
   driver: PlatformerControlsDriver,
 ) {
@@ -133,6 +176,7 @@ export async function exercisePlatformerControls(
   ];
   const initialIds = controls.map((id) => entity(before.panel, id).id);
   visible(await driver.capture("robot-root-controls"));
+  movementGeometry(await driver.state());
 
   await exercisePlatformerGaitSelection(driver);
   await driver.press("platformer-reverse");
@@ -166,6 +210,7 @@ export async function exercisePlatformerControls(
     "skin changes preserve control identities",
   );
   visible(await driver.capture("robot-controls-cybertron"));
+  movementGeometry(await driver.state());
   await driver.action("skin", "glass");
   visible(await driver.capture("robot-controls-glass-restored"));
   assert.equal(

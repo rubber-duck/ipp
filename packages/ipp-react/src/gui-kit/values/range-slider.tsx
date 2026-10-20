@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+} from "../layout.js";
+
 import type { ValueChangeHandler } from "./value-synchronization.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
@@ -28,7 +37,7 @@ import { useEntityId } from "../../scope/identity.js";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_COLUMN, LAYOUT_ROW, LAYOUT_STACK, Row } from "../layout.js";
+
 import {
   CentredLine,
   EndCaption,
@@ -62,7 +71,8 @@ export interface RangeSliderProps extends SliderCompositeProps {
   readonly bounds?: boolean;
 }
 
-export function RangeSlider(props: RangeSliderProps) {
+export function RangeSlider(inputProps: RangeSliderProps) {
+  const props = useGuiKitLayout(inputProps);
   const {
     id: providedId,
     layer = 0,
@@ -129,7 +139,11 @@ export function RangeSlider(props: RangeSliderProps) {
       <Entity id={id}>
         <PresentationGate open />
         <Style layer={layer} />
-        <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          height={rows * g.row + rail}
+          {...layout}
+        />
         <Font source={kit.font} font_size={kit.fontSize} />
         <Children>
           {label !== undefined && (
@@ -189,7 +203,7 @@ export function RangeSlider(props: RangeSliderProps) {
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         height={(label === undefined ? 0 : g.row) + box}
         {...layout}
@@ -197,7 +211,7 @@ export function RangeSlider(props: RangeSliderProps) {
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {label !== undefined && (
-          <Row id={`${id}/header`} height={kit.unit(t.denseRow)}>
+          <Row gap={0} id={`${id}/header`} height={kit.unit(t.denseRow)}>
             <TextLine id={`${id}/label`} text={label} tone={tones.label} />
           </Row>
         )}

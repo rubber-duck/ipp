@@ -28,6 +28,7 @@ fn native_output_reserves_simultaneous_payload_and_framing_before_copy() {
         selection: [32_768; 2],
         composition: None,
         masked: false,
+        client_input: false,
     };
     let size = ipp_protocol::host::gui_input::native_state_size(&state).unwrap();
     for (available, accepted) in [(512 + size, false), (512 + 2 * size, true)] {

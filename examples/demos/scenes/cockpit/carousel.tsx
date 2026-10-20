@@ -9,9 +9,8 @@ import {
 import { Animation, AnimationAsset, SurfaceCache, assetRef } from "@ipp/react";
 import type { AnimationClipSource } from "@ipp/client";
 import type { CockpitNavigationSource } from "./control-screen.js";
-import type { CockpitOptions } from "./options.js";
+import { COCKPIT_PANE_COUNT, type CockpitOptions } from "./options.js";
 
-export const COCKPIT_PANE_COUNT = 3;
 export const CAROUSEL_ENTITY = "cockpit-carousel";
 export const CAROUSEL_ASSET = "cockpit-carousel-rotation";
 export const CAROUSEL_TRACKING_SECONDS = 0.2;

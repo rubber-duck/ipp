@@ -51,6 +51,7 @@ impl HostRuntime {
                     &mut self.io,
                     &mut self.data,
                     &mut self.topology,
+                    &mut self.web_content,
                 )
                 .snapshot_children(limits.max_bytes)?;
             order.push(reference);
@@ -79,6 +80,7 @@ impl HostRuntime {
                     &mut self.io,
                     &mut self.data,
                     &mut self.topology,
+                    &mut self.web_content,
                 )
                 .snapshot_outputs(limits.max_bytes)?
             {
@@ -109,6 +111,7 @@ impl HostRuntime {
                     &mut self.io,
                     &mut self.data,
                     &mut self.topology,
+                    &mut self.web_content,
                 )
                 .capture_world_with_references(&references, &mut fields, &mut bytes, limits)?;
             nodes.push(WorldGraphNode {

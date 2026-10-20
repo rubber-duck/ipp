@@ -70,6 +70,7 @@ export function Tooltip({
     >
       {lines.map((line, index) => (
         <Row
+          gap={0}
           key={index}
           id={`${id}/line/${index}`}
           height={kit.unit(t.denseRow)}

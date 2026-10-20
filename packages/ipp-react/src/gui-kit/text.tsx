@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+} from "./layout.js";
+
 import { useEntityId } from "../scope/identity.js";
 /**
  * Text leaves of the kit: one line in a tone of the palette at a size of the
@@ -5,11 +12,10 @@ import { useEntityId } from "../scope/identity.js";
  * vertically centred in a row by default; a text's layout box is its line box.
  */
 import { PresentationGate, Entity } from "../components.js";
-import { Font, Layout, Style, Text } from "../gui/components.js";
+import { Font, Style, Text } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { GUI_KIT_ICONS, type GuiKitIcon } from "./icons.js";
 import { useGuiKit, type GuiKitTone, type GuiKitTypeSize } from "./kit.js";
-import { LAYOUT_LEAF, type GuiKitLayout } from "./layout.js";
 
 /**
  * The shared font's advance in em: every glyph of the monospaced Shure Tech
@@ -28,7 +34,7 @@ export function glyphSizeForWidth(width: number): number {
   return width / FONT_ADVANCE;
 }
 
-export interface TextLineProps {
+export interface TextLineProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -36,25 +42,25 @@ export interface TextLineProps {
   /** Palette role: accent for titles and labels, text for content, neutral for secondary. */
   readonly tone?: GuiKitTone;
   readonly size?: GuiKitTypeSize;
-  readonly layout?: GuiKitLayout;
 }
 
 /** One line of text in a tone of the palette at a size of the type scale. */
-export function TextLine({
-  id: providedId,
-  layer = 0,
-  text,
-  tone = "text",
-  size = "body",
-  layout,
-}: TextLineProps) {
+export function TextLine(props: TextLineProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    text,
+    tone = "text",
+    size = "body",
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const color = kit.color(tone);
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
+      <KitLayout kind={LAYOUT_LEAF} align_y={0} {...layout} />
       <Style
         layer={layer}
         red={color[0]}
@@ -67,7 +73,7 @@ export function TextLine({
   );
 }
 
-export interface IconProps {
+export interface IconProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -75,25 +81,25 @@ export interface IconProps {
   readonly tone?: GuiKitTone;
   /** Font size at the tokens' `em`; the icon size by default. */
   readonly size?: number;
-  readonly layout?: GuiKitLayout;
 }
 
 /** One icon glyph of the shared font in a tone of the palette. */
-export function Icon({
-  id: providedId,
-  layer = 0,
-  icon,
-  tone = "accent",
-  size,
-  layout,
-}: IconProps) {
+export function Icon(props: IconProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    icon,
+    tone = "accent",
+    size,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const color = kit.color(tone);
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout kind={LAYOUT_LEAF} align_y={0} {...layout} />
+      <KitLayout kind={LAYOUT_LEAF} align_y={0} {...layout} />
       <Style
         layer={layer}
         red={color[0]}
@@ -125,7 +131,7 @@ export function lineWidth(text: string, size: number): number {
  */
 export const CHECK_MARK = 16;
 
-export interface CheckMarkProps {
+export interface CheckMarkProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -133,27 +139,27 @@ export interface CheckMarkProps {
   readonly tone?: "accent" | "surface";
   /** Side at the tokens' `em`; the checkbox's icon size by default. */
   readonly size?: number;
-  readonly layout?: GuiKitLayout;
 }
 
 /**
  * The language's one check mark, the checkbox's stroke mark, in a square of
  * `size`; its own font size draws the stroke in proportion.
  */
-export function CheckMark({
-  id: providedId,
-  layer = 0,
-  tone = "accent",
-  size = CHECK_MARK,
-  layout,
-}: CheckMarkProps) {
+export function CheckMark(props: CheckMarkProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    tone = "accent",
+    size = CHECK_MARK,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_LEAF}
         width={kit.unit(size)}
         height={kit.unit(size)}

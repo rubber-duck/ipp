@@ -26,6 +26,8 @@ export interface GuiNativeTextState {
   readonly text: string;
   /** Presentation only; offsets and edits still index the original text. */
   readonly masked: boolean;
+  /** This focus captures input for a client; it has no editable core text. */
+  readonly clientInput?: boolean;
   readonly selectionStart: number;
   readonly selectionEnd: number;
   readonly composition?: {
@@ -63,6 +65,7 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
   const selectionStart = reader.u32();
   const selectionEnd = reader.u32();
   const masked = reader.boolean();
+  const clientInput = reader.boolean();
   const composition = reader.boolean()
     ? {
         text: reader.string(),
@@ -90,6 +93,7 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
     },
     text,
     masked,
+    ...(clientInput ? { clientInput: true } : {}),
     selectionStart,
     selectionEnd,
     ...(composition ? { composition } : {}),
@@ -120,6 +124,14 @@ export type GuiPhysicalKey =
   | "f10";
 /** `shift` is whether Shift was held for a key or wheel event; false when omitted. */
 export type GuiPhysicalInput =
+  | {
+      kind: "clientInput";
+      fence: GuiTextFence;
+      input: Extract<
+        import("./gui-types.js").GuiClientInput,
+        { kind: "key" | "text" }
+      >;
+    }
   | {
       kind: "pointerDown" | "pointerUp";
       button?: "primary" | "secondary" | "auxiliary";
@@ -481,6 +493,57 @@ export class GuiPhysicalContext {
   async send(input: GuiPhysicalInput): Promise<GuiInputRoutingOutcome> {
     if (this.stopped) throw this.stopped;
     const body = new HostWireWriter();
+    if (input.kind === "clientInput") {
+      const { fence, input: event } = input;
+      if (
+        !Number.isInteger(fence.target.component) ||
+        fence.target.component < 0 ||
+        fence.target.component > 65535 ||
+        fence.generation <= 0n ||
+        fence.target.incarnation <= 0n
+      )
+        throw new RangeError("Invalid client input target fence");
+      body.u8(this.tag("GUI_PHYSICAL_REQUEST_CLIENT"));
+      body.u64(this.identity);
+      body.u64(fence.target.world.id);
+      body.u64(fence.target.world.incarnation);
+      body.u64(fence.target.entity);
+      body.u8(fence.target.component & 255);
+      body.u8(fence.target.component >>> 8);
+      body.u64(fence.target.incarnation);
+      body.u64(fence.generation);
+      if (event.kind === "text") {
+        if (
+          new TextEncoder().encode(event.text).length >
+          this.limit("GUI_CLIENT_TEXT_BYTES")
+        )
+          throw new RangeError("Client text capacity exceeded");
+        body.u8(this.tag("GUI_CLIENT_INPUT_TEXT"));
+        body.string(event.text);
+        body.u8(event.paste ? 1 : 0);
+      } else {
+        for (const value of [event.key, event.code])
+          if (
+            !value ||
+            new TextEncoder().encode(value).length >
+              this.limit("GUI_CLIENT_KEY_BYTES")
+          )
+            throw new RangeError("Invalid client key");
+        if (
+          !Number.isInteger(event.modifiers) ||
+          event.modifiers < 0 ||
+          event.modifiers > 15
+        )
+          throw new RangeError("Invalid key modifiers");
+        body.u8(this.tag("GUI_CLIENT_INPUT_KEY"));
+        body.string(event.key);
+        body.string(event.code);
+        body.u8(event.modifiers);
+        body.u8(event.repeat ? 1 : 0);
+        body.u8(event.pressed ? 1 : 0);
+      }
+      return this.submit(body);
+    }
     body.u8(this.tag("GUI_PHYSICAL_REQUEST_EVENT"));
     body.u64(this.identity);
     const point = (values: readonly [number, number]) => {

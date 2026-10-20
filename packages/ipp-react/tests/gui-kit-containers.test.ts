@@ -54,11 +54,11 @@ test("Panel and Separator take the container and line themes", async () => {
   assert.equal(world.skin("section"), "container");
   assert.equal(world.fields("section", "GuiLayout").get("kind"), 2);
   assert.equal(world.fields("section", "GuiLayout").get("width"), 200);
-  // Ordinary content starts at the skin's content inset on every side.
+  // The frame leaves content padding to its body.
   for (const side of ["left", "right", "top", "bottom"])
     assert.equal(
       world.fields("section", "GuiLayout").get(`padding_${side}`),
-      TOKENS.inset,
+      0,
     );
   assert.equal(world.fields("section", "GuiFont").get("font_size"), 16);
   assert.deepEqual(world.children("section"), ["rule", "divider"]);
@@ -141,10 +141,13 @@ test("ScrollArea fits padded content and shares an enclosing Panel surface", asy
       ),
     );
     assert.equal(world.skin("area"), "gridBody");
-    assert.equal(world.fields("area/body", "GuiLayout").get("padding_left"), 0);
+    assert.equal(
+      world.fields("area/body", "GuiLayout").get("padding_left"),
+      TOKENS.inset,
+    );
     assert.equal(
       world.fields("outer-panel", "GuiLayout").get("padding_left"),
-      TOKENS.inset,
+      0,
     );
     await draw(
       h(
@@ -312,12 +315,14 @@ test("Panel parts: a header strip with window controls, a labelled division and 
         }),
         h(
           PanelFooter,
-          { key: "footer", id: "monitor/footer" },
-          h(TextLine, {
-            id: "monitor/count",
-            text: "2 EVENTS",
-            layout: { flex: 1 },
-          }),
+          {
+            key: "footer",
+            id: "monitor/footer",
+            leading: h(TextLine, {
+              id: "monitor/count",
+              text: "2 EVENTS",
+            }),
+          },
           h(SecondaryButton, {
             id: "monitor/clear",
             label: "CLEAR",
@@ -389,9 +394,13 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   assert.equal(world.skin("monitor/events/line"), "division");
   assert.deepEqual(world.tone("monitor/events/label"), TOKENS.accent);
 
-  // The footer: small buttons in half-inset margins at the content inset.
+  // The footer fits its actions and keeps the shared content inset.
   const footer = world.fields("monitor/footer/row", "GuiLayout");
-  assert.equal(footer.get("height"), (32 + 16) * 2);
+  assert.equal(footer.get("fit_height"), true);
+  assert.equal(
+    world.fields("monitor/footer/row/leading", "GuiLayout").get("flex"),
+    1,
+  );
   assert.equal(footer.get("padding_left"), 32);
   assert.equal(footer.get("padding_right"), 32);
   assert.equal(world.skin("monitor/clear"), "secondarySmall");
@@ -649,7 +658,7 @@ test("DataGrid lays out header, rows and lines; rows are Buttons the application
 
   // A grid that flexes takes its container's height instead.
   const { world: flexed } = await render(grid({ layout: { flex: 1 } }));
-  assert.equal(flexed.fields("grid", "GuiLayout").has("height"), false);
+  assert.equal(flexed.fields("grid", "GuiLayout").get("height"), -1);
   assert.equal(flexed.fields("grid", "GuiLayout").get("flex"), 1);
 });
 
@@ -831,7 +840,10 @@ test("padded panel content and explicit framed bodies preserve identities when l
   ]);
   for (const id of ["content-panel", "content-panel/body"])
     for (const side of ["top", "right", "bottom", "left"])
-      assert.equal(fields(id).get(`padding_${side}`), TOKENS.inset * 2);
+      assert.equal(
+        fields(id).get(`padding_${side}`),
+        id === "content-panel" ? 0 : TOKENS.inset * 2,
+      );
   await draw(scene(true));
   assert.equal(world.entity("content-panel"), panel);
   assert.equal(world.entity("content-panel/body"), body);
@@ -849,7 +861,7 @@ test("padded panel content and explicit framed bodies preserve identities when l
   await draw(scene(false));
   assert.equal(fields("content-panel").get("height"), -1);
   assert.equal(fields("content-panel").get("fit_height"), true);
-  assert.equal(fields("content-panel").get("padding_right"), TOKENS.inset * 2);
+  assert.equal(fields("content-panel").get("padding_right"), 0);
   assert.equal(
     fields("content-panel/body").get("padding_left"),
     TOKENS.inset * 2,

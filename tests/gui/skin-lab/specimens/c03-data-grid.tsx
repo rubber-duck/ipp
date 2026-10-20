@@ -46,8 +46,8 @@ const GRID_AT: Point = [62.35, 67.4];
 const PANEL = [392, 224] as const;
 
 const COLUMNS: readonly DataGridColumn[] = [
-  { key: "node", title: "NODE", width: 128 },
-  { key: "signal", title: "SIGNAL", width: 112, align: "end" },
+  { key: "node", title: "NODE", width: u(128) },
+  { key: "signal", title: "SIGNAL", width: u(112), align: "end" },
   { key: "status", title: "STATUS" },
 ];
 

@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Persistent information beside the content it concerns: a frame tinted in
@@ -8,12 +16,12 @@ import { useEntityId } from "../../scope/identity.js";
  * that it moves only what lies below.
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Style, Font, Layout } from "../../gui/components.js";
+import { Style, Font } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiPressListener } from "../../gui/callbacks.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { useGuiKit, type GuiKitTone } from "../kit.js";
-import { LAYOUT_ROW, Strut, type GuiKitLayout } from "../layout.js";
+
 import { SecondaryButton } from "../secondary-button.js";
 import { Icon, TextLine } from "../text.js";
 import type { KitThemeName } from "../themes.js";
@@ -27,14 +35,13 @@ export interface InlineAlertAction {
   readonly ref?: GuiControlRef;
 }
 
-export interface InlineAlertProps {
+export interface InlineAlertProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
   readonly severity: InlineAlertSeverity;
   readonly text: string;
   readonly action?: InlineAlertAction;
-  readonly layout?: GuiKitLayout;
 }
 
 const SEVERITIES: Readonly<
@@ -45,14 +52,15 @@ const SEVERITIES: Readonly<
   error: { tone: "error", theme: "alertError" },
 };
 
-export function InlineAlert({
-  id: providedId,
-  layer = 0,
-  severity,
-  text,
-  action,
-  layout,
-}: InlineAlertProps) {
+export function InlineAlert(props: InlineAlertProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    severity,
+    text,
+    action,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -63,7 +71,7 @@ export function InlineAlert({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         height={kit.unit(t.controlHeight)}
         padding_left={kit.unit(t.inset)}

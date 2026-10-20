@@ -1,4 +1,4 @@
-"""Locked-camera reference projection on shallow, independently addressable geometry.
+"""Fixed-size reference console inside a spatial bridge and planetary environment.
 
 Pixel contours are measured against the immutable approved 1672 x 941 reference.
 The cleaned plate removes pictured GUI; actual controls mount at the named empties.
@@ -38,13 +38,6 @@ def inside(point, polygon):
         ) + a[0]:
             result = not result
     return result
-
-
-def ellipse(cx, cy, rx, ry):
-    return [
-        (cx + rx * math.cos(t * math.tau / 80), cy + ry * math.sin(t * math.tau / 80))
-        for t in range(80)
-    ]
 
 
 def projected_mesh(name, polygon, depth, material, holes=(), step=32):
@@ -134,10 +127,6 @@ def anchor(name, pixels, depths, role):
     obj["reference_corners"] = json.dumps(pixels)
     obj.empty_display_type = "ARROWS"
     obj.empty_display_size = 0.2
-    if role in ("pulse", "scanner"):
-        obj["surface_width"] *= 0.85
-        obj["surface_height"] *= 0.88
-        obj.location.x += 0.06 if role == "pulse" else -0.06
     return obj
 
 
@@ -189,87 +178,17 @@ def placement_preview(scene):
 
 
 def build():
-    scene = bpy.data.scenes.new("Cockpit projected presentation")
+    scene = bpy.data.scenes.new("Cockpit spatial bridge")
     bpy.context.window.scene = scene
     for other in list(bpy.data.scenes):
         if other != scene:
             bpy.data.scenes.remove(other)
     bpy.ops.outliner.orphans_purge(do_recursive=True)
-    scene.name = "Cockpit projected presentation"
-    plate = ROOT / "cockpit-unlit-all.png"
-    image = bpy.data.images.load(str(plate), check_existing=False)
-    if tuple(image.size) != (WIDTH, HEIGHT):
-        image.scale(WIDTH, HEIGHT)
-    image.pack()
-    image.filepath = "//cockpit-unlit-all.png"
-    mat = material(image)
-    full = [(0, 0), (WIDTH, 0), (WIDTH, HEIGHT), (0, HEIGHT)]
-    window = [
-        (83, 0),
-        (1591, 0),
-        (1573, 50),
-        (1556, 100),
-        (1524, 200),
-        (1507, 300),
-        (1482, 400),
-        (1459, 500),
-        (1449, 544),
-        (1033, 544),
-        (836, 542),
-        (704, 544),
-        (222, 544),
-        (211, 500),
-        (187, 400),
-        (162, 300),
-        (146, 200),
-        (116, 100),
-        (101, 50),
-    ]
-    side_windows = (
-        [(0, 415), (43, 573), (0, 573)],
-        [(WIDTH, 415), (WIDTH, 573), (1630, 573)],
-    )
-    dashboard = [
-        (0, 744),
-        (180, 718),
-        (420, 699),
-        (650, 689),
-        (840, 686),
-        (1040, 690),
-        (1260, 700),
-        (1490, 720),
-        (WIDTH, 744),
-        (WIDTH, HEIGHT),
-        (0, HEIGHT),
-    ]
-    dials = [
-        ellipse(562, 848, 62, 31),
-        ellipse(835, 840, 117, 51),
-        ellipse(1111, 848, 63, 31),
-    ]
-    exterior = runpy.run_path(str(ROOT / "projected_exterior.py"))["build"](
-        projected_mesh, material
-    )
-    projected_mesh(
-        "cockpit-window-shell",
-        full,
-        12,
-        mat,
-        holes=(window, *side_windows, dashboard),
-        step=80,
-    )
-    deck = lambda x, y: 8.4 - 0.008 * (y - 690) + 0.04 * ((x - 836) / 836) ** 2
-    projected_mesh("cockpit-console-shell", dashboard, deck, mat, holes=dials, step=20)
-    for name, polygon in zip(("left", "centre", "right"), dials):
-        projected_mesh(
-            "cockpit-dial-" + name,
-            polygon,
-            lambda x, y: deck(x, y) - 0.018,
-            mat,
-            step=12,
-        )
-    lights, registration = runpy.run_path(str(ROOT / "projected_lights.py"))["build"](
-        projected_mesh, deck, mat
+    scene.name = "Cockpit spatial bridge"
+    environment = runpy.run_path(str(ROOT / "spatial_environment.py"))
+    exterior = environment["build"](CAMERA_POSITION)
+    console = runpy.run_path(str(ROOT / "standalone_console.py"))["build"](
+        projected_mesh, material, anchor
     )
     anchor(
         "cockpit-screen-0",
@@ -289,29 +208,22 @@ def build():
         [8.65, 7.4, 7.4, 8.65],
         "telemetry",
     )
-    anchor(
-        "cockpit-pulse-surface",
-        [(91, 804), (246, 787), (230, 866), (54, 883)],
-        [7.20, 7.20, 6.55, 6.55],
-        "pulse",
-    )
-    anchor(
-        "cockpit-scanner-surface",
-        [(1418, 787), (1574, 804), (1619, 883), (1443, 866)],
-        [7.20, 7.20, 6.55, 6.55],
-        "scanner",
-    )
-    data = bpy.data.cameras.new("Locked reference camera")
+    data = bpy.data.cameras.new("Bridge camera")
     data.lens = 30
     data.sensor_width = 36
     data.sensor_fit = "HORIZONTAL"
-    data.clip_end = 100
+    data.clip_end = 1200
     cam = bpy.data.objects.new("cockpit-camera", data)
     scene.collection.objects.link(cam)
     cam["ipp_id"] = "cockpit-camera"
     cam.location = CAMERA_POSITION
     cam.rotation_euler = (math.pi / 2, 0, 0)
     scene.camera = cam
+    for obj in scene.objects:
+        if obj.name.startswith(("cockpit-console", "cockpit-dial-")) or obj.get(
+            "surface_role"
+        ) in ("pulse", "scanner"):
+            obj.parent = bpy.data.objects["cockpit-bridge"]
     scene.render.engine = "CYCLES"
     scene.cycles.samples = 16
     scene.cycles.use_denoising = False
@@ -332,8 +244,7 @@ def build():
     scene["presentation_notice"] = (
         "Pictured GUI removed; all controls are supplied by native GUI at named empties."
     )
-    # Save only this prototype and its packed image, retaining the previous physical
-    # model in its own unchanged cockpit.blend and verified recovery archive.
+    # Keep the earlier physical study in its separate cockpit.blend.
     for other in list(bpy.data.scenes):
         if other != scene:
             bpy.data.scenes.remove(other)
@@ -352,15 +263,14 @@ def build():
                 "matrix_blender": [list(r) for r in o.matrix_world],
             }
             for o in scene.objects
-            if o.type == "EMPTY"
+            if o.type == "EMPTY" and o.get("surface_role")
         ],
     }
     result["surfaces"] = {
         a["id"]: {"width": a["width"], "height": a["height"]} for a in result["anchors"]
     }
-    result["lights"] = lights
+    result["console"] = console
     result["exterior"] = exterior
-    result["mask_registration"] = registration
     (ROOT / "cockpit-projected-anchors.json").write_text(
         json.dumps(result, indent=2) + "\n"
     )

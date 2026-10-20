@@ -7,7 +7,9 @@ import { artifact, bundleBrowser, workspace } from "./helpers.mjs";
 // Development paths stay in the examples. The published entry module lives next
 // to index.html, so these URLs work unchanged at /, /ipp/ or a custom subdirectory.
 const locations = [
+  ["/examples/demos/scenes/cockpit/browser-pages/", "./browser-pages/"],
   ["/target/browser-build/render/", "./runtime/"],
+  ["/target/terminal-build/", "./terminal/"],
   ["/target/gallery-assets/", "./assets/"],
   ["/target/font-assets/", "./assets/shared/"],
   ["/target/gallery-platformer-assets/", "./assets/platformer/"],
@@ -68,6 +70,22 @@ export async function buildGallerySite(output) {
     .replace(/>\s+</g, "><");
   await writeFile(resolve(output, "index.html"), html);
   await writeFile(resolve(output, ".nojekyll"), "");
+
+  for (const name of [
+    "terminal-worker.js",
+    "terminal-font.json",
+    "ghostty-vt.wasm",
+    "ghostty-callbacks.wasm",
+    "bashkit.wasm",
+    "THIRD_PARTY_NOTICES.txt",
+  ])
+    await copy(`target/terminal-build/${name}`, `terminal/${name}`);
+
+  for (const name of ["welcome.html", "mission.html", "crew.html"])
+    await copy(
+      `examples/demos/scenes/cockpit/browser-pages/${name}`,
+      `browser-pages/${name}`,
+    );
 
   const runtime = "target/browser-build/render";
   await mkdir(resolve(output, "runtime"), { recursive: true });

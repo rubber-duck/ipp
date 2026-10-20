@@ -401,6 +401,90 @@ test("structural sibling insertion preserves global validation without diffing u
   }
 });
 
+for (const structural of [false, true]) {
+  test(`a checkpointed snapshot cannot consume a newer ${structural ? "structural" : "field"} capture's changes`, async () => {
+    const world = new CommitWorld();
+    const commits = new ReactWorldCommits(world, {
+      onError: (error) => assert.fail(error),
+    });
+    const scene = (serial: number): ReactWorldDescription => {
+      const scalar = {
+        identity: 2,
+        entity: 1,
+        component: SCALAR,
+        fields: new Map([[12, { kind: "f32" as const, value: serial }]]),
+      };
+      return {
+        signature: String(serial),
+        serial,
+        assets: [],
+        animations: [],
+        links: [],
+        entities: [
+          {
+            identity: 1,
+            symbolicId: "leaf",
+            kind: "declared",
+            parent: undefined,
+          },
+        ],
+        components: [
+          scalar,
+          ...(structural && serial >= 3
+            ? [
+                {
+                  identity: 3,
+                  entity: 1,
+                  component: TRANSFORM,
+                  fields: new Map(),
+                },
+              ]
+            : []),
+        ],
+        ...(serial > 1 && !(structural && serial === 3)
+          ? {
+              changes: {
+                base: serial - 1,
+                entities: new Map(),
+                components: new Map([[0, scalar]]),
+              },
+            }
+          : {}),
+      };
+    };
+    try {
+      await commits.capture(scene(1));
+      const leaf = created(world, "leaf");
+      const older = commits.capture(scene(2));
+      commits.checkpoint();
+      // Both snapshots are queued before either starts applying. The
+      // checkpoint prevents replacing the older render slot.
+      const newer = commits.capture(scene(3));
+      await Promise.all([older, newer]);
+      assert.deepEqual(world.calls[1], [setValue(leaf, 2)]);
+      assert.deepEqual(world.calls[2], [
+        setValue(leaf, 3),
+        ...(structural
+          ? [
+              {
+                kind: "insertComponent",
+                entity: { kind: "handle", id: leaf },
+                component: TRANSFORM,
+                fields: [],
+                adopt: true,
+              },
+            ]
+          : []),
+      ]);
+      // A following field-only render must resume incremental commits.
+      await commits.capture(scene(4));
+      assert.deepEqual(world.calls[3], [setValue(leaf, 4)]);
+    } finally {
+      await commits.dispose();
+    }
+  });
+}
+
 for (const refuseGate of [false, true]) {
   test(`a structural capture during ${refuseGate ? "rejected" : "accepted"} gate validation keeps its complete commit`, async () => {
     let release!: (page: InspectionPage) => void;

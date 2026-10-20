@@ -1,5 +1,6 @@
 import type {
   GuiTarget,
+  GuiClientInput,
   GuiActiveItemRecord,
   GuiFocusRecord,
   GuiPointerRecord,
@@ -161,6 +162,15 @@ function readGuiEffect(reader: Reader): GuiCommittedEffect {
           point: [reader.f32(), reader.f32()],
         },
       };
+    case 9:
+      return {
+        id,
+        target,
+        source,
+        tick,
+        ancestry,
+        effect: { kind: "input", input: readGuiClientInput(reader) },
+      };
     case 1:
       return {
         id,
@@ -198,6 +208,52 @@ function readGuiEffect(reader: Reader): GuiCommittedEffect {
   }
 }
 
+function readGuiClientInput(reader: Reader): GuiClientInput {
+  switch (reader.u8()) {
+    case WIRE.GUI_CLIENT_INPUT_KEY: {
+      const key = reader.string(GUI_CLIENT_KEY_BYTES),
+        code = reader.string(GUI_CLIENT_KEY_BYTES),
+        modifiers = reader.u8();
+      if (!key || !code || modifiers > 15) return fail("client key");
+      return {
+        kind: "key",
+        key,
+        code,
+        modifiers,
+        repeat: reader.boolean(),
+        pressed: reader.boolean(),
+      };
+    }
+    case WIRE.GUI_CLIENT_INPUT_TEXT: {
+      const text = reader.string(GUI_CLIENT_TEXT_BYTES);
+      return { kind: "text", text, paste: reader.boolean() };
+    }
+    case WIRE.GUI_CLIENT_INPUT_POINTER: {
+      const pointer = reader.u64();
+      const phase = (["down", "move", "up", "cancel"] as const)[reader.u8()];
+      const button = (["primary", "secondary", "auxiliary", "none"] as const)[
+        reader.u8()
+      ];
+      if (!phase || !button) return fail("client pointer");
+      return {
+        kind: "pointer",
+        pointer,
+        phase,
+        button,
+        point: [reader.f32(), reader.f32()],
+      };
+    }
+    case WIRE.GUI_CLIENT_INPUT_WHEEL:
+      return {
+        kind: "wheel",
+        point: [reader.f32(), reader.f32()],
+        delta: [reader.f32(), reader.f32()],
+      };
+    default:
+      return fail("client input kind");
+  }
+}
+
 function writeGuiObservation(
   writer: Writer,
   control: GuiObservationRequest,
@@ -205,6 +261,14 @@ function writeGuiObservation(
   writer.u8(control.kind === "subscribe" ? 0 : 1);
   writeWorldReference(writer, control.world);
   if (control.kind === "subscribe") {
+    if (control.inputTarget) {
+      writer.u8(3);
+      writeWorldReference(writer, control.inputTarget.world);
+      writer.u64(control.inputTarget.entity);
+      writer.u16(control.inputTarget.component);
+      writer.u64(control.inputTarget.incarnation);
+      return;
+    }
     const classes = { application: 0, feedback: 1, all: 2 }[control.classes];
     if (classes === undefined) fail("GUI observation class");
     writer.u8(classes);

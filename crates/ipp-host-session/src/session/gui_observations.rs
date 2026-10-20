@@ -29,6 +29,9 @@ fn encoded_bound(record: &GuiObservationRecord) -> Option<usize> {
             ..
         } => {
             let text_bytes = match &effect.kind {
+                ipp_core::systems::gui::local::GuiLocalEffectKind::Input(input) => {
+                    input.retained_bytes()
+                }
                 ipp_core::systems::gui::local::GuiLocalEffectKind::Submitted(text)
                 | ipp_core::systems::gui::local::GuiLocalEffectKind::Rejected(text)
                 | ipp_core::systems::gui::local::GuiLocalEffectKind::Discarded(text) => text.len(),
@@ -95,9 +98,29 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
             .expect("initialized observations");
         let registration = match control {
             GuiObservationRequest::Subscribe {
-                classes,
+                mut classes,
+                ref input_target,
                 ..
             } => {
+                if let Some(target) = input_target {
+                    if target.world != world.into()
+                        || target.component != ipp_core::ComponentValue::GUI_INPUT_TARGET
+                        || self
+                            .world
+                            .component_incarnation(target.entity, target.component)
+                            != Some(target.incarnation)
+                    {
+                        return Err("Stale client input target".into());
+                    }
+                    classes = ipp_core::systems::gui::observations::GuiObservationClasses::Input(
+                        ipp_core::systems::gui::local::GuiEntityTarget {
+                            world,
+                            entity: target.entity,
+                            component: target.component,
+                            incarnation: target.incarnation,
+                        },
+                    );
+                }
                 let metadata = self
                     .session
                     .reply_budget

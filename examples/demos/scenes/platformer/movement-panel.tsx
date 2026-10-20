@@ -21,7 +21,7 @@ import {
 /** Clears the standing mannequin's head, including the panel's half-height. */
 export const MOVEMENT_HEIGHT = 2.75;
 export const MOVEMENT_SURFACE = "platformer-movement-surface";
-export const MOVEMENT_EXTENT = [420, 146] as const;
+export const MOVEMENT_EXTENT = [420, 160] as const;
 export const MOVEMENT_DENSITY = 180;
 
 const PANEL_WORLD = {
@@ -93,8 +93,8 @@ export function PlatformerMovementPanel({
         >
           <Panel
             id="platformer-movement-panel"
-            padding={0}
-            layout={{ width: MOVEMENT_EXTENT[0], height: MOVEMENT_EXTENT[1] }}
+            width={MOVEMENT_EXTENT[0]}
+            height={MOVEMENT_EXTENT[1]}
           >
             <PlatformerMovementControls movement={movement} />
           </Panel>

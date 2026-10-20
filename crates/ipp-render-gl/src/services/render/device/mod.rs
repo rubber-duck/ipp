@@ -23,8 +23,10 @@ mod gles;
 #[cfg(target_arch = "wasm32")]
 mod webgl;
 
+#[cfg(target_os = "linux")]
+pub use gles::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufPlane};
 #[cfg(not(target_arch = "wasm32"))]
-pub use gles::GlesRenderDevice;
+pub use gles::{GlesDmaBufImport, GlesRenderDevice};
 
 #[cfg(target_arch = "wasm32")]
 pub use webgl::WebGlRenderDevice;

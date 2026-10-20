@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+} from "./layout.js";
+
 import { useEntityId } from "../scope/identity.js";
 /**
  * A secondary text button, such as CLEAR, Retry or Cancel: the part cut and a
@@ -8,7 +15,7 @@ import { useEntityId } from "../scope/identity.js";
  */
 import { PresentationGate, Entity } from "../components.js";
 import { Button } from "../gui/controls.js";
-import { Style, Behavior, Font, Layout } from "../gui/components.js";
+import { Style, Behavior, Font } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import type {
   GuiFeedbackListeners,
@@ -16,10 +23,12 @@ import type {
 } from "../gui/callbacks.js";
 import type { GuiControlRef } from "../gui/control-ref.js";
 import { useGuiKit } from "./kit.js";
-import { LAYOUT_LEAF, type GuiKitLayout } from "./layout.js";
+
 import { textWidth } from "./text.js";
 
-export interface SecondaryButtonProps extends GuiFeedbackListeners {
+export interface SecondaryButtonProps
+  extends GuiFeedbackListeners,
+    GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -29,20 +38,21 @@ export interface SecondaryButtonProps extends GuiFeedbackListeners {
   readonly disabled?: boolean;
   /** The amber variant, for a destructive action. */
   readonly amber?: boolean;
-  readonly layout?: GuiKitLayout;
 }
 
-export function SecondaryButton({
-  id: providedId,
-  layer = 0,
-  label,
-  onPress,
-  ref,
-  disabled = false,
-  amber = false,
-  layout,
-  ...feedback
-}: SecondaryButtonProps) {
+export function SecondaryButton(props: SecondaryButtonProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    onPress,
+    ref,
+    disabled = false,
+    amber = false,
+    layout,
+    onFocusChange,
+    onInteractionChange,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -51,7 +61,7 @@ export function SecondaryButton({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_LEAF}
         width={textWidth(label, size) + kit.unit(2 * t.inset)}
         height={kit.unit(t.smallHeight)}
@@ -65,7 +75,8 @@ export function SecondaryButton({
       {disabled && <Behavior enabled={false} />}
       <Button
         label={label}
-        {...feedback}
+        {...(onFocusChange ? { onFocusChange } : {})}
+        {...(onInteractionChange ? { onInteractionChange } : {})}
         {...(onPress ? { onPress } : {})}
         {...(ref ? { ref } : {})}
       />

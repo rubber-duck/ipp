@@ -390,6 +390,7 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::LifecycleTargetLifetime => "lifecycle-target-lifetime",
         TagSpace::LifecycleMembershipRejection => "lifecycle-membership-rejection",
         TagSpace::LifecycleWatchKinds => "lifecycle-watch-kinds",
+        TagSpace::GuiClientInput => "gui-client-input",
         TagSpace::GuiPhysicalRequest => "gui-physical-request",
         TagSpace::GuiPhysicalEvent => "gui-physical-event",
         TagSpace::GuiPhysicalResponse => "gui-physical-response",
@@ -1575,6 +1576,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
             (
                 subscribe,
                 gui::GuiObservationRequest::Subscribe {
+                    input_target: None,
                     world,
                     classes: ipp_core::systems::gui::observations::GuiObservationClasses::All,
                 },

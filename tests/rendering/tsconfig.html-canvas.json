@@ -1,0 +1,5 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {"noEmit": true},
+  "include": ["static-html.browser.test.ts", "pages/static-html.ts", "html-canvas.browser.test.ts", "pages/html-canvas.ts", "pages/html-canvas-worker.ts", "pages/html-canvas-device-worker.ts"]
+}

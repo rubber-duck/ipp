@@ -23,3 +23,13 @@ export function guiKitSpacing(
     inset: (tokens.spacing?.inset ?? tokens.inset) * scale,
   };
 }
+
+/** A numeric logical length or a skin-scaled spacing role. */
+export type GuiKitSpace = number | keyof GuiKitSpacing;
+
+export function resolveSpacing(
+  value: GuiKitSpace,
+  spacing: GuiKitSpacing,
+): number {
+  return typeof value === "number" ? value : spacing[value];
+}

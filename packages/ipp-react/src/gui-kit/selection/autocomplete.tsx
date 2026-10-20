@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * An autocomplete: a text field with the application's suggestions in an
@@ -21,7 +28,7 @@ import { useLayoutEffect, useRef, type Ref } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Skin } from "../../gui/theme.js";
 import { TextInput } from "../../gui/controls.js";
-import { Style, Behavior, Font, Layout } from "../../gui/components.js";
+import { Style, Behavior, Font } from "../../gui/components.js";
 import type {
   GuiSubmitEvent,
   GuiTextCommitListener,
@@ -29,7 +36,7 @@ import type {
 } from "../../gui/callbacks.js";
 import type { GuiControlHandle } from "../../gui/control-ref.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_LEAF, type GuiKitLayout } from "../layout.js";
+
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen } from "../overlays/overlay.js";
 import { useTextValue } from "../values/text-value.js";
@@ -39,7 +46,7 @@ import {
   useConnectedSelectSkin,
 } from "./select-trigger.js";
 
-export interface AutocompleteProps {
+export interface AutocompleteProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the field; the list and its rows extend it. */
@@ -66,27 +73,26 @@ export interface AutocompleteProps {
   readonly maxRows?: number;
   /** The field's control handle. */
   readonly ref?: Ref<GuiControlHandle>;
-  /** Layout of the field, such as its `width`; 240 at the `em` by default. */
-  readonly layout?: GuiKitLayout;
 }
 
-export function Autocomplete({
-  id: providedId,
-  layer = 0,
-  suggestions,
-  onInputChange,
-  onSelect,
-  onCommit,
-  inputValue,
-  defaultInputValue = "",
-  placeholder = "",
-  label,
-  loading,
-  disabled = false,
-  maxRows,
-  ref,
-  layout,
-}: AutocompleteProps) {
+export function Autocomplete(props: AutocompleteProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    suggestions,
+    onInputChange,
+    onSelect,
+    onCommit,
+    inputValue,
+    defaultInputValue = "",
+    placeholder = "",
+    label,
+    loading,
+    disabled = false,
+    maxRows,
+    ref,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -143,7 +149,7 @@ export function Autocomplete({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_LEAF}
         width={kit.unit(SELECT_WIDTH)}
         height={kit.unit(t.controlHeight)}

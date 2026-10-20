@@ -629,6 +629,7 @@ impl Evaluator<'_, '_> {
             ComponentValue::CANVAS_GLYPH_RUN,
             ComponentValue::CANVAS_DRAWING,
             ComponentValue::CANVAS_BITMAP,
+            ComponentValue::CANVAS_HTML,
             ComponentValue::CANVAS_BOX,
         ] {
             let Some(input) = world
@@ -680,6 +681,7 @@ impl Evaluator<'_, '_> {
                         size,
                         ..
                     }
+                    | CanvasGeometry::Html { size, .. }
                     | CanvasGeometry::Bitmap {
                         size,
                         ..

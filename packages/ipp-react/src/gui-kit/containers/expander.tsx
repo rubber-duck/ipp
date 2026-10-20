@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A collapsible section: a full-width header button showing a chevron, the
@@ -21,15 +30,10 @@ import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { useGuiKit } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_ROW,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Icon, TextLine } from "../text.js";
 
-export interface ExpanderProps {
+export interface ExpanderProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the complete section; the control is `${id}/header`. */
@@ -45,25 +49,24 @@ export interface ExpanderProps {
   readonly disabled?: boolean;
   /** The header's control handle. */
   readonly ref?: GuiControlRef;
-  /** Layout of the complete section; expanded, it fills bounded axes without an explicit extent. */
-  readonly layout?: GuiKitLayout;
   /** The content's Entity declarations, declared only while expanded. */
   readonly children?: ReactNode;
 }
 
-export function Expander({
-  id: providedId,
-  layer = 0,
-  label,
-  summary,
-  expanded,
-  defaultExpanded = false,
-  onExpandedChange,
-  disabled = false,
-  ref,
-  layout,
-  children,
-}: ExpanderProps) {
+export function Expander(props: ExpanderProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    summary,
+    expanded,
+    defaultExpanded = false,
+    onExpandedChange,
+    disabled = false,
+    ref,
+    layout,
+    children,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -77,7 +80,7 @@ export function Expander({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         {...layout}
         {...(!open ? { height: kit.unit(t.controlHeight) } : {})}

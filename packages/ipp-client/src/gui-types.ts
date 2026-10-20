@@ -84,6 +84,30 @@ export type GuiAction =
  * A momentary control effect. Committed values are ordinary component fields
  * observed through lifecycle value watches, not effects.
  */
+/** Typed input delivered only to an exclusive client-managed target subscription. */
+export type GuiClientInput =
+  | {
+      kind: "key";
+      key: string;
+      code: string;
+      modifiers: number;
+      repeat: boolean;
+      pressed: boolean;
+    }
+  | { kind: "text"; text: string; paste?: boolean }
+  | {
+      kind: "pointer";
+      pointer: bigint;
+      phase: "down" | "move" | "up" | "cancel";
+      button: "primary" | "secondary" | "auxiliary" | "none";
+      point: readonly [number, number];
+    }
+  | {
+      kind: "wheel";
+      point: readonly [number, number];
+      delta: readonly [number, number];
+    };
+
 export interface GuiCommittedEffect {
   id: { world: WorldReference; ordinal: bigint } | null;
   target: GuiTarget;
@@ -91,6 +115,7 @@ export interface GuiCommittedEffect {
   tick: bigint;
   ancestry: readonly bigint[];
   effect:
+    | { kind: "input"; input: GuiClientInput }
     | { kind: "pressed" }
     /**
      * Focus on the control after the change, and its focused part, or the
@@ -148,6 +173,8 @@ export type GuiObservedEffect = Readonly<
   }
 >;
 export interface GuiObservationOptions {
+  /** Exclusively receive this exact target's input and focus feedback. */
+  inputTarget?: GuiTarget;
   classes?: "application" | "feedback" | "all";
 }
 
@@ -166,6 +193,7 @@ export interface GuiEffectSubscription {
 export type GuiObservationRequest =
   | {
       kind: "subscribe";
+      inputTarget?: GuiTarget;
       world: WorldReference;
       classes: "application" | "feedback" | "all";
     }

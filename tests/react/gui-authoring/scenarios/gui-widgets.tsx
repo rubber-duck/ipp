@@ -92,7 +92,13 @@ export async function guiWidgets(
     const [checked, setChecked] = useState(true);
     const [value, setValue] = useState("allowed");
     return (
-      <Column id="widgets" width={EXTENT[0]} height={EXTENT[1]} padding={12}>
+      <Column
+        id="widgets"
+        width={EXTENT[0]}
+        height={EXTENT[1]}
+        padding={12}
+        gap="compact"
+      >
         <Checkbox
           id="checked"
           ref={checkbox}

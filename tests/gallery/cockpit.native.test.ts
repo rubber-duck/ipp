@@ -11,6 +11,7 @@ import { runNativeEnvironment } from "../harness/native.js";
 const execute = promisify(execFile);
 
 for (const [part, command, minimumFrames] of [
+  ["spatial", "spatial", 3],
   ["carousel", "carousel", 13],
   ["quality", "quality", 8],
   ["presentation", "exercise", 17],
@@ -21,6 +22,12 @@ for (const [part, command, minimumFrames] of [
   for (const [label, args] of [
     ["wide", []],
     ["narrow", ["narrow"]],
+    ...(part === "spatial"
+      ? ([
+          ["ultrawide", ["ultrawide"]],
+          ["portrait", ["portrait"]],
+        ] as const)
+      : []),
     ...(part === "quality" ? [["hidpi", ["hidpi"]] as const] : []),
   ] as const) {
     // Each viewport owns its Host, budget and cleanup; one slow layout fails alone.

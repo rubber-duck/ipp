@@ -64,11 +64,12 @@ mod system_state;
 pub(crate) mod test_support;
 pub(in crate::world::systems) mod update;
 pub(in crate::world::systems) mod walk;
+mod web_content;
 
 pub use component::CanvasBounds;
 pub use component::{
-    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasPaint,
-    CanvasStyle, CanvasText,
+    CanvasBitmap, CanvasBox, CanvasDrawing, CanvasGlyphRow, CanvasGlyphRun, CanvasHtml,
+    CanvasPaint, CanvasStyle, CanvasText,
 };
 pub use layer_transition::CanvasLayerTransition;
 pub use publication::{

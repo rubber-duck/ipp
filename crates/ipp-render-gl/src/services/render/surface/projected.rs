@@ -186,6 +186,52 @@ impl<D: RenderDevice> RenderService<D> {
         }
     }
 
+    /// Each output may use its ranked reservation plus unreserved headroom.
+    /// The resident/remaining-demand check still prevents sharing that headroom twice.
+    pub(in crate::services::render) fn required_image_limit(&self, output: OutputRef) -> usize {
+        let reserved: usize = self.required_image_demand.values().sum();
+        self.required_image_demand
+            .get(&output)
+            .copied()
+            .unwrap_or(0)
+            + self.surface_cache.budget().saturating_sub(reserved)
+    }
+
+    /// Run before any output is painted, so dependencies never see an image
+    /// released halfway through child-first composition. Retain mesh/publication
+    /// identity; image contents will be reconstructed at the newly admitted tier.
+    pub(in crate::services::render) fn reclaim_required_allocations(&mut self) {
+        let outputs: Vec<_> = self.required_image_demand.keys().copied().collect();
+        for output in outputs {
+            let limit = self.required_image_limit(output);
+            if output.kind() == OutputKind::Camera {
+                if self
+                    .camera_targets
+                    .get(&output)
+                    .is_some_and(|(_, size, _)| size[0] as usize * size[1] as usize * 4 > limit)
+                {
+                    let (target, _, _) = self
+                        .camera_targets
+                        .remove(&output)
+                        .expect("selected target");
+                    self.device.borrow_mut().delete_surface_cache_target(target);
+                    self.camera_completed.remove(&output);
+                }
+            } else if let Some(state) = self.projected_surfaces.get_mut(&output)
+                && state.groups.len() * state.size[0] as usize * state.size[1] as usize * 4 > limit
+            {
+                for group in &mut state.groups {
+                    if let Some(target) = group.target.take() {
+                        self.device.borrow_mut().delete_surface_cache_target(target);
+                    }
+                }
+                state.stamp = None;
+                state.current_image = false;
+                state.budget_limited = true;
+            }
+        }
+    }
+
     /// Padding may use only bytes left after every other visible image's active
     /// demand, including images that have not reached allocation in this frame.
     pub(in crate::services::render) fn remaining_required_bytes(
@@ -626,11 +672,18 @@ impl<D: RenderDevice> RenderService<D> {
                     }
                 }
             }
+            let available = self.required_image_limit(selection).min(
+                self.surface_cache.budget().saturating_sub(
+                    self.projected_image_bytes()
+                        + self.surface_cache.resident().1 as usize
+                        + self.remaining_required_bytes(selection),
+                ),
+            );
+            let next_size =
+                std::array::from_fn::<_, 2, _>(|i| (state.size[i] * 2).min(requested[i]));
             let recover_budget = state.budget_limited
-                && active_bytes
-                    + self.projected_image_bytes()
-                    + self.surface_cache.resident().1 as usize
-                    <= self.surface_cache.budget();
+                && next_size != state.size
+                && planes.len() * next_size[0] as usize * next_size[1] as usize * 4 <= available;
             if geometry_changed
                 || groups_changed
                 || quality_changed
@@ -674,10 +727,12 @@ impl<D: RenderDevice> RenderService<D> {
                     } else {
                         super::quality::image_capacity(size, limit)
                     };
-                    let available = self.surface_cache.budget().saturating_sub(
-                        other_images
-                            + optional_bytes as usize
-                            + self.remaining_required_bytes(selection),
+                    let available = self.required_image_limit(selection).min(
+                        self.surface_cache.budget().saturating_sub(
+                            other_images
+                                + optional_bytes as usize
+                                + self.remaining_required_bytes(selection),
+                        ),
                     );
                     let capacity_bytes =
                         image_count * capacity[0] as usize * capacity[1] as usize * 4;

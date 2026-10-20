@@ -134,7 +134,7 @@ pub(crate) fn read_control(
     let components = &simulation.components;
     let index = entity.index() as usize;
     let value = match control.kind {
-        GuiControlKind::Button => GuiTestValue::None,
+        GuiControlKind::Button | GuiControlKind::InputTarget => GuiTestValue::None,
         GuiControlKind::Checkbox => GuiTestValue::Bool(components.gui_checkbox(index)?.checked),
         GuiControlKind::Slider => {
             let slider = components.gui_slider(index)?;

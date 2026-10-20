@@ -76,6 +76,7 @@ interface GeneratedCanvasModule {
       wasm: string,
       options: {
         canvas: OffscreenCanvas;
+        htmlCanvas: HTMLCanvasElement;
         signal: AbortSignal;
         timeoutMs: number;
         logLevel: LogLevel;
@@ -266,6 +267,7 @@ export function IppCanvas({
           configuration.wasmUrl,
           {
             canvas,
+            htmlCanvas: surface.canvas,
             signal: startup.signal,
             timeoutMs: configuration.timeoutMs ?? 10_000,
             logLevel: configuration.logLevel ?? "info",

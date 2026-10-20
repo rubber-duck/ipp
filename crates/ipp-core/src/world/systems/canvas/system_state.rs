@@ -18,6 +18,8 @@ pub(super) struct CanvasSystemState {
     /// Tree order: depth-first over the top-level entities in sibling order.
     pub order: Vec<EntityId>,
     pub leaves: BTreeMap<(EntityId, u16), CanvasPreparedLeaf>,
+    /// Only live HTML consumers need to poll shared producer progress.
+    pub html_entities: BTreeSet<EntityId>,
     pub slots: BTreeMap<EntityId, Arc<CanvasPaintEntry>>,
     /// A change the canvas cannot patch: the next evaluation walks it whole.
     pub dirty: bool,
@@ -77,6 +79,10 @@ pub(in crate::world::systems) enum CanvasGeometry {
     Bitmap {
         bitmap: AssetKey,
         size: [f32; 2],
+    },
+    Html {
+        size: [f32; 2],
+        image: Option<crate::services::web_content::WebContentImageId>,
     },
     Box {
         size: [f32; 2],

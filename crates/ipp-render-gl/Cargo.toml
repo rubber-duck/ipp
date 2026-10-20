@@ -36,3 +36,7 @@ required-features = ["instrumentation"]
 [[test]]
 name = "gpu_profiling"
 required-features = ["instrumentation"]
+
+[[test]]
+name = "web_images"
+required-features = ["instrumentation"]

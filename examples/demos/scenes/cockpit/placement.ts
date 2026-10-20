@@ -1,6 +1,8 @@
-import { carouselStep, COCKPIT_PANE_COUNT } from "./carousel.js";
+import { carouselStep } from "./carousel.js";
+import { COCKPIT_PANE_COUNT } from "./options.js";
+import type { CockpitRuntime } from "./runtime.js";
 
-/** Placement derived from the authored cockpit mounts and fixed Camera. */
+/** Placement derived from the authored bridge mounts. */
 export const TRANSFORM_FIELDS = [
   "x",
   "y",
@@ -50,14 +52,13 @@ function rotate(point: readonly number[], pose: Pose, inverse = false) {
   ] as const;
 }
 
-/** Every panel center and tangent lies on one cylinder around the camera axis. */
+/** Every panel center and tangent lies on one cylinder in the bridge mount frame. */
 export function carouselScreenMounts(
-  _mounts: readonly ScreenMount[],
+  bridge: CockpitRuntime["bridge"],
   radius: number,
   count = COCKPIT_PANE_COUNT,
 ): readonly CurvedScreenMount[] {
-  const width = 960 / 200;
-  const height = 800 / 200;
+  const [width, height] = bridge.paneExtent;
   const step = carouselStep(width, radius);
   return Array.from({ length: count }, (_, index) => {
     const angle = index * step;
@@ -66,7 +67,7 @@ export function carouselScreenMounts(
       curvature: -1 / radius,
       pose: {
         x: radius * Math.sin(angle),
-        y: 0.65,
+        y: bridge.paneElevation,
         z: -radius * Math.cos(angle),
         qx: 0,
         qy: Math.sin(-angle / 2),

@@ -105,6 +105,7 @@ impl HostRuntime {
                             &mut self.io,
                             &mut self.data,
                             &mut self.topology,
+                            &mut self.web_content,
                         )
                         .dispatch_asset_lifecycle(&event, false);
                 }
@@ -124,6 +125,7 @@ impl HostRuntime {
                             &mut self.io,
                             &mut self.data,
                             &mut self.topology,
+                            &mut self.web_content,
                         )
                         .dispatch_asset_lifecycle(&event, true);
                 }
@@ -134,6 +136,7 @@ impl HostRuntime {
                             &mut self.io,
                             &mut self.data,
                             &mut self.topology,
+                            &mut self.web_content,
                         )
                         .flush_lifecycle_cleanup();
                 }
@@ -152,5 +155,17 @@ impl HostRuntime {
     /// Local producer admission and Host policy configuration.
     pub fn data_sources_mut(&mut self) -> &mut crate::services::data::DataService {
         &mut self.data
+    }
+}
+
+impl HostRuntime {
+    /// Shared request metadata and immutable image authority.
+    pub fn web_content(&self) -> &crate::services::web_content::WebContentService {
+        &self.web_content
+    }
+
+    /// Producer admission and source registration at the exclusive Host boundary.
+    pub fn web_content_mut(&mut self) -> &mut crate::services::web_content::WebContentService {
+        &mut self.web_content
     }
 }

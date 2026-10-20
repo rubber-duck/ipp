@@ -30,6 +30,7 @@ mod statistics;
 mod surface;
 #[cfg(test)]
 mod test_support;
+mod web_images;
 
 pub use outputs::scene::RenderEntity;
 
@@ -53,8 +54,10 @@ pub use statistics::RenderStatistics;
 #[cfg(target_arch = "wasm32")]
 pub use device::WebGlRenderDevice;
 
+#[cfg(target_os = "linux")]
+pub use device::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufPlane};
 #[cfg(not(target_arch = "wasm32"))]
-pub use device::GlesRenderDevice;
+pub use device::{GlesDmaBufImport, GlesRenderDevice};
 
 pub use assets::export::RenderAssetExportDelay;
 pub use canvas::paint::{
@@ -67,6 +70,7 @@ pub use surface::texture_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };
+pub use web_images::{WebImageImportError, WebImageReservation, WebImageStaging, WebImageUsage};
 
 #[cfg(feature = "instrumentation")]
 pub use device::RenderGlCallCounts;

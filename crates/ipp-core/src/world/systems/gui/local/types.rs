@@ -39,6 +39,8 @@ impl GuiEntityTarget {
 /// Concrete local control role, independent of its appearance or layout.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GuiControlKind {
+    /// Input delivered to a designated client through protocol observations.
+    InputTarget,
     /// Momentary activation without a value.
     Button,
     /// Boolean `checked` field.
@@ -59,6 +61,7 @@ impl GuiControlKind {
     /// The role of a control component, if `component` is one.
     pub fn of_component(component: u16) -> Option<Self> {
         Some(match component {
+            ComponentValue::GUI_INPUT_TARGET => Self::InputTarget,
             ComponentValue::GUI_BUTTON => Self::Button,
             ComponentValue::GUI_CHECKBOX => Self::Checkbox,
             ComponentValue::GUI_SLIDER => Self::Slider,
@@ -140,6 +143,8 @@ pub enum GuiLocalActionError {
 /// fields and reach clients through field observation, not through effects.
 #[derive(Clone, Debug, PartialEq)]
 pub enum GuiLocalEffectKind {
+    /// Ordered input for the live client bound to this target.
+    Input(super::GuiClientInput),
     /// Momentary button press; no value or focus transition.
     Pressed,
     /// Submitted text, retained at the application boundary: a numeric

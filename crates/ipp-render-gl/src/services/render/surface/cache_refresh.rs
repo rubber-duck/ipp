@@ -19,6 +19,7 @@ pub(in crate::services::render) struct CanvasCacheRequest {
     pub anchor: EntityId,
     pub token: WorldAttachmentToken,
     pub pixel_demand: [f64; 2],
+    pub screen_coverage: f64,
     pub policy: SurfaceCachePolicy,
     pub distance: f32,
     pub clip: CanvasClip,
@@ -34,6 +35,7 @@ pub(in crate::services::render) struct CanvasCacheState {
     request: CanvasCacheRequest,
     stamp: OutputContentStamp,
     painted_stamp: Option<OutputContentStamp>,
+    painted_current: bool,
     painted_outputs: std::collections::BTreeSet<OutputRef>,
     represented_images: std::collections::BTreeSet<OutputRef>,
     /// Raster changes propagate through caches containing independently refreshed images.
@@ -186,6 +188,7 @@ impl<D: RenderDevice> RenderService<D> {
                     request: request.clone(),
                     stamp: stamp.clone(),
                     painted_stamp: None,
+                    painted_current: false,
                     painted_outputs: Default::default(),
                     represented_images: Default::default(),
                     generation: 0,
@@ -200,6 +203,10 @@ impl<D: RenderDevice> RenderService<D> {
             }
             state.raster_dependencies = raster_dependencies;
             if !state.stamp.same_dependencies(&stamp)
+                || state
+                    .painted_stamp
+                    .as_ref()
+                    .is_some_and(|painted| !painted.web_images_valid())
                 || state.request.clip != request.clip
                 || state.request.opacity != request.opacity
                 || state.paint_context != paint_context
@@ -220,6 +227,7 @@ impl<D: RenderDevice> RenderService<D> {
                     entity: request.anchor,
                     policy: request.policy,
                     pixel_demand: request.pixel_demand,
+                    screen_coverage: request.screen_coverage,
                     paint_revision: state.paint_revision,
                     resource_revision: state.resource_revision,
                     interaction: request.interaction,
@@ -343,7 +351,8 @@ impl<D: RenderDevice> RenderService<D> {
             .canvas_caches
             .get_mut(&selection)
             .expect("painted cache state");
-        state.painted_stamp = current_image.then(|| state.stamp.clone());
+        state.painted_stamp = result.is_ok().then(|| state.stamp.clone());
+        state.painted_current = current_image;
         state.painted_outputs = painted_outputs;
         state.represented_images = represented_images;
         self.canvas_cache_frame.repainting = None;
@@ -463,7 +472,8 @@ impl<D: RenderDevice> RenderService<D> {
                         .represented_images
                         .extend(state.represented_images.iter().copied());
                 }
-                let current_image = state.painted_stamp.as_ref() == Some(&state.stamp);
+                let current_image =
+                    state.painted_current && state.painted_stamp.as_ref() == Some(&state.stamp);
                 self.inclusions.active.stale_image |= !current_image;
                 if current_image && self.inclusions.observing() {
                     let stale_parent = std::mem::take(&mut self.inclusions.active.stale_image);

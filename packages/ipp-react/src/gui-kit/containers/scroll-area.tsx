@@ -1,3 +1,4 @@
+import { resolveSpacing } from "../spacing.js";
 import { useState, type ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Font, Layout, Style } from "../../gui/components.js";
@@ -13,7 +14,7 @@ import { useEntityId } from "../../scope/identity.js";
 import {
   Column,
   LAYOUT_COLUMN,
-  layoutFields,
+  useLayoutFields,
   type GuiKitFlowLayoutProps,
 } from "../layout.js";
 import { usePanelSurface, usePanelPadding } from "./panel.js";
@@ -55,7 +56,9 @@ export function ScrollArea({
   const parentPadding = usePanelPadding();
   const insets = parentPadding.map(
     (provided) =>
-      padding ??
+      (padding === undefined
+        ? undefined
+        : resolveSpacing(padding, kit.spacing)) ??
       Math.max(0, kit.spacing.inset - (panel && !frame ? provided : 0)),
   );
   const theme = frame ? kit.controlTheme("scroll") : kit.theme("gridBody");
@@ -67,7 +70,7 @@ export function ScrollArea({
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        {...layoutFields(layout, { fit_height: true, clip: true })}
+        {...useLayoutFields(layout, { fit_height: true, clip: true })}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       {theme && <Skin theme={theme} />}

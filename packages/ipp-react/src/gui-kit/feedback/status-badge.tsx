@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A read-only compact label of an observed state: a small part-cut frame in
@@ -14,12 +23,7 @@ import { Style, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiKitIcon } from "../icons.js";
 import { useGuiKit, type GuiKitTone } from "../kit.js";
-import {
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Icon, TextLine, glyphSizeForWidth, textWidth } from "../text.js";
 import type { KitThemeName } from "../themes.js";
 
@@ -34,14 +38,13 @@ export type StatusBadgeStatus =
   | "warning"
   | "error";
 
-export interface StatusBadgeProps {
+export interface StatusBadgeProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
   readonly status: StatusBadgeStatus;
   /** The state's word, such as Online. */
   readonly label: string;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Side of the marker, at the tokens' `em`. */
@@ -72,13 +75,14 @@ const STATUSES: Readonly<
   error: { tone: "error", frame: "badgeError", marker: { icon: "error" } },
 };
 
-export function StatusBadge({
-  id: providedId,
-  layer = 0,
-  status,
-  label,
-  layout,
-}: StatusBadgeProps) {
+export function StatusBadge(props: StatusBadgeProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    status,
+    label,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -94,7 +98,7 @@ export function StatusBadge({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         width={width}
         height={kit.unit(t.smallHeight)}

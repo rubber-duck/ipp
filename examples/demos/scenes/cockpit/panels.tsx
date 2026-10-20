@@ -3,7 +3,7 @@ import type { GuiTarget } from "@ipp/client";
 import { Button as GrabButton, Behavior, Layout } from "@ipp/react/gui";
 import {
   Column,
-  Stack,
+  OverlayStack,
   Panel,
   PanelHeader,
   ScrollArea,
@@ -23,12 +23,17 @@ import {
   RadarInstrument,
   type InstrumentContract,
 } from "./instruments.js";
-import { cockpitOptions, type CockpitOptions } from "./options.js";
+import {
+  cockpitOptions,
+  COCKPIT_SCREEN_TITLES,
+  type CockpitOptions,
+} from "./options.js";
 import {
   ControlScreen,
   type CockpitNavigationSource,
 } from "./control-screen.js";
 import { SystemScreen } from "./system-screen.js";
+import { BrowserScreen } from "./browser-screen.js";
 import { TerminalScreen } from "./terminal-screen.js";
 import type { FrameRateContract } from "../../frame-rate-panel.js";
 import type { GalleryDiagnosticsMonitor } from "../../frame-rate.js";
@@ -36,11 +41,6 @@ import type { GalleryDiagnosticsMonitor } from "../../frame-rate.js";
 export const PANEL_DENSITY = 200;
 export const COCKPIT_SCREEN_WIDTH = 960;
 export const COCKPIT_SCREEN_HEIGHT = 800;
-export const COCKPIT_SCREEN_TITLES = [
-  "Bridge controls",
-  "System monitor",
-  "Terminal",
-] as const;
 
 /** This frame is shared with the flat native design review, without a parallel layout. */
 export function CockpitPane({
@@ -55,7 +55,11 @@ export function CockpitPane({
   application,
   initialTab,
   navigation,
+  startTerminal,
+  browserHost,
 }: {
+  browserHost?: object | undefined;
+  startTerminal?: (() => Promise<void>) | undefined;
   index: number;
   width: number;
   height: number;
@@ -71,7 +75,7 @@ export function CockpitPane({
   const kit = useGuiKit();
   const inset = kit.spacing.inset;
   return (
-    <Stack width={width} height={height}>
+    <OverlayStack width={width} height={height}>
       <Entity id={`cockpit-grip-${index}`}>
         <Layout width={width} height={height} />
         <GrabButton
@@ -80,25 +84,24 @@ export function CockpitPane({
         />
         <Behavior focusable={false} />
       </Entity>
-      <Panel
-        id={`cockpit-pane-${index}`}
-        width={width}
-        height={height}
-        padding={0}
-      >
+      <Panel id={`cockpit-pane-${index}`} width={width} height={height}>
         <PanelHeader
           id={`cockpit-header-${index}`}
           title={COCKPIT_SCREEN_TITLES[index]!}
         >
-          <TextLine text={`0${index + 1} / 03`} tone="neutral" size="small" />
+          <TextLine
+            text={`0${index + 1} / 0${COCKPIT_SCREEN_TITLES.length}`}
+            tone="neutral"
+            size="small"
+          />
         </PanelHeader>
         <ScrollArea
           id={`cockpit-content-${index}`}
           ref={(handle) => wheelTarget?.("content", handle?.target ?? null)}
-          padding={inset}
+          padding="inset"
           fitHeight={false}
           gap={0}
-          layout={{ flex: 1 }}
+          flex={1}
         >
           {index === 0 ? (
             <ControlScreen
@@ -114,12 +117,30 @@ export function CockpitPane({
               contract={contract}
               width={width - 2 * inset}
             />
+          ) : index === 2 ? (
+            <TerminalScreen
+              width={width - 2 * inset}
+              height={
+                height -
+                kit.unit(kit.tokens.controlHeight + kit.tokens.lineWidth) -
+                2 * inset
+              }
+              start={startTerminal}
+            />
           ) : (
-            <TerminalScreen state={state} />
+            <BrowserScreen
+              width={width - 2 * inset}
+              height={
+                height -
+                kit.unit(kit.tokens.controlHeight + kit.tokens.lineWidth) -
+                2 * inset
+              }
+              host={browserHost}
+            />
           )}
         </ScrollArea>
       </Panel>
-    </Stack>
+    </OverlayStack>
   );
 }
 
@@ -146,7 +167,8 @@ export function DashboardInstrument({
       {radar ? (
         <RadarInstrument
           state={state}
-          size={Math.min(width, height)}
+          width={width}
+          height={height}
           report={report}
         />
       ) : (
@@ -167,7 +189,7 @@ export function CockpitControls(props: GallerySceneControlsProps) {
   const state = cockpitOptions(props.mount.options);
   const { update } = sceneActions(props);
   return (
-    <Column gap={12}>
+    <Column>
       <TextLine
         text="Choose a bridge screen. Scene and display controls live together on the first screen."
         tone="neutral"

@@ -13,6 +13,7 @@ use crate::RenderError;
 #[derive(Default)]
 pub struct WebGlRenderDevice {
     pub(super) readbacks: Vec<std::rc::Weak<std::cell::Cell<Option<u32>>>>,
+    pub(super) completion_fences: std::collections::BTreeSet<u32>,
     uniform_epoch: u64,
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::super::gpu_queries::GpuQueryPool<super::gpu_queries::WebGlGpuQueries>,
@@ -197,6 +198,22 @@ impl RenderDevice for WebGlRenderDevice {
 
     type Texture = u32;
     type TextureReadback = super::texture_readback::WebGlTextureReadback;
+
+    fn create_completion_fence(&mut self) -> Result<u64, RenderError> {
+        self.create_fence()
+    }
+
+    fn finish_submitted_work(&mut self) -> Result<(), RenderError> {
+        self.finish_work()
+    }
+
+    fn poll_completion_fence(&mut self, fence: u64) -> Result<bool, RenderError> {
+        self.poll_fence(fence)
+    }
+
+    fn delete_completion_fence(&mut self, fence: u64) {
+        self.delete_fence(fence);
+    }
 
     fn texture_readback_supported(&self) -> bool {
         true

@@ -7,7 +7,11 @@ import {
 } from "../gui/controls.js";
 import { Behavior, Font, Layout, Style } from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
-import { LAYOUT_LEAF, layoutFields, type GuiKitLayoutProps } from "./layout.js";
+import {
+  LAYOUT_LEAF,
+  useLayoutFields,
+  type GuiKitLayoutProps,
+} from "./layout.js";
 import { textWidth } from "./text.js";
 import { useCheckedValue } from "./values/checked-value.js";
 
@@ -85,7 +89,7 @@ function CheckedField({
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_LEAF}
-        {...layoutFields(
+        {...useLayoutFields(
           {
             layout,
             width,

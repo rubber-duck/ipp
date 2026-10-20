@@ -99,3 +99,13 @@ A toast is a control row in 8-unit margins (56). A colour control is a 144 field
 ## Reference crops
 
 The crops are local and ignored by Git: `.resources/skin-reference/` of the primary checkout (override with `--references` or `IPP_SKIN_REFERENCES`); `crop.py` there regenerates them from the three sheets, and the `crop-*.py` scripts from the supplement sheets. Row crops `a01`…`a07`, `b01`…`b03` and `c01`…`c07`, and the supplement sheets' component crops such as `h02` and `i01`, are 2x; the `z*-` close-ups use other scales, so compare them with the shared-Host `compare` command and explicit boxes.
+
+## Layout review
+
+The shared Host can run the maintained [widget sizing scenario](../../react/gui-authoring/scenarios/gui-widget-sizing.tsx) through [layout-lab.ts](layout-lab.ts). It captures both skins at narrow and wide panel widths and different font sizes, checking shared field widths, one content inset, natural text rows, visible action content and real pointer input. The native/browser GUI authoring suite runs the same scenario for delivery evidence.
+
+```sh
+node tools/shared-host/shared-host.mjs session start tests/gui/skin-lab/layout-lab.ts --name layout-review
+node tools/shared-host/shared-host.mjs session capture layout-review
+node tools/shared-host/shared-host.mjs session stop layout-review
+```

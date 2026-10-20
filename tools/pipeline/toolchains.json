@@ -1,4 +1,19 @@
 {
+  "chromeForTesting": {
+    "channel": "Stable",
+    "version": "155.0.8059.84",
+    "revision": "1697595",
+    "resolvedAt": "2026-10-17T09:18:35.172Z",
+    "source": "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json",
+    "downloads": {
+      "linux-arm64": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/linux-arm64/chrome-linux-arm64.zip",
+      "linux64": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/linux64/chrome-linux64.zip",
+      "mac-arm64": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/mac-arm64/chrome-mac-arm64.zip",
+      "mac-x64": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/mac-x64/chrome-mac-x64.zip",
+      "win32": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/win32/chrome-win32.zip",
+      "win64": "https://storage.googleapis.com/chrome-for-testing-public/155.0.8059.84/win64/chrome-win64.zip"
+    }
+  },
   "blenderLinuxX64": {
     "directory": "blender-5.2.1-linux-x64",
     "url": "https://mirrors.ocf.berkeley.edu/blender/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz",

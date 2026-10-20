@@ -1,5 +1,6 @@
 import type { RenderStatisticsSnapshot } from "@ipp/client/diagnostics";
 import assert from "node:assert/strict";
+import { exerciseSurfaceAllocation } from "./surface-allocation.js";
 import {
   compareFrames,
   type FrameDifference,
@@ -108,7 +109,7 @@ export const REDUCED_TOLERANCE = { meanChannelDifference: 16 } as const;
 /** Recovered glyph atlas slots may round coverage by one level at glyph edges. */
 const RECOVERY_THRESHOLD = 2;
 
-const DEFAULT_BUDGET = 32 << 20;
+const DEFAULT_BUDGET = 128 << 20;
 
 export type SurfaceCacheReport = Awaited<
   ReturnType<typeof exerciseSurfaceCache>
@@ -536,6 +537,8 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
   assert.equal(counter(removed, "surfaceCacheEntries"), 0);
   assert.equal(counter(removed, "surfaceCacheResidentBytes"), 0);
 
+  const allocation = await exerciseSurfaceAllocation(driver);
+
   const gui = driver.gui
     ? await exerciseCachedGui(driver, capture, records)
     : null;
@@ -599,6 +602,7 @@ export async function exerciseSurfaceCache(driver: SurfaceCacheDriver) {
     continuous: { repaints: continuous, elapsedMs: elapsed, cap },
     mirror,
     gui,
+    allocation,
   };
 }
 

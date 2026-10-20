@@ -9,7 +9,8 @@ import { exerciseFrameRateHistory } from "./scenarios/frame-rate-history.js";
 import type * as Fixture from "./pages/frame-rate.js";
 
 test("cockpit full FPS history stays readable without per-sample draws", {
-  timeout: 180_000,
+  // Both surfaces render full history at DPR 2, including software browsers.
+  timeout: 360_000,
 }, async (context) => {
   await runBrowserEnvironment(
     "cockpit dense FPS history",

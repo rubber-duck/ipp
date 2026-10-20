@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_STACK,
+} from "./layout.js";
+
 import { useEntityId } from "../scope/identity.js";
 /**
  * Rings of the kit: the arc shape painted by a skinned entity that is not a
@@ -14,17 +21,16 @@ import { useEntityId } from "../scope/identity.js";
  */
 import type { ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../components.js";
-import { Layout } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
-import { LAYOUT_STACK, type GuiKitLayout } from "./layout.js";
+
 import { PULSE_REST, Pulse, Turn, useOwnRow } from "./row-motion.js";
 import type { KitThemeName } from "./themes.js";
 
 /** Lit share of a turning arc: a quarter of the ring. */
 export const TURNING_SWEEP = 0.25;
 
-export interface ArcProps {
+export interface ArcProps extends GuiKitLayoutProps {
   readonly id?: string;
   readonly theme: KitThemeName;
   /** Outer diameter at the tokens' `em`. */
@@ -39,24 +45,25 @@ export interface ArcProps {
   readonly turning?: boolean;
   /** A liveness cue: drawn at the pulse's rest opacity, and fading. */
   readonly cue?: boolean;
-  readonly layout?: GuiKitLayout;
+
   /** Entities centred over the ring, such as its lit arc or a readout. */
   readonly children?: ReactNode;
 }
 
 /** A ring sector `size` across, centred in its container by default. */
-export function Arc({
-  id: providedId,
-  theme,
-  size,
-  thickness,
-  start = 0,
-  sweep = 1,
-  turning = false,
-  cue = false,
-  layout,
-  children,
-}: ArcProps) {
+export function Arc(props: ArcProps) {
+  const {
+    id: providedId,
+    theme,
+    size,
+    thickness,
+    start = 0,
+    sweep = 1,
+    turning = false,
+    cue = false,
+    layout,
+    children,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const parts = useOwnRow({
@@ -69,7 +76,7 @@ export function Arc({
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout
+      <KitLayout
         kind={LAYOUT_STACK}
         width={kit.unit(size)}
         height={kit.unit(size)}

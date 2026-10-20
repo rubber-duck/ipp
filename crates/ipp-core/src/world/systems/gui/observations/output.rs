@@ -294,7 +294,15 @@ impl OutputState {
                     .len()
                     .checked_mul(size_of::<crate::EntityId>())?,
             )?;
-        let mut text_length = 0;
+        let mut text_length = match &effect.kind {
+            super::super::local::GuiLocalEffectKind::Input(input) => {
+                bytes = bytes
+                    .checked_add(input.retained_bytes())?
+                    .checked_add(2 * size_of::<usize>())?;
+                input.retained_bytes()
+            }
+            _ => 0,
+        };
         if let super::super::local::GuiLocalEffectKind::Submitted(text)
         | super::super::local::GuiLocalEffectKind::Rejected(text)
         | super::super::local::GuiLocalEffectKind::Discarded(text) = &effect.kind

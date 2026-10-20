@@ -192,10 +192,7 @@ test("RadioGroup is a labelled group of radio marks whose arrows select", async 
   assert.equal(world.fields("axis/options", "GuiLayout").get("kind"), 1);
   assert.equal(world.fields("axis/options", "GuiGroup").get("axis"), 0);
   assert.equal(world.fields("axis/options", "GuiLayout").get("gap"), 32);
-  assert.equal(
-    world.fields("axis/y", "GuiLayout").get("margin_left"),
-    undefined,
-  );
+  assert.equal(world.fields("axis/y", "GuiLayout").get("margin_left"), 0);
 });
 
 test("a choice reports the runtime's selection and writes only the application's own", async () => {

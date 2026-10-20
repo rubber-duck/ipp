@@ -334,6 +334,35 @@ impl GuiHostInputService {
         reservation: SharedReplyReservation,
     ) -> Result<Option<GuiPhysicalResponse>, String> {
         match input {
+            GuiPhysicalRequest::Client {
+                context,
+                target,
+                generation,
+                event,
+            } => {
+                let target = match target.resolve(host) {
+                    Ok(target) => target,
+                    Err(_) => return Ok(Some(GuiPhysicalResponse::Rejected("StaleTarget".into()))),
+                };
+                self.request(
+                    host,
+                    connection,
+                    request,
+                    GuiPhysicalRequest::Event {
+                        context,
+                        input: ipp_core::services::gui_input::router::GuiPhysicalInput::Client {
+                            fence: ipp_core::systems::gui::local::GuiTextFence {
+                                target,
+                                generation,
+                            },
+                            event,
+                        },
+                    },
+                    outbox,
+                    budget,
+                    reservation,
+                )
+            }
             GuiPhysicalRequest::Text {
                 context,
                 target,

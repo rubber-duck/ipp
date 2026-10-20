@@ -64,6 +64,8 @@ ipp_schema_derive::component_registry! {
         CanvasLayerTransition = 56,
         GuiMetrics = 57,
         PresentationGate = 58,
+        GuiInputTarget = 59,
+        CanvasHtml = 60,
         BufferDataSourceBinding = 100,
         StreamingDataSourceBinding = 101,
         PlotFrame2d = 103,

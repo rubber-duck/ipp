@@ -1,3 +1,15 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_PADDING,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Measured completion of a task: its label and readout above a read-only
@@ -34,15 +46,7 @@ import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitTone, type GuiKitTokens } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_PADDING,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { LEAD, PULSE_REST, Pulse, useOwnRow } from "../row-motion.js";
 import { CHECK_MARK, CheckMark, Icon, TextLine, percentage } from "../text.js";
 import type { KitThemeName } from "../themes.js";
@@ -60,7 +64,7 @@ export interface ProgressBarSegment {
   readonly tone?: ProgressBarTone;
 }
 
-export interface ProgressBarProps {
+export interface ProgressBarProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -75,7 +79,6 @@ export interface ProgressBarProps {
   readonly segments?: readonly ProgressBarSegment[];
   /** The task's outcome once it has one. */
   readonly status?: ProgressBarStatus;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Space between the label row and the frame. */
@@ -135,15 +138,16 @@ function progressGeometry(tokens: GuiKitTokens) {
   return { clearance, fillHeight: height - 2 * clearance };
 }
 
-export function ProgressBar({
-  id: providedId,
-  layer = 0,
-  label,
-  value,
-  segments,
-  status,
-  layout,
-}: ProgressBarProps) {
+export function ProgressBar(props: ProgressBarProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    value,
+    segments,
+    status,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -191,7 +195,7 @@ export function ProgressBar({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         height={kit.unit(
           t.denseRow + LABEL_GAP + (t.progressHeight ?? t.smallHeight),
@@ -200,7 +204,7 @@ export function ProgressBar({
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
-        <Row id={`${id}/labels`} height={kit.unit(t.denseRow)}>
+        <Row gap={0} id={`${id}/labels`} height={kit.unit(t.denseRow)}>
           <TextLine id={`${id}/label`} text={label} layout={{ flex: 1 }} />
           {status === "failed" && (
             <Icon

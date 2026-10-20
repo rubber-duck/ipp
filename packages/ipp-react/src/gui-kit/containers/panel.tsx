@@ -6,10 +6,10 @@ import { useEntityId } from "../../scope/identity.js";
  * optional `PanelFooter`. Minimised, it is the same frame unlit, as tall as
  * its header, which is then all it should hold.
  *
- * Header and footer are rows of buttons in half-inset margins: the header a
- * control-height strip whose docked buttons sit as far from its end as from
- * its edges, the footer a row of small buttons at the content inset. Each is
- * divided from the body by a panel division.
+ * Header and footer align their content at the container inset. The header
+ * is a control-height title strip with docked buttons; the footer holds
+ * leading status and trailing actions with compact vertical padding. Each
+ * is divided from the body by a panel division.
  */
 import { createContext, useContext, type ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
@@ -20,7 +20,8 @@ import {
   LAYOUT_COLUMN,
   Column,
   Row,
-  layoutFields,
+  ActionRow,
+  useLayoutFields,
   type ContainerProps,
   type GuiKitFlowLayoutProps,
 } from "../layout.js";
@@ -51,8 +52,8 @@ export interface PanelProps extends GuiKitFlowLayoutProps {
 }
 
 /**
- * A padded content container. Use padding={0} for a frame whose header,
- * separators or tab rail meet its edges, and PanelBody for its padded body.
+ * An unpadded frame whose header, body and footer own their content insets.
+ * Use PanelBody for ordinary content or padding="inset" for a simple surface.
  */
 export function Panel({
   id: providedId,
@@ -64,13 +65,8 @@ export function Panel({
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
-  const inset = kit.spacing.inset;
-  const fields = layoutFields(layout, {
+  const fields = useLayoutFields(layout, {
     fit_height: true,
-    padding_left: inset,
-    padding_right: inset,
-    padding_top: inset,
-    padding_bottom: inset,
   });
   const padding = [
     fields.padding_top!,
@@ -114,7 +110,7 @@ export function PanelBody(props: PanelBodyProps) {
   );
 }
 
-export interface PanelHeaderProps {
+export interface PanelHeaderProps extends GuiKitFlowLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -133,6 +129,7 @@ export function PanelHeader({
   layer = 0,
   title,
   children,
+  ...layout
 }: PanelHeaderProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
@@ -144,7 +141,9 @@ export function PanelHeader({
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        height={kit.unit(t.controlHeight + (minimized ? 0 : t.lineWidth))}
+        {...useLayoutFields(layout, {
+          height: kit.unit(t.controlHeight + (minimized ? 0 : t.lineWidth)),
+        })}
       />
       <Children>
         <Row
@@ -169,47 +168,52 @@ export function PanelHeader({
   );
 }
 
-export interface PanelFooterProps {
+export interface PanelFooterProps extends GuiKitFlowLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
-  /** The footer's row content, such as a count and secondary buttons. */
+  /** Status or descriptive content at the leading content edge. */
+  readonly leading?: ReactNode;
+  /** Actions placed together at the trailing content edge. */
   readonly children?: ReactNode;
 }
 
 /**
- * The panel's last row, after a division: small buttons in half-inset margins
- * with the content inset at either end. Give the body before it `flex: 1` to
+ * The panel's last row, after a division: actions with label spacing above
+ * and below, and the content inset at either end. Give the body before it `flex: 1` to
  * hold it at the bottom of a taller panel.
  */
 export function PanelFooter({
   id: providedId,
   layer = 0,
   children,
+  leading,
+  ...layout
 }: PanelFooterProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
-  const t = kit.tokens;
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        height={kit.unit(t.smallHeight + t.inset + t.lineWidth)}
+        {...useLayoutFields(layout, { fit_height: true })}
       />
       <Children>
         <Separator id={`${id}/separator`} />
-        <Row
+        <ActionRow
           id={`${id}/row`}
-          height={kit.unit(t.smallHeight + t.inset)}
+          leading={leading}
           layout={{
             padding_left: kit.spacing.inset,
             padding_right: kit.spacing.inset,
+            padding_top: kit.spacing.label,
+            padding_bottom: kit.spacing.label,
           }}
         >
           {children}
-        </Row>
+        </ActionRow>
       </Children>
     </Entity>
   );

@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+  LAYOUT_STACK,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A slider's scale: tick marks and their labels along its rail, below a
@@ -19,7 +27,7 @@ import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import { LAYOUT_LEAF, LAYOUT_STACK, type GuiKitLayout } from "../layout.js";
+
 import {
   MarkText,
   RailMark,
@@ -44,7 +52,7 @@ export interface SliderScaleMarks {
   readonly origin?: number;
 }
 
-export interface SliderScaleProps extends SliderScaleMarks {
+export interface SliderScaleProps extends SliderScaleMarks, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -54,7 +62,6 @@ export interface SliderScaleProps extends SliderScaleMarks {
   readonly vertical?: boolean;
   /** A vertical rail's length at the tokens' em; the unsized slider's by default. */
   readonly length?: number;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Length of a tick across the rail. */
@@ -117,16 +124,17 @@ export function scaleGeometry(
   };
 }
 
-export function SliderScale({
-  id: providedId,
-  layer = 0,
-  min,
-  max,
-  vertical = false,
-  length = SLIDER_LENGTH,
-  layout,
-  ...marks
-}: SliderScaleProps) {
+export function SliderScale(props: SliderScaleProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    min,
+    max,
+    vertical = false,
+    length = SLIDER_LENGTH,
+    layout,
+    ...marks
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const values = scaleValues(min, max, marks);
@@ -137,7 +145,7 @@ export function SliderScale({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_STACK}
         {...(vertical
           ? { width: g.extent, height: kit.unit(length) }

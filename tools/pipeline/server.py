@@ -72,6 +72,7 @@ def handler(name: str, root: Path = ROOT) -> type[BaseHTTPRequestHandler]:
                 "target/gallery-platformer-assets",
                 "target/demos-cockpit-assets",
                 "target/demos-drawings",
+                "target/terminal-build",
                 "target/font-assets",
                 "target/surface-assets",
             )

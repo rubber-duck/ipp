@@ -127,6 +127,7 @@ fn numeric_parameter_invalidation_reads_the_live_typed_store_and_runtime_clone_i
         .with_system::<DataBindingSystem, _>(DataBindingSystem::ID, |system, runtime| {
             system.before_numeric_update(&mut SystemNumericContext {
                 world_data: runtime.world,
+                web_content: runtime.web_content,
                 changed: &[(entity, ComponentValue::BUFFER_DATA_SOURCE_BINDING)],
             });
             runtime

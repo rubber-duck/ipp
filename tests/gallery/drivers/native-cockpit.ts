@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import { renderDiagnostics } from "@ipp/client/diagnostics";
 import { nativePresentationTransport } from "@ipp/client/testing";
+import { exerciseCockpitSpatial } from "../scenarios/cockpit-spatial.js";
 import { exerciseCockpitQuality } from "../scenarios/cockpit-quality.js";
 import { setTimeout } from "node:timers/promises";
 import type {
@@ -114,8 +115,11 @@ function driver(
       ? fields(snapshot, id, client.components.GuiLayout!.id).height
       : rect.height;
     const y = Number(rect.y) + Number(targetHeight) * 0.5;
+    const rootExtent = (await state.root.inspectPage({ collection: "canvas" }))
+      .canvas?.state.extent;
+    assert.ok(rootExtent, "application Canvas has a logical extent");
     if (panel === "shell")
-      return [x / viewport.width, y / viewport.height] as const;
+      return [x / rootExtent[0], y / rootExtent[1]] as const;
     const canvas = (await client.inspectPage({ collection: "canvas" })).canvas
       ?.state;
     assert.ok(canvas);
@@ -138,13 +142,51 @@ function driver(
     );
     const height = Math.tan(Number(projection.fov_y) / 2) * -view[2]!;
     assert.ok(height > 0, `${id} lies ahead of the fixed Camera`);
+    const shell = await app.inspectApplication();
+    const anchor = shell.shell.entities.find(
+      (entity) => entity.id === shell.cameraPath[0]?.anchor,
+    );
+    const placement = anchor?.components.find(
+      (component) => component.component === components.CanvasStyle!.id,
+    )?.fields;
+    const surface = anchor?.components.find(
+      (component) => component.component === components.FlatSurface!.id,
+    )?.fields;
+    assert.ok(placement && surface, "scene Camera Surface exists");
+    const surfaceWidth = Number(surface.width);
+    const surfaceHeight = Number(surface.height);
     return [
-      0.5 + view[0]! / ((height * 2 * viewport.width) / viewport.height),
-      0.5 - view[1]! / (height * 2),
+      (Number(placement.x) +
+        surfaceWidth *
+          (0.5 + view[0]! / ((height * 2 * surfaceWidth) / surfaceHeight))) /
+        rootExtent[0],
+      (Number(placement.y) + surfaceHeight * (0.5 - view[1]! / (height * 2))) /
+        rootExtent[1],
     ] as const;
   };
   const contentLayouts = new Map<number, Record<string, number>>();
   return {
+    async cameraViewport() {
+      const shell = await app.inspectApplication();
+      const anchor = shell.shell.entities.find(
+        (entity) => entity.id === shell.cameraPath[0]?.anchor,
+      );
+      const placement = anchor?.components.find(
+        (component) => component.component === components.CanvasStyle!.id,
+      )?.fields;
+      const surface = anchor?.components.find(
+        (component) => component.component === components.FlatSurface!.id,
+      )?.fields;
+      const extent = (await state.root.inspectPage({ collection: "canvas" }))
+        .canvas?.state.extent;
+      assert.ok(placement && surface && extent, "scene Camera slot exists");
+      return [
+        Number(placement.x) / extent[0],
+        Number(placement.y) / extent[1],
+        Number(surface.width) / extent[0],
+        Number(surface.height) / extent[1],
+      ] as const;
+    },
     async contentHeight(panel, height) {
       const client = state.panels[panel]!;
       const snapshot = await client.inspect();
@@ -665,9 +707,13 @@ export default defineClient<State>({
       : undefined;
     const viewport = args.includes("hidpi")
       ? { width: 1920, height: 1080, devicePixelRatio: 2 }
-      : args.includes("narrow")
-        ? { width: 960, height: 640, devicePixelRatio: 1 }
-        : VIEWPORT;
+      : args.includes("ultrawide")
+        ? { width: 2048, height: 640, devicePixelRatio: 1 }
+        : args.includes("portrait")
+          ? { width: 800, height: 1200, devicePixelRatio: 1 }
+          : args.includes("narrow")
+            ? { width: 960, height: 640, devicePixelRatio: 1 }
+            : VIEWPORT;
     const gallery = new NativeGallerySession(
       context,
       "cockpit",
@@ -716,7 +762,9 @@ export default defineClient<State>({
         let failure: string | undefined;
         let carouselEvidence: unknown;
         try {
-          if (args[0] === "quality") {
+          if (args[0] === "spatial") {
+            carouselEvidence = await exerciseCockpitSpatial(subject);
+          } else if (args[0] === "quality") {
             carouselEvidence = await exerciseCockpitQuality({
               ...subject,
               statistics: () =>
@@ -773,7 +821,7 @@ export default defineClient<State>({
     await state.diagnosticsHost?.close();
     assert.ok(
       (await context.host.listWorlds()).every((world) => !worlds.has(world.id)),
-      "cockpit releases its shell, scene and all five Canvas Worlds",
+      "cockpit releases its shell, scene and all six Canvas Worlds",
     );
   },
 });

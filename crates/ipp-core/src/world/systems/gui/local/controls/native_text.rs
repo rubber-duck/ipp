@@ -40,6 +40,8 @@ pub struct GuiNativeTextState {
     pub text: Arc<str>,
     /// Whether the native adapter presents the text as masked.
     pub masked: bool,
+    /// Native buffer captures committed input for a client, without editable core text.
+    pub client_input: bool,
     /// UTF-8 anchor and caret in `text`.
     pub selection: [u32; 2],
     /// Provisional composition, if any.
@@ -79,6 +81,7 @@ impl GuiTextEdit {
 pub(in crate::world::systems::gui) struct GuiNativeText {
     pub state: GuiNativeTextState,
     pub owner: GuiInputSession,
+    pub client_binding: Option<crate::systems::gui::observations::GuiObservationSubscriptionId>,
     /// A numeric input's committed number as it was formatted when the edit
     /// started or last committed; the edit is pending while the text differs.
     /// None for a text input without a number.
@@ -111,7 +114,9 @@ impl GuiLocalState {
     ) -> Option<&GuiNativeTextState> {
         let native = self.native_text.as_ref()?;
         let (focused, owner) = self.focus.as_ref()?;
-        (native.owner.is_live()
+        ((!native.state.client_input
+            || self.observations.input_binding(target) == native.client_binding)
+            && native.owner.is_live()
             && owner
                 .as_ref()
                 .is_none_or(|owner| owner.id() == native.owner.id())
@@ -135,6 +140,22 @@ impl GuiLocalState {
 }
 
 impl GuiNativeText {
+    pub(in crate::world::systems::gui) fn client(
+        target: GuiEntityTarget,
+        owner: GuiInputSession,
+        binding: crate::systems::gui::observations::GuiObservationSubscriptionId,
+        generation: u64,
+    ) -> Self {
+        let mut state = Self::state(target, Arc::default(), generation, false);
+        state.client_input = true;
+        Self {
+            state,
+            owner,
+            basis: None,
+            client_binding: Some(binding),
+        }
+    }
+
     /// The control and text of the pending numeric edit this record holds:
     /// its text while it differs from its basis.
     pub(in crate::world::systems::gui::local) fn pending_number_edit(
@@ -160,6 +181,7 @@ impl GuiNativeText {
             text,
             composition: None,
             masked,
+            client_input: false,
         }
     }
 
@@ -182,6 +204,7 @@ impl GuiNativeText {
             state,
             owner,
             basis,
+            client_binding: None,
         }
     }
 }

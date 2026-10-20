@@ -1,3 +1,14 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * An option list: the rows of a dropdown, searchable dropdown, multi-select
@@ -26,14 +37,7 @@ import { Skin } from "../../gui/theme.js";
 import type { GuiVirtualRange } from "../../gui/callbacks.js";
 import { GROUP_VERTICAL } from "../choice.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Spinner } from "../feedback/spinner.js";
 import { TextLine } from "../text.js";
 
@@ -48,7 +52,7 @@ export interface SelectOption {
 /** How the selected options show: the selected row's bar, or check marks. */
 export type OptionListMark = "selected" | "check";
 
-export interface OptionListProps {
+export interface OptionListProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the list; rows extend it with their keys. */
@@ -66,7 +70,6 @@ export interface OptionListProps {
   readonly loading?: string;
   /** Rows shown before the list scrolls; six by default. */
   readonly maxRows?: number;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Rows a list shows before it scrolls. */
@@ -92,18 +95,19 @@ export function optionListGeometry(
   };
 }
 
-export function OptionList({
-  id: providedId,
-  layer = 0,
-  options,
-  selected = [],
-  mark = "selected",
-  onPick,
-  emptyLabel = "No options",
-  loading,
-  maxRows = OPTION_LIST_ROWS,
-  layout,
-}: OptionListProps) {
+export function OptionList(props: OptionListProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    options,
+    selected = [],
+    mark = "selected",
+    onPick,
+    emptyLabel = "No options",
+    loading,
+    maxRows = OPTION_LIST_ROWS,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const empty = options.length === 0 && loading === undefined;
@@ -118,7 +122,7 @@ export function OptionList({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout kind={LAYOUT_STACK} height={g.height} {...layout} />
+      <KitLayout kind={LAYOUT_STACK} height={g.height} {...layout} />
       <Skin theme={kit.theme("gridBody")} />
       <ScrollView
         bar_thickness={scrolling ? g.bar : 0}
@@ -149,7 +153,7 @@ export function OptionList({
               />
             ))}
             {empty && (
-              <Row id={`${id}/empty`} layout={status}>
+              <Row gap={0} id={`${id}/empty`} height={g.row} layout={status}>
                 <TextLine
                   id={`${id}/empty/label`}
                   text={emptyLabel}
@@ -158,7 +162,7 @@ export function OptionList({
               </Row>
             )}
             {loading !== undefined && (
-              <Row id={`${id}/loading`} layout={status}>
+              <Row gap={0} id={`${id}/loading`} height={g.row} layout={status}>
                 <Spinner
                   id={`${id}/loading/spinner`}
                   label={loading}

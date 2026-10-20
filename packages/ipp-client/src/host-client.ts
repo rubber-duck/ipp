@@ -1,3 +1,5 @@
+import { bindHtmlSources } from "./html-content.js";
+import { bindWorkerPorts } from "./worker.js";
 import { HostAssets } from "./asset-exports.js";
 import { BulkReadClient } from "./bulk-reads.js";
 import { bindHostProfiling, HostProfiling } from "./profiling.js";
@@ -124,6 +126,8 @@ export abstract class HostClientBase<T extends Client> {
     // Statistics and testing controls reach the presentation through
     // `@ipp/client/diagnostics` and `/testing`, not a member of this type.
     bindPresentation(this, presentationOf(transport));
+    bindWorkerPorts(this, transport);
+    bindHtmlSources(this, transport);
   }
 
   protected abstract hostTag(name: string): number;

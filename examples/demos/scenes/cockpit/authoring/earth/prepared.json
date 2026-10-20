@@ -1,0 +1,53 @@
+{
+  "blender": "5.2.1 LTS",
+  "images": {
+    "surface-8k.jpg": {
+      "dimensions": [
+        8192,
+        4096
+      ],
+      "bytes": 4631328,
+      "sha256": "e5906379a085028b9cf0a1b8bdf3d23ce5fdfbfe5d7130b75f43efa7c0d69517"
+    },
+    "surface-4k.jpg": {
+      "dimensions": [
+        4096,
+        2048
+      ],
+      "bytes": 1351389,
+      "sha256": "0526842db6aac2840630d948eecd0ae26d8ff623ea497e1af41598f0eb7915c0"
+    },
+    "clouds-8k.png": {
+      "dimensions": [
+        8192,
+        4096
+      ],
+      "bytes": 32481193,
+      "sha256": "ba02f38b90bf573582bde88e52009f448cd7e2c44bbd68a467059c14849e84dd"
+    },
+    "clouds-4k.png": {
+      "dimensions": [
+        4096,
+        2048
+      ],
+      "bytes": 8805289,
+      "sha256": "015ddf68fe8a49fcb8036d6b07182a6b665b7dcd86a9ba0071096642a770b6ee"
+    },
+    "cities-4k.png": {
+      "dimensions": [
+        4096,
+        2048
+      ],
+      "bytes": 640178,
+      "sha256": "2eff7ad2302f06dbbdd6ad0753a56dfa95de4f41312f7f2fff260b565e020644"
+    },
+    "cities-2k.png": {
+      "dimensions": [
+        2048,
+        1024
+      ],
+      "bytes": 197783,
+      "sha256": "ad0fc2cdb5f36ab60466c04baa4860a9d1ca85fbc0d4c80a5e427d0f5ddd6943"
+    }
+  }
+}

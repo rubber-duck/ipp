@@ -8,7 +8,11 @@ import {
 import { Behavior, Font, Layout, Style } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
-import { LAYOUT_LEAF, layoutFields, type GuiKitLayoutProps } from "./layout.js";
+import {
+  LAYOUT_LEAF,
+  useLayoutFields,
+  type GuiKitLayoutProps,
+} from "./layout.js";
 import { textWidth } from "./text.js";
 
 /** A complete entity-owning button; native Button remains a component declaration. */
@@ -64,7 +68,7 @@ export function Button({
     variant === "primary"
       ? kit.controlTheme("button")
       : kit.theme(variant === "secondary" ? "secondary" : "amber");
-  const fields = layoutFields(
+  const fields = useLayoutFields(
     {
       layout,
       width,

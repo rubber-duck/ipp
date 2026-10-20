@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A popover: a trigger, a secondary button whose caret says it opens
@@ -24,7 +32,7 @@ import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { GUI_KIT_ICONS } from "../icons.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_COLUMN, LAYOUT_LEAF, type GuiKitLayout } from "../layout.js";
+
 import {
   Floating,
   useOverlayOpen,
@@ -41,7 +49,7 @@ import { WindowControl } from "../containers/window-controls.js";
  */
 const WIDTH = 240;
 
-export interface PopoverProps extends OverlayOpenProps {
+export interface PopoverProps extends OverlayOpenProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the trigger; the popover and its parts extend it. */
@@ -54,26 +62,25 @@ export interface PopoverProps extends OverlayOpenProps {
   readonly size?: "regular" | "compact";
   /** Show the close button; true by default. */
   readonly closable?: boolean;
-  /** The popover's width at the tokens' `em`; 240 by default. */
-  readonly width?: number;
-  /** Layout of the trigger. */
-  readonly layout?: GuiKitLayout;
+  /** The popover's logical width; its skin-scaled default is 240. */
+  readonly contentWidth?: number;
   /** The content: entity declarations in a column at the content inset. */
   readonly children?: ReactNode;
 }
 
-function PopoverView({
-  id: providedId,
-  layer = 0,
-  label,
-  title,
-  size = "regular",
-  closable = true,
-  width = WIDTH,
-  layout,
-  children,
-  ...open
-}: PopoverProps) {
+function PopoverView(props: PopoverProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    title,
+    size = "regular",
+    closable = true,
+    contentWidth,
+    layout,
+    children,
+    ...open
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -86,7 +93,7 @@ function PopoverView({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_LEAF}
         width={textWidth(text, textSize) + 2 * inset}
         height={kit.unit(compact ? t.smallHeight : t.controlHeight)}
@@ -106,7 +113,7 @@ function PopoverView({
           controlled={overlay.controlled}
           onVisibleChange={overlay.onVisibleChange}
           offset={[0, kit.unit(t.inset / 4)]}
-          layout={{ width: kit.unit(width) }}
+          layout={{ width: contentWidth ?? kit.unit(WIDTH) }}
         >
           <PanelHeader id={`${id}/header`} title={title}>
             {closable && (
@@ -122,10 +129,10 @@ function PopoverView({
             <PresentationGate open />
             <Layout
               kind={LAYOUT_COLUMN}
-              padding_left={inset}
-              padding_right={inset}
-              padding_top={inset}
-              padding_bottom={inset}
+              padding_left={kit.spacing.inset}
+              padding_right={kit.spacing.inset}
+              padding_top={kit.spacing.inset}
+              padding_bottom={kit.spacing.inset}
             />
             {children !== undefined && <Children>{children}</Children>}
           </Entity>
@@ -148,21 +155,22 @@ function usePopover() {
   return scope;
 }
 
-export interface PopoverRootProps extends OverlayOpenProps {
+export interface PopoverRootProps extends OverlayOpenProps, GuiKitLayoutProps {
   readonly id?: string;
   readonly layer?: number;
-  readonly layout?: GuiKitLayout;
+
   readonly children?: ReactNode;
 }
 
 /** Compose a custom trigger and anchored content in one ordinary entity tree. */
-export function PopoverRoot({
-  id: providedId,
-  layer = 0,
-  layout,
-  children,
-  ...state
-}: PopoverRootProps) {
+export function PopoverRoot(props: PopoverRootProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    layout,
+    children,
+    ...state
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const overlay = useOverlayOpen(state);
   return (
@@ -170,25 +178,21 @@ export function PopoverRoot({
       <Entity id={id}>
         <PresentationGate open />
         <Style layer={layer} />
-        <Layout kind={LAYOUT_COLUMN} fit_width fit_height {...layout} />
+        <KitLayout kind={LAYOUT_COLUMN} fit_width fit_height {...layout} />
         <Children>{children}</Children>
       </Entity>
     </PopoverContext>
   );
 }
 
-export interface PopoverTriggerProps {
+export interface PopoverTriggerProps extends GuiKitLayoutProps {
   /** Any entity-owning control; its own native ref and callbacks remain intact. */
   readonly children?: ReactNode;
   readonly disabled?: boolean;
-  readonly layout?: GuiKitLayout;
 }
 
-export function PopoverTrigger({
-  children,
-  disabled = false,
-  layout,
-}: PopoverTriggerProps) {
+export function PopoverTrigger(props: PopoverTriggerProps) {
+  const { children, disabled = false, layout } = useGuiKitLayout(props);
   const { id, overlay } = usePopover();
   return (
     <Entity
@@ -203,28 +207,27 @@ export function PopoverTrigger({
       }}
     >
       <PresentationGate open />
-      <Layout kind={LAYOUT_COLUMN} fit_width fit_height {...layout} />
+      <KitLayout kind={LAYOUT_COLUMN} fit_width fit_height {...layout} />
       <Behavior enabled={!disabled} />
       <Children>{children}</Children>
     </Entity>
   );
 }
 
-export interface PopoverContentProps {
+export interface PopoverContentProps extends GuiKitLayoutProps {
   readonly title?: string;
   readonly children?: ReactNode;
-  readonly width?: number;
   readonly closable?: boolean;
-  readonly layout?: GuiKitLayout;
 }
 
-export function PopoverContent({
-  title,
-  children,
-  width = WIDTH,
-  closable = true,
-  layout,
-}: PopoverContentProps) {
+export function PopoverContent(props: PopoverContentProps) {
+  const {
+    title,
+    children,
+    width,
+    closable = true,
+    layout,
+  } = useGuiKitLayout(props);
   const { id, overlay } = usePopover();
   const kit = useGuiKit();
   return (
@@ -236,7 +239,7 @@ export function PopoverContent({
       controlled={overlay.controlled}
       onVisibleChange={overlay.onVisibleChange}
       offset={[0, kit.unit(kit.tokens.inset / 4)]}
-      layout={{ width: kit.unit(width), ...layout }}
+      layout={{ width: width ?? kit.unit(WIDTH), ...layout }}
     >
       {title !== undefined && (
         <PanelHeader id={`${id}/header`} title={title}>

@@ -120,13 +120,14 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   };
 
   // No pointer move or press precedes this wheel: its native hit must be fresh.
-  await wheel(1, "cockpit-header-1", [40, 0]);
+  // Use the exposed right side: at narrow aspects the overlay covers the centre.
+  await wheel(1, "cockpit-header-1", [40, 0], 0.85);
   close(
     await focus(),
     1.25,
     "horizontal trackpad movement advances a quarter pane",
   );
-  await wheel(1, "cockpit-header-1", [0, 40]);
+  await wheel(1, "cockpit-header-1", [0, 40], 0.85);
   close(
     await focus(),
     1.5,
@@ -298,10 +299,10 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   );
   await wheel(0, "cockpit-header-0", [-40, 0]);
   close(await focus(), 0, "wheel navigation clamps at the first pane");
-  await driver.options({ carousel: 2 });
+  await driver.options({ carousel: 3 });
   await driver.advance(0.3);
-  await wheel(2, "cockpit-header-2", [40, 0]);
-  close(await focus(), 2, "wheel navigation clamps at the last pane");
+  await wheel(3, "cockpit-header-3", [40, 0]);
+  close(await focus(), 3, "wheel navigation clamps at the last pane");
   await driver.capture("cockpit-wheel-last");
   const final = await driver.state();
   assert.deepEqual(
@@ -312,7 +313,7 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   assert.deepEqual(
     final.panelWorlds,
     initial.panelWorlds,
-    "wheel navigation retains all five Worlds",
+    "wheel navigation retains all panel Worlds",
   );
   return {
     admissionMs: timings,

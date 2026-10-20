@@ -7,7 +7,12 @@ impl<D: RenderDevice> RenderService<D> {
     /// Initialize empty context caches. Programs are compiled on first demand.
     pub fn new(device: D) -> Result<Self, RenderError> {
         let device = Rc::new(RefCell::new(device));
+        let asset_context_active = super::assets::context::RenderAssetContext::default();
         Ok(Self {
+            web_images: super::web_images::WebImageRegistry::new(
+                device.clone(),
+                asset_context_active.clone(),
+            ),
             inclusions: Default::default(),
             fullscreen_camera: None,
             #[cfg(feature = "instrumentation")]
@@ -53,7 +58,7 @@ impl<D: RenderDevice> RenderService<D> {
             surface_paint: BTreeMap::new(),
             analytic_glyphs: BTreeMap::new(),
             device,
-            asset_context_active: Default::default(),
+            asset_context_active,
             asset_export_delay: None,
             #[cfg(feature = "instrumentation")]
             asset_export_staging_gate: false,
@@ -168,6 +173,9 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     /// Gate loader device calls while the owning presentation context is detached.
+    /// For a live context, call `unload_host` before disabling it so owned GPU
+    /// objects are completed and deleted. After actual loss, disable immediately;
+    /// prepare with the Host after restoration before drawing again.
     pub fn set_asset_context_active(&self, active: bool) {
         self.asset_context_active.set_active(active);
     }
@@ -176,6 +184,8 @@ impl<D: RenderDevice> RenderService<D> {
     /// The Host must finish its lifecycle barrier before the graphics device is replaced.
     pub fn unload_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), RenderError> {
         self.validate_catalog(host)?;
+        host.web_content_mut().renderer_invalidated();
+        self.web_images.unload()?;
         self.unload_resources(host.asset_resources_mut());
         Ok(())
     }
@@ -267,6 +277,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "instrumentation")]
         self.gpu_replace_context();
         let active = self.asset_context_active.is_active();
+        self.web_images.release_context();
         self.asset_context_active.set_active(false);
         *self.device.borrow_mut() = device;
         self.asset_context_active.set_active(active);

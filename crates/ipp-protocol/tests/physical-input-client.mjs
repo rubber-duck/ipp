@@ -53,6 +53,8 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       (name) => codec.WIRE[name],
       (name) => {
         const [layoutName, fieldName] = {
+          GUI_CLIENT_KEY_BYTES: ["gui-client-key", "key"],
+          GUI_CLIENT_TEXT_BYTES: ["gui-client-text", "text"],
           GUI_PHYSICAL_POINTERS: ["gui-physical-cancelled", "pointers"],
           GUI_PHYSICAL_BLOCKERS: ["gui-physical-open", "blockers"],
           GUI_PHYSICAL_HIT_PATH: ["gui-input-hit", "path"],
@@ -250,6 +252,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       selection_start: 2,
       selection_end: 3,
       masked: true,
+      client_input: false,
       composition: layout("gui-native-composition", {
         text: "b",
         selection_start: 0,
@@ -329,6 +332,42 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       };
       assert.equal((await context.editText(fence, edit)).applied, 1);
     }
+    for (const event of [
+      {
+        kind: "key",
+        key: "c",
+        code: "KeyC",
+        modifiers: 2,
+        repeat: false,
+        pressed: true,
+      },
+      {
+        kind: "key",
+        key: "ArrowUp",
+        code: "ArrowUp",
+        modifiers: 1,
+        repeat: true,
+        pressed: false,
+      },
+      { kind: "text", text: "é\n", paste: true },
+      { kind: "text", text: "a", paste: false },
+    ]) {
+      const { kind, ...fields } = event;
+      exchange = {
+        request: variant("GUI_PHYSICAL_REQUEST_CLIENT", {
+          context: 1n,
+          target: encodedTarget,
+          generation: 20n,
+          event: variant(`GUI_CLIENT_INPUT_${kind.toUpperCase()}`, fields),
+        }),
+        reply: routed(),
+      };
+      assert.equal(
+        (await context.send({ kind: "clientInput", fence, input: event }))
+          .applied,
+        1,
+      );
+    }
     let cancellation;
     context.onCancel((value) => {
       cancellation = value;
@@ -373,8 +412,9 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       Object.keys(manifest.WIRE_TAG_LAYOUTS)
         .filter(
           (name) =>
-            manifest.WIRE_TAG_LAYOUTS[name].space >= 46 &&
-            manifest.WIRE_TAG_LAYOUTS[name].space <= 52,
+            (manifest.WIRE_TAG_LAYOUTS[name].space >= 46 &&
+              manifest.WIRE_TAG_LAYOUTS[name].space <= 52) ||
+            ["GUI_CLIENT_INPUT_KEY", "GUI_CLIENT_INPUT_TEXT"].includes(name),
         )
         .sort(),
     );

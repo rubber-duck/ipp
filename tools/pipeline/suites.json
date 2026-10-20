@@ -1,4 +1,23 @@
 {
+  "cef-surface": {
+    "description": "Opt-in real CEF accelerated HTML/canvas textures through the native GLES Surface renderer",
+    "sourceRoots": [
+      "tests/rendering/cef/",
+      "tools/pipeline/cef.py",
+      "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/",
+      "crates/ipp-render-gl/src/services/render/device/gles/completion_fences.rs",
+      "crates/ipp-render-gl/src/services/render/device/gles/completion_fences_tests.rs",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.vert",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.frag",
+      "crates/ipp-render-gl/examples/smoke/egl.rs"
+    ],
+    "commands": [{
+      "name": "native",
+      "command": ["@python", "tests/rendering/cef/run.py", "--egl-dir", "@egl"],
+      "builds": ["cef-surface-prototype"],
+      "requirements": ["rust", "gles", "cef-display"]
+    }]
+  },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
     "sourceRoots": [
@@ -85,6 +104,9 @@
       "crates/ipp-render-gl/Cargo.toml",
       "crates/ipp-render-gl/build.rs",
       "crates/ipp-core/src/world/systems/render/",
+      "crates/ipp-core/src/services/web_content/",
+      "crates/ipp-core/src/world/systems/canvas/web_content.rs",
+      "crates/ipp-core/src/world/systems/canvas/web_content_tests.rs",
       "crates/ipp-core/tests/debug_geometry.rs",
       "crates/ipp-core/src/host/queries/scene.rs",
       "crates/ipp-core/tests/attachment_placement.rs"
@@ -104,6 +126,18 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "web-images",
+        "command": ["cargo", "test", "-p", "ipp-render-gl", "--features", "instrumentation", "--test", "web_images", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "web-content",
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "--locked", "--", "web_content"],
+        "builds": [],
+        "requirements": ["rust"]
       },
       {
         "name": "canvas-paints",
@@ -2108,6 +2142,7 @@
       "dist/packages/ipp-react/tests/gui-clipboard.test.js",
       "dist/packages/ipp-react/tests/gui-declaration.test.js",
       "dist/packages/ipp-react/tests/gui-kit-core.test.js",
+      "dist/packages/ipp-react/tests/gui-kit-layout.test.js",
       "dist/packages/ipp-react/tests/gui-kit-containers.test.js",
       "dist/packages/ipp-react/tests/gui-kit-feedback.test.js",
       "dist/packages/ipp-react/tests/gui-kit-overlays.test.js",
@@ -2782,6 +2817,7 @@
       "tests/surfaces/support/surface-cache-bridge.ts",
       "tests/surfaces/support/surface-cache-environment.ts",
       "tests/surfaces/scenarios/surface-cache.ts",
+      "tests/surfaces/scenarios/surface-allocation.ts",
       "tests/surfaces/surface-cache.test.ts",
       "tests/surfaces/pages/surface.tsx",
       "tests/surfaces/support/surface-separators.ts",
@@ -4363,9 +4399,33 @@
       "tests/gallery/scenarios/cockpit-lights.ts",
       "tests/gallery/drivers/native-cockpit.ts",
       "tests/gallery/scenarios/cockpit-wheel.ts",
-      "tests/gallery/scenarios/cockpit-quality.ts"
+      "tests/gallery/scenarios/cockpit-quality.ts",
+      "tests/gallery/scenarios/cockpit-spatial.ts"
     ],
     "commands": [
+      {
+        "name": "spatial",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit spatial ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
       {
         "name": "native",
         "command": [
@@ -4479,6 +4539,224 @@
           "node",
           "npm",
           "gles"
+        ]
+      }
+    ]
+  },
+  "terminal": {
+    "description": "Real BashKit and Ghostty Worker over IPP input and Canvas presentation without isolation",
+    "sourceRoots": [
+      "packages/ipp-terminal/",
+      "tests/terminal/",
+      "examples/browser-terminal/",
+      "tools/products/terminal.mjs",
+      "packages/ipp-client/src/",
+      "packages/ipp-react/src/gui/platform/",
+      "crates/ipp-core/src/world/systems/gui/",
+      "crates/ipp-core/src/services/gui_input/",
+      "crates/ipp-protocol/src/"
+    ],
+    "commands": [
+      {
+        "name": "engine",
+        "command": [
+          "@node",
+          "--test",
+          "target/terminal-build/engine.test.js"
+        ],
+        "builds": [
+          "terminal"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "browser",
+        "command": [
+          "@node",
+          "--test",
+          "target/terminal-build/terminal.browser.test.js"
+        ],
+        "builds": [
+          "terminal"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "cockpit",
+        "command": ["@node", "--test", "target/terminal-build/cockpit.browser.test.js"],
+        "builds": ["gallery-site", "gallery-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
+  "html-canvas": {
+    "description": "Static HTML through IPP Canvas/Surface and experimental HTML-in-Canvas GPU bridges",
+    "sourceRoots": [
+      "tests/rendering/html-canvas.browser.test.ts",
+      "tests/rendering/static-html.browser.test.ts",
+      "tests/rendering/pages/static-html.ts",
+      "tests/rendering/scenarios/static-html.ts",
+      "packages/ipp-client/src/html-content.ts",
+      "packages/ipp-client/src/html-worker.ts",
+      "crates/ipp-wasm/src/services/render/web_content.rs",
+      "tests/rendering/support/html-canvas-producer.ts",
+      "tests/rendering/pages/html-canvas.ts",
+      "tests/rendering/pages/html-canvas-worker.ts",
+      "tests/rendering/pages/html-canvas-device-worker.ts",
+      "crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts",
+      "crates/ipp-render-gl/src/services/render/device/webgl/webgl-web-images.ts",
+      "crates/ipp-render-gl/src/services/render/device/webgl/webgl-completion-fences.ts",
+      "tests/rendering/drivers/browser-html-canvas.ts",
+      "tests/rendering/scenarios/html-canvas.ts",
+      "tools/products/html-canvas-fixtures.mjs",
+      "tools/build/browser-options.mjs",
+      "tools/pipeline/browser.py"
+    ],
+    "commands": [
+      {
+        "name": "static",
+        "command": [
+          "@node",
+          "--test",
+          "target/html-canvas/static-html.browser.test.js"
+        ],
+        "builds": [
+          "browser:render-instrumentation",
+          "html-canvas-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "device",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "device imports",
+          "target/html-canvas/html-canvas.browser.test.js"
+        ],
+        "builds": [
+          "html-canvas-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "runner",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "runner cleans",
+          "target/html-canvas/html-canvas.browser.test.js"
+        ],
+        "builds": [
+          "html-canvas-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm"
+        ]
+      },
+      {
+        "name": "installer",
+        "command": [
+          "@python",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "tools/tests",
+          "-p",
+          "test_browser.py"
+        ],
+        "builds": [],
+        "requirements": []
+      },
+      {
+        "name": "gpu",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "GPU bridge",
+          "target/html-canvas/html-canvas.browser.test.js"
+        ],
+        "builds": [
+          "html-canvas-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      },
+      {
+        "name": "unavailable",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "unavailable",
+          "target/html-canvas/html-canvas.browser.test.js"
+        ],
+        "builds": [
+          "html-canvas-fixtures"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
+        ]
+      }
+    ]
+  },
+  "cockpit-browser": {
+    "description": "Linked HTML forms, routed Surface input and browser history through the real cockpit worker, plus Chrome capability instructions",
+    "sourceRoots": [
+      "examples/demos/scenes/cockpit/",
+      "packages/ipp-client/src/html-content.ts",
+      "packages/ipp-client/src/html-input.ts",
+      "packages/ipp-client/src/html-worker.ts",
+      "packages/ipp-react/src/gui/platform/",
+      "packages/ipp-react/src/reconciler/",
+      "crates/ipp-wasm/src/services/render/web_content.rs",
+      "tests/gallery/cockpit-browser.browser.test.ts",
+      "tests/gallery/scenarios/cockpit-browser.ts",
+      "tests/gallery/drivers/browser-cockpit-browser.ts"
+    ],
+    "commands": [
+      {
+        "name": "browser",
+        "command": [
+          "@node",
+          "--test",
+          "dist/tests/gallery/cockpit-browser.browser.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gallery-site",
+          "gallery-fixtures",
+          "gallery"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser"
         ]
       }
     ]

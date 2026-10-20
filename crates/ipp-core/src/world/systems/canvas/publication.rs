@@ -362,6 +362,12 @@ pub enum CanvasPrimitive {
         bitmap: AssetKey,
         size: [f32; 2],
     },
+    /// Immutable web image selected by this publication; absent while unavailable.
+    Html {
+        style: CanvasPrimitiveStyle,
+        image: Option<crate::services::web_content::WebContentImageId>,
+        size: [f32; 2],
+    },
     /// Size precedes visual scale; corner radii, border width and the shape's corner
     /// lengths are final logical lengths.
     Box {
@@ -396,6 +402,10 @@ impl CanvasPrimitive {
                 style,
                 ..
             }
+            | Self::Html {
+                style,
+                ..
+            }
             | Self::Box {
                 style,
                 ..
@@ -422,10 +432,25 @@ impl CanvasPrimitive {
                 style,
                 ..
             }
+            | Self::Html {
+                style,
+                ..
+            }
             | Self::Box {
                 style,
                 ..
             } => style,
+        }
+    }
+
+    /// Exact immutable web image, if this primitive has one.
+    pub fn web_image(&self) -> Option<crate::services::web_content::WebContentImageId> {
+        match self {
+            Self::Html {
+                image,
+                ..
+            } => *image,
+            _ => None,
         }
     }
 
@@ -444,7 +469,10 @@ impl CanvasPrimitive {
                 bitmap,
                 ..
             } => Some(*bitmap),
-            Self::Box {
+            Self::Html {
+                ..
+            }
+            | Self::Box {
                 ..
             }
             | Self::Path {
@@ -706,6 +734,7 @@ pub struct CanvasPublication {
     /// so a consumer that presented that revision need only look at these.
     pub paint_changes: Option<CanvasPaintChanges>,
     pub(crate) resources: Arc<[AssetKey]>,
+    pub(crate) web_images: Arc<[crate::services::web_content::WebContentImageId]>,
 }
 
 /// Entries a paint revision replaced in place.

@@ -3,6 +3,7 @@ import { createContext, useContext } from "react";
 import { useEntityId } from "../../scope/identity.js";
 import { useGuiKit } from "../kit.js";
 import { Column, type ContainerProps } from "../layout.js";
+import type { GuiKitSpace } from "../spacing.js";
 import { TextLine } from "../text.js";
 
 const FormContext = createContext(false);
@@ -25,8 +26,10 @@ export function Form(props: FormProps) {
 }
 
 export interface FieldProps extends ContainerProps {
-  readonly label?: string;
-  readonly description?: string;
+  readonly label?: string | undefined;
+  readonly description?: string | undefined;
+  readonly error?: string | undefined;
+  readonly disabled?: boolean;
 }
 
 /** An optional caption and helper around a control; no outside margins. */
@@ -34,6 +37,8 @@ export function Field({
   id: providedId,
   label,
   description,
+  error,
+  disabled = false,
   children,
   ...layout
 }: FieldProps) {
@@ -42,7 +47,11 @@ export function Field({
   return (
     <Form id={id} {...layout} gap={layout.gap ?? kit.spacing.label}>
       {label !== undefined && (
-        <TextLine id={`${id}/label`} text={label} tone="accent" />
+        <TextLine
+          id={`${id}/label`}
+          text={label}
+          tone={disabled ? "neutral" : "accent"}
+        />
       )}
       {children}
       {description !== undefined && (
@@ -53,6 +62,9 @@ export function Field({
           size="small"
         />
       )}
+      {error !== undefined && (
+        <TextLine id={`${id}/error`} text={error} tone="error" size="small" />
+      )}
     </Form>
   );
 }
@@ -60,8 +72,8 @@ export function Field({
 export interface FormSectionProps extends ContainerProps {
   readonly title?: string;
   readonly description?: string;
-  /** Space between body fields, in logical units. */
-  readonly fieldGap?: number;
+  /** Space between body fields, as a logical length or skin spacing role. */
+  readonly fieldGap?: GuiKitSpace;
 }
 
 /** Group heading and a field-spaced body; its parent owns section separation. */

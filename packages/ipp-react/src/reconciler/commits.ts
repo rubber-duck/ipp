@@ -713,10 +713,16 @@ export class ReactWorldCommits {
     whole = false,
   ): Promise<void> {
     this.checkSession();
-    // Claim the ledger before any asynchronous work: later captures must
-    // not be overwritten when this description resumes.
-    const changes = whole || this.needsReset ? undefined : this.unapplied;
-    this.unapplied = { entities: new Map(), components: new Map() };
+    // The ledger reaches the latest capture, which can be newer than this
+    // queued snapshot. Applying an older snapshot must compare it in full
+    // and leave the newer one needing a full comparison too.
+    const latest = description === this.desired;
+    const changes =
+      whole || this.needsReset || !latest ? undefined : this.unapplied;
+    // Claim before yielding so later captures retain their own changes.
+    this.unapplied = latest
+      ? { entities: new Map(), components: new Map() }
+      : undefined;
     if (this.needsReset) this.controls.reset(true);
     const failures: unknown[] = [];
     try {

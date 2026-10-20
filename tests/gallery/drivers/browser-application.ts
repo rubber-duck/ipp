@@ -88,6 +88,7 @@ export async function openApplication(
     index: number,
     id: string,
     fraction = 0.5,
+    verticalFraction = 0.5,
   ) => {
     const snapshot =
       await call<Awaited<ReturnType<typeof Fixture.cockpitGeometry>>>(
@@ -110,7 +111,7 @@ export async function openApplication(
       snapshot.componentIds,
       index,
       (Number(rect.x) + Number(rect.width) * fraction) / extent[0],
-      (Number(rect.y) + Number(targetHeight) * 0.5) / extent[1],
+      (Number(rect.y) + Number(targetHeight) * verticalFraction) / extent[1],
     ).position;
     const camera = cockpitFields(
       snapshot.scene,
@@ -127,15 +128,26 @@ export async function openApplication(
     assert.ok(halfHeight > 0, `${id} is ahead of the Camera`);
     const bounds = await page.locator("#ipp-demo-canvas").boundingBox();
     assert.ok(bounds);
+    const surface = snapshot.cameraSurface;
+    const scaleX =
+      (bounds.width * snapshot.viewport.devicePixelRatio) /
+      snapshot.viewport.width;
+    const scaleY =
+      (bounds.height * snapshot.viewport.devicePixelRatio) /
+      snapshot.viewport.height;
     return {
       x:
         bounds.x +
-        bounds.width *
-          (0.5 +
-            local[0]! /
-              ((2 * halfHeight * snapshot.viewport.width) /
-                snapshot.viewport.height)),
-      y: bounds.y + bounds.height * (0.5 - local[1]! / (2 * halfHeight)),
+        scaleX *
+          (surface.x +
+            surface.width *
+              (0.5 +
+                local[0]! /
+                  ((2 * halfHeight * surface.width) / surface.height))),
+      y:
+        bounds.y +
+        scaleY *
+          (surface.y + surface.height * (0.5 - local[1]! / (2 * halfHeight))),
     };
   };
   const capture = async (label: string) => {

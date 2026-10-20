@@ -466,6 +466,7 @@ fn a_cached_canvas_repaints_when_a_paint_property_changes() {
             ComponentValue::SurfaceCache(ipp_core::SurfaceCache {
                 direct_distance: 0.0,
                 resolution_scale: 1.0,
+                allocation_priority: 1.0,
                 max_refresh_hz: 10.0,
                 max_texture_size: 0,
                 force_cache: false,

@@ -302,6 +302,10 @@ pub(in crate::services::render) struct WorldContentStamp {
     pub render_version: Option<u64>,
     pub geometry_version: Option<u64>,
     pub resources: Vec<(AssetKey, bool)>,
+    pub web_images: Vec<(
+        ipp_core::services::web_content::WebContentImageId,
+        Option<ipp_core::services::web_content::WebContentImageValidity>,
+    )>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -332,8 +336,21 @@ impl From<&PublishedWorldAttachment> for PublishedPlacement {
 }
 
 impl OutputContentStamp {
+    /// A baked image retains authority witnesses without retaining source GPU
+    /// pixels. Ordinary new versions may wait for the cache refresh interval;
+    /// mandatory source/target/context revocation cannot.
+    pub fn web_images_valid(&self) -> bool {
+        self.outputs
+            .iter()
+            .flat_map(|output| &output.worlds)
+            .flat_map(|world| &world.web_images)
+            .all(|(_, validity)| validity.as_ref().is_none_or(|value| value.is_valid()))
+    }
+
     pub fn same_dependencies(&self, other: &Self) -> bool {
-        self.outputs.len() == other.outputs.len()
+        self.web_images_valid()
+            && other.web_images_valid()
+            && self.outputs.len() == other.outputs.len()
             && self
                 .outputs
                 .iter()
@@ -343,7 +360,9 @@ impl OutputContentStamp {
                         && left.children == right.children
                         && left.worlds.len() == right.worlds.len()
                         && left.worlds.iter().zip(&right.worlds).all(|(left, right)| {
-                            left.world == right.world && left.resources == right.resources
+                            left.world == right.world
+                                && left.resources == right.resources
+                                && same_web_authorities(left, right)
                         })
                 })
     }
@@ -386,6 +405,7 @@ impl OutputContentStamp {
                         world: scene.publication.world,
                         render_version: None,
                         geometry_version: None,
+                        web_images: web_image_dependencies(host, scene.publication.id),
                         resources: scene
                             .canvas
                             .resources()
@@ -440,10 +460,34 @@ impl OutputContentStamp {
     }
 }
 
+/// Frame versions change ordinary paint dirtiness, while a changed source,
+/// target or context authority requires immediate cache replacement. Compare
+/// sets because an updated image ID may reorder a publication's sorted images.
+fn same_web_authorities(left: &WorldContentStamp, right: &WorldContentStamp) -> bool {
+    let contains =
+        |world: &WorldContentStamp,
+         value: &ipp_core::services::web_content::WebContentImageValidity| {
+            world
+                .web_images
+                .iter()
+                .any(|(_, candidate)| candidate.as_ref() == Some(value))
+        };
+    left.web_images
+        .iter()
+        .filter_map(|(_, value)| value.as_ref())
+        .all(|value| contains(right, value))
+        && right
+            .web_images
+            .iter()
+            .filter_map(|(_, value)| value.as_ref())
+            .all(|value| contains(left, value))
+}
+
 impl WorldContentStamp {
     fn read(host: &HostRuntime, publication: &WorldPublication) -> Self {
         Self {
             world: publication.world,
+            web_images: web_image_dependencies(host, publication.id),
             render_version: publication
                 .chunk(RenderSystem::ID)
                 .map(|chunk| chunk.version()),
@@ -462,6 +506,25 @@ impl WorldContentStamp {
                 .collect(),
         }
     }
+}
+
+fn web_image_dependencies(
+    host: &HostRuntime,
+    publication: WorldPublicationId,
+) -> Vec<(
+    ipp_core::services::web_content::WebContentImageId,
+    Option<ipp_core::services::web_content::WebContentImageValidity>,
+)> {
+    host.publication_web_images(publication)
+        .into_iter()
+        .flatten()
+        .map(|image| {
+            (
+                *image,
+                host.publication_web_image_validity(publication, *image),
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -42,7 +42,7 @@ export type {
   MessageTransport,
   TransportEvents,
 } from "./transport.js";
-export { createWorkerHost, workerTransport } from "./worker.js";
+export { createWorkerHost, workerTransport, openWorkerPort } from "./worker.js";
 export type { WorkerHost, WorkerEndpoint } from "./worker.js";
 export { browserRuntime } from "./browser.js";
 
@@ -155,3 +155,9 @@ export type {
   AssetExportRead,
   AuthorizedAssetSource,
 } from "./asset-exports.js";
+
+export { htmlCanvasAvailable, registerHtml } from "./html-content.js";
+export type { HtmlSource } from "./html-content.js";
+
+export { htmlInputFor } from "./html-input.js";
+export type { HtmlInputBinding } from "./html-input.js";

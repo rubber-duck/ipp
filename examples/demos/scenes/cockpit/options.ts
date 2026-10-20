@@ -1,3 +1,11 @@
+export const COCKPIT_SCREEN_TITLES = [
+  "Bridge controls",
+  "System monitor",
+  "Terminal",
+  "Browser",
+] as const;
+export const COCKPIT_PANE_COUNT = COCKPIT_SCREEN_TITLES.length;
+
 /** Operator settings; component state and animation clocks remain in the World. */
 export interface CockpitOptions {
   charge: number;
@@ -95,7 +103,7 @@ export function cockpitOptions(
       COCKPIT_SCREEN_DISTANCE.min,
       COCKPIT_SCREEN_DISTANCE.max,
     ),
-    carousel: number("carousel", 0, 2),
+    carousel: number("carousel", 0, COCKPIT_PANE_COUNT - 1),
     carouselDragging: Boolean(value.carouselDragging),
     flightMode: String(value.flightMode ?? COCKPIT_DEFAULTS.flightMode),
     autopilot: value.autopilot === undefined ? true : Boolean(value.autopilot),

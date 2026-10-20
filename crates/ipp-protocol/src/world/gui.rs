@@ -27,6 +27,8 @@ pub enum GuiObservationRequest {
         world: WorldReference,
         /// Applied record classes to retain.
         classes: GuiObservationClasses,
+        /// Optional exact target for an exclusive client input subscription.
+        input_target: Option<GuiTarget>,
     },
     /// Retire only this exact output generation at the ordered receiver boundary.
     Unsubscribe {
@@ -41,12 +43,11 @@ const GUI_OBSERVATION_ENVELOPE_BYTES: usize = 3 * 8 + 1 + 4 + 2 * 8 + 1;
 const GUI_EFFECT_ID_BYTES: usize = 1 + 16 + 8;
 const GUI_TARGET_BYTES: usize = 16 + 8 + 2 + 8;
 const GUI_ROUTED_SOURCE_BYTES: usize = 1 + 16;
-/// Largest fixed effect payload: a pointer number and four feedback flags.
-const GUI_EFFECT_PAYLOAD_BYTES: usize = 8 + 4;
+/// Largest fixed effect payload: a client pointer tag, identity, phase/button and point.
+const GUI_EFFECT_PAYLOAD_BYTES: usize = 1 + 8 + 2 + 8;
 
 /// Peak encoded allocations, including the ordinary response header and framing.
-/// The largest fixed payload is a routed pointer feedback effect; submitted,
-/// rejected and discarded text is charged per byte.
+/// Variable key/code and text payloads are charged per byte.
 pub const GUI_OBSERVATION_ENCODING: GuiObservationEncoding = GuiObservationEncoding {
     control_bytes: 80,
     effect_bytes: GUI_OBSERVATION_ENVELOPE_BYTES
@@ -106,15 +107,30 @@ impl Reader<'_> {
         let operation = self.u8()?;
         let world = self.world_reference()?;
         match operation {
-            0 => Ok(GuiObservationRequest::Subscribe {
-                world,
-                classes: match self.u8()? {
-                    0 => GuiObservationClasses::Application,
+            0 => {
+                let tag = self.u8()?;
+                let classes = match tag {
+                    0 | 3 => GuiObservationClasses::Application,
                     1 => GuiObservationClasses::Feedback,
                     2 => GuiObservationClasses::All,
                     _ => return Err(ProtocolError::Malformed("GUI observation class")),
-                },
-            }),
+                };
+                let input_target = if tag == 3 {
+                    Some(GuiTarget {
+                        world: self.world_reference()?,
+                        entity: EntityId::from_bits(self.u64()?),
+                        component: self.u16()?,
+                        incarnation: self.u64()?,
+                    })
+                } else {
+                    None
+                };
+                Ok(GuiObservationRequest::Subscribe {
+                    world,
+                    classes,
+                    input_target,
+                })
+            }
             1 => {
                 let subscription = GuiObservationSubscriptionId {
                     output: self.u64()?,
@@ -231,6 +247,10 @@ impl Writer {
         // Kinds 2 (value applied) and 5 (scroll changed) are retired; values
         // are observed as fields.
         match &effect.kind {
+            GuiLocalEffectKind::Input(input) => {
+                self.u8(9)?;
+                self.gui_client_input(input)
+            }
             GuiLocalEffectKind::Pressed => self.u8(0),
             GuiLocalEffectKind::FocusChanged {
                 focused,

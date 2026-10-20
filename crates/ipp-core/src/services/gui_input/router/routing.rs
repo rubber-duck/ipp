@@ -323,7 +323,10 @@ impl GuiInputRouter {
                 Some(pointer) if pointer.pressed => Some(refresh(host, view, &pointer.target)?),
                 _ => hit(host, query, *point, &context.blockers)?,
             },
-            GuiPhysicalInput::Text {
+            GuiPhysicalInput::Client {
+                ..
+            }
+            | GuiPhysicalInput::Text {
                 ..
             }
             | GuiPhysicalInput::Key {
@@ -359,11 +362,25 @@ impl GuiInputRouter {
         if let GuiPhysicalInput::Text {
             fence,
             ..
+        }
+        | GuiPhysicalInput::Client {
+            fence,
+            ..
         } = &input
             && context
                 .focus
                 .as_ref()
                 .is_none_or(|focus| focus.control.record.target != fence.target)
+        {
+            return Err(GuiInputError::Unavailable);
+        }
+        if let GuiPhysicalInput::Client {
+            fence,
+            ..
+        } = &input
+            && !self.with_native_text(host, context, |state| {
+                state.is_some_and(|state| state.client_input && state.fence == *fence)
+            })
         {
             return Err(GuiInputError::Unavailable);
         }
@@ -415,6 +432,10 @@ impl GuiInputRouter {
             return Ok(GuiRoutingDisposition::Blocked);
         }
 
+        if let Some(result) = self.client_pointer(host, context, view, query, &input, delivery)? {
+            return Ok(result);
+        }
+
         // A secondary press is a context request, routed below; other presses
         // and releases of non-primary buttons only report what they hit.
         if let GuiPhysicalInput::PointerDown {
@@ -461,6 +482,62 @@ impl GuiInputRouter {
             *focus = refresh(host, view, focus)?;
         }
         match input {
+            GuiPhysicalInput::Client {
+                fence,
+                event,
+            } => {
+                use crate::systems::gui::local::GuiClientInput;
+                let target = context.focus.clone().ok_or(GuiInputError::Unavailable)?;
+                if target.control.record.kind != GuiControlKind::InputTarget
+                    || target.control.record.target != fence.target
+                {
+                    return Err(GuiInputError::Unavailable);
+                }
+                if !self.with_native_text(host, context, |state| {
+                    state.is_some_and(|state| state.client_input && state.fence == fence)
+                }) {
+                    return Err(GuiInputError::Unavailable);
+                }
+                if let GuiClientInput::Key {
+                    key,
+                    modifiers,
+                    pressed: true,
+                    ..
+                } = &event
+                {
+                    if key.as_ref() == "Escape" && modifiers & 3 == 3 {
+                        return self.route_inner(
+                            host,
+                            context,
+                            view,
+                            GuiPhysicalInput::Blur,
+                            delivery,
+                        );
+                    }
+                    let policy = target.control.input.ok_or(GuiInputError::Unavailable)?;
+                    let routed = match key.as_ref() {
+                        "Tab" if !policy.capture_tab => Some(GuiPhysicalKey::Tab),
+                        "Escape" if !policy.capture_escape => Some(GuiPhysicalKey::Escape),
+                        _ => None,
+                    };
+                    if let Some(key) = routed {
+                        return self.route_inner(
+                            host,
+                            context,
+                            view,
+                            GuiPhysicalInput::Key {
+                                key,
+                                shift: modifiers & 1 != 0,
+                            },
+                            delivery,
+                        );
+                    }
+                }
+                self.emit_client_input(host, context, &target, Some(fence), event, delivery)?;
+                Ok(GuiRoutingDisposition::Routed {
+                    target: fence.target,
+                })
+            }
             GuiPhysicalInput::Text {
                 fence,
                 edit,
@@ -942,6 +1019,26 @@ impl GuiInputRouter {
                         target: target.control.record.target,
                         path: &target.path,
                     })?;
+                }
+                if let Some(target) = over
+                    .as_ref()
+                    .filter(|target| target.control.record.kind == GuiControlKind::InputTarget)
+                {
+                    let local = local_point(host, query, target, point)?;
+                    self.emit_client_input(
+                        host,
+                        context,
+                        target,
+                        None,
+                        crate::systems::gui::local::GuiClientInput::Wheel {
+                            point: local,
+                            delta,
+                        },
+                        delivery,
+                    )?;
+                    return Ok(GuiRoutingDisposition::Routed {
+                        target: target.control.record.target,
+                    });
                 }
                 // Sliders and dials take wheel input at the pointer without
                 // moving keyboard focus. A range chooses its pointed/nearest
@@ -1453,6 +1550,190 @@ impl GuiInputRouter {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn client_pointer(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        view: ViewDescriptor,
+        query: ViewQueryTarget,
+        input: &GuiPhysicalInput,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<Option<GuiRoutingDisposition>, GuiInputError> {
+        let (pointer, point, phase, button) = match input {
+            GuiPhysicalInput::PointerDown {
+                pointer,
+                point,
+                button,
+            } => (*pointer, Some(*point), 0, *button as u8),
+            GuiPhysicalInput::PointerMove {
+                pointer,
+                point,
+            } => (*pointer, Some(*point), 1, 3),
+            GuiPhysicalInput::PointerUp {
+                pointer,
+                point,
+                button,
+            } => (*pointer, Some(*point), 2, *button as u8),
+            GuiPhysicalInput::PointerCancel {
+                pointer,
+            } => (*pointer, None, 3, 3),
+            _ => return Ok(None),
+        };
+        let target = if phase != 0
+            && let Some(active) = context
+                .pointers
+                .get(&pointer)
+                .filter(|active| active.pressed)
+        {
+            Some(refresh(host, view, &active.target)?)
+        } else if let Some(point) = point {
+            hit(host, query, point, &context.blockers)?
+        } else {
+            None
+        };
+        let Some(target) =
+            target.filter(|target| target.control.record.kind == GuiControlKind::InputTarget)
+        else {
+            return Ok(None);
+        };
+        if let Some(active) = context.pointers.get_mut(&pointer) {
+            active.target = target.clone();
+        }
+        let identity = target.control.record.target;
+        let local = if let Some(point) = point {
+            // A captured ray may temporarily miss a curved Surface. Keep capture.
+            if project_composed_point(
+                host,
+                query,
+                &target.path,
+                point,
+                true,
+                target.control.hit.layer,
+            )
+            .map_err(|_| GuiInputError::StalePath)?
+            .is_none()
+            {
+                if phase >= 2 {
+                    self.emit_client_input(
+                        host,
+                        context,
+                        &target,
+                        None,
+                        crate::systems::gui::local::GuiClientInput::Pointer {
+                            pointer,
+                            phase: 3,
+                            button,
+                            point: [0.0; 2],
+                        },
+                        delivery,
+                    )?;
+                    self.cancel_pointer(host, context, pointer, delivery)?;
+                }
+                return Ok(Some(GuiRoutingDisposition::Routed {
+                    target: identity,
+                }));
+            }
+            local_point(host, query, &target, point)?
+        } else {
+            [0.0; 2]
+        };
+        if phase == 0 {
+            // This path returns before ordinary routing refreshes focus. A
+            // transfer must blur through the current completed publication,
+            // not the publication that originally focused the previous control.
+            if let Some(focus) = &mut context.focus {
+                *focus = refresh(host, view, focus)?;
+            }
+            self.cancel_pointer(host, context, pointer, delivery)?;
+            if context.pointers.len() >= GUI_INPUT_MAX_POINTERS {
+                return Err(GuiInputError::Capacity);
+            }
+            if target.control.record.focusable {
+                self.focus(host, context, target.clone(), false, delivery)?;
+            }
+            let (command, lease) = self.feedback(
+                host,
+                context,
+                &target,
+                pointer,
+                None,
+                GuiInteractionUpdate::Hover(true),
+                delivery,
+            )?;
+            enqueue(host, context.queue_owner, identity, command)?;
+            for update in [GuiInteractionUpdate::Press, GuiInteractionUpdate::Capture] {
+                let (command, _) = self.feedback(
+                    host,
+                    context,
+                    &target,
+                    pointer,
+                    Some(lease.clone()),
+                    update,
+                    delivery,
+                )?;
+                enqueue(host, context.queue_owner, identity, command)?;
+            }
+            context.pointers.insert(
+                pointer,
+                Pointer {
+                    target: target.clone(),
+                    lease,
+                    pressed: true,
+                    tap: false,
+                    drag: None,
+                },
+            );
+            self.service
+                .set_pointer_capture(&context.context, pointer, Some(identity))?;
+        }
+        self.emit_client_input(
+            host,
+            context,
+            &target,
+            None,
+            crate::systems::gui::local::GuiClientInput::Pointer {
+                pointer,
+                phase,
+                button,
+                point: local,
+            },
+            delivery,
+        )?;
+        if phase >= 2 {
+            self.cancel_pointer(host, context, pointer, delivery)?;
+        }
+        Ok(Some(GuiRoutingDisposition::Routed {
+            target: identity,
+        }))
+    }
+
+    fn emit_client_input(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        target: &Target,
+        fence: Option<crate::systems::gui::local::GuiTextFence>,
+        event: crate::systems::gui::local::GuiClientInput,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        let input = self.input(host, context, target, delivery)?;
+        enqueue(
+            host,
+            context.queue_owner,
+            target.control.record.target,
+            GuiLocalCommand::client_input(
+                input,
+                target
+                    .control
+                    .input_binding
+                    .ok_or(GuiInputError::Unavailable)?,
+                fence,
+                event,
+            )?,
+        )
+    }
+
     fn start_drag(
         &mut self,
         host: &mut HostRuntime,
@@ -1709,6 +1990,9 @@ pub(super) fn refresh(
         return Err(GuiInputError::StalePath);
     }
     let control = locate_control(host, view, &target.path, target.control.record.target)?;
+    if control.input_binding != target.control.input_binding {
+        return Err(GuiInputError::StalePath);
+    }
     // A control that lost the named part, as a range made a single slider,
     // keeps its last part, or names none.
     let parts = control.record.focus_parts;

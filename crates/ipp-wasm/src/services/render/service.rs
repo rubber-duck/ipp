@@ -18,10 +18,11 @@ unsafe extern "C" {
 }
 
 pub(crate) struct RenderSurfaceService {
-    renderer: RenderService<WebGlRenderDevice>,
+    pub(super) renderer: RenderService<WebGlRenderDevice>,
+    pub(super) web_content: super::web_content::BrowserWebContent,
     #[cfg(feature = "instrumentation")]
     profile: Option<super::profiling::RenderProfileCapture>,
-    active: bool,
+    pub(super) active: bool,
     width: u32,
     height: u32,
     context: u64,
@@ -125,6 +126,7 @@ impl RenderSurfaceService {
             .expect("factories registered before source use");
         Self {
             renderer,
+            web_content: Default::default(),
             #[cfg(feature = "instrumentation")]
             profile: None,
             active: false,

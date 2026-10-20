@@ -1,3 +1,11 @@
+import {
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  Row,
+} from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A confirmation dialog: a modal floating surface centred on the canvas,
@@ -25,7 +33,7 @@ import { Button } from "../../gui/controls.js";
 import { Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_COLUMN, LAYOUT_LEAF, LAYOUT_ROW, Row } from "../layout.js";
+
 import { Floating, useOverlayOpen } from "./overlay.js";
 import { PanelHeader } from "../containers/panel.js";
 import { TextLine } from "../text.js";
@@ -37,7 +45,7 @@ import { WindowControl } from "../containers/window-controls.js";
  */
 const WIDTH = 368;
 
-export interface ConfirmationDialogProps {
+export interface ConfirmationDialogProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the dialog; its parts extend it. */
@@ -57,8 +65,8 @@ export interface ConfirmationDialogProps {
   readonly onConfirm?: () => void;
   /** Cancel, the close button or Escape. */
   readonly onCancel?: () => void;
-  /** Width at the tokens' `em`; 368 by default. */
-  readonly width?: number;
+  /** Logical width; the skin-scaled default is 368. */
+  readonly width?: number | undefined;
 }
 
 export function ConfirmationDialog({
@@ -72,13 +80,15 @@ export function ConfirmationDialog({
   destructive = true,
   onConfirm,
   onCancel,
-  width = WIDTH,
+  width,
+  ...layoutProps
 }: ConfirmationDialogProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
   const lines = typeof body === "string" ? [body] : body;
-  const inset = kit.unit(t.inset);
+  const inset = kit.spacing.inset;
+  const layout = useGuiKitLayout(layoutProps).layout;
 
   // One answer per opening: the first of Cancel, close, Escape or the action.
   const answered = useRef(!open);
@@ -134,7 +144,10 @@ export function ConfirmationDialog({
       open={open}
       controlled={overlay.controlled}
       onVisibleChange={overlay.onVisibleChange}
-      layout={{ width: kit.unit(width) }}
+      layout={{
+        width: width ?? kit.unit(WIDTH),
+        ...layout,
+      }}
     >
       <PanelHeader id={`${id}/header`} title={title}>
         <WindowControl
@@ -164,6 +177,7 @@ export function ConfirmationDialog({
         <Children>
           {lines.map((line, index) => (
             <Row
+              gap={0}
               key={index}
               id={`${id}/line/${index}`}
               height={kit.unit(t.denseRow)}

@@ -49,14 +49,14 @@ pub use crate::systems::surface::{CylinderSurface, FlatSurface, SphereSurface, S
 pub use crate::systems::world_attachment::WorldAttachment;
 
 pub use crate::systems::canvas::{
-    CanvasBitmap, CanvasBounds, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasLayerTransition,
-    CanvasPaint, CanvasStyle, CanvasText,
+    CanvasBitmap, CanvasBounds, CanvasBox, CanvasDrawing, CanvasGlyphRun, CanvasHtml,
+    CanvasLayerTransition, CanvasPaint, CanvasStyle, CanvasText,
 };
 
 pub use crate::systems::gui::layout::{GuiLayout, GuiOverlay};
 pub use crate::systems::gui::local::{
-    GuiBehavior, GuiButton, GuiCheckbox, GuiColor, GuiGroup, GuiScrollView, GuiSlider,
-    GuiTextInput, GuiVirtualItem, GuiVirtualList,
+    GuiBehavior, GuiButton, GuiCheckbox, GuiColor, GuiGroup, GuiInputTarget, GuiScrollView,
+    GuiSlider, GuiTextInput, GuiVirtualItem, GuiVirtualList,
 };
 pub use crate::systems::gui::motion::GuiThemeMotion;
 pub use crate::systems::gui::presentation::{GuiFont, GuiMetrics, GuiSkin, GuiTheme};

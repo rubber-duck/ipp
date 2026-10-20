@@ -38,6 +38,7 @@ impl SystemRuntimeAccess<'_> {
                 current,
                 self.asset_acquisition,
                 self.data,
+                self.web_content,
                 false,
             )?;
         }
@@ -204,6 +205,7 @@ impl SystemRuntimeAccess<'_> {
             current,
             self.asset_acquisition,
             self.data,
+            self.web_content,
             false,
         );
         result.and(commit)

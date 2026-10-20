@@ -4,6 +4,7 @@ fn policy(direct_distance: f32) -> SurfaceCachePolicy {
     SurfaceCachePolicy::new(&SurfaceCache {
         direct_distance,
         resolution_scale: 1.0,
+        allocation_priority: 1.0,
         max_refresh_hz: 30.0,
         max_texture_size: 0,
         force_cache: false,
@@ -24,6 +25,22 @@ fn validation_rejects_non_finite_non_positive_and_excessive_values() {
     );
 
     for invalid in [
+        SurfaceCache {
+            allocation_priority: 0.0,
+            ..valid
+        },
+        SurfaceCache {
+            allocation_priority: -1.0,
+            ..valid
+        },
+        SurfaceCache {
+            allocation_priority: f32::NAN,
+            ..valid
+        },
+        SurfaceCache {
+            allocation_priority: f32::INFINITY,
+            ..valid
+        },
         SurfaceCache {
             direct_distance: -1.0,
             ..valid
@@ -137,6 +154,7 @@ fn refresh_caps_never_increase_with_distance() {
         SurfaceCachePolicy::new(&SurfaceCache {
             direct_distance: 1.0,
             resolution_scale: 0.5,
+            allocation_priority: 1.0,
             max_refresh_hz: 0.25,
             max_texture_size: 0,
             force_cache: false,
@@ -166,6 +184,7 @@ fn floors_stop_halving_without_raising_low_authored_values() {
     let policy = SurfaceCachePolicy::new(&SurfaceCache {
         direct_distance: 1.0,
         resolution_scale: 1.0,
+        allocation_priority: 1.0,
         max_refresh_hz: 1.5,
         max_texture_size: 0,
         force_cache: false,
@@ -180,6 +199,7 @@ fn floors_stop_halving_without_raising_low_authored_values() {
     let low = SurfaceCachePolicy::new(&SurfaceCache {
         direct_distance: 1.0,
         resolution_scale: 0.5,
+        allocation_priority: 1.0,
         max_refresh_hz: 0.25,
         max_texture_size: 0,
         force_cache: false,

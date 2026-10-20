@@ -324,7 +324,9 @@ test("native gallery captures all shared scenes, including moving particles and 
 });
 
 test("native unified charts retain fixed samples, focus and pick World-qualified source rows without leaked participants", {
-  timeout: 270_000,
+  // Real captures, focus/skin transitions and reload across twelve Worlds
+  // share this budget, including runs alongside other rendering processes.
+  timeout: 360_000,
 }, async (context) => {
   await runGallery(
     context.signal,

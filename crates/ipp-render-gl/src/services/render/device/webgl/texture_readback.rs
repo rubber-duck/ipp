@@ -79,6 +79,8 @@ impl WebGlRenderDevice {
 
 impl Drop for WebGlRenderDevice {
     fn drop(&mut self) {
+        self.release_fences();
+
         for stage in self.readbacks.drain(..).filter_map(|stage| stage.upgrade()) {
             if let Some(id) = stage.take() {
                 // SAFETY: Old device is destroyed before replacing its context.

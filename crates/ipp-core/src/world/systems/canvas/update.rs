@@ -46,10 +46,11 @@ pub(super) struct CanvasOutputChanges<'a> {
     pub interaction: CanvasInteractionPriority,
     pub paints: Option<Arc<[CanvasPaintInstance]>>,
     pub resources: Option<Arc<[AssetKey]>>,
+    pub web_images: Option<Arc<[crate::services::web_content::WebContentImageId]>>,
 }
 
 impl CanvasSystem {
-    pub(super) fn evaluate(&mut self, context: &SystemRuntimeAccess<'_>) {
+    pub(super) fn evaluate(&mut self, context: &mut SystemRuntimeAccess<'_>) {
         self.state.work = CanvasWork::default();
         let world = &*context.world;
         let plot_revision = self
@@ -62,6 +63,8 @@ impl CanvasSystem {
         if structure_changed {
             self.rebuild_order(world);
         }
+        self.prepare_web_content(context);
+        let world = &*context.world;
         let controls_changed = {
             let revision = self
                 .gui
@@ -270,6 +273,7 @@ impl CanvasSystem {
         plot_hits.sort_by_key(|hit| hit.order);
         let paints = paint_instances(world, assets, &entries);
         let resources = retained_resources(&entries, &paints);
+        let web_images = super::web_content::retained_images(&entries);
         let interaction = records.iter().fold([0; 4], |counts, record| {
             let record = interaction_counts(record.interaction);
             std::array::from_fn(|flag| counts[flag] + record[flag])
@@ -324,6 +328,9 @@ impl CanvasSystem {
         let changed_resources = previous
             .as_ref()
             .is_none_or(|previous| previous.resources != resources);
+        let changed_web_images = previous
+            .as_ref()
+            .is_none_or(|previous| previous.web_images != web_images);
         let changed_paints = previous
             .as_ref()
             .is_none_or(|previous| *previous.paints != *paints);
@@ -346,6 +353,7 @@ impl CanvasSystem {
                 interaction: self.state.walk.priority(),
                 paints: changed_paints.then(|| paints.into()),
                 resources: changed_resources.then_some(resources),
+                web_images: changed_web_images.then_some(web_images),
             },
         );
         let publication = self.state.publication.as_ref().unwrap();
@@ -372,6 +380,7 @@ impl CanvasSystem {
         let revision = if changes.layout
             || changes.entries.is_some()
             || changes.resources.is_some()
+            || changes.web_images.is_some()
             || changed_input
             || changes.paints.is_some()
         {
@@ -399,7 +408,7 @@ impl CanvasSystem {
                 kept().layout_revision
             },
             paint_revision,
-            resource_revision: if changes.resources.is_some() {
+            resource_revision: if changes.resources.is_some() || changes.web_images.is_some() {
                 revision
             } else {
                 kept().resource_revision
@@ -429,6 +438,9 @@ impl CanvasSystem {
             resources: changes
                 .resources
                 .unwrap_or_else(|| kept().resources.clone()),
+            web_images: changes
+                .web_images
+                .unwrap_or_else(|| kept().web_images.clone()),
         };
         let input_revision = publication.input_revision;
         self.state.publication = Some(publication);
@@ -689,6 +701,13 @@ pub(in crate::world::systems) fn prepare_constrained_geometry(
                     bitmap.variant,
                 )?,
                 size: [bitmap.width, bitmap.height],
+            })
+        }
+        ComponentValue::CANVAS_HTML => {
+            let html = world.components.canvas_html(index)?;
+            Some(CanvasGeometry::Html {
+                size: [html.width, html.height],
+                image: None,
             })
         }
         ComponentValue::CANVAS_BOX => {

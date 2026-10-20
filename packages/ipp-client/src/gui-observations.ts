@@ -17,6 +17,7 @@ interface Adapter {
 }
 
 interface Registration {
+  inputTarget?: import("./gui-types.js").GuiTarget;
   world: WorldReference;
   classes: "application" | "feedback" | "all";
   listener: (effect: GuiObservedEffect) => void;
@@ -54,6 +55,9 @@ export class GuiObservations {
     });
     const registration: Registration = {
       world: immutable({ ...world }),
+      ...(options.inputTarget
+        ? { inputTarget: immutable({ ...options.inputTarget }) }
+        : {}),
       classes: options.classes ?? "application",
       listener,
       ordinal: 0n,
@@ -99,6 +103,9 @@ export class GuiObservations {
               kind: "subscribe",
               world: registration.world,
               classes: registration.classes,
+              ...(registration.inputTarget
+                ? { inputTarget: registration.inputTarget }
+                : {}),
             }
           : {
               kind: "unsubscribe",
@@ -207,10 +214,20 @@ export class GuiObservations {
       effect.effect.kind === "discarded" ||
       effect.effect.kind === "contextRequested";
     if (
+      !registration.inputTarget &&
       registration.classes !== "all" &&
       (registration.classes === "application") !== application
     )
       throw new Error("GUI observation class mismatch");
+    if (
+      registration.inputTarget &&
+      (effect.target.entity !== registration.inputTarget.entity ||
+        effect.target.component !== registration.inputTarget.component ||
+        effect.target.incarnation !== registration.inputTarget.incarnation)
+    )
+      throw new Error("Foreign client input target");
+    if (!registration.inputTarget && effect.effect.kind === "input")
+      throw new Error("Input on an ordinary observation");
     registration.ordinal = effect.id.ordinal;
     try {
       registration.listener(immutable(effect));

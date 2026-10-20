@@ -1,4 +1,4 @@
-/** One opaque texture pass preserves the photograph while animating light groups. */
+/** One cutout pass preserves the complete console and animates authored lamps. */
 import { useMemo } from "react";
 import {
   Animation,
@@ -16,9 +16,6 @@ import { textureSource, type CockpitRuntime } from "./runtime.js";
 const GROUPS = ["cabin", "dashboard", "buttons", "dials"] as const;
 const PARAMETERS = {
   base: "texture2D",
-  cabin: "texture2D",
-  dashboard: "texture2D",
-  cyan: "texture2D",
   illumination: "f32",
   cabinPhase: "f32",
   dashboardPhase: "f32",
@@ -31,37 +28,47 @@ const PARAMETERS = {
 } as const;
 
 function fragment(zones: CockpitRuntime["lighting"]["zones"]): string {
-  // These constants are authored UV classification, independent of the viewport.
+  // UV regions isolate actual lamps from the silver casing. Emission is
+  // attenuated from the authored exposure, so it never blooms beyond the source.
   const rectangles = zones
-    .filter(({ group }) => group === "buttons" || group === "dials")
     .map(({ rect, group }) => {
       const value = rect.map((number) => number.toFixed(9));
       const motion =
         group === "dials"
           ? `float angle = atan(local.y - 0.5, local.x - 0.5);
-           float sweep = pow(max(0.0, cos(angle - p_dialsPhase - ${value[0]} * 6.2831853)), 4.0);
-           cyanGain = p_dialsTint * (0.22 + 0.78 * sweep);`
-          : `float lamp = floor(min(local.x, 0.999) * 6.0);
-           float wave = 0.5 + 0.5 * cos(p_buttonsPhase - lamp * 0.9 - ${value[0]} * 6.2831853);
-           cyanGain = p_buttonsTint * (0.25 + 0.75 * wave * wave);`;
+         float sweep = pow(max(0.0, cos(angle - p_dialsPhase - ${value[0]} * 6.2831853)), 4.0);
+         gain = p_dialsTint * (0.10 + 0.90 * sweep);`
+          : group === "buttons"
+            ? `float lamp = floor(min(local.x, 0.999) * 6.0);
+         float wave = 0.5 + 0.5 * cos(p_buttonsPhase - lamp * 0.9 - ${value[0]} * 6.2831853);
+         gain = p_buttonsTint * (0.18 + 0.82 * wave * wave);`
+            : `gain = p_${group}Tint * (0.78 + 0.22 * cos(p_${group}Phase + v_uv.x));`;
+      const footprint =
+        group === "buttons"
+          ? `float bank = min(v_uv.x, 1.0 - v_uv.x);
+           float footprint = 1.0 - smoothstep(0.014, 0.025, abs(v_uv.y - (0.529 - 0.407 * bank)));`
+          : group === "dials"
+            ? `float footprint = 1.0 - smoothstep(0.98, 1.08, length((local - 0.5) * 2.0));`
+            : `float footprint = 1.0;`;
       return `if (all(greaterThanEqual(v_uv,vec2(${value[0]},${value[1]}))) && all(lessThanEqual(v_uv,vec2(${value[2]},${value[3]})))) {
-        vec2 local = (v_uv - vec2(${value[0]},${value[1]})) / vec2(${(rect[2] - rect[0]).toFixed(9)},${(rect[3] - rect[1]).toFixed(9)});
-        ${motion}
-      }`;
+      vec2 local = (v_uv - vec2(${value[0]},${value[1]})) / vec2(${(rect[2] - rect[0]).toFixed(9)},${(rect[3] - rect[1]).toFixed(9)});
+      vec3 gain;
+      ${motion}
+      ${footprint}
+      // Follow the curved button bank and elliptical dials so their rectangular
+      // registration regions cannot dim the silver casing underneath them.
+      float lampMask = footprint * smoothstep(0.18, 0.72, max(base.r, max(base.g, base.b)));
+      color = mix(base, base * (0.035 + 0.965 * gain * p_illumination), lampMask);
+    }`;
     })
     .join("\n");
   return `vec4 materialFragment() {
-    vec3 base = texture(p_base, v_uv).rgb;
-    // Keep peaks at the authored exposure. Motion comes from attenuation,
-    // with spatial sweeps on instruments rather than flashing the whole cabin.
-    vec3 cabinGain = p_cabinTint * (0.91 + 0.09 * cos(p_cabinPhase + v_uv.x));
-    vec3 dashboardGain = p_dashboardTint * (0.82 + 0.18 * cos(p_dashboardPhase));
-    vec3 cyanGain = p_buttonsTint;
+    vec4 authored = ippSample(p_base, v_uv);
+    if (authored.a < 0.65) ippDiscard();
+    vec3 base = authored.rgb;
+    vec3 color = base;
     ${rectangles}
-    vec3 emission = texture(p_cabin,v_uv).rgb * cabinGain
-      + texture(p_dashboard,v_uv).rgb * dashboardGain
-      + texture(p_cyan,v_uv).rgb * cyanGain;
-    return vec4(base + emission * p_illumination, 1.0);
+    return vec4(color, 1.0);
   }`;
 }
 
@@ -111,18 +118,17 @@ export function CockpitLighting({
         recipe={{}}
         parameters={PARAMETERS}
       >
-        <FragmentShader requiredAttributes={2}>{shader}</FragmentShader>
+        <FragmentShader backend="ipp" requiredAttributes={2}>
+          {shader}
+        </FragmentShader>
       </ShaderAsset>
       <AnimationAsset id="cockpit-light-mask-motion" clip={clip} />
       {runtime.lighting.bodies.map((body) => (
         <Entity key={body.entity} bindTo={body.entity}>
           <CustomMaterial
             source={assetRef("cockpit-light-mask-shader")}
-            alpha_mode={0}
+            alpha_mode={1}
             base={texture(body.baseTexture)}
-            cabin={texture(runtime.lighting.textures.cabin)}
-            dashboard={texture(runtime.lighting.textures.dashboard)}
-            cyan={texture(runtime.lighting.textures.cyan)}
             illumination={state.illumination}
             cabinPhase={0}
             dashboardPhase={0}

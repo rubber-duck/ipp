@@ -46,9 +46,11 @@ export {
 export { GUI_KIT_ICONS, type GuiKitIcon } from "./gui-kit/icons.js";
 export {
   Row,
+  ActionRow,
+  type ActionRowProps,
   Toolbar,
   Column,
-  Stack,
+  OverlayStack,
   type ContainerProps,
   type GuiKitLayoutProps,
   type GuiKitFlowLayoutProps,
@@ -282,6 +284,7 @@ export {
 export type { PlotSkinAppearance } from "./plots/skin-types.js";
 
 export type {
+  GuiKitSpace,
   GuiKitSpacing,
   GuiKitSpacingOverrides,
 } from "./gui-kit/spacing.js";

@@ -17,6 +17,12 @@ use std::{cell::Cell, rc::Rc};
 
 #[derive(Default)]
 pub struct DeviceState {
+    pub completion_fences_ready: Cell<bool>,
+    pub completion_fence_sequence: Cell<u64>,
+    pub completion_fences: RefCell<std::collections::BTreeSet<u64>>,
+    pub textures_allocated: Cell<usize>,
+    pub textures_deleted: Cell<usize>,
+    pub completion_finishes: Cell<usize>,
     pub texture_readback_enabled: Cell<bool>,
     pub texture_readback_ready: Cell<bool>,
     pub texture_readback_begins: Cell<u32>,
@@ -107,6 +113,30 @@ pub struct DeviceState {
 pub struct TestDevice(pub Rc<DeviceState>);
 
 impl RenderDevice for TestDevice {
+    fn finish_submitted_work(&mut self) -> Result<(), RenderError> {
+        self.0
+            .completion_finishes
+            .set(self.0.completion_finishes.get() + 1);
+        self.0.completion_fences_ready.set(true);
+        Ok(())
+    }
+
+    fn create_completion_fence(&mut self) -> Result<u64, RenderError> {
+        let id = self.0.completion_fence_sequence.get() + 1;
+        self.0.completion_fence_sequence.set(id);
+        self.0.completion_fences.borrow_mut().insert(id);
+        Ok(id)
+    }
+
+    fn poll_completion_fence(&mut self, fence: u64) -> Result<bool, RenderError> {
+        assert!(self.0.completion_fences.borrow().contains(&fence));
+        Ok(self.0.completion_fences_ready.get())
+    }
+
+    fn delete_completion_fence(&mut self, fence: u64) {
+        assert!(self.0.completion_fences.borrow_mut().remove(&fence));
+    }
+
     fn viewport_limits(&self) -> Option<ipp_render_gl::ViewportLimits> {
         Some(ipp_render_gl::ViewportLimits {
             max_width: 4096,
@@ -289,6 +319,9 @@ impl RenderDevice for TestDevice {
 
     fn allocate_texture(&mut self, _width: u32, _height: u32) -> Result<(), RenderError> {
         if self.0.texture_readback_enabled.get() {
+            self.0
+                .textures_allocated
+                .set(self.0.textures_allocated.get() + 1);
             self.0
                 .texture_pixels
                 .borrow_mut()
@@ -762,6 +795,9 @@ impl RenderDevice for TestDevice {
     }
 
     fn delete_texture(&mut self, _texture: ()) {
+        self.0
+            .textures_deleted
+            .set(self.0.textures_deleted.get() + 1);
         if !self.0.texture_readback_enabled.get() {
             panic!("mesh-only scenarios never delete textures");
         }

@@ -17,6 +17,8 @@ struct CanvasView {
     camera: Option<[f64; 3]>,
     raster_mvp: [f32; 16],
     raster_viewport: WorldViewport,
+    /// Root-screen fraction represented by this raster viewport.
+    screen_fraction: f64,
 }
 
 struct OutputJob {
@@ -29,6 +31,8 @@ struct OutputJob {
     projected: Option<super::scene::SceneOutputSurface>,
     projected_mvp: [f32; 16],
     projected_viewport: WorldViewport,
+    screen_coverage: f64,
+    allocation_priority: f32,
     visible: bool,
     interaction_eligible: bool,
 }
@@ -90,6 +94,7 @@ impl<D: RenderDevice> RenderService<D> {
                     ],
                 )?,
                 raster_viewport: viewport,
+                screen_fraction: 1.0,
             })
         } else {
             None
@@ -106,6 +111,8 @@ impl<D: RenderDevice> RenderService<D> {
                 projected: None,
                 projected_mvp: [0.0; 16],
                 projected_viewport: viewport,
+                screen_coverage: 1.0,
+                allocation_priority: 1.0,
                 visible: true,
                 interaction_eligible: world_interaction_eligible(host, selection.world()),
             },
@@ -148,6 +155,16 @@ impl<D: RenderDevice> RenderService<D> {
                         };
                         let projected_mvp =
                             ipp_core::math::multiply(camera_view.view_projection, surface.model);
+                        let screen_coverage = if visible {
+                            job.screen_coverage
+                                * super::super::surface::coverage::surface(
+                                    &*surface.geometry,
+                                    &[0.0, f64::from(surface.layer_depth)],
+                                    projected_mvp,
+                                )?
+                        } else {
+                            0.0
+                        };
                         let pixel_demand = super::super::surface::quality::surface_demand(
                             &*surface.geometry,
                             &[0.0, f64::from(surface.layer_depth)],
@@ -157,7 +174,11 @@ impl<D: RenderDevice> RenderService<D> {
                         let Some(size) = super::super::surface::quality::image_size(
                             pixel_demand,
                             surface.cache_policy.map_or(1.0, |p| p.resolution_scale),
-                            self.device.borrow().surface_cache_limit(),
+                            surface
+                                .cache_policy
+                                .map_or(self.device.borrow().surface_cache_limit(), |p| {
+                                    p.texture_limit(self.device.borrow().surface_cache_limit())
+                                }),
                             (surface.selection.kind() == OutputKind::Camera)
                                 .then(|| {
                                     self.camera_targets
@@ -236,6 +257,7 @@ impl<D: RenderDevice> RenderService<D> {
                                     [2.0 / f64::from(extent[0]), -2.0 / f64::from(extent[1])],
                                 )?,
                                 raster_viewport: viewport,
+                                screen_fraction: screen_coverage,
                             });
                             cache = surface
                                 .cache_policy
@@ -245,6 +267,7 @@ impl<D: RenderDevice> RenderService<D> {
                                     anchor: surface.entity.entity,
                                     token: surface.token.clone(),
                                     pixel_demand,
+                                    screen_coverage,
                                     policy,
                                     distance: distance(camera, plane, extent),
                                     clip,
@@ -268,6 +291,10 @@ impl<D: RenderDevice> RenderService<D> {
                                 .then(|| surface.clone()),
                             projected_mvp,
                             projected_viewport: job.viewport,
+                            screen_coverage,
+                            allocation_priority: surface
+                                .cache_policy
+                                .map_or(1.0, |p| p.allocation_priority),
                             visible,
                             interaction_eligible,
                         });
@@ -307,15 +334,17 @@ impl<D: RenderDevice> RenderService<D> {
                         else {
                             continue;
                         };
-                        let raster_mvp = match raster_child {
+                        let (raster_mvp, raster_clip) = match raster_child {
                             CanvasChild::Canvas {
                                 mvp,
+                                clip,
                                 ..
                             }
                             | CanvasChild::Camera {
                                 mvp,
+                                clip,
                                 ..
-                            } => mvp,
+                            } => (mvp, clip),
                         };
                         let logical_extent = match &child {
                             CanvasChild::Canvas {
@@ -332,6 +361,12 @@ impl<D: RenderDevice> RenderService<D> {
                             raster_mvp,
                             view.raster_viewport,
                         )?;
+                        let screen_coverage = if job.visible {
+                            view.screen_fraction
+                                * super::super::surface::coverage::plane(raster_clip, raster_mvp)
+                        } else {
+                            0.0
+                        };
                         let policy = attachment.edge.and_then(|edge| edge.surface_cache_policy);
                         let size = if self
                             .fullscreen_camera
@@ -342,7 +377,9 @@ impl<D: RenderDevice> RenderService<D> {
                             let Some(size) = super::super::surface::quality::image_size(
                                 pixel_demand,
                                 policy.map_or(1.0, |p| p.resolution_scale),
-                                self.device.borrow().surface_cache_limit(),
+                                policy.map_or(self.device.borrow().surface_cache_limit(), |p| {
+                                    p.texture_limit(self.device.borrow().surface_cache_limit())
+                                }),
                                 (selection.kind() == OutputKind::Camera)
                                     .then(|| {
                                         self.camera_targets
@@ -389,6 +426,7 @@ impl<D: RenderDevice> RenderService<D> {
                                     camera: view.camera,
                                     raster_mvp,
                                     raster_viewport: view.raster_viewport,
+                                    screen_fraction: view.screen_fraction,
                                 });
 
                                 let cache = attachment
@@ -399,6 +437,7 @@ impl<D: RenderDevice> RenderService<D> {
                                         anchor: slot.anchor,
                                         token: slot.token.clone(),
                                         pixel_demand,
+                                        screen_coverage,
                                         policy,
                                         distance: distance(
                                             view.camera,
@@ -428,6 +467,8 @@ impl<D: RenderDevice> RenderService<D> {
                             projected: None,
                             projected_mvp: [0.0; 16],
                             projected_viewport: viewport,
+                            screen_coverage,
+                            allocation_priority: policy.map_or(1.0, |p| p.allocation_priority),
                             visible: job.visible,
                             interaction_eligible: job.interaction_eligible
                                 && world_interaction_eligible(host, selection.world()),
@@ -467,8 +508,7 @@ impl<D: RenderDevice> RenderService<D> {
         self.begin_projected_frame(presentation_time, &visible);
         // Reserve visible required active images before optional admission. Idle
         // optional capacity and padding must not lower required raster quality.
-        let mut required_bytes = 0usize;
-        self.required_image_demand.clear();
+        let mut image_requests = Vec::new();
         for job in prepared.iter().filter(|job| job.visible) {
             let count = if job.selection.kind() == OutputKind::Camera {
                 1
@@ -489,18 +529,21 @@ impl<D: RenderDevice> RenderService<D> {
             } else {
                 0
             };
-            let bytes = count * job.viewport.width as usize * job.viewport.height as usize * 4;
-            self.required_image_demand.insert(job.selection, bytes);
-            required_bytes = required_bytes.saturating_add(bytes);
-        }
-        if required_bytes > self.surface_cache.budget() {
-            // Active quality cannot all fit. Reserve bounded proportional shares
-            // so future requests allow downshifts instead of excluding every image.
-            let ratio = self.surface_cache.budget() as f64 / required_bytes as f64;
-            for bytes in self.required_image_demand.values_mut() {
-                *bytes = ((*bytes as f64 * ratio) as usize / 4 * 4).max(4);
+            if count != 0 {
+                image_requests.push(super::super::surface::allocation::ImageRequest {
+                    output: job.selection,
+                    size: [job.viewport.width, job.viewport.height],
+                    count,
+                    score: job.screen_coverage * f64::from(job.allocation_priority),
+                });
             }
         }
+        self.required_image_demand =
+            super::super::surface::allocation::plan(image_requests, self.surface_cache.budget());
+        let required_bytes = self.required_image_demand.values().sum();
+        // Release superseded allocations before child-first painting: residency
+        // from the previous view must not defeat the current priority ranking.
+        self.reclaim_required_allocations();
         self.reclaim_inactive_images();
         self.reclaim_required_padding()?;
         self.plan_canvas_caches(
@@ -615,11 +658,13 @@ impl<D: RenderDevice> RenderService<D> {
         }
 
         let previous = self.camera_targets.remove(&selection);
-        let available = self.surface_cache.budget().saturating_sub(
-            self.projected_image_bytes()
-                + self.surface_cache.resident().1 as usize
-                + self.remaining_required_bytes(selection),
-        );
+        let available =
+            self.required_image_limit(selection)
+                .min(self.surface_cache.budget().saturating_sub(
+                    self.projected_image_bytes()
+                        + self.surface_cache.resident().1 as usize
+                        + self.remaining_required_bytes(selection),
+                ));
         let mut size = [viewport.width, viewport.height];
         while size[0] as usize * size[1] as usize * 4 > available {
             if size == [1, 1] {

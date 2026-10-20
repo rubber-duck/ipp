@@ -163,7 +163,13 @@ async function captureScene(page) {
                   source.tick >= panel.tick,
               ),
             })),
-            exterior: ["cockpit-space", "cockpit-planet"].map((name) => {
+            exterior: [
+              "cockpit-space",
+              "cockpit-planet",
+              "cockpit-atmosphere",
+              "cockpit-starfield",
+              "cockpit-bridge-front",
+            ].map((name) => {
               const entity = state.entities.find(
                 (entity) => entity.metadata.symbolicId === name,
               );
@@ -397,18 +403,18 @@ test("the release gallery is complete and renders at root and project URLs", {
           if (scene === "cockpit") {
             assert.equal(
               frame.cockpit.panels.length,
-              5,
+              6,
               "all projected GUI panel Worlds load",
             );
             assert.equal(
               new Set(frame.cockpit.panels.map(({ world }) => world)).size,
-              5,
+              6,
             );
             assert.ok(
               frame.cockpit.panels.every(
                 (panel) => panel.entities > 0 && panel.sources.length > 0,
               ),
-              "all five panel Worlds load their entities and assets",
+              "all six panel Worlds load their entities and assets",
             );
             assert.ok(
               frame.cockpit.panels[frame.cockpit.focusedPanel].completed,
@@ -422,11 +428,13 @@ test("the release gallery is complete and renders at root and project URLs", {
               for (const name of [
                 "base",
                 "cities",
-                "atmosphere",
-                "stars",
+                "role",
                 "phase",
+                "cloudPhase",
                 "cityPhase",
-                "starPhase",
+                "intensity",
+                "cityGain",
+                "starGain",
               ])
                 assert.ok(
                   exterior.properties.includes(name),
@@ -455,7 +463,7 @@ test("the release gallery is complete and renders at root and project URLs", {
                 (world) =>
                   !cockpitWorlds.includes(`${world.incarnation}:${world.id}`),
               ),
-              "returning to Shapes retires the cockpit and all five panel Worlds",
+              "returning to Shapes retires the cockpit and all six panel Worlds",
             );
             assert.equal(
               worlds.length,

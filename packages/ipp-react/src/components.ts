@@ -54,6 +54,7 @@ export const componentContract = {
     fields: {
       direct_distance: "number",
       resolution_scale: "number",
+      allocation_priority: "number",
       max_refresh_hz: "number",
       max_texture_size: "number",
       force_cache: "boolean",
@@ -342,6 +343,8 @@ export type SurfaceCacheProps = ComponentProps & {
   direct_distance?: number | undefined;
   /** Multiplier of projected device-pixel demand, independent of Canvas layout. */
   resolution_scale?: number | undefined;
+  /** Positive finite screen-coverage multiplier for image allocation; defaults to 1. */
+  allocation_priority?: number | undefined;
   /**
    * Maximum content refresh rate in hertz in the nearest cached band;
    * positive. Pending content changes wait for the next refresh.

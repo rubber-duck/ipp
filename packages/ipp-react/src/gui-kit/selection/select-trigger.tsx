@@ -1,3 +1,13 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  Strut,
+  type GuiKitLayout,
+} from "../layout.js";
+
 import { useFormLayout } from "../containers/form.js";
 import { useEntityId } from "../../scope/identity.js";
 /** Dropdown trigger and anchored list shared by the selection controls.
@@ -16,12 +26,7 @@ import type {
 } from "../../gui/callbacks.js";
 import type { GuiControlHandle, GuiControlRef } from "../../gui/control-ref.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Floating } from "../overlays/overlay.js";
 import { TextLine } from "../text.js";
 
@@ -31,7 +36,7 @@ export const SELECT_WIDTH = 240;
 /** Side of the chevron's square at the tokens' `em`. */
 const CHEVRON = 16;
 
-export interface SelectTriggerProps {
+export interface SelectTriggerProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -45,7 +50,7 @@ export interface SelectTriggerProps {
   /** The trigger's semantic name, such as the field's label. */
   readonly label?: string;
   readonly ref?: GuiControlRef;
-  readonly layout?: GuiKitLayout;
+
   /** Its list: a `SelectList`. */
   readonly children?: ReactNode;
 }
@@ -63,19 +68,20 @@ export function selectTextRoom(
   return width - kit.unit(2 * t.inset + CHEVRON + t.inset / 2);
 }
 
-export function SelectTrigger({
-  id: providedId,
-  layer = 0,
-  text,
-  placeholder = false,
-  open,
-  onPress,
-  disabled = false,
-  label,
-  ref,
-  layout,
-  children,
-}: SelectTriggerProps) {
+export function SelectTrigger(props: SelectTriggerProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    text,
+    placeholder = false,
+    open,
+    onPress,
+    disabled = false,
+    label,
+    ref,
+    layout,
+    children,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const inForm = useFormLayout();
@@ -87,7 +93,7 @@ export function SelectTrigger({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         width={inForm ? -1 : kit.unit(SELECT_WIDTH)}
         height={height}

@@ -44,7 +44,7 @@ REGRESSION_GROUPS = {
     ),
     "browser": RegressionGroup(
         "Chromium worker/WASM transport and lifecycle",
-        ("browser",),
+        ("browser", "terminal", "html-canvas"),
         (
             "test:presentation:webgl",
             "test:presentation:webgl-production",
@@ -138,6 +138,7 @@ REGRESSION_GROUPS = {
         (
             "gallery-site",
             "gallery-browser",
+            "cockpit-browser",
             "gallery-cockpit",
             "native-gallery",
         ),
@@ -146,6 +147,11 @@ REGRESSION_GROUPS = {
     "blender": RegressionGroup(
         "Blender packaging, exports, streaming and browser presentation",
         ("blender", "blender-headless", "blender-disk-headless", "particles-blender"),
+    ),
+    "cef": RegressionGroup(
+        "Native CEF accelerated HTML/canvas prototype; requires Weston and a hardware GLES driver",
+        ("cef-surface",),
+        steps=("check:cef-format", "check:cef-clippy", "check:cef-cache"),
     ),
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
@@ -216,6 +222,9 @@ class ProductScript:
 # `build:<name>` steps that only stage and run one script; `builds.build` runs the
 # remaining steps' code.
 PRODUCT_SCRIPTS = {
+    "html-canvas-fixtures": ProductScript(
+        "tools/products/html-canvas-fixtures.mjs", "target/html-canvas"
+    ),
     "client": ProductScript(
         "packages/ipp-client/tsconfig.build.json",
         "packages/ipp-client/dist",
@@ -306,6 +315,7 @@ PRODUCT_SCRIPTS = {
     "surface-assets": ProductScript(
         "tools/assets/surface_assets.py", "target/surface-assets", runner="python"
     ),
+    "terminal": ProductScript("tools/products/terminal.mjs", "target/terminal-build"),
     "surface-fixtures": ProductScript(
         "tools/products/surface-fixtures.mjs", "target/surface-build"
     ),
@@ -373,6 +383,23 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             ),
             requirements=("node", "npm", "rust"),
             outputs=("target/presentation-wire-host",),
+        )
+    )
+    add(
+        Task(
+            "build:cef-surface-prototype",
+            "Build the isolated pinned Chromium/GLES experiment",
+            (sys.executable, "tests/rendering/cef/run.py", "--build"),
+            requirements=("rust",),
+            outputs=("target/cef-prototype/debug/ipp-cef-surface-prototype",),
+            source_roots=(
+                "tests/rendering/cef/",
+                "tools/pipeline/cef.py",
+                "crates/ipp-render-gl/",
+                "crates/ipp-core/",
+                "tools/ipp-schema-derive/",
+                ".cargo/",
+            ),
         )
     )
     # Audited native compilation/generation inputs. Root files are always included.
@@ -471,6 +498,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     build("builtin-exporter", (), ("target/builtin-exporter",), ("rust",))
     build("render-fixtures", (), ("target/render-fixtures",), ("node", "npm"))
+    build("html-canvas-fixtures", ("native",), ("target/html-canvas",), ("node", "npm"))
     for name in PROFILES["browser"]:
         build(
             f"browser:{name}",
@@ -511,6 +539,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "gallery-platformer-assets",
             "demos-cockpit-assets",
             "demos-drawings",
+            "terminal",
         ),
         ("target/gallery-build",),
         ("node", "npm"),
@@ -582,6 +611,12 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("native",),
         ("target/demos-cockpit-native-assets",),
         ("python-tools", "blender", "node", "npm"),
+    )
+    build(
+        "terminal",
+        ("browser:render", "font-assets"),
+        ("target/terminal-build",),
+        ("node", "npm"),
     )
     build(
         "surface-fixtures",
@@ -696,6 +731,36 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         check(
             f"format-{language}", operation("format", language, "check"), requirements
         )
+    check(
+        "cef-format",
+        (
+            "cargo",
+            "fmt",
+            "--manifest-path",
+            "tests/rendering/cef/Cargo.toml",
+            "--",
+            "--check",
+        ),
+        ("rust",),
+    )
+    check(
+        "cef-clippy",
+        (sys.executable, "tests/rendering/cef/run.py", "--clippy"),
+        ("rust",),
+    )
+    check(
+        "cef-cache",
+        (
+            sys.executable,
+            "-m",
+            "unittest",
+            "discover",
+            "-s",
+            "tools/tests",
+            "-p",
+            "test_cef.py",
+        ),
+    )
     # Production is the workspace default; all-features adds every instrumentation
     # axis, the WASM renderer and core's test-only oracle.
     for name, flags in (("default", ()), ("all-features", ("--all-features",))):

@@ -116,7 +116,7 @@ test("a horizontal SliderScale hangs its labels under the ticks with the marks' 
   // As long as its stack, reaching down to its labels' dense row.
   const root = world.fields("volts", "GuiLayout");
   near(root.get("height"), g.end + g.row);
-  assert.equal(root.has("width"), false);
+  assert.equal(root.get("width"), -1);
   const marks = [0, 1, 2].map((index) => `volts/mark/${index}`);
   assert.deepEqual(world.children("volts"), marks);
   assert.deepEqual(
@@ -721,10 +721,7 @@ test("a rejected entry shows its error until a later commit, submission, discard
   await reject("abc", 5n);
   assert.equal(shown(), "abc is not a number");
   assert.equal(world.skin("ev/error"), "alertError");
-  assert.equal(
-    world.fields("ev/error", "GuiLayout").get("margin_top"),
-    undefined,
-  );
+  assert.equal(world.fields("ev/error", "GuiLayout").get("margin_top"), 0);
   assert.deepEqual(world.children("ev"), ["ev/caption", "ev/row", "ev/error"]);
   assert.equal(
     world.fields("ev", "GuiLayout").get("height"),

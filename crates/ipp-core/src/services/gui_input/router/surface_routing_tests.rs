@@ -876,3 +876,130 @@ fn captured_nested_input_refreshes_moving_slot_plane_from_current_publication() 
     );
     rig.finish();
 }
+
+#[test]
+fn client_input_binding_refreshes_previous_focus_and_releases_on_curved_miss() {
+    use crate::services::reliable_output::{OutputCharge, OutputLimits, ReliableOutputAccount};
+    use crate::systems::gui::GuiSystem;
+    use crate::systems::gui::local::{GuiClientInput, GuiInputTarget, GuiLocalEffectKind};
+    use crate::systems::gui::observations::*;
+
+    let (mut rig, panel) = scene(components(0.5, 0.0)[0].clone());
+    let world = panel.world();
+    let entity = panel.controls[0];
+    apply(
+        &mut rig.host,
+        world,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_SLIDER,
+            },
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiInputTarget(GuiInputTarget::default()),
+            ),
+        ],
+    );
+    rig.frame();
+    rig.send(movement(71, [0.5, 0.5]));
+    rig.send(press(71, [0.5, 0.5]));
+    rig.send(release(71, [0.5, 0.5]));
+    assert!(!rig.snapshot(world, entity).focused);
+    let target = rig.snapshot(world, entity).target;
+    let output = GuiObservationOutput::new(
+        ReliableOutputAccount::new(OutputLimits {
+            bytes: 1024 * 1024,
+            reply_reserve: 0,
+        }),
+        GuiObservationEncoding {
+            control_bytes: 64,
+            effect_bytes: 128,
+            ancestry_entry_bytes: 16,
+            text_byte_bytes: 1,
+        },
+    )
+    .unwrap();
+    let subscription = output
+        .new_subscription(world, GuiObservationClasses::Input(target))
+        .unwrap();
+    let lease = output
+        .account()
+        .reserve(OutputCharge {
+            entries: 1,
+            bytes: 0,
+        })
+        .unwrap();
+    let command =
+        GuiObservationCommand::prepare_subscribe(&output, world, &subscription, 1, lease).unwrap();
+    rig.host
+        .world_mut(world.id())
+        .unwrap()
+        .enqueue_system_command(GuiSystem::ID, 7, command)
+        .unwrap();
+    rig.frame();
+    let address = create(
+        &mut rig.host,
+        world,
+        vec![
+            sized(0, 0.5, 0.5),
+            ComponentValue::GuiTextInput(Default::default()),
+        ],
+        None,
+    );
+    rig.frame();
+    let address_target = rig.snapshot(world, address).target;
+    gui_action(
+        &mut rig.host,
+        address_target,
+        crate::systems::gui::local::GuiLocalAction::Focus(0),
+    );
+    rig.frame();
+    rig.synchronize();
+    rig.frame();
+    assert!(rig.snapshot(world, address).focused);
+    // A page/layout change advances the publication while address focus stays.
+    apply(
+        &mut rig.host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(address),
+            ComponentValue::GuiLayout(crate::components::GuiLayout {
+                width: 0.5,
+                height: 0.5,
+                margin_top: 0.1,
+                ..Default::default()
+            }),
+        )],
+    );
+    rig.frame();
+    rig.send(press(71, [0.5, 0.5]));
+    assert!(rig.snapshot(world, entity).focused);
+    assert!(!rig.snapshot(world, address).focused);
+    assert!(rig.snapshot(world, entity).interaction.captured);
+    assert!(subscription.is_active());
+    rig.send(release(71, [4.0, 0.5]));
+    assert!(!rig.snapshot(world, entity).interaction.captured);
+    let mut cancelled = false;
+    while let Some(delivery) = output.pop_front() {
+        let (record, _) = delivery.into_parts();
+        if let GuiObservationRecord::Effect {
+            effect,
+            ..
+        } = record
+        {
+            cancelled |= matches!(
+                effect.kind,
+                GuiLocalEffectKind::Input(GuiClientInput::Pointer {
+                    phase: 3,
+                    ..
+                })
+            );
+        }
+    }
+    assert!(
+        cancelled,
+        "A release outside the curved projection cancels the client pointer too"
+    );
+    rig.finish();
+}

@@ -1,0 +1,5 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>IPP · Ghostty terminal</title>
+<style>html{color-scheme:dark;background:#101722;color:#dce8f2;font:16px system-ui}body{max-width:960px;margin:6vh auto;padding:24px}h1{font-weight:500}p{color:#9cabbf;line-height:1.6}button{background:#88d4e4;color:#10232a;border:0;border-radius:6px;padding:12px 20px;font:inherit;cursor:pointer}button:disabled{opacity:.5}canvas{display:block;width:100%;max-width:900px;aspect-ratio:5/3;background:#12151b;margin:24px 0;border:1px solid #334253;border-radius:8px}small{color:#8f9fae}</style></head>
+<body><small>INTERACTIVE PRESENTATION PLATFORM</small><h1>A real terminal, rendered by IPP.</h1><p>Ghostty and a BashKit virtual shell run in their own Web Worker. Display and input travel over the standard IPP protocol.</p><button>Start session</button><canvas width="900" height="540" tabindex="0" aria-label="Terminal"></canvas><p id="status">Start a session, then try <code>cat readme.txt</code>, shell pipelines, or <code>vi notes.txt</code>.</p><script type="module" src="main.js"></script></body></html>

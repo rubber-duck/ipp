@@ -4,6 +4,8 @@
 #[cfg(all(feature = "render", target_arch = "wasm32"))]
 mod service;
 #[cfg(all(feature = "render", target_arch = "wasm32"))]
+mod web_content;
+#[cfg(all(feature = "render", target_arch = "wasm32"))]
 pub(crate) use service::RenderSurfaceService;
 
 #[cfg(all(feature = "render", any(test, target_arch = "wasm32")))]

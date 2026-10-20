@@ -18,6 +18,22 @@ pub(in crate::world::systems::gui) struct GuiEffectPublisher {
 }
 
 impl GuiEffectPublisher {
+    pub fn input_binding(
+        &self,
+        target: super::super::local::GuiEntityTarget,
+    ) -> Option<GuiObservationSubscriptionId> {
+        let mut current = self.registrations.as_deref();
+        while let Some(registration) = current {
+            if registration.subscription.is_active()
+                && registration.subscription.0.classes == GuiObservationClasses::Input(target)
+            {
+                return Some(registration.subscription.id());
+            }
+            current = registration.next.as_deref();
+        }
+        None
+    }
+
     pub fn candidate_id(
         &self,
         world: WorldRef,
@@ -34,7 +50,8 @@ impl GuiEffectPublisher {
 
     fn class(kind: &GuiLocalEffectKind) -> Option<GuiObservationClasses> {
         match kind {
-            GuiLocalEffectKind::Pressed
+            GuiLocalEffectKind::Input(_)
+            | GuiLocalEffectKind::Pressed
             | GuiLocalEffectKind::Submitted(_)
             | GuiLocalEffectKind::Rejected(_)
             | GuiLocalEffectKind::Discarded(_)
@@ -65,8 +82,13 @@ impl GuiEffectPublisher {
         while let Some(registration) = current {
             let subscription = &registration.subscription.0;
             if subscription.world == id.world
-                && (subscription.classes == GuiObservationClasses::All
-                    || subscription.classes == class)
+                && match subscription.classes {
+                    GuiObservationClasses::Input(target) => target == effect.target,
+                    classes => {
+                        !matches!(effect.kind, GuiLocalEffectKind::Input(_))
+                            && (classes == GuiObservationClasses::All || classes == class)
+                    }
+                }
                 && let Some(output) = subscription.output.upgrade()
             {
                 output.observe(subscription.id, effect);
@@ -92,6 +114,16 @@ impl GuiEffectPublisher {
         self.prune();
         let subscription = &command.subscription.0;
         if command.subscribe {
+            if let GuiObservationClasses::Input(target) = subscription.classes
+                && (target.world != world
+                    || target.component != crate::ComponentValue::GUI_INPUT_TARGET
+                    || self.input_binding(target).is_some())
+            {
+                command.finish(GuiObservationControlResult::Rejected(
+                    GuiObservationRejection::AlreadySubscribed,
+                ));
+                return;
+            }
             let rejection = match subscription.status.get() {
                 SubscriptionStatus::Active => Some(GuiObservationRejection::AlreadySubscribed),
                 SubscriptionStatus::Closed => Some(GuiObservationRejection::StaleSubscription),
@@ -129,16 +161,22 @@ impl GuiEffectPublisher {
         }
     }
 
-    pub fn prune(&mut self) {
+    pub fn prune(&mut self) -> bool {
+        let mut changed = false;
         let mut cursor = &mut self.registrations;
         while let Some(mut registration) = cursor.take() {
             if registration.subscription.is_active() {
                 *cursor = Some(registration);
                 cursor = &mut cursor.as_mut().expect("retained registration").next;
             } else {
+                changed |= matches!(
+                    registration.subscription.0.classes,
+                    GuiObservationClasses::Input(_)
+                );
                 *cursor = registration.next.take();
             }
         }
+        changed
     }
 }
 

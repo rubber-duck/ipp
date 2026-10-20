@@ -1,3 +1,10 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_STACK,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * What a list or grid shows when it holds nothing: a content frame, cut as a
@@ -5,34 +12,29 @@ import { useEntityId } from "../../scope/identity.js";
  * control-height row that fills its container's width.
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Style, Font, Layout } from "../../gui/components.js";
+import { Style, Font } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_STACK, type GuiKitLayout } from "../layout.js";
+
 import { TextLine } from "../text.js";
 
-export interface EmptyStateProps {
+export interface EmptyStateProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
   /** The message, such as No records. */
   readonly text: string;
-  readonly layout?: GuiKitLayout;
 }
 
-export function EmptyState({
-  id: providedId,
-  layer = 0,
-  text,
-  layout,
-}: EmptyStateProps) {
+export function EmptyState(props: EmptyStateProps) {
+  const { id: providedId, layer = 0, text, layout } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_STACK}
         height={kit.unit(kit.tokens.controlHeight)}
         {...layout}

@@ -383,3 +383,80 @@ fn routed_observation_fits_the_reserved_wire_bound() {
                 + GUI_OBSERVATION_ENCODING.ancestry_entry_bytes
     );
 }
+
+#[test]
+fn client_input_codec_preserves_unicode_and_rejects_malformed_values() {
+    use ipp_core::systems::gui::local::GuiClientInput;
+
+    let inputs = [
+        GuiClientInput::Text {
+            text: "a😀\n\t".into(),
+            paste: true,
+        },
+        GuiClientInput::Key {
+            key: "F12".into(),
+            code: "F12".into(),
+            modifiers: 15,
+            repeat: true,
+            pressed: false,
+        },
+        GuiClientInput::Pointer {
+            pointer: 17,
+            phase: 2,
+            button: 1,
+            point: [2.5, -3.0],
+        },
+        GuiClientInput::Wheel {
+            point: [0.0, 8.0],
+            delta: [-1.0, 3.0],
+        },
+    ];
+    for input in inputs {
+        let mut writer = Writer::new(Vec::new());
+        writer.gui_client_input(&input).unwrap();
+        let mut reader = Reader {
+            bytes: &writer.0,
+            at: 0,
+        };
+        assert_eq!(reader.gui_client_input().unwrap(), input);
+        assert_eq!(reader.at, writer.0.len());
+        for length in 0..writer.0.len() {
+            assert!(
+                Reader {
+                    bytes: &writer.0[..length],
+                    at: 0
+                }
+                .gui_client_input()
+                .is_err()
+            );
+        }
+    }
+    // Text tag, one byte, invalid UTF-8, then the paste flag.
+    assert!(
+        Reader {
+            bytes: &[1, 1, 0, 0, 0, 255, 0],
+            at: 0
+        }
+        .gui_client_input()
+        .is_err()
+    );
+    assert!(
+        Writer::new(Vec::new())
+            .gui_client_input(&GuiClientInput::Text {
+                text: "x".repeat(65537).into(),
+                paste: false
+            })
+            .is_err()
+    );
+    assert!(
+        Writer::new(Vec::new())
+            .gui_client_input(&GuiClientInput::Key {
+                key: "x".into(),
+                code: "KeyX".into(),
+                modifiers: 16,
+                repeat: false,
+                pressed: true
+            })
+            .is_err()
+    );
+}

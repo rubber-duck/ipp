@@ -84,6 +84,13 @@ impl GuiRoutingCancellation {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum GuiPhysicalInput {
+    /// Client-managed key or committed text, fenced to its native focus.
+    Client {
+        /// Exact focused target and generation.
+        fence: crate::systems::gui::local::GuiTextFence,
+        /// Typed application input. Pointer events are routed from physical coordinates.
+        event: crate::systems::gui::local::GuiClientInput,
+    },
     /// Native edits retain the exact observed focus/value fence across asynchronous OS work.
     Text {
         /// Original native buffer fence.

@@ -256,9 +256,11 @@ Control handles issue scroll-to, scroll-by and scroll-to-index actions. `onScrol
 
 ## GUI kit
 
-`Button`, `TextField`, `Checkbox` and `Switch` own their entities, layout and native controls. Kit identities are optional; use explicit ids for external clients or reconnects. `Row`, `Column` and `Panel` fit their content height by default, while explicit dimensions and flex retain intentional fills. Row centers its children; flow containers accept `gap` and `alignItems`, and Toolbar supplies skin spacing. Individual child alignment and raw `layout` fields take precedence. Panel pads ordinary content; use `padding={0}` for a joined header or tab frame and PanelBody for its padded, spaced body. Named sizing and behavior props restore widget defaults when omitted; raw component declarations retain their last authored values. `fitWidth` and `fitHeight` select content sizing within available bounds.
+Kit widgets own ordinary entities and native controls. Their common layout props use World logical units; spacing props also accept skin-scaled roles such as `gap="compact"`, `gap="field"` and `padding="inset"`. Explicit raw `layout` fields take precedence. See the shared [layout interface](src/gui-kit/layout.tsx) for sizing and alignment, and [spacing roles](src/gui-kit/spacing.ts) for the token vocabulary.
 
-[`Form`, `Field` and `FormSection`](src/gui-kit/containers/form.tsx) compose fields, captions/helpers and titled groups without child margins. Form fields fill the available width unless explicitly sized. `useGuiKit().spacing` resolves label, field, section and container spacing from the skin's tokens. Container padding can differ from control padding; panel headers, bodies and scroll content share the container inset. Parent containers own the space between fields, while labelled controls own their internal caption gap; explicit `gap`, dimensions and raw `layout` fields win.
+`Row` and `Column` fit their content height and supply compact and field spacing respectively. Row centers its children without imposing a control height; Toolbar adds control-row sizing and label spacing. ActionRow places its spaced controls at the trailing edge; its `leading` slot holds status or descriptive content at the opposite edge. PanelFooter uses the same slots with compact vertical padding. OverlayStack overlaps children in one box. Explicit dimensions, flex, zero gaps and `fitWidth`/`fitHeight` express intentional sizing and connected surfaces.
+
+Panel is an unpadded frame. PanelHeader, PanelBody, PanelFooter and ScrollArea own their content insets; use `padding="inset"` on a Panel holding direct content. Fields fill available form width unless explicitly sized. Form, Field and FormSection compose labels, descriptions, errors and groups with shared presentation; TextField uses that same Field presentation. Dialog sections accept the shared layout props, and its actions use trailing placement. Popover's `contentWidth` sizes its floating content independently of the trigger's root `width`. Explicit dialog and popover widths and DataGrid column widths use logical units; only omitted defaults scale with the skin. TextField's `gap` controls spacing between its label, input, description and error; raw `layout.gap` takes precedence. Raw component declarations retain their last authored values when props are omitted; kit layout roots explicitly restore their own defaults.
 
 [`ScrollArea`](src/gui-kit/containers/scroll-area.tsx) fits short content and scrolls within available space or a `maxHeight`. It supplies content padding, form spacing and scrollbar clearance, hides bars when content fits, and shares an enclosing Panel's surface. Use `padding={0}` for flush content or `fitHeight={false}` for an intentional fill; ordinary ScrollView remains the low-level declaration.
 
@@ -273,17 +275,33 @@ Control handles issue scroll-to, scroll-by and scroll-to-index actions. `onScrol
 
 ```tsx
 import { useState } from "react";
-import { Panel, Button, Switch, TextField } from "@ipp/react/gui-kit";
+import {
+  Panel,
+  PanelBody,
+  Form,
+  ActionRow,
+  Button,
+  Switch,
+  TextField,
+} from "@ipp/react/gui-kit";
 
 // Render inside a SkinProvider with its receiving contract, skin and font.
 function Preferences() {
   const [enabled, setEnabled] = useState(false);
   const [name, setName] = useState("");
   return (
-    <Panel width={280} gap={8}>
-      <TextField label="Name" value={name} onChange={setName} />
-      <Switch checked={enabled} onCheckedChange={setEnabled}>Sync</Switch>
-      <Button disabled={!name}>Save</Button>
+    <Panel width={280}>
+      <PanelBody>
+        <Form>
+          <TextField label="Name" value={name} onChange={setName} />
+          <Switch checked={enabled} onCheckedChange={setEnabled}>
+            Sync
+          </Switch>
+        </Form>
+        <ActionRow>
+          <Button disabled={!name}>Save</Button>
+        </ActionRow>
+      </PanelBody>
     </Panel>
   );
 }
@@ -331,7 +349,7 @@ import {
 } from "@ipp/react/gui-kit";
 
 <GuiKit skin={cybertronSkin(contract)} contract={contract} font={assetRef("gui-font")} fontSize={16}>
-  <Panel id="nodes" padding={0} layout={{ width: 480, height: 360 }}>
+  <Panel id="nodes" layout={{ width: 480, height: 360 }}>
     <PanelHeader id="nodes/header" title="NODE STATUS">
       <WindowControls id="nodes/controls" onClose={close} />
     </PanelHeader>

@@ -597,6 +597,55 @@ impl<D: RenderDevice> RenderService<D> {
                     .draw_surface_bitmap(program, texture, mvp, &placement, &clip, &color)?;
                 stats.draw(2);
             }
+            CanvasPrimitive::Html {
+                image,
+                size,
+                ..
+            } => {
+                let texture = image
+                    .filter(|image| {
+                        scene
+                            .host
+                            .publication_web_image(scene.publication, *image)
+                            .is_some()
+                    })
+                    .and_then(|image| self.web_images.texture(image));
+                let Some(texture) = texture else {
+                    stats.failed_draw();
+                    self.surface_missing_draws += 1;
+                    self.inclusions.active.stale_image = true;
+                    return Ok(());
+                };
+                if self.surface_bitmap_program.is_none() {
+                    self.surface_bitmap_program = Some(self.device.borrow_mut().create_program(
+                        crate::services::render::embedded_shader!("shaders/surface_bitmap.vert"),
+                        crate::services::render::embedded_shader!("shaders/surface_bitmap.frag"),
+                    )?);
+                }
+                let placement = [
+                    style.position[0],
+                    style.position[1],
+                    size[0] * style.scale[0],
+                    size[1] * style.scale[1],
+                ];
+                let color = [
+                    style.color[0],
+                    style.color[1],
+                    style.color[2],
+                    style.color[3] * style.opacity,
+                ];
+                self.device.borrow_mut().draw_surface_bitmap(
+                    self.surface_bitmap_program
+                        .as_ref()
+                        .expect("bitmap program"),
+                    texture,
+                    mvp,
+                    &placement,
+                    &clip,
+                    &color,
+                )?;
+                stats.draw(2);
+            }
             CanvasPrimitive::Box {
                 ..
             } => {

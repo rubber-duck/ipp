@@ -68,6 +68,8 @@ python tools/ipp.py setup browser --with-deps
 python tools/ipp.py doctor --for cameras
 ```
 
+Browser scenarios target latest stable Chrome for Testing, resolved to an exact version and platform URL in the [toolchain pins](../../tools/pipeline/toolchains.json), using the existing pinned Playwright driver. `setup browser` installs that release into a user-level `ipp/chrome-for-testing` cache shared by worktrees; concurrent setup waits for one atomic installation, and warm setup verifies its receipt without network access. It preserves the downloaded archive for inspection or offline repair and never removes older releases during ordinary setup or worktree cleanup. Refresh the stable pin explicitly when Chrome advances. The shared launch options enable HTML-in-Canvas experimental features; capability-negative tests explicitly disable them. The [HTML-in-Canvas prototype](../../tests/rendering/HTML_CANVAS.md) records the actual API and acceleration requirements.
+
 Use `python3` if that is your platform's executable name. Python tools are installed in `.venv` and resolved directly; shell activation is unnecessary. The optional Blender setup uses its separate pinned release and wheel lock. `setup certificates --install-trust` explicitly installs development certificate trust. Ordinary builds/checks never install dependencies or change trust. Beads/Dolt remain optional for compilation; `doctor --coordination` checks their installed versions without opening the task database.
 
 Every public command supports `--help`, `--plan` and `--json`; build/test/check/regression also expose `--list`. Plans explain prerequisites and environments before executing anything. JSON output uses stdout; progress and child output use stderr. `--live` streams child output while retaining logs. Missing required environments stop execution before expensive builds and produce a failed prerequisite report.
@@ -191,6 +193,7 @@ Repeatable `--group` adds on-demand coverage to core, using the existing suites 
 | `gallery` | Published gallery, demo behavior or application assets |
 | `blender` | Addon packaging, export, streaming or Blender integration |
 | `gles` | Native GL device/presentation or shared rendering behavior affecting GLES |
+| `cef` | The isolated [native Chromium Surface prototype](../../tests/rendering/cef/README.md), standalone formatting/Clippy and shared-cache checks; requires Weston and hardware DMA-BUF import and is included by `--full` |
 | `matrix` | Instrumentation or renderer features, target contracts, generation, dependencies or distribution composition: all-features Clippy, Rust tests and WASM builds, the production debug WASM, both target contracts and every browser distribution with its contract identity |
 | `scaling` | Bulk mutation, hierarchy, restoration or command-streaming complexity |
 

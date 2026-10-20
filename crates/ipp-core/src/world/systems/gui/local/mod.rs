@@ -33,6 +33,7 @@ mod component;
 pub(in crate::world::systems) mod composites;
 pub(crate) mod controls;
 mod eligibility;
+mod input;
 mod interaction;
 mod queries;
 mod scroll;
@@ -52,6 +53,7 @@ pub use controls::{
     format_number, parse_number,
 };
 pub(in crate::world::systems::gui) use eligibility::refresh_eligibility;
+pub use input::{GUI_CLIENT_MODIFIERS, GUI_CLIENT_TEXT_MAX_BYTES, GuiClientInput, GuiInputTarget};
 pub(in crate::world::systems::gui) use interaction::GuiPointerFeedback;
 pub(in crate::world::systems) use interaction::{GUI_MAX_FOCUS_PARTS, GuiPartInteraction};
 pub use interaction::{

@@ -1,3 +1,13 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A data grid: a composition, not a control. A header row of small accent
@@ -38,13 +48,7 @@ import type { GuiControlHandle, GuiControlRef } from "../../gui/control-ref.js";
 import { EmptyState } from "../feedback/empty-state.js";
 import { usePanelSurface } from "./panel.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { Separator } from "../separator.js";
 import { Icon, TextLine, textWidth } from "../text.js";
 
@@ -52,7 +56,7 @@ export interface DataGridColumn {
   readonly key: string;
   readonly title: string;
   /**
-   * Width between the column's lines at the tokens' `em`; a column without a
+   * Logical width between the column's lines; a column without a
    * width shares the rest by `flex`, 1 by default.
    */
   readonly width?: number;
@@ -77,7 +81,7 @@ export interface DataGridSort {
   readonly direction: "ascending" | "descending";
 }
 
-interface DataGridCommonProps {
+interface DataGridCommonProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -98,7 +102,6 @@ interface DataGridCommonProps {
   readonly footer?: string;
   /** The empty body's message; No records by default. */
   readonly emptyText?: string;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Every row, held in the body or, with `scroll`, scrolled in it. */
@@ -122,10 +125,10 @@ export type DataGridProps = DataGridCommonProps &
 const SORT_GAP_INSETS = 1 / 4;
 
 /** Layout fields that size a column by its width or flex. */
-function columnSize(kit: GuiKitScope, column: DataGridColumn) {
+function columnSize(column: DataGridColumn) {
   return column.width === undefined
     ? { flex: column.flex ?? 1 }
-    : { width: kit.unit(column.width) };
+    : { width: column.width };
 }
 
 /** The grid's geometry in the World's units. */
@@ -142,7 +145,8 @@ function geometry(kit: GuiKitScope, scrolling: boolean) {
   };
 }
 
-export function DataGrid(props: DataGridProps) {
+export function DataGrid(inputProps: DataGridProps) {
+  const props = useGuiKitLayout(inputProps);
   const {
     id: providedId,
     layer = 0,
@@ -173,7 +177,7 @@ export function DataGrid(props: DataGridProps) {
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         {...(body === undefined || layout?.flex
           ? {}
@@ -225,6 +229,7 @@ export function DataGrid(props: DataGridProps) {
         </Entity>
         {footer !== undefined && (
           <Row
+            gap={0}
             id={`${id}/footer`}
             height={kit.unit(t.denseRow)}
             layout={{ padding_left: g.gutter + g.inset }}
@@ -253,7 +258,6 @@ interface RowContext {
 function ColumnLines({
   id: providedId,
   columns,
-  kit,
   g,
 }: {
   readonly id: string;
@@ -270,7 +274,7 @@ function ColumnLines({
         {columns.map((column, index) => (
           <Entity key={column.key} id={`${id}/${column.key}`}>
             <PresentationGate open />
-            <Layout kind={LAYOUT_ROW} {...columnSize(kit, column)} />
+            <Layout kind={LAYOUT_ROW} {...columnSize(column)} />
             {(index < columns.length - 1 || g.bar > 0) && (
               <Children>
                 <Entity id={`${id}/${column.key}/space`}>
@@ -487,7 +491,7 @@ function Cells({
             return (
               <Entity key={column.key} id={cell}>
                 <PresentationGate open />
-                <Layout kind={LAYOUT_STACK} {...columnSize(kit, column)} />
+                <Layout kind={LAYOUT_STACK} {...columnSize(column)} />
                 <Children>
                   {at(editingCell, column) ? (
                     <CellEditor

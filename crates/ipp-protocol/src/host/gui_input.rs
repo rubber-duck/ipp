@@ -19,6 +19,13 @@ mod tests;
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum GuiPhysicalRequest {
+    /// Client-managed key/text input with an exact native focus fence.
+    Client {
+        context: u64,
+        target: crate::world::gui::GuiTarget,
+        generation: u64,
+        event: ipp_core::systems::gui::local::GuiClientInput,
+    },
     Text {
         context: u64,
         target: crate::world::gui::GuiTarget,
@@ -116,6 +123,30 @@ impl Reader<'_> {
             at: 0,
         };
         let request = match reader.u8()? {
+            GUI_PHYSICAL_REQUEST_CLIENT => {
+                let context = reader.u64()?;
+                let target = crate::world::gui::GuiTarget {
+                    world: reader.world_reference()?,
+                    entity: ipp_core::EntityId::from_bits(reader.u64()?),
+                    component: reader.u16()?,
+                    incarnation: reader.u64()?,
+                };
+                let generation = reader.u64()?;
+                let event = reader.gui_client_input()?;
+                if !matches!(
+                    event,
+                    ipp_core::systems::gui::local::GuiClientInput::Key { .. }
+                        | ipp_core::systems::gui::local::GuiClientInput::Text { .. }
+                ) {
+                    return Err(ProtocolError::Malformed("physical client input kind"));
+                }
+                GuiPhysicalRequest::Client {
+                    context,
+                    target,
+                    generation,
+                    event,
+                }
+            }
             GUI_PHYSICAL_REQUEST_TEXT => GuiPhysicalRequest::Text {
                 context: reader.u64()?,
                 target: crate::world::gui::GuiTarget {
@@ -311,6 +342,28 @@ impl Writer {
                         writer.u64(blocker.incarnation)?;
                     }
                 }
+                GuiPhysicalRequest::Client {
+                    context,
+                    target,
+                    generation,
+                    event,
+                } => {
+                    if !matches!(
+                        event,
+                        ipp_core::systems::gui::local::GuiClientInput::Key { .. }
+                            | ipp_core::systems::gui::local::GuiClientInput::Text { .. }
+                    ) {
+                        return Err(ProtocolError::Malformed("physical client input kind"));
+                    }
+                    writer.u8(GUI_PHYSICAL_REQUEST_CLIENT)?;
+                    writer.u64(*context)?;
+                    writer.world_reference(target.world)?;
+                    writer.u64(target.entity.to_bits())?;
+                    writer.u16(target.component)?;
+                    writer.u64(target.incarnation)?;
+                    writer.u64(*generation)?;
+                    writer.gui_client_input(event)?;
+                }
                 GuiPhysicalRequest::Close(context) => {
                     writer.u8(GUI_PHYSICAL_REQUEST_CLOSE)?;
                     writer.u64(*context)?;
@@ -322,7 +375,10 @@ impl Writer {
                     writer.u8(GUI_PHYSICAL_REQUEST_EVENT)?;
                     writer.u64(*context)?;
                     match input {
-                        GuiPhysicalInput::Text {
+                        GuiPhysicalInput::Client {
+                            ..
+                        }
+                        | GuiPhysicalInput::Text {
                             ..
                         } => {
                             return Err(ProtocolError::Malformed(
@@ -580,6 +636,7 @@ impl Writer {
         self.u32(state.selection[0])?;
         self.u32(state.selection[1])?;
         self.u8(u8::from(state.masked))?;
+        self.u8(u8::from(state.client_input))?;
         self.u8(u8::from(state.composition.is_some()))?;
         if let Some(composition) = &state.composition {
             self.string(&composition.text)?;

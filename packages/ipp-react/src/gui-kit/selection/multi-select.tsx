@@ -1,3 +1,4 @@
+import { useGuiKitLayout, type GuiKitLayoutProps } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A multi-select: a dropdown whose options toggle. The trigger summarises
@@ -15,14 +16,13 @@ import { useEntityId } from "../../scope/identity.js";
  * explicit `layout.width`, or its default width.
  */
 import { useLayoutEffect, useRef, useState } from "react";
-import type { GuiKitLayout } from "../layout.js";
 import { useGuiKit } from "../kit.js";
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen, type OverlayOpenProps } from "../overlays/overlay.js";
 import { SelectList, SelectTrigger, selectTextRoom } from "./select-trigger.js";
 import { textWidth } from "../text.js";
 
-export interface MultiSelectProps extends OverlayOpenProps {
+export interface MultiSelectProps extends OverlayOpenProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
@@ -41,8 +41,6 @@ export interface MultiSelectProps extends OverlayOpenProps {
   readonly disabled?: boolean;
   /** Rows the list shows before it scrolls; six by default. */
   readonly maxRows?: number;
-  /** Layout of the trigger, such as its `width`; 240 at the `em` by default. */
-  readonly layout?: GuiKitLayout;
 }
 
 /**
@@ -58,20 +56,21 @@ export function selectionSummary(
   return textWidth(joined, size) <= room ? joined : `${labels.length} selected`;
 }
 
-export function MultiSelect({
-  id: providedId,
-  layer = 0,
-  options,
-  value,
-  defaultValue = [],
-  onChange,
-  placeholder = "Select",
-  label,
-  disabled = false,
-  maxRows,
-  layout,
-  ...open
-}: MultiSelectProps) {
+export function MultiSelect(props: MultiSelectProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    options,
+    value,
+    defaultValue = [],
+    onChange,
+    placeholder = "Select",
+    label,
+    disabled = false,
+    maxRows,
+    layout,
+    ...open
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const overlay = useOverlayOpen(open);

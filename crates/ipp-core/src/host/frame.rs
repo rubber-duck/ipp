@@ -93,6 +93,7 @@ impl HostRuntime {
                     &mut self.io,
                     &mut self.data,
                     &mut self.topology,
+                    &mut self.web_content,
                 );
             access.frame_context = Some(&context);
             let result = access.evaluate_frame(delta, admitted);
@@ -152,6 +153,7 @@ impl HostRuntime {
                 chunks: BTreeMap::new(),
                 outputs: BTreeMap::new(),
                 resources: BTreeSet::new(),
+                web_images: BTreeSet::new(),
             };
             let access = self
                 .worlds
@@ -162,6 +164,7 @@ impl HostRuntime {
                     &mut self.io,
                     &mut self.data,
                     &mut self.topology,
+                    &mut self.web_content,
                 );
             if let Some(fault) = access.fault() {
                 report.publication_errors.insert(world, fault.to_string());
@@ -186,6 +189,7 @@ impl HostRuntime {
                     continue;
                 }
             };
+            let web_lease = self.web_content.retain_publication(&builder.web_images);
             let publication = WorldPublication {
                 id,
                 world: identity,
@@ -195,12 +199,14 @@ impl HostRuntime {
                 chunks: builder.chunks,
                 outputs: builder.outputs,
                 resources: builder.resources,
+                web_images: builder.web_images,
             };
             self.publications.completed.insert(
                 id,
                 RetainedPublication {
                     data: publication,
                     lease,
+                    web_lease,
                     available: true,
                     readers: std::rc::Rc::default(),
                 },

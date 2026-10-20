@@ -9,6 +9,11 @@ pub struct GuiLocalCommand {
 }
 
 pub(super) enum GuiLocalOperation {
+    ClientInput {
+        binding: super::super::observations::GuiObservationSubscriptionId,
+        fence: Option<GuiTextFence>,
+        event: GuiClientInput,
+    },
     TextCaret {
         offset: u32,
         extend: bool,
@@ -61,6 +66,27 @@ pub(super) enum GuiLocalOperation {
 }
 
 impl GuiLocalCommand {
+    /// Ordered client input with an optional native focus fence.
+    pub fn client_input(
+        input: GuiInputCommand,
+        binding: super::super::observations::GuiObservationSubscriptionId,
+        fence: Option<GuiTextFence>,
+        event: GuiClientInput,
+    ) -> Result<Self, GuiInputError> {
+        if event.validate().is_err() {
+            input.reject(GuiInputError::Unavailable);
+            return Err(GuiInputError::Unavailable);
+        }
+        Self::new(
+            input,
+            GuiLocalOperation::ClientInput {
+                binding,
+                fence,
+                event,
+            },
+        )
+    }
+
     /// Pointer selection uses the completed label metrics, then validates local focus at commit.
     pub fn text_caret(
         input: GuiInputCommand,
@@ -372,6 +398,10 @@ impl GuiLocalCommand {
                 edit,
                 ..
             } => edit.retained_bytes(),
+            GuiLocalOperation::ClientInput {
+                event,
+                ..
+            } => event.retained_bytes(),
             _ => 0,
         };
         let bytes = std::mem::size_of::<Self>()

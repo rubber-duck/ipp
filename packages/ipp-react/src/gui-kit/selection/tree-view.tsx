@@ -1,3 +1,14 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A tree of the application's nodes in a list frame. Each visible node is a
@@ -51,14 +62,7 @@ import {
 } from "../choice.js";
 import { GUI_KIT_ICONS } from "../icons.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { TextLine } from "../text.js";
 
 export interface TreeNode {
@@ -82,7 +86,7 @@ export interface TreeViewHandle {
   key(key: GuiPhysicalKey): boolean;
 }
 
-export interface TreeViewProps extends ChoiceProps {
+export interface TreeViewProps extends ChoiceProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the frame; rows extend it with their keys. */
@@ -93,7 +97,6 @@ export interface TreeViewProps extends ChoiceProps {
   readonly defaultExpanded?: readonly string[];
   readonly onExpandedChange?: (expanded: readonly string[]) => void;
   readonly ref?: Ref<TreeViewHandle>;
-  readonly layout?: GuiKitLayout;
 }
 
 /** One visible row: its node, depth and neighbours in the hierarchy. */
@@ -143,17 +146,18 @@ function geometry(kit: GuiKitScope) {
   };
 }
 
-export function TreeView({
-  id: providedId,
-  layer = 0,
-  nodes,
-  expanded,
-  defaultExpanded = [],
-  onExpandedChange,
-  ref,
-  layout,
-  ...props
-}: TreeViewProps) {
+export function TreeView(inputProps: TreeViewProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    nodes,
+    expanded,
+    defaultExpanded = [],
+    onExpandedChange,
+    ref,
+    layout,
+    ...props
+  } = useGuiKitLayout(inputProps);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
@@ -218,7 +222,7 @@ export function TreeView({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout kind={LAYOUT_STACK} {...layout} />
+      <KitLayout kind={LAYOUT_STACK} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
       <ScrollView
         bar_thickness={scrolling ? g.bar : 0}

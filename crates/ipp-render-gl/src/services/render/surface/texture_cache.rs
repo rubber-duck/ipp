@@ -67,7 +67,8 @@
 //! owns ([`SURFACE_CACHE_BUDGET_BYTES`]); hosts do not configure it. GL exposes no
 //! memory size, so the budget is a documented heuristic while the device's target
 //! limit bounds each image's dimensions. Surfaces presented cached
-//! this frame are admitted in entity order, images already at their size first;
+//! this frame are admitted by clipped screen coverage times authored priority,
+//! with ties broken by World and entity;
 //! a Surface that does not fit presents directly as a fallback. Images not
 //! presented this frame are then evicted, least recently presented first with
 //! ties broken by World and entity. Recoverable allocation or repaint failures
@@ -82,15 +83,13 @@ use crate::RenderError;
 use ipp_core::{EntityId, SurfaceCachePolicy, WorldId, services::asset_management::AssetKey};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Context-wide byte budget for resident Surface cache images: 32 MiB, two images at
-/// the largest cache dimension or many smaller panels, a small share of the memory
-/// of any device that runs WebGL 2 or GLES 3.
-pub const SURFACE_CACHE_BUDGET_BYTES: usize = 32 << 20;
+/// Context-wide byte budget for required and optional Surface images: 128 MiB.
+/// Asset textures and output/depth buffers have separate ownership and accounting.
+pub const SURFACE_CACHE_BUDGET_BYTES: usize = 128 << 20;
 
-/// Largest cache image dimension, further capped by the device limit. At 2048
-/// texels one image stays within 16 MiB, half of [`SURFACE_CACHE_BUDGET_BYTES`],
-/// so a single oversized Surface cannot claim the whole budget; the WebGL bridge
-/// reports its raw device limit and this service applies the cap for every device.
+/// Largest cache image dimension, further capped by the device limit. A full
+/// 2048-square RGBA image uses 16 MiB. This is a ceiling, never a requested size:
+/// projected physical-pixel demand determines the active raster dimensions.
 pub const SURFACE_CACHE_MAX_DIMENSION: u32 = 2048;
 
 /// Host seconds without cached presentation after which an image is released.
@@ -213,6 +212,8 @@ pub(crate) struct SurfaceCacheInput {
     pub policy: SurfaceCachePolicy,
     /// Projected device-pixel demand, with uniform content density.
     pub pixel_demand: [f64; 2],
+    /// Fraction of the root screen covered, before occlusion.
+    pub screen_coverage: f64,
     pub paint_revision: u64,
     pub resource_revision: u64,
     /// Live GUI interaction on the Surface's root.
@@ -312,6 +313,7 @@ struct SurfaceCacheEntry<T> {
     // Frame-local selection.
     action: SurfaceCacheAction,
     desired: [u32; 2],
+    allocation_score: f64,
     desired_capacity: [u32; 2],
     revisions: (u64, u64),
 }
@@ -338,6 +340,7 @@ impl<T> SurfaceCacheEntry<T> {
             reuses: 0,
             action: SurfaceCacheAction::Direct,
             desired: [0, 0],
+            allocation_score: 0.0,
             desired_capacity: [0, 0],
             revisions: (0, 0),
         }
@@ -477,6 +480,8 @@ impl<T> SurfaceTextureCache<T> {
             .or_insert_with(|| SurfaceCacheEntry::new(input.policy.initial_band(input.distance)));
 
         entry.live = stamp;
+        entry.allocation_score =
+            input.screen_coverage.clamp(0.0, 1.0) * f64::from(input.policy.allocation_priority);
         entry.band = input.policy.band(input.distance, entry.band);
         entry.revisions = (input.paint_revision, input.resource_revision);
         let shown = std::mem::replace(&mut entry.shown, false);
@@ -660,15 +665,13 @@ impl<T> SurfaceTextureCache<T> {
             }
         }
 
-        // Images already at their size first, each group in entity order.
+        // Larger visible coverage wins, including authored priority. Residency
+        // must not lock a smaller Surface ahead of one revealed by camera motion.
         self.order.clear();
         for (key, entry) in &self.entries {
             if entry.live == stamp && entry.cached() {
-                let grows = entry
-                    .image
-                    .as_ref()
-                    .is_none_or(|image| image.size != entry.desired);
-                self.order.push((grows, 0, *key));
+                self.order
+                    .push((false, u64::MAX - entry.allocation_score.to_bits(), *key));
             }
         }
         self.order.sort_unstable();

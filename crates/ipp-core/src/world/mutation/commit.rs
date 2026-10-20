@@ -36,6 +36,7 @@ impl WorldContext<'_> {
             None,
             self.asset_acquisition,
             self.data,
+            self.web_content,
             true,
         ) {
             crate::diagnostic!(
@@ -54,6 +55,7 @@ impl WorldContext<'_> {
             None,
             self.asset_acquisition,
             self.data,
+            self.web_content,
             false,
         )
     }
@@ -65,6 +67,7 @@ pub(in crate::world) fn commit_components(
     mut current: Option<&mut dyn systems::System>,
     assets: &mut crate::services::asset_management::AssetManagementService,
     data: &mut crate::services::data::DataService,
+    web_content: &mut crate::services::web_content::WebContentService,
     evaluated: bool,
 ) -> Result<(), ErrorReason> {
     #[cfg(feature = "instrumentation")]
@@ -104,6 +107,7 @@ pub(in crate::world) fn commit_components(
             staged: &mut staged,
             assets,
             data,
+            web_content,
             evaluated,
             cleanup: &mut cleanup,
         });
@@ -123,6 +127,7 @@ pub(in crate::world) fn commit_components(
                 staged: &mut staged,
                 assets,
                 data,
+                web_content,
                 evaluated,
                 cleanup: &mut cleanup,
             });
@@ -219,6 +224,7 @@ pub(in crate::world) fn commit_components(
             staged: &mut staged,
             assets,
             data,
+            web_content,
             evaluated,
             cleanup: &mut cleanup,
         });
@@ -276,6 +282,7 @@ impl systems::SystemRuntimeAccess<'_> {
             Some(current),
             self.asset_acquisition,
             self.data,
+            self.web_content,
             true,
         )
     }
@@ -334,6 +341,7 @@ impl systems::SystemRuntimeAccess<'_> {
             Some(current),
             self.asset_acquisition,
             self.data,
+            self.web_content,
             true,
         )
     }
@@ -359,6 +367,7 @@ impl systems::SystemRuntimeAccess<'_> {
             system.before_numeric_update(&mut systems::SystemNumericContext {
                 world_data: self.world,
                 changed,
+                web_content: self.web_content,
             });
         });
     }

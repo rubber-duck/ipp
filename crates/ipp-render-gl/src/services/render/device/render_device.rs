@@ -615,6 +615,32 @@ pub trait RenderDevice: 'static {
         pixels: &[u8],
     ) -> Result<(), RenderError>;
 
+    /// Fence commands already submitted to this context and flush their submission.
+    /// The opaque name is valid only on its creating device and must not be reused.
+    fn create_completion_fence(&mut self) -> Result<u64, RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU completion fences unavailable".into(),
+        ))
+    }
+
+    /// Query completion without waiting for the GPU or advancing a frame.
+    fn poll_completion_fence(&mut self, _fence: u64) -> Result<bool, RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU completion fences unavailable".into(),
+        ))
+    }
+
+    /// Release a fence through its creating device; context loss discards its handle.
+    fn delete_completion_fence(&mut self, _fence: u64) {}
+
+    /// Complete submitted work before live context teardown releases its storage.
+    /// This may block; ordinary frame retirement must use asynchronous fences.
+    fn finish_submitted_work(&mut self) -> Result<(), RenderError> {
+        Err(RenderError::RenderDevice(
+            "GPU completion unavailable".into(),
+        ))
+    }
+
     /// Whether this device implements bounded asynchronous texture staging.
     fn texture_readback_supported(&self) -> bool {
         false

@@ -1,3 +1,4 @@
+import { HtmlSources, bindHtmlSources } from "./html-content.js";
 import type {
   SharedBufferPublication,
   WorkerBufferSource,
@@ -19,6 +20,8 @@ import { validateOptions } from "./client.js";
 export interface WorkerOptions {
   timeoutMs?: number;
   canvas?: OffscreenCanvas;
+  /** DOM owner of the transferred canvas, for static HTML capture. */
+  htmlCanvas?: HTMLCanvasElement;
   logLevel?: LogLevel;
   /** Unused-asset cache target in bytes; omitted keeps the Host default (64 MiB). */
   assetCacheBytes?: number;
@@ -121,6 +124,16 @@ export function createWorkerHost(
         reject(error);
       }
     });
+  const html = new HtmlSources(options.htmlCanvas, (message, transfer = []) =>
+    control.port1.postMessage(message, transfer),
+  );
+  const bindHtml = <T extends object>(target: T): T =>
+    bindHtmlSources(target, async (content, fail) => {
+      await ready;
+      if (failure || stopped || closing)
+        throw failure ?? new Error("Worker Host is closed");
+      return html.register(content, fail);
+    });
   let nextConnection = 1n;
   let stopped = false;
   let failure: Error | undefined;
@@ -143,6 +156,7 @@ export function createWorkerHost(
   const terminate = () => {
     if (stopped) return;
     stopped = true;
+    html.close();
     const closedError = failure ?? new Error("Worker Host closed");
     rejectReady(closedError);
     for (const reply of sourceReplies.values()) reply.reject(closedError);
@@ -159,6 +173,7 @@ export function createWorkerHost(
   const fail = (error: Error) => {
     if (stopped) return;
     failure ??= error;
+    html.close();
     for (const record of [...records.values()]) record.transport?.fail(error);
     diagnostics?.close(error);
     rejectReady(error);
@@ -177,6 +192,7 @@ export function createWorkerHost(
       return;
     }
     try {
+      if (html.receive(data as Record<string, unknown>)) return;
       if (diagnostics?.receive(data as Record<string, unknown>)) return;
       if (data.type === "ready") {
         resolveReady();
@@ -286,7 +302,7 @@ export function createWorkerHost(
         timeoutMs,
       );
       records.get(endpoint.connection)!.transport = transport;
-      return transport;
+      return bindHtml(bindWorkerPorts(transport, () => owner.openPort()));
     },
     close() {
       if (closing) return closing;
@@ -334,7 +350,7 @@ export function createWorkerHost(
     terminate();
     throw error;
   }
-  return owner;
+  return bindHtml(owner);
 }
 
 /** Convenience owner of one private Host and its initial physical connection. */
@@ -346,31 +362,62 @@ export function workerTransport(
 ): MessageTransport {
   const owner = createWorkerHost(workerUrl, wasmUrl, maxMessageBytes, options);
   const transport = owner.connect();
-  return bindPresentation(
-    {
-      start(events) {
-        transport.start({
-          ...events,
-          error(error) {
-            events.error(error);
-            void owner.close().catch(() => {});
+  return bindHtmlSources(
+    bindWorkerPorts(
+      bindPresentation(
+        {
+          start(events) {
+            transport.start({
+              ...events,
+              error(error) {
+                events.error(error);
+                void owner.close().catch(() => {});
+              },
+              closed() {
+                events.closed();
+                void owner.close().catch(() => {});
+              },
+            });
           },
-          closed() {
-            events.closed();
-            void owner.close().catch(() => {});
+          send: (bytes) => transport.send(bytes),
+          sendParts: (parts) => transport.sendParts!(parts),
+          async close() {
+            try {
+              await transport.close();
+            } finally {
+              await owner.close();
+            }
           },
-        });
-      },
-      send: (bytes) => transport.send(bytes),
-      sendParts: (parts) => transport.sendParts!(parts),
-      async close() {
-        try {
-          await transport.close();
-        } finally {
-          await owner.close();
-        }
-      },
-    } satisfies MessageTransport,
-    presentationOf(transport),
+        } satisfies MessageTransport,
+        presentationOf(transport),
+      ),
+      () => owner.openPort(),
+    ),
+    owner,
   );
+}
+
+// Generated clients and package consumers may load separate copies of this module.
+const WORKER_PORTS = Symbol.for("ipp.worker-ports");
+
+/** Carry local Host connection ownership through client wrappers. */
+export function bindWorkerPorts<T extends object>(
+  target: T,
+  source: object | (() => WorkerEndpoint),
+): T {
+  const open =
+    typeof source === "function"
+      ? source
+      : (source as { [WORKER_PORTS]?: () => WorkerEndpoint })[WORKER_PORTS];
+  if (open) Object.defineProperty(target, WORKER_PORTS, { value: open });
+  return target;
+}
+
+/** Open a normal protocol endpoint on the same browser Host as this client. */
+export function openWorkerPort(client: object): WorkerEndpoint {
+  const open = (client as { [WORKER_PORTS]?: () => WorkerEndpoint })[
+    WORKER_PORTS
+  ];
+  if (!open) throw new Error("This client does not own a local Worker Host");
+  return open();
 }

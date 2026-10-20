@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Activity of unknown duration beside readable status text: a ring the size
@@ -12,30 +20,25 @@ import { useEntityId } from "../../scope/identity.js";
  * hugs its text.
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Style, Font, Layout } from "../../gui/components.js";
+import { Style, Font } from "../../gui/components.js";
 import { Arc, TURNING_SWEEP } from "../arc.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_ROW, Strut, type GuiKitLayout } from "../layout.js";
+
 import { TextLine, lineWidth } from "../text.js";
 
-export interface SpinnerProps {
+export interface SpinnerProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
   /** The status text, such as Preparing…. */
   readonly label: string;
-  readonly layout?: GuiKitLayout;
 }
 
 /** Ring thickness: an eighth of the icon-sized ring, as the small progress ring. */
 const THICKNESS = 3;
 
-export function Spinner({
-  id: providedId,
-  layer = 0,
-  label,
-  layout,
-}: SpinnerProps) {
+export function Spinner(props: SpinnerProps) {
+  const { id: providedId, layer = 0, label, layout } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -44,7 +47,7 @@ export function Spinner({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         width={kit.unit(t.icon + gap) + lineWidth(label, kit.typeSize("body"))}
         height={kit.unit(t.icon)}

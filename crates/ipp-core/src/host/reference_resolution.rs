@@ -152,6 +152,7 @@ impl HostRuntime {
                 &mut self.io,
                 &mut self.data,
                 &mut self.topology,
+                &mut self.web_content,
             );
             context.publications = Some(&self.publications);
             return Some(context);
@@ -175,6 +176,7 @@ impl HostRuntime {
             &mut self.io,
             &mut self.data,
             &mut self.topology,
+            &mut self.web_content,
         );
         context.reference_worlds = Some(ReferenceWorlds(foreign));
         context.publications = Some(&self.publications);

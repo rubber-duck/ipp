@@ -48,6 +48,7 @@ fn policy() -> SurfaceCachePolicy {
     SurfaceCachePolicy {
         direct_distance: 4.0,
         resolution_scale: 1.0,
+        allocation_priority: 1.0,
         max_refresh_hz: 10.0,
         max_texture_size: 0,
         force_cache: false,
@@ -63,6 +64,7 @@ fn input(index: u64, distance: f32, paint: u64, resource: u64) -> SurfaceCacheIn
         entity: entity(index),
         policy: policy(),
         pixel_demand: [104.0, 52.0],
+        screen_coverage: 0.1,
         paint_revision: paint,
         resource_revision: resource,
         interaction: false,
@@ -421,7 +423,7 @@ fn culled_surfaces_do_no_work_and_repaint_stale_content_on_return() {
 }
 
 #[test]
-fn budget_fallback_admits_entities_in_order() {
+fn equal_coverage_budget_fallback_admits_entities_in_order() {
     let mut store = Store::new();
     store.cache.set_budget(2 * 4 * 104 * 52);
     let inputs = [
@@ -440,6 +442,30 @@ fn budget_fallback_admits_entities_in_order() {
     // A stable over-budget set does not churn allocations.
     assert_eq!(store.frame(0.1, &inputs), counts(0, 2, 1, 1, 0));
     assert_eq!(store.targets.creates, 2);
+}
+
+#[test]
+fn coverage_and_priority_changes_replace_the_resident_optional_image() {
+    let mut store = Store::new();
+    store.cache.set_budget(4 * 104 * 52);
+    let mut inputs = [input(1, 5.0, 1, 1), input(2, 5.0, 1, 1)];
+    inputs[0].screen_coverage = 0.4;
+    inputs[1].screen_coverage = 0.2;
+    store.frame(0.0, &inputs);
+    assert_eq!(store.diagnostic(1).size[0], 104);
+    assert_eq!(store.diagnostic(2).size[0], 0);
+
+    inputs[0].screen_coverage = 0.2;
+    inputs[1].screen_coverage = 0.4;
+    store.frame(0.1, &inputs);
+    assert_eq!(store.diagnostic(1).size[0], 0);
+    assert_eq!(store.diagnostic(2).size[0], 104);
+
+    inputs[0].policy.allocation_priority = 3.0;
+    store.frame(0.2, &inputs);
+    assert_eq!(store.diagnostic(1).size[0], 104);
+    assert_eq!(store.diagnostic(2).size[0], 0);
+    assert_eq!(store.frame(0.3, &inputs).allocations, 0);
 }
 
 #[test]

@@ -13,6 +13,7 @@ import tomllib
 import urllib.request
 
 from . import blender_addon
+from .browser import install_browser
 from .environment import development_python
 from .model import ROOT
 from .processes import blender, node, npm, run
@@ -45,15 +46,16 @@ def setup(args: list[str]) -> None:
             ]
         )
     elif name == "browser":
-        run(
-            [
-                node(),
-                "node_modules/playwright/cli.js",
-                "install",
-                *(["--with-deps"] if "--with-deps" in flags else []),
-                "chromium",
-            ]
-        )
+        if "--with-deps" in flags:
+            run(
+                [
+                    node(),
+                    "node_modules/playwright/cli.js",
+                    "install-deps",
+                    "chromium",
+                ]
+            )
+        install_browser()
     elif name == "certificates":
         blender_addon.main(["certificate", *flags])
     elif name == "blender":

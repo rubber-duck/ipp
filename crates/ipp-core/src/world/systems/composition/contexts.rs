@@ -232,6 +232,7 @@ pub struct SystemCommitContext<'a> {
     pub(in crate::world) staged: &'a mut crate::world::WorldMutationState,
     pub(in crate::world) assets: &'a mut crate::services::asset_management::AssetManagementService,
     pub(in crate::world) data: &'a mut crate::services::data::DataService,
+    pub(in crate::world) web_content: &'a mut crate::services::web_content::WebContentService,
     pub(in crate::world) evaluated: bool,
     pub(in crate::world) cleanup: &'a mut Vec<(crate::EntityId, crate::ComponentValue)>,
 }
@@ -304,6 +305,7 @@ impl SystemCommitContext<'_> {
 pub struct SystemNumericContext<'a> {
     pub(in crate::world) world_data: &'a mut WorldSimulationState,
     pub(in crate::world) changed: &'a [(crate::EntityId, u16)],
+    pub(in crate::world) web_content: &'a mut crate::services::web_content::WebContentService,
 }
 
 impl SystemNumericContext<'_> {
@@ -412,6 +414,7 @@ pub struct SystemRuntimeAccess<'a> {
         &'a mut crate::services::asset_management::AssetManagementService,
     pub(in crate::world) io: &'a mut crate::services::io::IoService,
     pub(in crate::world) data: &'a mut crate::services::data::DataService,
+    pub(in crate::world) web_content: &'a mut crate::services::web_content::WebContentService,
     pub(in crate::world) topology: &'a mut crate::host::attachments::topology::HostTopology,
     pub(in crate::world) frame_context: Option<&'a crate::WorldFrameContext>,
     pub(in crate::world) reference_worlds:

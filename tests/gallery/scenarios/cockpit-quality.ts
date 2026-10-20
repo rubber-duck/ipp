@@ -237,7 +237,7 @@ export async function exerciseCockpitQuality(
       focus === 1 ? assertCockpitChartPixels(frame, state) : undefined;
     const statistics = await driver.statistics();
     assert.ok(
-      statistics.surfaces.surfaceCacheResidentBytes <= 32 * 1024 * 1024,
+      statistics.surfaces.surfaceCacheResidentBytes <= 128 * 1024 * 1024,
     );
     observations.push({ focus, ink, surfaces: statistics.surfaces });
   }

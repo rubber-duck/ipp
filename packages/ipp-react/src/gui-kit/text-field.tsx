@@ -2,17 +2,17 @@ import { useEntityId } from "../scope/identity.js";
 import { PresentationGate, Children, Entity } from "../components.js";
 import { TextInput, type TextInputProps } from "../gui/controls.js";
 import { Behavior, Font, Layout, Style } from "../gui/components.js";
-import { useFormLayout } from "./containers/form.js";
+import { Field, useFormLayout } from "./containers/form.js";
 import { useGuiKit } from "./kit.js";
 import {
   LAYOUT_COLUMN,
   LAYOUT_LEAF,
-  layoutFields,
+  useLayoutFields,
   Row,
   type GuiKitLayoutProps,
 } from "./layout.js";
-import { TextLine } from "./text.js";
 import { useTextValue } from "./values/text-value.js";
+import type { GuiKitSpace } from "./spacing.js";
 
 export interface TextFieldProps
   extends Omit<
@@ -38,6 +38,9 @@ export interface TextFieldProps
   readonly onChange?: (value: string) => void;
   readonly label?: string;
   readonly error?: string;
+  readonly description?: string;
+  /** Spacing between the label, input, description and error. Raw layout.gap wins. */
+  readonly gap?: GuiKitSpace;
   readonly disabled?: boolean;
   readonly layer?: number;
 }
@@ -48,6 +51,7 @@ export function TextField({
   defaultValue = "",
   onChange,
   label,
+  description,
   error,
   disabled = false,
   layer = 0,
@@ -69,21 +73,23 @@ export function TextField({
   padding,
   margin,
   clip,
+  gap,
   ...control
 }: TextFieldProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const inForm = useFormLayout();
   const text = useTextValue(value, defaultValue, onChange, ref);
+  const { gap: rawGap, ...rootLayout } = layout ?? {};
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
-        {...layoutFields(
+        {...useLayoutFields(
           {
-            layout,
+            layout: rootLayout,
             width,
             height,
             minWidth,
@@ -103,45 +109,47 @@ export function TextField({
             width:
               inForm || (layout?.flex ?? flex ?? 0) > 0 ? -1 : kit.unit(240),
             fit_height: true,
-            gap: kit.spacing.label,
           },
         )}
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Behavior enabled={!disabled} />
       <Children>
-        {label !== undefined && (
-          <TextLine
-            id={`${id}/label`}
-            text={label}
-            tone={disabled ? "neutral" : "accent"}
-          />
-        )}
-        <Row id={`${id}/row`} height={kit.unit(kit.tokens.controlHeight)}>
-          <Entity id={`${id}/input`}>
-            <PresentationGate open />
-            <Layout
-              kind={LAYOUT_LEAF}
-              height={kit.unit(kit.tokens.controlHeight)}
-              flex={1}
-            />
-            <Behavior
-              enabled={!disabled}
-              semantic_label={label ?? placeholder}
-            />
-            <TextInput
-              {...control}
-              placeholder={placeholder}
-              masked={masked}
-              text={text.initial}
-              onTextCommit={text.changed}
-              ref={text.ref}
-            />
-          </Entity>
-        </Row>
-        {error !== undefined && (
-          <TextLine id={`${id}/error`} text={error} tone="error" size="small" />
-        )}
+        <Field
+          id={`${id}/field`}
+          label={label}
+          description={description}
+          error={error}
+          disabled={disabled}
+          gap={rawGap ?? gap}
+        >
+          <Row
+            gap={0}
+            id={`${id}/row`}
+            height={kit.unit(kit.tokens.controlHeight)}
+          >
+            <Entity id={`${id}/input`}>
+              <PresentationGate open />
+              <Layout
+                kind={LAYOUT_LEAF}
+                height={kit.unit(kit.tokens.controlHeight)}
+                flex={1}
+              />
+              <Behavior
+                enabled={!disabled}
+                semantic_label={label ?? placeholder}
+              />
+              <TextInput
+                {...control}
+                placeholder={placeholder}
+                masked={masked}
+                text={text.initial}
+                onTextCommit={text.changed}
+                ref={text.ref}
+              />
+            </Entity>
+          </Row>
+        </Field>
       </Children>
     </Entity>
   );

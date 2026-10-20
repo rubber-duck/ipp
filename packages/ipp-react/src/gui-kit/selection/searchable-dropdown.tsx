@@ -1,3 +1,4 @@
+import { useGuiKitLayout, LAYOUT_ROW, Strut } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A searchable dropdown: a dropdown whose list sits under a search field on
@@ -28,7 +29,7 @@ import type {
 import type { GuiControlHandle } from "../../gui/control-ref.js";
 import { useSelection, type DropdownProps } from "./dropdown.js";
 import { useGuiKit } from "../kit.js";
-import { LAYOUT_ROW, Strut } from "../layout.js";
+
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen } from "../overlays/overlay.js";
 import { Icon } from "../text.js";
@@ -70,23 +71,24 @@ async function clearText(
     await handle.compareAndSet("text", text, "");
 }
 
-export function SearchableDropdown({
-  id: providedId,
-  layer = 0,
-  options,
-  placeholder = "Select",
-  label,
-  disabled = false,
-  maxRows,
-  layout,
-  filter = labelContains,
-  onQueryChange,
-  loading,
-  searchPlaceholder = "Search",
-  emptyLabel = "No results",
-  searchRef,
-  ...state
-}: SearchableDropdownProps) {
+export function SearchableDropdown(props: SearchableDropdownProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    options,
+    placeholder = "Select",
+    label,
+    disabled = false,
+    maxRows,
+    layout,
+    filter = labelContains,
+    onQueryChange,
+    loading,
+    searchPlaceholder = "Search",
+    emptyLabel = "No results",
+    searchRef,
+    ...state
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;

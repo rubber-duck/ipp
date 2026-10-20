@@ -387,6 +387,10 @@
       "npm"
     ]
   },
+  "dist/packages/ipp-react/tests/gui-kit-layout.test.js": {
+    "builds": ["typescript"],
+    "requirements": ["node", "npm"]
+  },
   "dist/packages/ipp-react/tests/gui-kit-core.test.js": {
     "builds": [
       "typescript"

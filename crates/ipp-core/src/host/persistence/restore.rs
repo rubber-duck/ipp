@@ -131,7 +131,13 @@ impl HostRuntime {
         for node in &graph.nodes {
             let world = candidates.get_mut(&node.id).expect("private World");
             let ids = world
-                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    topology,
+                    &mut self.web_content,
+                )
                 .restore_world_entities(&node.world)?;
             entities.insert(node.id, ids);
             deferred.insert(
@@ -147,7 +153,13 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    topology,
+                    &mut self.web_content,
+                )
                 .restore_world_components(&node.world, &entities[&node.id], &deferred[&node.id])?;
         }
 
@@ -158,7 +170,13 @@ impl HostRuntime {
                     let world = candidates
                         .get_mut(&output.world)
                         .expect("output World")
-                        .context(&mut self.assets, &mut self.io, &mut self.data, topology);
+                        .context(
+                            &mut self.assets,
+                            &mut self.io,
+                            &mut self.data,
+                            topology,
+                            &mut self.web_content,
+                        );
                     let selection = match output.entity {
                         Some(entity) => {
                             world.bind_output(entities[&output.world][&entity], output.kind)
@@ -203,7 +221,13 @@ impl HostRuntime {
                     candidates
                         .get_mut(&node.id)
                         .expect("private World")
-                        .context(&mut self.assets, &mut self.io, &mut self.data, topology)
+                        .context(
+                            &mut self.assets,
+                            &mut self.io,
+                            &mut self.data,
+                            topology,
+                            &mut self.web_content,
+                        )
                         .restore_world_component(
                             entities[&node.id][&entity.persistent_id],
                             value,
@@ -215,7 +239,13 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    topology,
+                    &mut self.web_content,
+                )
                 .finish_restored_components()?;
         }
 
@@ -223,7 +253,13 @@ impl HostRuntime {
             candidates
                 .get_mut(&node.id)
                 .expect("private World")
-                .context(&mut self.assets, &mut self.io, &mut self.data, topology)
+                .context(
+                    &mut self.assets,
+                    &mut self.io,
+                    &mut self.data,
+                    topology,
+                    &mut self.web_content,
+                )
                 .restore_world_systems(&node.world, &entities[&node.id], limits)?;
         }
 

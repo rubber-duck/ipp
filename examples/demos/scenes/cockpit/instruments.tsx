@@ -18,6 +18,8 @@ import { useEffect, useRef } from "react";
 
 const SIGNAL_WIDTH = 330;
 const SIGNAL_HEIGHT = 170;
+// Linear RGB sampled from the console's blue button-lamp edge (#759bd1).
+const DASH_LIGHT = [0.178, 0.328, 0.638, 1] as const;
 export const INSTRUMENT_RESOURCES = [
   { kind: 18, path: "/target/demos-drawings/waveform.ippd" },
   { kind: 18, path: "/target/demos-drawings/waveform-pulse.ippd" },
@@ -83,17 +85,6 @@ float ink=rim*(0.08*rings+0.12*axes+0.32*sweep+0.7*tip+blips)+pulse*0.85;
 float border=1.0-smoothstep(0.005,0.005+aa,abs(r-1.0));
 return vec4(p_tint.rgb,clamp(ink+0.5*border,0.0,1.0)*color.a);`;
 
-const SCOPE = `
-vec2 footprint=max(fwidth(position),vec2(1.0e-4));
-vec2 cell=size/vec2(8.0,4.0);
-vec2 offset=abs(fract(position/cell+0.5)-0.5)*cell;
-vec2 lines=clamp((0.5-offset)/footprint+0.5,0.0,1.0);
-float grid=max(lines.x,lines.y)*0.18;
-float centre=p_phase*size.x;
-float distance=(position.x-centre)/max(size.x*0.06,1.0e-4);
-float band=exp(-distance*distance)*0.18;
-return vec4(p_tint.rgb,clamp(grid+band,0.0,1.0)*color.a);`;
-
 export interface InstrumentContract extends GuiKitContract {
   readonly CanvasPaint: { readonly id: number };
   readonly CanvasStyle: {
@@ -115,28 +106,6 @@ export function InstrumentAssets({
     () => dynamicClip(contract.CanvasPaint.id, "pulse", 1.2),
     [contract],
   );
-  const scroll = useMemo<AnimationClipSource>(
-    () => ({
-      duration: 2.4,
-      tracks: [
-        {
-          property: {
-            component: contract.CanvasStyle.id,
-            offsets: [contract.CanvasStyle.fields.x!.offset],
-          },
-          keys: [
-            {
-              time: 0,
-              value: { kind: "f32", value: 0 },
-              interpolation: { kind: "linear" },
-            },
-            { time: 2.4, value: { kind: "f32", value: -SIGNAL_WIDTH } },
-          ],
-        },
-      ],
-    }),
-    [contract],
-  );
   return (
     <>
       <ShaderAsset
@@ -153,27 +122,21 @@ export function InstrumentAssets({
       >
         <PaintShader>{RADAR}</PaintShader>
       </ShaderAsset>
-      <ShaderAsset
-        id="cockpit-scope-shader"
-        recipe={{}}
-        parameters={{ phase: "f32", tint: "vec4" }}
-      >
-        <PaintShader>{SCOPE}</PaintShader>
-      </ShaderAsset>
       <AnimationAsset id="cockpit-sweep" clip={sweep} />
       <AnimationAsset id="cockpit-pulse" clip={pulse} />
-      <AnimationAsset id="cockpit-wave-scroll" clip={scroll} />
     </>
   );
 }
 
 export function RadarInstrument({
   state,
-  size,
+  width,
+  height,
   report,
 }: {
   state: CockpitOptions;
-  size: number;
+  width: number;
+  height: number;
   report(error: unknown): void;
 }) {
   const pulse = useRef<AnimationHandle>(null);
@@ -185,14 +148,14 @@ export function RadarInstrument({
   }, [state.pulse, report]);
   return (
     <Entity id="cockpit-radar">
-      <Layout width={size} height={size} />
-      <Box width={size} height={size} />
+      <Layout width={width} height={height} />
+      <Box width={width} height={height} />
       <Paint
         source={assetRef("cockpit-radar-shader")}
         phase={0}
         gain={state.gain}
         range={state.range}
-        tint={[0.28, 0.72, 0.94, 1]}
+        tint={DASH_LIGHT}
         pulse={0}
         active={state.pulse ? 1 : 0}
       />
@@ -265,33 +228,17 @@ export function PulseInstrument({
     <Entity id="cockpit-waveform">
       <AnimationAsset id="cockpit-pulse-travel" clip={pulseClip} />
       <Layout kind={3} width={width} height={height} clip />
-      <Box width={width} height={height} />
-      <Paint
-        source={assetRef("cockpit-scope-shader")}
-        phase={0}
-        tint={[0.28, 0.72, 0.94, 1]}
-      />
-      <Animation
-        source={assetRef("cockpit-sweep")}
-        looping
-        playing={state.scanning}
-      />
       <Entity id="cockpit-wave-trace">
         <Layout width={width * 2} height={1} margin_top={height / 2} />
         <Style
           scale_x={scale}
           scale_y={(height / SIGNAL_HEIGHT) * (0.12 + state.gain * 0.88)}
-          red={0.28}
-          green={0.72}
-          blue={0.94}
+          red={DASH_LIGHT[0]}
+          green={DASH_LIGHT[1]}
+          blue={DASH_LIGHT[2]}
           opacity={state.scanning ? 1 : 0.45}
         />
         <Drawing source={assets.url(INSTRUMENT_RESOURCES[0].path)} />
-        <Animation
-          source={assetRef("cockpit-wave-scroll")}
-          looping
-          playing={state.scanning}
-        />
       </Entity>
       <Entity id="cockpit-wave-pulse">
         <Layout width={width} height={1} margin_top={height / 2} />
@@ -299,9 +246,9 @@ export function PulseInstrument({
           x={width}
           scale_x={scale}
           scale_y={(height / SIGNAL_HEIGHT) * (0.65 + state.gain * 0.35)}
-          red={0.7}
-          green={0.9}
-          blue={1}
+          red={DASH_LIGHT[0]}
+          green={DASH_LIGHT[1]}
+          blue={DASH_LIGHT[2]}
         />
         <Drawing source={assets.url(INSTRUMENT_RESOURCES[1].path)} />
         <Animation

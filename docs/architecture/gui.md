@@ -88,6 +88,16 @@ Applications own skin preferences and persistence, apply saved choices before vi
 
 Explicit setup and direct contract/caller migration buy independent skin delivery and predictable styling. The [runtime strategy](../plans/runtime-and-rendering.md#gui-implementation-approach) and [React strategy](../plans/react-reconciler.md#gui-declarations) cover real rendering and switching evidence.
 
+## Client-managed content
+
+A client-managed input target is an ordinary GUI control whose application behavior lives in a client. Core retains focus, capture, eligibility, spatial routing and exact target/session lifetime validation. Ordered typed keyboard, committed text, pointer and wheel events reach the client through the standard protocol. Authored key-consumption policy can retain Tab and Escape while preserving an explicit focus escape. Platform adapters keep clipboard and IME ownership. Observation and input delivery do not grant a client control of Host clocks or evaluation.
+
+A terminal uses this boundary: a client owns a pinned headless Ghostty instance as the authority for screen, scrollback, cursor, modes and terminal input encoding, and authors compact Canvas glyph runs, backgrounds and cursor paint through ordinary ordered batches. World components hold presentation, not another emulator. RenderService retains font, clipping, colour, depth, Surface and GPU ownership. Ghostty's Unicode state does not expand IPP's text rendering guarantees. Host clocks and AnimationSystem own presentation animation.
+
+The browser terminal client runs Ghostty and a BashKit shell in one dedicated Worker, independently of the IPP Host Worker. Their byte-oriented APIs connect locally; every IPP-facing interaction, including resize observations and cockpit commands, uses the matching generated client and standard protocol. The existing [worker connection API](../../packages/ipp-client/src/worker.ts) and [MessagePort transport](../../packages/ipp-client/src/transport.ts) transfer owned buffers without requiring shared memory. Any future transport must preserve the same interface, wire messages, ordering, backpressure and lifetime semantics, selected at connection creation without changing terminal code. A shell runtime's own hosting requirements remain independent.
+
+Applications explicitly start terminal sessions and own shell cleanup plus removal of their authored content. Loading presentation never launches a shell. Client input bindings invalidate with their session or target; late input and display writes cannot cross replacement lifetimes. Bounded shell I/O preserves bytes and terminal replies under backpressure. Persistence can retain authored presentation but cannot resume an emulator, shell or live input binding. The tradeoff is protocol traffic and explicit client lifecycle in exchange for independently scheduled terminal execution and reusable input capabilities without a core terminal dependency.
+
 ## Client and persistence boundaries
 
 ### Correlated wheel hit

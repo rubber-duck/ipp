@@ -123,6 +123,10 @@ pub(crate) struct RenderAssetLease {
 }
 
 impl RenderAssetLease {
+    pub(crate) fn generation_is_current(&self) -> bool {
+        self.context.0.borrow().generation == self.generation
+    }
+
     pub(crate) fn is_current(&self) -> bool {
         let state = self.context.0.borrow();
         state.active && state.generation == self.generation

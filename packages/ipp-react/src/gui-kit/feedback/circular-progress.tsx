@@ -1,3 +1,11 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  Row,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Measured completion of a task as a ring: a quiet track and a lit arc from
@@ -22,11 +30,11 @@ import { useEntityId } from "../../scope/identity.js";
  * centres on each other.
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Style, Font, Layout } from "../../gui/components.js";
+import { Style, Font } from "../../gui/components.js";
 import { Arc, TURNING_SWEEP } from "../arc.js";
 import { LEAD } from "../row-motion.js";
 import { useGuiKit, type GuiKitTone, type GuiKitTypeSize } from "../kit.js";
-import { LAYOUT_COLUMN, Row, type GuiKitLayout } from "../layout.js";
+
 import {
   CheckMark,
   Icon,
@@ -42,7 +50,7 @@ export type CircularProgressStatus = "complete" | "failed";
 
 export type CircularProgressSize = "large" | "small";
 
-export interface CircularProgressProps {
+export interface CircularProgressProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -59,7 +67,6 @@ export interface CircularProgressProps {
   readonly idle?: boolean;
   /** `large` by default. */
   readonly size?: CircularProgressSize;
-  readonly layout?: GuiKitLayout;
 }
 
 /**
@@ -100,16 +107,17 @@ const OUTCOMES: Readonly<
   failed: { arc: "arcError", tone: "error", word: "Failed" },
 };
 
-export function CircularProgress({
-  id: providedId,
-  layer = 0,
-  label,
-  value,
-  status,
-  idle = false,
-  size = "large",
-  layout,
-}: CircularProgressProps) {
+export function CircularProgress(props: CircularProgressProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    value,
+    status,
+    idle = false,
+    size = "large",
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -160,7 +168,7 @@ export function CircularProgress({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         width={Math.max(kit.unit(diameter), caption)}
         height={kit.unit(diameter + CAPTION_GAP + t.denseRow)}
@@ -209,6 +217,7 @@ export function CircularProgress({
           {centre}
         </Arc>
         <Row
+          gap={0}
           id={`${id}/caption`}
           height={kit.unit(t.denseRow)}
           layout={{

@@ -149,7 +149,7 @@ function Overlays({
           id: "ov-popover",
           label: "OPTS",
           title: "Options",
-          width: 120,
+          contentWidth: 60,
           onOpenChange: (open) => reports.popover.push(open),
           layout: place(BOXES.popover),
         },

@@ -9,6 +9,9 @@ import {
   createRoot,
   Entity,
   FlatSurface,
+  CylinderSurface,
+  CanvasWorld,
+  Transform,
   SurfaceCache,
   type AttachedWorldHandle,
   type ReactWorldRoot,
@@ -54,6 +57,7 @@ import {
   LIFECYCLE,
   CAMERA,
   SURFACE,
+  CANVAS,
   selectSystems,
 } from "../../fixtures/system-selections.js";
 import { rgbaDataUrl } from "../../harness/page/images.js";
@@ -1134,6 +1138,65 @@ export interface SurfaceCachePolicy {
   direct_distance: number;
   resolution_scale: number;
   max_refresh_hz: number;
+  allocation_priority?: number;
+  force_cache?: boolean;
+  max_texture_size?: number;
+}
+
+/** Equal pixel density, unequal clipped screen coverage. Both real Canvas
+ * outputs stay visible so camera motion tests reallocation, not idle eviction. */
+export async function allocationPanels(curved: boolean) {
+  await resizePresentation(320, 240, 1);
+  for (const id of ["allocation-left", "allocation-right"])
+    cachePolicies.set(id, {
+      direct_distance: 0,
+      resolution_scale: 1,
+      allocation_priority: 1,
+      max_refresh_hz: 240,
+      force_cache: true,
+    });
+  await presentCached(() =>
+    [-1, 1].map((side) => {
+      const id = side < 0 ? "allocation-left" : "allocation-right";
+      return (
+        <Entity key={id} id={id}>
+          <Transform x={side * 1.2} />
+          {curved ? (
+            <CylinderSurface width={2} height={2} curvature={0.05} />
+          ) : (
+            <FlatSurface width={2} height={2} />
+          )}
+          {cacheDeclaration(id)}
+          <CanvasWorld
+            presentation={{ anchor: id }}
+            create={{ selectedSystems: selectSystems(CANVAS, LIFECYCLE) }}
+            extent={[2, 2]}
+            unitsPerMetre={1}
+            onReady={observeCanvas(id)}
+          >
+            <Entity id={`${id}-paint`}>
+              <Style red={side < 0 ? 1 : 0} green={side > 0 ? 1 : 0} blue={0} />
+              <Box width={2} height={2} />
+            </Entity>
+          </CanvasWorld>
+        </Entity>
+      );
+    }),
+  );
+  return Promise.all(["allocation-left", "allocation-right"].map(entityId));
+}
+
+export async function allocationCamera(x: number) {
+  successfulBatch(
+    await client.batch(
+      componentFields(client, "Transform", { x }).map((field) => ({
+        kind: "setField",
+        entity: { kind: "handle", id: camera },
+        component: client.components.Transform!.id,
+        field,
+      })),
+    ),
+  );
 }
 
 async function entityBySymbol(symbolicId: string) {

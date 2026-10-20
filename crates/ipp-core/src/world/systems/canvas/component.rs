@@ -261,6 +261,43 @@ impl Default for CanvasBitmap {
     }
 }
 
+/// Platform-produced web content named through the Host source registry.
+/// Source objects and image versions are never stored in this component.
+#[repr(C)]
+#[derive(Clone, Debug, PartialEq, SchemaComponent)]
+pub struct CanvasHtml {
+    /// Scoped source registration name, interpreted by the Host adapter.
+    pub source: Arc<str>,
+    /// Logical display width before visual scaling.
+    pub width: f32,
+    /// Logical display height before visual scaling.
+    pub height: f32,
+}
+
+impl Default for CanvasHtml {
+    fn default() -> Self {
+        Self {
+            source: Arc::default(),
+            width: 1.0,
+            height: 1.0,
+        }
+    }
+}
+
+impl ComponentLifecycle for CanvasHtml {
+    fn required_components() -> &'static [u16] {
+        LEAF_REQUIREMENTS
+    }
+
+    fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
+        self.validate()
+    }
+
+    fn validate(&self) -> Result<(), ErrorReason> {
+        nonnegative(&[self.width, self.height])
+    }
+}
+
 /// A resource-independent filled rounded rectangle.
 ///
 /// The box paints white under the inherited tint. On an entity that also has a

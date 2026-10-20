@@ -116,6 +116,7 @@ impl SystemFactory for CanvasSystemFactory {
                 ComponentValue::CANVAS_LAYER_TRANSITION,
                 ComponentValue::CANVAS_BOX,
                 ComponentValue::CANVAS_BOUNDS,
+                ComponentValue::CANVAS_HTML,
             ],
             [crate::systems::WorldOperation::Canvas],
         );
@@ -291,13 +292,16 @@ impl System for CanvasSystem {
             for resource in publication.resources() {
                 output.retain(resource);
             }
+            for &image in publication.web_images.iter() {
+                output.retain_web_image(image);
+            }
             output.output(publication.selection, publication.clone());
         }
         Ok(())
     }
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
-        self.evaluate(&context.world);
+        self.evaluate(&mut context.world);
         for (entity, [x, y, width, height]) in std::mem::take(&mut self.state.bounds) {
             let Some(current) = context
                 .world
@@ -320,7 +324,21 @@ impl System for CanvasSystem {
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
+        super::web_content::before_commit(context);
         for (entity, component) in context.changed_components() {
+            if component == ComponentValue::CANVAS_HTML {
+                if context
+                    .staged
+                    .entities
+                    .get(&entity)
+                    .and_then(|record| record.input(component))
+                    .is_some()
+                {
+                    self.state.html_entities.insert(entity);
+                } else {
+                    self.state.html_entities.remove(&entity);
+                }
+            }
             let retained = context.retains_component(entity, component);
             self.changed(entity, component, retained, false);
             if input_component(component) && !retained {
@@ -333,6 +351,7 @@ impl System for CanvasSystem {
     }
 
     fn before_numeric_update(&mut self, context: &mut SystemNumericContext<'_>) {
+        super::web_content::before_numeric_update(context);
         for &(entity, component) in context.changed_components() {
             // GUI writes a sampled transition into its control's GuiBehavior,
             // which changes only that control's paint.
@@ -382,6 +401,7 @@ fn input_component(component: u16) -> bool {
                 | ComponentValue::CANVAS_TEXT
                 | ComponentValue::CANVAS_GLYPH_RUN
                 | ComponentValue::CANVAS_DRAWING
+                | ComponentValue::CANVAS_HTML
                 | ComponentValue::CANVAS_BITMAP
                 | ComponentValue::CANVAS_BOX
                 | ComponentValue::CANVAS_PAINT

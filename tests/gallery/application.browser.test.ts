@@ -327,7 +327,10 @@ test("cockpit carousel browser swipe, wheel priority and cancellation", {
           0,
           "A hovered slider at its bound still owns the wheel",
         );
-        await app.page.mouse.move(1000, 100);
+        // The fixed bridge framing puts a side pane under the old upper-right
+        // point. The lower-right console corner stays outside every GUI Surface.
+        const viewport = app.page.viewportSize()!;
+        await app.page.mouse.move(viewport.width - 8, viewport.height - 8);
         await app.page.mouse.wheel(100, 0);
         await app.settle();
         assert.equal(

@@ -32,6 +32,7 @@ One mutation owner, one stored value per component field, stable storage, demand
 | [Data](architecture/data.md) | Typed sources, data bindings, updates and shared retention |
 | [Rendering](architecture/rendering.md) | GPU boundary, materials, cameras and interaction |
 | [GUI](architecture/gui.md) | Canvas content, layout, local controls and platform input |
+| [Web content](architecture/web-content.md) | Chromium producers, immutable images and recovery |
 | [Authoring](architecture/authoring.md) | React and Blender integration boundaries |
 | [Rust workspace](architecture/rust-workspace.md) | Crates, capabilities and dependencies |
 

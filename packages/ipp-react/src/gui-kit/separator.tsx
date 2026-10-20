@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  Row,
+} from "./layout.js";
+
 import { useEntityId } from "../scope/identity.js";
 /**
  * Lines one idle line weight thick whose layout box is the line, filling their
@@ -5,13 +14,13 @@ import { useEntityId } from "../scope/identity.js";
  * labelled separator that names a section.
  */
 import { PresentationGate, Entity } from "../components.js";
-import { Style, Layout } from "../gui/components.js";
+import { Style } from "../gui/components.js";
 import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
-import { LAYOUT_COLUMN, LAYOUT_ROW, Row, type GuiKitLayout } from "./layout.js";
+
 import { TextLine } from "./text.js";
 
-export interface SeparatorProps {
+export interface SeparatorProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -22,16 +31,16 @@ export interface SeparatorProps {
    */
   readonly tone?: "division" | "rule" | "quiet";
   readonly vertical?: boolean;
-  readonly layout?: GuiKitLayout;
 }
 
-export function Separator({
-  id: providedId,
-  layer = 0,
-  tone = "division",
-  vertical = false,
-  layout,
-}: SeparatorProps) {
+export function Separator(props: SeparatorProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    tone = "division",
+    vertical = false,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const thickness = kit.unit(kit.tokens.lineWidth);
@@ -39,7 +48,7 @@ export function Separator({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={vertical ? LAYOUT_COLUMN : LAYOUT_ROW}
         {...(vertical ? { width: thickness } : { height: thickness })}
         {...layout}
@@ -49,7 +58,7 @@ export function Separator({
   );
 }
 
-export interface LabelledSeparatorProps {
+export interface LabelledSeparatorProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -61,7 +70,6 @@ export interface LabelledSeparatorProps {
    * section heading at the content's edge does.
    */
   readonly stub?: boolean;
-  readonly layout?: GuiKitLayout;
 }
 
 /**
@@ -69,13 +77,14 @@ export interface LabelledSeparatorProps {
  * the label, and a line filling the rest of the row, half an inset from the
  * label on either side. It is a dense row high.
  */
-export function LabelledSeparator({
-  id: providedId,
-  layer = 0,
-  label,
-  stub = true,
-  layout,
-}: LabelledSeparatorProps) {
+export function LabelledSeparator(props: LabelledSeparatorProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    stub = true,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -83,6 +92,7 @@ export function LabelledSeparator({
   const line = { align_y: 0 };
   return (
     <Row
+      gap={0}
       id={id}
       layer={layer}
       height={kit.unit(t.denseRow)}

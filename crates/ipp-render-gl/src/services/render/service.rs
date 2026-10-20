@@ -67,6 +67,7 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) inclusions: super::outputs::inclusion::OutputInclusions,
     pub(super) device: Rc<RefCell<D>>,
     pub(super) asset_context_active: super::assets::context::RenderAssetContext,
+    pub(super) web_images: super::web_images::WebImageRegistry<D>,
     pub(super) asset_export_delay: Option<RenderAssetExportDelay>,
     #[cfg(feature = "instrumentation")]
     pub(super) asset_export_staging_gate: bool,

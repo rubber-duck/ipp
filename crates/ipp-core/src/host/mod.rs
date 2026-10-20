@@ -58,6 +58,7 @@ pub struct HostRuntime {
     system_factories: SystemFactories,
     io: crate::services::io::IoService,
     data: crate::services::data::DataService,
+    web_content: crate::services::web_content::WebContentService,
     assets: crate::services::asset_management::service::AssetManagementService,
     topology: attachments::topology::HostTopology,
     publications: publication::HostPublications,

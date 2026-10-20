@@ -160,7 +160,7 @@ pub(super) fn grid_demand(
 /// Homogeneous clipping preserves the affine Jacobian numerator. Its norm is
 /// convex, so the clipped vertices still bound every visible interior sample.
 /// A triangle clipped by six planes has at most nine vertices.
-fn visible_triangle(triangle: [[f64; 4]; 3]) -> ([[f64; 4]; 12], usize) {
+pub(super) fn visible_triangle(triangle: [[f64; 4]; 3]) -> ([[f64; 4]; 12], usize) {
     let mut polygon = [[0.0; 4]; 12];
     polygon[..3].copy_from_slice(&triangle);
     let mut count = 3;

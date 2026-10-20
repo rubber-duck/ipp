@@ -100,6 +100,9 @@ pub struct SurfaceCache {
     pub direct_distance: f32,
     /// Multiplier of projected device-pixel demand; 1 matches presentation density.
     pub resolution_scale: f32,
+    /// Positive finite multiplier of projected screen coverage for image allocation.
+    /// One uses coverage alone; larger values favor this Surface under memory pressure.
+    pub allocation_priority: f32,
     /// Maximum content refresh rate in the first cached band, in hertz.
     pub max_refresh_hz: f32,
     /// Optional per-image dimension cap in pixels; zero uses renderer/device limits.
@@ -113,6 +116,7 @@ impl Default for SurfaceCache {
         Self {
             direct_distance: 4.0,
             resolution_scale: 1.0,
+            allocation_priority: 1.0,
             max_refresh_hz: 30.0,
             max_texture_size: 0,
             force_cache: false,

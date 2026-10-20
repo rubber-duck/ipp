@@ -76,6 +76,10 @@ export const guiComponentContract = {
       height: "number",
     },
   },
+  CanvasHtml: {
+    host: "ipp-canvas-html",
+    fields: { source: "string", width: "number", height: "number" },
+  },
   CanvasBox: {
     host: "ipp-canvas-box",
     fields: {
@@ -185,6 +189,10 @@ export const guiComponentContract = {
     host: "ipp-gui-skin",
     fields: { theme: "entity", parts: "bytes" },
   },
+  GuiInputTarget: {
+    host: "ipp-gui-input-target",
+    fields: { capture_tab: "boolean", capture_escape: "boolean" },
+  },
   GuiButton: {
     host: "ipp-gui-button",
     fields: { label: "string", selected: "boolean" },
@@ -239,6 +247,7 @@ export const guiControlNames = new Set([
   "GuiScrollView",
   "GuiVirtualList",
   "GuiButton",
+  "GuiInputTarget",
   "GuiCheckbox",
   "GuiSlider",
   "GuiTextInput",

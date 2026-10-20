@@ -297,8 +297,10 @@ impl GuiSystem {
                 focused: true,
                 ..
             })
-        ) && control.kind == GuiControlKind::TextInput
-            && !self.local.holds_native_text(control.target, &owner);
+        ) && matches!(
+            control.kind,
+            GuiControlKind::TextInput | GuiControlKind::InputTarget
+        ) && !self.local.holds_native_text(control.target, &owner);
         let native_changed = focus_change.is_some() || installs_native;
         let text_changed = native_changed && self.local.composing();
         let presentation_revision = self
@@ -320,6 +322,18 @@ impl GuiSystem {
             focus_change
                 .is_none_or(|(focused, _)| focused)
                 .then(|| {
+                    if control.kind == GuiControlKind::InputTarget {
+                        return self.local.observations.input_binding(control.target).map(
+                            |binding| {
+                                super::controls::native_text::GuiNativeText::client(
+                                    control.target,
+                                    owner.clone(),
+                                    binding,
+                                    native_generation,
+                                )
+                            },
+                        );
+                    }
                     context
                         .world
                         .world
@@ -593,6 +607,32 @@ impl GuiLocalState {
             .get(component, entity.index() as usize)
             .ok_or(GuiLocalActionError::StaleTarget)?;
         let action = match operation {
+            GuiLocalOperation::ClientInput {
+                binding,
+                fence,
+                event,
+            } => {
+                self.validate_client_input(control.target, *binding, event)?;
+                if let Some(fence) = fence
+                    && (!self.holds_native_text(control.target, owner)
+                        || self
+                            .native_text(control.target)
+                            .is_none_or(|state| state.fence != *fence))
+                {
+                    return Err(GuiLocalActionError::StaleTarget);
+                }
+                return Ok(GuiActionOutcome {
+                    kind: Some(GuiLocalEffectKind::Input(event.clone())),
+                    writes: Vec::new(),
+                    consumed: match event {
+                        GuiClientInput::Wheel {
+                            delta,
+                            ..
+                        } => *delta,
+                        _ => [0.0; 2],
+                    },
+                });
+            }
             GuiLocalOperation::SliderStep {
                 steps,
                 fine,

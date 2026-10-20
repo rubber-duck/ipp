@@ -65,6 +65,13 @@ export function Image(props: ImageProps) {
   return createElement(componentContract.CanvasBitmap.host, props);
 }
 
+export type HtmlProps = ComponentProps & ComponentFields<"CanvasHtml">;
+
+/** A registered Host web-content source on the ordinary Canvas/Surface. */
+export function Html(props: HtmlProps) {
+  return createElement(componentContract.CanvasHtml.host, props);
+}
+
 export type BoxProps = ComponentProps & ComponentFields<"CanvasBox">;
 
 export function Box(props: BoxProps) {
@@ -117,4 +124,18 @@ export type GroupProps = ComponentProps & ComponentFields<"GuiGroup">;
 
 export function Group(props: GroupProps) {
   return createElement(componentContract.GuiGroup.host, props);
+}
+
+export type InputTargetProps = ComponentProps &
+  ComponentFields<"GuiInputTarget"> & {
+    ref?: import("./control-ref.js").GuiControlRef;
+  };
+
+/** Client-managed content; the connected application owns its input subscription. */
+export function InputTarget(props: InputTargetProps) {
+  const { ref, ...fields } = props;
+  return createElement(componentContract.GuiInputTarget.host, {
+    ...fields,
+    controlRef: ref,
+  });
 }

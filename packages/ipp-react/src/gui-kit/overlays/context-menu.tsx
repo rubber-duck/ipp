@@ -1,3 +1,4 @@
+import { useGuiKitLayout, type GuiKitLayoutProps } from "../layout.js";
 /**
  * A context menu: the commands for one target, opened at the point of the
  * target's context request, a secondary press or the Menu key or Shift+F10
@@ -25,7 +26,6 @@ import type {
   GuiContextMenuEvent,
   GuiContextMenuListener,
 } from "../../gui/callbacks.js";
-import type { GuiKitLayout } from "../layout.js";
 import { Menu, type MenuItem } from "./menu.js";
 import { Floating, useOverlayOpen, type OverlayOpen } from "./overlay.js";
 
@@ -77,7 +77,7 @@ export function useContextMenu<Target>(): ContextMenuState<Target> {
   };
 }
 
-export interface ContextMenuProps<Target> {
+export interface ContextMenuProps<Target> extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the menu's anchor; its surface and rows extend it. */
@@ -87,18 +87,17 @@ export interface ContextMenuProps<Target> {
   readonly items: readonly MenuItem[];
   /** A command was activated for `target`; the menu has closed. */
   readonly onSelect?: (key: string, target: Target) => void;
-  /** Layout of the command list, such as its `width`. */
-  readonly layout?: GuiKitLayout;
 }
 
-export function ContextMenu<Target>({
-  id: providedId,
-  layer = 0,
-  menu,
-  items,
-  onSelect,
-  layout,
-}: ContextMenuProps<Target>) {
+export function ContextMenu<Target>(props: ContextMenuProps<Target>) {
+  const {
+    id: providedId,
+    layer = 0,
+    menu,
+    items,
+    onSelect,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const { request, overlay } = menu;
   // The anchor stays where it was while the menu closes.

@@ -1,3 +1,12 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  Strut,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * Toasts: brief notifications above the content that never take focus or
@@ -35,13 +44,7 @@ import {
 import { AnimationAsset, assetRef } from "../../assets/declarations.js";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
-import {
-  Behavior,
-  Font,
-  Layout,
-  Overlay,
-  Style,
-} from "../../gui/components.js";
+import { Behavior, Font, Overlay, Style } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
 import type {
   GuiFocusChangeEvent,
@@ -50,12 +53,7 @@ import type {
 } from "../../gui/callbacks.js";
 import type { GuiKitIcon } from "../icons.js";
 import { useGuiKit, type GuiKitTone } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_ROW,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { GUI_KIT_OVERLAY_BANDS } from "./overlay.js";
 import { SecondaryButton } from "../secondary-button.js";
 import { Separator } from "../separator.js";
@@ -104,7 +102,7 @@ const SEVERITIES: Readonly<
   error: { tone: "error", theme: "toastError", icon: "error" },
 };
 
-export interface ToastProps extends Omit<ToastItem, "key"> {
+export interface ToastProps extends Omit<ToastItem, "key">, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -112,20 +110,20 @@ export interface ToastProps extends Omit<ToastItem, "key"> {
   readonly onDismiss?: () => void;
   /** Milliseconds before a toast that dismisses itself does; 6000 by default. */
   readonly duration?: number;
-  readonly layout?: GuiKitLayout;
 }
 
-export function Toast({
-  id: providedId,
-  layer = 0,
-  severity = "information",
-  text,
-  action,
-  persistent = false,
-  onDismiss,
-  duration = DURATION,
-  layout,
-}: ToastProps) {
+export function Toast(props: ToastProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    severity = "information",
+    text,
+    action,
+    persistent = false,
+    onDismiss,
+    duration = DURATION,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -161,7 +159,7 @@ export function Toast({
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout
+      <KitLayout
         kind={LAYOUT_ROW}
         height={kit.unit(height)}
         padding_left={kit.unit(t.inset)}
@@ -299,7 +297,7 @@ function Countdown({
   );
 }
 
-export interface ToastStackProps {
+export interface ToastStackProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -315,23 +313,22 @@ export interface ToastStackProps {
   readonly align?: "start" | "centre" | "end";
   /** Milliseconds before toasts that dismiss themselves do; 6000 by default. */
   readonly duration?: number;
-  /** Layout of the stack, such as its `width` in the World's units. */
-  readonly layout?: GuiKitLayout;
 }
 
 const ALIGNS = { start: 0, centre: 1, end: 2 } as const;
 
-export function ToastStack({
-  id: providedId,
-  layer = 0,
-  toasts,
-  onDismiss,
-  limit,
-  side = "bottom",
-  align = "end",
-  duration,
-  layout,
-}: ToastStackProps) {
+export function ToastStack(props: ToastStackProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    toasts,
+    onDismiss,
+    limit,
+    side = "bottom",
+    align = "end",
+    duration,
+    layout,
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
@@ -351,7 +348,7 @@ export function ToastStack({
         y={side === "top" ? inset : -inset}
       />
       <Behavior visible={shown.length > 0} />
-      <Layout kind={LAYOUT_COLUMN} width={kit.unit(WIDTH)} {...layout} />
+      <KitLayout kind={LAYOUT_COLUMN} width={kit.unit(WIDTH)} {...layout} />
       <Children>
         {shown.map(({ key, ...toast }, index) => (
           <Toast

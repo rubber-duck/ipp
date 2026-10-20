@@ -78,7 +78,7 @@ export async function exerciseApplicationLayout(
       "demo-display",
       "demo-controls-toggle",
     ];
-    const padding = Number(initial.layouts["demo-toolbar-panel"]!.padding_left);
+    const padding = 21; // Container inset 24 at the application's font size 14.
     assert.ok(
       padding >= 8,
       "ordinary Panel has a content inset beyond its border",
@@ -164,7 +164,21 @@ export async function exerciseApplicationLayout(
         "demo-render-scale",
         "demo-reset-view",
       ].map((id) => display.rects[id]!);
-      for (const field of fields) inside(field, box, 8);
+      // Floating content begins inside its 1.25-unit frame line at font size 14.
+      const overlayInset = padding + (1.25 * 14) / 16;
+      for (const field of fields) {
+        inside(field, box, overlayInset);
+        close(
+          field.x - box.x,
+          overlayInset,
+          "settings align with container inset",
+        );
+        close(
+          box.x + box.width - field.x - field.width,
+          overlayInset,
+          "settings right inset",
+        );
+      }
       close(fields[0]!.width, fields[1]!.width, "settings stretch uniformly");
       close(
         fields[1]!.width,
@@ -228,12 +242,21 @@ export async function exerciseApplicationLayout(
       "description uses measured wrapped text height",
     );
     const bar = controls.scrollbars["demo-controls-scroll"]!;
-    const inset = Number(controls.layouts["demo-controls-panel"]!.padding_left);
+    const inset = 21;
+    close(
+      Number(controls.layouts["demo-controls-scroll/body"]!.padding_left),
+      inset,
+      "scroll content uses container inset at font size 14",
+    );
+    const frameInset = Number(
+      controls.layouts["demo-controls-panel"]!.padding_left,
+    );
+    close(frameInset, 0, "frame leaves padding to scroll content");
     const scroll = cr["demo-controls-scroll"]!;
     const short = cr["demo-controls-panel"]!;
     close(
       short.height,
-      scroll.height + 2 * inset,
+      scroll.height + 2 * frameInset,
       "one padded surface fits short content",
     );
     close(
@@ -334,7 +357,7 @@ export async function exerciseApplicationLayout(
     close(
       longPanel.height,
       Math.min(
-        longBody.height + 2 * inset,
+        longBody.height + 2 * frameInset,
         560,
         long.viewport[1] - longPanel.y - 16,
       ),

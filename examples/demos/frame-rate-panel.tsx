@@ -11,7 +11,13 @@ import {
   type PlotContract,
 } from "@ipp/react";
 import { Layout } from "@ipp/react/gui";
-import { Panel, TextLine, useGuiKit } from "@ipp/react/gui-kit";
+import {
+  Panel,
+  PanelBody,
+  Column,
+  TextLine,
+  useGuiKit,
+} from "@ipp/react/gui-kit";
 import type * as Generated from "@ipp/host-contract";
 import { FRAME_RATE_SAMPLES } from "./frame-rate.js";
 
@@ -31,9 +37,21 @@ export function FrameRatePanel({
   const chartWidth = width - 2 * kit.spacing.inset;
   return (
     <Panel id="demo-frame-rate-panel" width={width} fitHeight>
-      <TextLine text="Frame rate" tone="accent" />
-      <TextLine text="FPS · recent 60 seconds" size="small" tone="neutral" />
-      <FrameRateChart source={source} contract={contract} width={chartWidth} />
+      <PanelBody gap="label">
+        <Column gap="compact">
+          <TextLine text="Frame rate" tone="accent" />
+          <TextLine
+            text="FPS · recent 60 seconds"
+            size="small"
+            tone="neutral"
+          />
+        </Column>
+        <FrameRateChart
+          source={source}
+          contract={contract}
+          width={chartWidth}
+        />
+      </PanelBody>
     </Panel>
   );
 }

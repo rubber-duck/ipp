@@ -61,6 +61,7 @@ impl World {
         io: &'a mut crate::services::io::IoService,
         data: &'a mut crate::services::data::DataService,
         topology: &'a mut crate::host::attachments::topology::HostTopology,
+        web_content: &'a mut crate::services::web_content::WebContentService,
     ) -> WorldContext<'a> {
         WorldContext {
             world: &mut self.data,
@@ -73,6 +74,7 @@ impl World {
             io,
             data,
             topology,
+            web_content,
             frame_context: None,
             reference_worlds: None,
             publications: None,

@@ -505,16 +505,16 @@ test("flow defaults center Row children without adding layout entities and prese
   assert.deepEqual(world.children("natural"), ["natural/button"]);
   assert.equal(fields("natural").get("height"), -1);
   assert.equal(fields("natural").get("fit_height"), true);
-  assert.equal(fields("natural").get("min_height"), TOKENS.row * 2);
+  assert.equal(fields("natural").get("min_height"), 0);
   assert.equal(fields("natural").get("align_items"), 0);
-  assert.equal(fields("natural").get("gap"), 0);
+  assert.equal(fields("natural").get("gap"), TOKENS.inset / 2);
   assert.equal(
     fields("natural/button").get("align_y"),
     1,
     "parent alignment leaves the child's explicit alignment authored",
   );
   assert.equal(fields("column").get("align_items"), 2);
-  assert.equal(fields("column").get("gap"), 0);
+  assert.equal(fields("column").get("gap"), TOKENS.inset * 2);
   assert.equal(fields("toolbar").get("gap"), TOKENS.inset);
   assert.equal(fields("toolbar").get("align_items"), 0);
   await draw(scene(true));
@@ -546,11 +546,11 @@ test("flow defaults center Row children without adding layout entities and prese
   await draw(scene(false));
   assert.equal(world.entity("natural"), row);
   assert.equal(fields("natural").get("height"), -1);
-  assert.equal(fields("natural").get("min_height"), TOKENS.row * 2);
+  assert.equal(fields("natural").get("min_height"), 0);
   assert.equal(fields("natural").get("align_items"), 0);
-  assert.equal(fields("natural").get("gap"), 0);
+  assert.equal(fields("natural").get("gap"), TOKENS.inset / 2);
   assert.equal(fields("column").get("align_items"), 2);
-  assert.equal(fields("column").get("gap"), 0);
+  assert.equal(fields("column").get("gap"), TOKENS.inset * 2);
   assert.equal(fields("toolbar").get("gap"), TOKENS.inset);
 });
 
@@ -628,7 +628,7 @@ test("semantic forms share configurable spacing, fill defaults and stable contro
       "field/description",
     ]);
     assert.equal(world.fields("name", "GuiLayout").get("width"), -1);
-    assert.deepEqual(world.children("name"), ["name/row"]);
+    assert.deepEqual(world.children("name"), ["name/field"]);
     assert.equal(world.fields("name/row", "GuiLayout").get("width"), -1);
     assert.equal(world.fields("name/input", "GuiLayout").get("flex"), 1);
     assert.equal(world.fields("channel", "GuiLayout").get("width"), -1);
@@ -638,7 +638,7 @@ test("semantic forms share configurable spacing, fill defaults and stable contro
       "explicit raw dimensions win over named and form defaults",
     );
     assert.equal(world.fields("joined", "GuiLayout").get("gap"), 0);
-    assert.equal(world.fields("joined/input", "GuiLayout").get("gap"), 0);
+    assert.equal(world.fields("joined/input/field", "GuiLayout").get("gap"), 0);
     await draw(true);
     assert.equal(
       scope.spacing.inset,
@@ -651,7 +651,7 @@ test("semantic forms share configurable spacing, fill defaults and stable contro
       0,
       "zero is an intentional spacing override",
     );
-    assert.equal(world.fields("name", "GuiLayout").get("gap"), 0);
+    assert.equal(world.fields("name/field", "GuiLayout").get("gap"), 0);
     assert.equal(world.entity("name/input"), name);
     assert.equal(world.entity("channel"), trigger);
   } finally {

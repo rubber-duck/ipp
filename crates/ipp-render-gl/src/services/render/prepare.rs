@@ -62,6 +62,7 @@ impl<D: RenderDevice> RenderService<D> {
         #[cfg(feature = "instrumentation")]
         let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.prepare");
         self.validate_catalog(host)?;
+        self.refresh_web_images(host)?;
         let result = self.prepare_selected(host, selected);
         if result.is_err() || selected.is_none() {
             if let Some(demand) = &mut self.program_demand {
@@ -69,6 +70,7 @@ impl<D: RenderDevice> RenderService<D> {
             }
             if selected.is_none() {
                 self.program_demand = None;
+                self.web_images.unbind_host(host.web_content_mut());
             }
             self.program_lookup.fill(None);
             self.retain_prepared_outputs(None, &Default::default());
@@ -77,6 +79,7 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     pub(super) fn validate_catalog(&self, host: &HostRuntime) -> Result<(), RenderError> {
+        self.web_images.validate_host(host.identity())?;
         if self
             .program_demand
             .as_ref()

@@ -450,6 +450,7 @@ impl WorldContext<'_> {
                     asset_acquisition: self.asset_acquisition,
                     io: self.io,
                     data: self.data,
+                    web_content: self.web_content,
                     topology: self.topology,
                     frame_context: self.frame_context,
                     reference_worlds: self.reference_worlds.as_ref(),

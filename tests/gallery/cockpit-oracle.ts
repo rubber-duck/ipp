@@ -6,9 +6,28 @@ export const COCKPIT_ANCHORS = [
   "cockpit-screen-0",
   "cockpit-screen-1",
   "cockpit-screen-2",
+  "cockpit-screen-3",
   "cockpit-pulse-surface",
   "cockpit-scanner-surface",
 ] as const;
+
+/** Scene Camera rectangle, normalized to the completed root image. */
+export type CockpitViewport = readonly [number, number, number, number];
+
+/** Map the independently measured 1672 × 941 camera plate into its actual slot. */
+export function cockpitPlate(
+  frame: { width: number; height: number },
+  viewport: CockpitViewport,
+) {
+  const width = viewport[2] * frame.width;
+  const height = viewport[3] * frame.height;
+  const scale = Math.min(width, height) / 941;
+  return {
+    scale,
+    left: viewport[0] * frame.width + (width - 1672 * scale) / 2,
+    top: viewport[1] * frame.height + (height - 941 * scale) / 2,
+  };
+}
 
 export function cockpitFields(
   snapshot: Inspection,
@@ -98,13 +117,12 @@ export function surfaceSample(
   );
   const surface = (flat ?? curved)!.fields;
   const localPose = cockpitFields(snapshot, name, ids.Transform!);
-  const pose =
-    panel < 3
-      ? globalPose(
-          localPose,
-          cockpitFields(snapshot, "cockpit-carousel", ids.Transform!),
-        )
-      : localPose;
+  let pose: Readonly<Record<string, unknown>> = localPose;
+  for (const parent of panel < 4
+    ? ["cockpit-carousel", "cockpit-carousel-mount", "cockpit-bridge"]
+    : ["cockpit-bridge"]) {
+    pose = globalPose(pose, cockpitFields(snapshot, parent, ids.Transform!));
+  }
   const x = (u - 0.5) * Number(surface.width);
   const y = (0.5 - v) * Number(surface.height);
   const k = curved ? Number(surface.curvature) : 0;
@@ -151,10 +169,13 @@ export function assertCylinder(
   ids: Readonly<Record<string, number>>,
   radius: number,
 ) {
-  const camera = cockpitFields(scene, "cockpit-camera", ids.Transform!);
+  const camera = globalPose(
+    cockpitFields(scene, "cockpit-carousel-mount", ids.Transform!),
+    cockpitFields(scene, "cockpit-bridge", ids.Transform!),
+  );
   const spans: { start: number; end: number; top: number; bottom: number }[] =
     [];
-  for (let panel = 0; panel < 3; panel++) {
+  for (let panel = 0; panel < 4; panel++) {
     const center = surfaceSample(scene, ids, panel, 0.5, 0.5);
     near(
       Number(center.surface.width),
@@ -181,9 +202,13 @@ export function assertCylinder(
         near(
           Math.hypot(point[0]!, point[2]!),
           radius,
-          "every sample is on the viewer-centered cylinder",
+          "every sample is on the bridge-mounted cylinder",
         );
-        near(normal[1]!, 0, "the shared cylinder axis follows Camera up");
+        near(
+          normal[1]!,
+          0,
+          "the shared cylinder axis follows the bridge mount",
+        );
         near(
           (normal[0]! * -point[0]! + normal[2]! * -point[2]!) / radius,
           1,
@@ -217,7 +242,7 @@ export function assertCylinder(
   });
   assert.ok(
     gaps.every((gap) => Math.abs(gap - 0.07) < 0.0001),
-    `three spans preserve their metric gaps: ${gaps}`,
+    `four spans preserve their metric gaps: ${gaps}`,
   );
   for (const span of spans.slice(1)) {
     near(span.top, spans[0]!.top, "top rims are aligned");
@@ -230,15 +255,18 @@ export function assertFlat(
   ids: Readonly<Record<string, number>>,
   radius: number,
 ) {
-  const camera = cockpitFields(scene, "cockpit-camera", ids.Transform!);
-  for (let panel = 0; panel < 5; panel++) {
+  const camera = globalPose(
+    cockpitFields(scene, "cockpit-carousel-mount", ids.Transform!),
+    cockpitFields(scene, "cockpit-bridge", ids.Transform!),
+  );
+  for (let panel = 0; panel < 6; panel++) {
     const sample = surfaceSample(scene, ids, panel, 0.5, 0.5);
     assert.equal(
       sample.provider,
       "flat",
       "Flat uses actual tangent FlatSurface providers",
     );
-    if (panel >= 3) continue;
+    if (panel >= 4) continue;
     near(
       Number(sample.surface.width),
       960 / 200,
@@ -253,7 +281,7 @@ export function assertFlat(
     near(
       Math.hypot(point[0]!, point[2]!),
       radius,
-      "flat tangent center uses displayed camera distance",
+      "flat tangent center uses authored mount distance",
     );
     const normal = rotate(sample.normal, camera, true);
     near(

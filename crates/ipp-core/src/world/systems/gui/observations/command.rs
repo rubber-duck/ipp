@@ -43,6 +43,30 @@ pub struct GuiObservationCommand {
 }
 
 impl GuiObservationCommand {
+    pub(in crate::world::systems::gui) fn input_binding_target(
+        &self,
+    ) -> Option<super::super::local::GuiEntityTarget> {
+        match self.subscription.0.classes {
+            GuiObservationClasses::Input(target) => Some(target),
+            _ => None,
+        }
+    }
+
+    pub(in crate::world::systems::gui) fn input_target(
+        &self,
+    ) -> Option<super::super::local::GuiEntityTarget> {
+        match self.subscription.0.classes {
+            GuiObservationClasses::Input(target) if self.subscribe => Some(target),
+            _ => None,
+        }
+    }
+
+    pub(in crate::world::systems::gui) fn reject_stale_target(&self) {
+        self.finish(GuiObservationControlResult::Rejected(
+            GuiObservationRejection::StaleSubscription,
+        ));
+    }
+
     /// Prepare without activating. Enqueue through GuiSystem without another command reply.
     pub fn prepare_subscribe(
         output: &GuiObservationOutput,

@@ -910,3 +910,179 @@ fn focus_an_overlay_moves_in_and_back_publishes_feedback_for_both_controls() {
     assert!(snapshot(&mut host, world, opener).focused);
     assert_eq!(focus_changes(&feedback), [(inside, false), (opener, true)]);
 }
+
+#[test]
+fn client_input_is_exclusive_and_does_not_leak_to_world_observers() {
+    use crate::systems::gui::local::{GuiClientInput, GuiInputTarget};
+
+    let (mut host, _, target, context) =
+        presented(ComponentValue::GuiInputTarget(GuiInputTarget::default()));
+    let world = target.world.id();
+    apply(
+        &mut host,
+        world,
+        vec![Command::insert_value(
+            EntityRef::Handle(target.entity),
+            ComponentValue::GuiLayout(crate::systems::gui::layout::GuiLayout {
+                width: 80.0,
+                height: 40.0,
+                ..Default::default()
+            }),
+        )],
+    );
+    frame(&mut host);
+    let input_output = output();
+    let general_output = output();
+    let subscription = subscribed(
+        &mut host,
+        world,
+        &input_output,
+        GuiObservationClasses::Input(target),
+    );
+    let _general = subscribed(
+        &mut host,
+        world,
+        &general_output,
+        GuiObservationClasses::All,
+    );
+    let duplicate = output();
+    let duplicate_subscription = duplicate
+        .new_subscription(target.world, GuiObservationClasses::Input(target))
+        .unwrap();
+    cut(
+        &mut host,
+        world,
+        &duplicate,
+        &duplicate_subscription,
+        2,
+        true,
+    );
+    frame(&mut host);
+    assert!(matches!(
+        records(&duplicate).as_slice(),
+        [GuiObservationRecord::Control {
+            result: GuiObservationControlResult::Rejected(
+                GuiObservationRejection::AlreadySubscribed
+            ),
+            ..
+        }]
+    ));
+
+    let event = GuiClientInput::Text {
+        text: "echo private 😀\n".into(),
+        paste: true,
+    };
+    let request = host.next_request();
+    let input = host
+        .service
+        .reserve_routed(
+            &host.host,
+            &context,
+            target,
+            request,
+            &[],
+            host.permit(world, request),
+        )
+        .unwrap();
+    let command =
+        GuiLocalCommand::client_input(input, subscription.id(), None, event.clone()).unwrap();
+    host.world_mut(world)
+        .unwrap()
+        .enqueue_system_command(GuiSystem::ID, 7, command)
+        .unwrap();
+    frame(&mut host);
+    assert!(records(&general_output).is_empty());
+    assert!(
+        matches!(records(&input_output).as_slice(), [GuiObservationRecord::Effect { effect, .. }] if effect.kind == GuiLocalEffectKind::Input(event))
+    );
+
+    cut(&mut host, world, &input_output, &subscription, 3, false);
+    frame(&mut host);
+    let replacement = output();
+    let _replacement_subscription = subscribed(
+        &mut host,
+        world,
+        &replacement,
+        GuiObservationClasses::Input(target),
+    );
+    let request = host.next_request();
+    let input = host
+        .service
+        .reserve_routed(
+            &host.host,
+            &context,
+            target,
+            request,
+            &[],
+            host.permit(world, request),
+        )
+        .unwrap();
+    let command = GuiLocalCommand::client_input(
+        input,
+        subscription.id(),
+        None,
+        GuiClientInput::Text {
+            text: "late".into(),
+            paste: false,
+        },
+    )
+    .unwrap();
+    host.world_mut(world)
+        .unwrap()
+        .enqueue_system_command(GuiSystem::ID, 7, command)
+        .unwrap();
+    frame(&mut host);
+    assert!(outcomes(&mut host, world).last().unwrap().result.is_err());
+    assert!(records(&replacement).is_empty());
+    assert!(matches!(
+        records(&input_output).as_slice(),
+        [GuiObservationRecord::Control {
+            result: GuiObservationControlResult::Unsubscribed,
+            ..
+        }]
+    ));
+}
+
+#[test]
+fn client_input_binding_rejects_replaced_component_lifetimes() {
+    use crate::systems::gui::local::GuiInputTarget;
+
+    let (mut host, world) = fixture();
+    let entity = create(
+        &mut host,
+        world,
+        ComponentValue::GuiInputTarget(GuiInputTarget::default()),
+    );
+    frame(&mut host);
+    let old = snapshot(&mut host, world, entity).target;
+    apply(
+        &mut host,
+        world,
+        vec![
+            Command::RemoveComponent {
+                entity: EntityRef::Handle(entity),
+                component: ComponentValue::GUI_INPUT_TARGET,
+            },
+            Command::insert_value(
+                EntityRef::Handle(entity),
+                ComponentValue::GuiInputTarget(GuiInputTarget::default()),
+            ),
+        ],
+    );
+    let output = output();
+    let subscription = output
+        .new_subscription(old.world, GuiObservationClasses::Input(old))
+        .unwrap();
+    cut(&mut host, world, &output, &subscription, 1, true);
+    frame(&mut host);
+    assert!(!subscription.is_active());
+    assert!(matches!(
+        records(&output).as_slice(),
+        [GuiObservationRecord::Control {
+            result: GuiObservationControlResult::Rejected(
+                GuiObservationRejection::StaleSubscription
+            ),
+            ..
+        }]
+    ));
+}

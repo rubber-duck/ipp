@@ -11,3 +11,5 @@ pub mod reliable_output;
 pub mod gui_input;
 
 pub mod world_serialization;
+
+pub mod web_content;

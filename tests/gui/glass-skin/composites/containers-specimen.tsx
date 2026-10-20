@@ -155,13 +155,16 @@ export function containersSpecimen(
                   )}
                 </PanelHeader>
                 {rows("main/channel", 4)}
-                <PanelFooter id="main/footer">
-                  <TextLine
-                    id="main/footer/state"
-                    text="ONLINE / SYNCED"
-                    tone="neutral"
-                    layout={{ flex: 1 }}
-                  />
+                <PanelFooter
+                  id="main/footer"
+                  leading={
+                    <TextLine
+                      id="main/footer/state"
+                      text="ONLINE / SYNCED"
+                      tone="neutral"
+                    />
+                  }
+                >
                   <SecondaryButton
                     id="main/footer/action"
                     label="DETAILS"

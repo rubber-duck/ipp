@@ -1,3 +1,14 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  LAYOUT_COLUMN,
+  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+  type GuiKitLayout,
+} from "../layout.js";
+
 import type { ValueChangeHandler } from "./value-synchronization.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
@@ -23,14 +34,7 @@ import { useEntityId } from "../../scope/identity.js";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Style, Font, Layout } from "../../gui/components.js";
 import { useGuiKit } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_LEAF,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import {
   CentredLine,
   EndCaption,
@@ -72,7 +76,8 @@ export interface LabelledSliderProps extends SliderCompositeProps {
   readonly scale?: SliderScaleMarks;
 }
 
-export function LabelledSlider(props: LabelledSliderProps) {
+export function LabelledSlider(inputProps: LabelledSliderProps) {
+  const props = useGuiKitLayout(inputProps);
   const {
     id: providedId,
     layer = 0,
@@ -151,7 +156,11 @@ export function LabelledSlider(props: LabelledSliderProps) {
       <Entity id={id}>
         <PresentationGate open />
         <Style layer={layer} />
-        <Layout kind={LAYOUT_COLUMN} height={rows * g.row + rail} {...layout} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          height={rows * g.row + rail}
+          {...layout}
+        />
         <Font source={kit.font} font_size={kit.fontSize} />
         <Children>
           {label !== undefined && (
@@ -210,7 +219,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         height={g.row + gap + box}
         gap={gap}
@@ -218,7 +227,7 @@ export function LabelledSlider(props: LabelledSliderProps) {
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
-        <Row id={`${id}/header`} height={kit.unit(t.denseRow)}>
+        <Row gap={0} id={`${id}/header`} height={kit.unit(t.denseRow)}>
           {label === undefined ? (
             <Entity id={`${id}/space`}>
               <PresentationGate open />

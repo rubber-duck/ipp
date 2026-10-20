@@ -1,0 +1,13 @@
+--- a/build.rs
++++ b/build.rs
+@@ -166,4 +166,9 @@
+         "linux" => {
+             // On Windows and Linux the cef files usually have to be next to the main binary.
+             // On macOS it's more complicated so we'll leave it to tools like tauri-cli for now.
+-            copy_cef_runtime_files(&cef_dir, target_dir)?;
++            // IPP resolves, validates and leases one immutable external runtime.
++            // Preserve normal CEF linking; only omit deployment staging copies.
++            println!("cargo::rerun-if-env-changed=IPP_CEF_EXTERNAL_RUNTIME");
++            if env::var("IPP_CEF_EXTERNAL_RUNTIME").as_deref() != Ok("1") {
++                copy_cef_runtime_files(&cef_dir, target_dir)?;
++            }

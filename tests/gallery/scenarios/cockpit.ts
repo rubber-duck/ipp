@@ -5,6 +5,7 @@ import {
   assertCylinder,
   assertFlat,
   COCKPIT_ANCHORS,
+  type CockpitViewport,
 } from "../cockpit-oracle.js";
 import { assertFrameRateData } from "./frame-rate.js";
 import { exerciseCockpitLights } from "./cockpit-lights.js";
@@ -38,6 +39,7 @@ export interface CockpitTrackingEvidence {
 }
 
 export interface CockpitDriver {
+  cameraViewport(): Promise<CockpitViewport>;
   tracking(): Promise<CockpitTrackingEvidence>;
   history(): Promise<DatasetPage>;
   contentHeight(panel: number, height: number | null): Promise<void>;
@@ -148,6 +150,7 @@ function exteriorDifference(
 ) {
   let windowChanges = 0;
   let foregroundChanges = 0;
+  const starPixels = new Set<number>();
   for (let y = 0; y < first.height; y++)
     for (let x = 0; x < first.width; x++) {
       const index = (y * first.width + x) * 4;
@@ -161,21 +164,75 @@ function exteriorDifference(
       );
       if (delta <= 24) continue;
       if (
+        category === "stars" &&
+        Math.max(
+          first.pixels[index]!,
+          first.pixels[index + 1]!,
+          first.pixels[index + 2]!,
+        ) < 8
+      )
+        starPixels.add(y * first.width + x);
+      if (
         y < first.height * 0.62 &&
         x > first.width * 0.05 &&
         x < first.width * 0.95
       )
         windowChanges++;
-      if (y > first.height * 0.74) foregroundChanges++;
+      // The fixed-size console no longer covers the entire lower viewport.
+      // Its central dial deck is opaque; space beside its ends can show stars.
+      if (
+        y > first.height * 0.85 &&
+        y < first.height * 0.95 &&
+        x > first.width * 0.3 &&
+        x < first.width * 0.7
+      )
+        foregroundChanges++;
     }
   assert.ok(
-    windowChanges > 150,
+    windowChanges > (category === "stars" ? 40 : 150),
     `${category} changes visible window pixels (${windowChanges})`,
   );
   assert.ok(
     foregroundChanges < 100,
     `${category} preserves cockpit pixels (${foregroundChanges})`,
   );
+  if (category === "stars") {
+    // Isolate stars against empty space, excluding GUI text and the planet.
+    // Connected bright regions must remain compact at different output sizes.
+    const areas: number[] = [];
+    while (starPixels.size) {
+      const queue = [starPixels.values().next().value!];
+      starPixels.delete(queue[0]!);
+      let area = 0;
+      while (queue.length) {
+        const pixel = queue.pop()!;
+        area++;
+        const x = pixel % first.width;
+        const y = Math.floor(pixel / first.width);
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            const nextX = x + dx;
+            const nextY = y + dy;
+            if (
+              nextX < 0 ||
+              nextX >= first.width ||
+              nextY < 0 ||
+              nextY >= first.height
+            )
+              continue;
+            const next = nextY * first.width + nextX;
+            if (starPixels.delete(next)) queue.push(next);
+          }
+      }
+      areas.push(area);
+    }
+    assert.ok(areas.length >= 3, `visible distant stars (${areas.length})`);
+    const maximum = Math.max(...areas);
+    assert.ok(
+      maximum < Math.max(24, 32 * (first.width / 1600) ** 2),
+      `stars remain compact points rather than soft blobs (${maximum} pixels)`,
+    );
+  }
 }
 
 export async function exerciseCockpitTracking(driver: CockpitDriver) {
@@ -475,51 +532,28 @@ async function exerciseForms(driver: CockpitDriver) {
     await driver.advance(0.3);
     const terminal = await driver.state();
     const terminalText = texts(terminal, 2);
-    assert.match(terminalText.join("\n"), /Arch Linux/);
-    assert.match(terminalText.join("\n"), /simulat/i);
+    assert.match(terminalText.join("\n"), /BashKit.*Ghostty/);
+    const input = terminal.panels[2]!.entities.find(
+      (entity) => entity.metadata.symbolicId === "cockpit-terminal",
+    );
     assert.ok(
-      terminalText.some((text) => text.includes("\uE0B0")),
-      "Powerline separators use actual Nerd Font characters",
+      input?.components.some(
+        (component) =>
+          component.component === terminal.componentIds.GuiInputTarget,
+      ),
+      "terminal exposes a generic client-managed input target",
     );
     assert.ok(
       !terminal.panels[2]!.entities.some((entity) =>
-        entity.components.some(
-          (component) =>
-            component.component === terminal.componentIds.GuiTextInput,
-        ),
+        entity.metadata.classes.includes("terminal-content"),
       ),
-      "terminal presents a transcript without an editable input",
-    );
-    for (const id of ["cockpit-terminal-run", "cockpit-terminal-reset"])
-      assert.ok(
-        !terminal.panels[2]!.entities.some(
-          (entity) => entity.metadata.symbolicId === id,
-        ),
-        `${id} is absent from the terminal presentation`,
-      );
-    const cursor = terminal.panels[2]!.controllers?.find((controller) =>
-      controller.description.drivers.some((driver) =>
-        driver.source.includes("terminal"),
-      ),
-    );
-    assert.ok(
-      cursor,
-      "terminal cursor owns a real native animation controller",
-    );
-    assert.equal(cursor.state, "playing", "cursor blinks on the Host clock");
-    await driver.advance(0.2);
-    const animated = (await driver.state()).panels[2]!.controllers?.find(
-      (controller) => controller.id === cursor.id,
-    );
-    assert.ok(
-      animated && animated.time !== cursor.time,
-      "cursor controller advances independently of client edits",
+      "loading the cockpit does not start a shell",
     );
     visible(await driver.capture(`cockpit-forms-${skin}-terminal`));
     assert.deepEqual(
       (await driver.state()).panelWorlds,
       worlds,
-      "tabs and edits retain all five Canvas Worlds",
+      "tabs and edits retain all six Canvas Worlds",
     );
     await driver.options({ carousel: 0 });
     await driver.advance(0.3);
@@ -560,7 +594,7 @@ export async function exerciseCockpit(
   };
   const initial = await driver.state();
   assert.equal(initial.navigation, "fixed");
-  assert.equal(initial.panels.length, 5);
+  assert.equal(initial.panels.length, 6);
   assert.ok(
     initial.panels.every((panel) =>
       panel.resources.every((resource) => resource.status === "loaded"),
@@ -608,7 +642,7 @@ export async function exerciseCockpit(
   );
   const glass = await driver.capture("cockpit-glass");
   visible(glass);
-  for (let panel = 3; panel < 5; panel++) {
+  for (let panel = 4; panel < 6; panel++) {
     assert.ok(
       !initial.panels[panel]!.entities.some((entry) =>
         entry.components.some(
@@ -838,7 +872,7 @@ export async function exerciseCockpit(
       assert.deepEqual(
         flat.panelWorlds,
         initial.panelWorlds,
-        "Flat retains all five Canvas Worlds",
+        "Flat retains all six Canvas Worlds",
       );
       await driver.options({ carousel: 0, charge: 0.7 });
       await driver.advance(0.3);
@@ -866,9 +900,9 @@ export async function exerciseCockpit(
       assert.deepEqual(
         curved.panelWorlds,
         initial.panelWorlds,
-        "Curved retains all five Canvas Worlds",
+        "Curved retains all six Canvas Worlds",
       );
-      for (const name of COCKPIT_ANCHORS.slice(3)) {
+      for (const name of COCKPIT_ANCHORS.slice(4)) {
         assert.deepEqual(
           fields(curved.scene, name, initial.componentIds.Transform!),
           fields(initial.scene, name, initial.componentIds.Transform!),

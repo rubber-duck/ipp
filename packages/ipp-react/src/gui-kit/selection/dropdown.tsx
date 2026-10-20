@@ -1,3 +1,4 @@
+import { useGuiKitLayout, type GuiKitLayoutProps } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A dropdown: a trigger showing the selected option's label, or a
@@ -19,12 +20,14 @@ import { useEntityId } from "../../scope/identity.js";
  */
 import { useState } from "react";
 import type { ChoiceProps } from "../choice.js";
-import type { GuiKitLayout } from "../layout.js";
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen, type OverlayOpenProps } from "../overlays/overlay.js";
 import { SelectList, SelectTrigger } from "./select-trigger.js";
 
-export interface DropdownProps extends ChoiceProps, OverlayOpenProps {
+export interface DropdownProps
+  extends ChoiceProps,
+    OverlayOpenProps,
+    GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the trigger; the list and its rows extend it. */
@@ -37,8 +40,6 @@ export interface DropdownProps extends ChoiceProps, OverlayOpenProps {
   readonly disabled?: boolean;
   /** Rows the list shows before it scrolls; six by default. */
   readonly maxRows?: number;
-  /** Explicit trigger layout; inside a Form its default width fills the field. */
-  readonly layout?: GuiKitLayout;
 }
 
 /** The selection of a single-choice selection control. */
@@ -56,17 +57,18 @@ export function useSelection({ value, defaultValue, onChange }: ChoiceProps) {
   };
 }
 
-export function Dropdown({
-  id: providedId,
-  layer = 0,
-  options,
-  placeholder = "Select",
-  label,
-  disabled = false,
-  maxRows,
-  layout,
-  ...state
-}: DropdownProps) {
+export function Dropdown(props: DropdownProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    options,
+    placeholder = "Select",
+    label,
+    disabled = false,
+    maxRows,
+    layout,
+    ...state
+  } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const overlay = useOverlayOpen(state);
   const selection = useSelection(state);

@@ -13,6 +13,12 @@ mod gl_call_tests;
 #[cfg(feature = "instrumentation")]
 mod gpu_queries;
 
+mod completion_fences;
+mod dma_buf;
+pub use dma_buf::GlesDmaBufImport;
+#[cfg(target_os = "linux")]
+pub use dma_buf::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufPlane};
+
 mod custom;
 mod lighting;
 mod linear_target;
@@ -48,6 +54,11 @@ use loader::Functions;
 /// detection of context destruction belong to the host.
 pub struct GlesRenderDevice {
     gl: Functions,
+    completion_fences: std::collections::BTreeMap<u64, *mut c_void>,
+    #[cfg(target_os = "linux")]
+    texture_extents: std::collections::BTreeMap<u32, (u32, u32)>,
+    #[cfg(target_os = "linux")]
+    dma_buf_copy: Option<dma_buf::GlesDmaBufCopy>,
     readbacks: Vec<std::rc::Weak<std::cell::RefCell<Option<texture_readback::ReadbackStorage>>>>,
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::gpu_queries::GpuQueryPool<gpu_queries::GlesGpuQueries>,

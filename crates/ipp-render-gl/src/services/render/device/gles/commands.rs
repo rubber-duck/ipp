@@ -70,6 +70,26 @@ impl RenderDevice for GlesRenderDevice {
     type Texture = u32;
     type TextureReadback = super::GlesTextureReadback;
 
+    fn create_completion_fence(&mut self) -> Result<u64, RenderError> {
+        self.create_fence()
+    }
+
+    fn poll_completion_fence(&mut self, fence: u64) -> Result<bool, RenderError> {
+        self.poll_fence(fence)
+    }
+
+    fn delete_completion_fence(&mut self, fence: u64) {
+        self.delete_fence(fence);
+    }
+
+    fn finish_submitted_work(&mut self) -> Result<(), RenderError> {
+        // SAFETY: The Host keeps this creating context current through live
+        // teardown. No pointers or aliases are passed; all earlier work completes
+        // before its owned storage is deleted or its accounting released.
+        unsafe { self.gl.finish() };
+        self.check()
+    }
+
     fn texture_readback_supported(&self) -> bool {
         true
     }
@@ -718,6 +738,8 @@ impl RenderDevice for GlesRenderDevice {
             self.delete_texture(texture);
             return Err(error);
         }
+        #[cfg(target_os = "linux")]
+        self.texture_extents.insert(texture, (width, height));
         Ok(texture)
     }
 
@@ -1014,6 +1036,8 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn delete_texture(&mut self, texture: u32) {
+        #[cfg(target_os = "linux")]
+        self.texture_extents.remove(&texture);
         // SAFETY: Consumes the owned name once in the current context; GL ignores zero.
         unsafe { self.gl.delete_textures(1, &texture) };
     }

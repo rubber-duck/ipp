@@ -64,6 +64,8 @@ COMPONENTS = [
     "CanvasLayerTransition",
     "GuiMetrics",
     "PresentationGate",
+    "GuiInputTarget",
+    "CanvasHtml",
     "BufferDataSourceBinding",
     "StreamingDataSourceBinding",
     "PlotFrame2d",

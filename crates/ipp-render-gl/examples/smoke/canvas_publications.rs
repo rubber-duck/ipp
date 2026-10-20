@@ -409,6 +409,7 @@ fn opacity_cache<D: RenderDevice>(
                 ComponentValue::SurfaceCache(ipp_core::components::SurfaceCache {
                     direct_distance: 0.0,
                     resolution_scale: 1.0,
+                    allocation_priority: 1.0,
                     max_refresh_hz: 1.0,
                     max_texture_size: 0,
                     force_cache: false,

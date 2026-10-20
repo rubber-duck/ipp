@@ -456,6 +456,7 @@ export async function guiProjectedSurfaces(
           "projected-kit-panel",
           "projected-kit-header",
           "projected-kit-footer",
+          "projected-kit-footer/text",
           "projected-kit-header/separator",
           "projected-kit-footer/separator",
         ];
@@ -479,6 +480,29 @@ export async function guiProjectedSurfaces(
           inserted.ok,
           "Raw client failed to add layout observation components",
         );
+        // Text measurement becomes meaningful only after its font is decoded.
+        // A completed capture alone can still precede asynchronous asset readiness.
+        const readyDeadline = performance.now() + 30_000;
+        for (;;) {
+          const ready = await observer.inspect();
+          check(
+            !ready.resources.some((resource) => resource.status === "failed"),
+            "Projected resources failed",
+          );
+          if (
+            ready.resources.some(
+              (resource) =>
+                resource.kind === 17 && resource.status === "loaded",
+            ) &&
+            ready.resources.every((resource) => resource.status === "loaded")
+          )
+            break;
+          check(
+            performance.now() < readyDeadline,
+            "Projected resources did not load before layout assertions",
+          );
+          await observer.waitForFrame(ready.tick);
+        }
         diagnosticFrame = await session.capture();
         const snapshot = await observer.inspect();
         layout = Object.fromEntries(
@@ -487,6 +511,7 @@ export async function guiProjectedSurfaces(
             "projected-kit-header",
             "projected-kit-button",
             "projected-kit-footer",
+            "projected-kit-footer/text",
             "projected-kit-header/separator",
             "projected-kit-footer/separator",
           ].map((name) => {
@@ -512,6 +537,21 @@ export async function guiProjectedSurfaces(
       const header = layout["projected-kit-header"]!;
       const button = layout["projected-kit-button"]!;
       const footer = layout["projected-kit-footer"]!;
+      const footerText = layout["projected-kit-footer/text"]!;
+      check(
+        footerText.width > 10 && footerText.height > 5,
+        "Footer text has measured content",
+      );
+      check(
+        Math.abs(footer.height - footerText.height - 8.625) < 0.1,
+        "Footer fits its text, two label insets and separator at font size 8",
+      );
+      check(
+        Math.abs(
+          footer.x + footer.width - footerText.x - footerText.width - 12,
+        ) < 0.1,
+        "Footer text ends at the container inset",
+      );
       check(
         header.height > 15 && button.height > 10 && footer.height > 15,
         `Grouped panel parts collapsed: ${JSON.stringify(layout)}`,
@@ -665,29 +705,55 @@ export async function guiProjectedSurfaces(
         "projected-kit-footer/separator",
       ]) {
         const bounds = layout[name]!;
+        const separator = name.endsWith("/separator");
         let ink = 0;
         for (let y = 90; y < VIEW[1] - 15; y++)
           for (let x = 60; x < 260; x++) {
-            const point = projectedSurfaceRay(pose, [x, y], 1);
-            if (
-              !point ||
-              point[0] < bounds.x ||
-              point[0] >= bounds.x + bounds.width ||
-              point[1] < bounds.y ||
-              point[1] >= bounds.y + bounds.height
-            )
-              continue;
             const offset = (y * VIEW[0] + x) * 4;
             if (
               Math.max(
                 pixels[offset]!,
                 pixels[offset + 1]!,
                 pixels[offset + 2]!,
-              ) > 100
+              ) <= 100
             )
-              ink++;
+              continue;
+            if (separator) {
+              // A subpixel line may cover pixels without containing their
+              // centres. Check pixel footprints and exclude the panel edges.
+              const corners = [
+                projectedSurfaceRay(pose, [x - 0.5, y - 0.5], 1),
+                projectedSurfaceRay(pose, [x + 0.5, y - 0.5], 1),
+                projectedSurfaceRay(pose, [x - 0.5, y + 0.5], 1),
+                projectedSurfaceRay(pose, [x + 0.5, y + 0.5], 1),
+              ];
+              if (corners.some((point) => !point)) continue;
+              const xs = corners.map((point) => point![0]);
+              const ys = corners.map((point) => point![1]);
+              if (
+                Math.max(...xs) <= bounds.x + bounds.width * 0.2 ||
+                Math.min(...xs) >= bounds.x + bounds.width * 0.8 ||
+                Math.max(...ys) <= bounds.y ||
+                Math.min(...ys) >= bounds.y + bounds.height
+              )
+                continue;
+            } else {
+              const point = projectedSurfaceRay(pose, [x, y], 1);
+              if (
+                !point ||
+                point[0] < bounds.x ||
+                point[0] >= bounds.x + bounds.width ||
+                point[1] < bounds.y ||
+                point[1] >= bounds.y + bounds.height
+              )
+                continue;
+            }
+            ink++;
           }
-        check(ink > 2, `${name} has no ink on its inherited physical rank`);
+        check(
+          ink > (separator ? 10 : 2),
+          `${name} has insufficient ink on its inherited physical rank: pose ${index}, ${ink} pixels`,
+        );
       }
       check(errors.length === 0, errors.map(String).join("; "));
       if (index === 0) {

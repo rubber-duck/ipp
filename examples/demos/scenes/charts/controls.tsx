@@ -76,7 +76,8 @@ export function ChartControls(props: GallerySceneControlsProps) {
             ? `Selected ${(state.selection as { chart: string }).chart}`
             : "Click a data mark to inspect it"
         }
-        layout={{ margin_top: 16 }}
+        size="small"
+        tone="neutral"
       />
       {state.selection && (
         <SceneButtons

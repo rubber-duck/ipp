@@ -1,3 +1,15 @@
+import {
+  KitLayout,
+  useGuiKitLayout,
+  type GuiKitLayoutProps,
+  LAYOUT_COLUMN,
+  LAYOUT_ROW,
+  LAYOUT_STACK,
+  Row,
+  Strut,
+  type GuiKitLayout,
+} from "../layout.js";
+
 import { useEntityId } from "../../scope/identity.js";
 /**
  * One choice from a labelled set of options. The group is one Tab stop,
@@ -35,14 +47,7 @@ import {
   type ChoiceProps,
 } from "../choice.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
-import {
-  LAYOUT_COLUMN,
-  LAYOUT_ROW,
-  LAYOUT_STACK,
-  Row,
-  Strut,
-  type GuiKitLayout,
-} from "../layout.js";
+
 import { TextLine, lineWidth } from "../text.js";
 
 export interface RadioOption {
@@ -52,7 +57,7 @@ export interface RadioOption {
   readonly disabled?: boolean;
 }
 
-export interface RadioGroupProps extends ChoiceProps {
+export interface RadioGroupProps extends ChoiceProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   /** Symbolic id of the group's root entity; options extend it. */
@@ -64,7 +69,6 @@ export interface RadioGroupProps extends ChoiceProps {
   readonly horizontal?: boolean;
   /** Space between choices; compact vertically, field spacing horizontally. */
   readonly optionGap?: number;
-  readonly layout?: GuiKitLayout;
 }
 
 /** The option geometry in the World's units. */
@@ -78,16 +82,17 @@ function geometry(kit: GuiKitScope) {
   };
 }
 
-export function RadioGroup({
-  id: providedId,
-  layer = 0,
-  label,
-  options,
-  horizontal = false,
-  optionGap,
-  layout,
-  ...props
-}: RadioGroupProps) {
+export function RadioGroup(inputProps: RadioGroupProps) {
+  const {
+    id: providedId,
+    layer = 0,
+    label,
+    options,
+    horizontal = false,
+    optionGap,
+    layout,
+    ...props
+  } = useGuiKitLayout(inputProps);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const g = geometry(kit);
@@ -107,7 +112,7 @@ export function RadioGroup({
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
-      <Layout
+      <KitLayout
         kind={LAYOUT_COLUMN}
         height={
           (label === undefined ? 0 : g.caption + captionGap) + optionsHeight
@@ -118,7 +123,11 @@ export function RadioGroup({
       <Font source={kit.font} font_size={kit.fontSize} />
       <Children>
         {label !== undefined && (
-          <Row id={`${id}/caption`} height={kit.unit(kit.tokens.denseRow)}>
+          <Row
+            gap={0}
+            id={`${id}/caption`}
+            height={kit.unit(kit.tokens.denseRow)}
+          >
             <TextLine id={`${id}/caption/text`} text={label} tone="accent" />
           </Row>
         )}
@@ -174,7 +183,12 @@ function Option({
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Layout kind={LAYOUT_ROW} width={width} height={g.height} {...layout} />
+      <KitLayout
+        kind={LAYOUT_ROW}
+        width={width}
+        height={g.height}
+        {...layout}
+      />
       <Children>
         <Strut id={`${id}/strut`} height={g.height} />
         <Entity id={`${id}/mark`}>

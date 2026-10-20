@@ -179,6 +179,9 @@ pub(in crate::world::systems) fn control_paint(
     let entity = painted.control.target.entity;
     let index = entity.index() as usize;
     let kind = painted.control.kind;
+    if kind == GuiControlKind::InputTarget {
+        return Some(Vec::new());
+    }
     let enabled = painted.eligibility.enabled;
     let (skin, theme) = skin(context.world, entity).ok()?;
     if !painted.eligibility.available || !painted.eligibility.visible {
@@ -408,7 +411,7 @@ pub(in crate::world::systems) fn control_paint(
                 }
             }
         }
-        GuiControlKind::Button | GuiControlKind::TextInput => {
+        GuiControlKind::InputTarget | GuiControlKind::Button | GuiControlKind::TextInput => {
             let icon = resolve(GuiPrimitivePart::Icon);
             if icon.color.is_some() || icon.asset.is_some() {
                 let edge = (size[1] * metrics.icon_ratio).min(size[0]);

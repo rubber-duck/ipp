@@ -103,6 +103,8 @@ const CONTRACT_LIMITS: &[(&str, &str, bool)] = &[
 /// Physical input bounds the maintained Host client reads by name, present exactly when
 /// the target compiles GUI, as `(name, layout, field)`.
 const HOST_LIMITS: &[(&str, &str, &str)] = &[
+    ("GUI_CLIENT_KEY_BYTES", "gui-client-key", "key"),
+    ("GUI_CLIENT_TEXT_BYTES", "gui-client-text", "text"),
     (
         "GUI_PHYSICAL_POINTERS",
         "gui-physical-cancelled",
@@ -114,6 +116,8 @@ const HOST_LIMITS: &[(&str, &str, &str)] = &[
 
 /// GUI payload bounds, present exactly when the target compiles GUI.
 const GUI_FIELD_LIMITS: &[(&str, &str, &str, bool)] = &[
+    ("GUI_CLIENT_KEY_BYTES", "gui-client-key", "key", false),
+    ("GUI_CLIENT_TEXT_BYTES", "gui-client-text", "text", false),
     (
         "GUI_OBSERVATION_CONTROL_BYTES",
         "request-gui-observation",
@@ -130,6 +134,8 @@ const GUI_FIELD_LIMITS: &[(&str, &str, &str, bool)] = &[
 
 /// Every constant name this module emits, reserved against component names.
 pub(super) const CODEC_LIMIT_NAMES: &[&str] = &[
+    "GUI_CLIENT_KEY_BYTES",
+    "GUI_CLIENT_TEXT_BYTES",
     "DATA_AUTHORING",
     "DATASET_CHUNK_BYTES",
     "DATASET_UPDATE_BYTES",

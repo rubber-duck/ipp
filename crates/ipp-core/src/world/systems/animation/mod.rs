@@ -5,12 +5,15 @@ mod controller;
 mod gui_motion;
 mod lifecycle;
 mod math;
+mod motion;
 mod persistence;
 mod system;
 mod system_state;
 mod targets;
 mod update;
 mod world_api;
+
+pub use motion::{AnimationMotionControl, AnimationMotionMode, AnimationMotionState};
 
 #[cfg(feature = "instrumentation")]
 mod sampling_profile;
@@ -169,6 +172,8 @@ pub enum AnimationPlaybackStatus {
 /// Ordered controller operation. Only a Host advances World time.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AnimationPlaybackControl {
+    /// Drive sample position with bounded Host-time motion.
+    Motion(AnimationMotionControl),
     /// Resume, or replay a completed controller from its directional start.
     Play,
     /// Set a finite signed speed and resume without rewinding an endpoint.
@@ -194,6 +199,8 @@ pub struct AnimationControllerSnapshot {
     pub state: AnimationPlaybackStatus,
     /// Local time, frozen while sources are pending.
     pub time: f64,
+    /// Procedural cursor motion; its position is `time`.
+    pub motion: Option<AnimationMotionState>,
     /// Active crossfade state, when this controller is transitioning.
     pub transition: Option<AnimationControllerTransitionState>,
 }

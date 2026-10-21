@@ -9,11 +9,11 @@ use crate::systems::animation::{
     ANIMATION_TYPE, AnimationAccess, AnimationController, AnimationControllerCommand,
     AnimationControllerDescription, AnimationControllerId, AnimationControllerOutcome,
     AnimationControllerSnapshot, AnimationControllerState, AnimationControllerTransition,
-    AnimationControllerTransitionState, AnimationDriverDescription,
-    AnimationPersistentContribution, AnimationPersistentState, AnimationPersistentTransitionSource,
-    AnimationPlaybackControl, AnimationPlaybackEvent, AnimationPlaybackEventKind,
-    AnimationPlaybackStatus, AnimationTrackTarget, AnimationTransitionStartTime, AnimationValue,
-    MAX_CONTROLLERS,
+    AnimationControllerTransitionState, AnimationDriverDescription, AnimationMotionMode,
+    AnimationMotionState, AnimationPersistentContribution, AnimationPersistentState,
+    AnimationPersistentTransitionSource, AnimationPlaybackControl, AnimationPlaybackEvent,
+    AnimationPlaybackEventKind, AnimationPlaybackStatus, AnimationTrackTarget,
+    AnimationTransitionStartTime, AnimationValue, MAX_CONTROLLERS,
 };
 use crate::{
     ComponentValue, EntityId, ErrorReason, services::asset_management::AssetDemandSelection,
@@ -104,6 +104,7 @@ impl AnimationAccess<'_, '_> {
             id,
             AnimationController {
                 snapshot: AnimationControllerSnapshot {
+                    motion: None,
                     id,
                     description,
                     state: AnimationPlaybackStatus::Stopped,
@@ -148,6 +149,12 @@ impl AnimationAccess<'_, '_> {
         let incarnations = self
             .read()
             .validate_controller_description(&description, old.snapshot.time)?;
+        if old.snapshot.motion.is_some() {
+            if description.looping {
+                return Err(ErrorReason::InvalidValue);
+            }
+            self.validate_transition_targets(&description, &incarnations)?;
+        }
         let demand = self
             .read()
             .controller_demand(Some((id, &description)), None)?;
@@ -285,6 +292,7 @@ impl AnimationAccess<'_, '_> {
         };
         let mut controller = AnimationController {
             snapshot: AnimationControllerSnapshot {
+                motion: None,
                 id,
                 description: transition.description,
                 state,
@@ -401,6 +409,7 @@ impl AnimationAccess<'_, '_> {
             AnimationPlaybackControl::Play
                 | AnimationPlaybackControl::PlayAtSpeed(_)
                 | AnimationPlaybackControl::Restart
+                | AnimationPlaybackControl::Motion(_)
         ) && controller.drivers.is_empty()
             && controller.structural_drivers.is_empty()
         {
@@ -426,7 +435,20 @@ impl AnimationAccess<'_, '_> {
                         .and_then(|key| self.read().clip_by_key(key))?;
                     Some(duration.max(clip.duration()))
                 });
+        if let AnimationPlaybackControl::Motion(motion) = control {
+            if controller.snapshot.transition.is_some()
+                || controller.snapshot.description.looping
+                || known_duration.is_some_and(|duration| motion.max > duration)
+            {
+                return Err(ErrorReason::InvalidValue);
+            }
+            self.validate_transition_targets(
+                &controller.snapshot.description,
+                incarnations.as_ref().unwrap_or(&controller.incarnations),
+            )?;
+        }
         let replay_endpoint = control == AnimationPlaybackControl::Play
+            && controller.snapshot.motion.is_none()
             && matches!(
                 controller.snapshot.state,
                 AnimationPlaybackStatus::Stopped | AnimationPlaybackStatus::Completed
@@ -455,7 +477,53 @@ impl AnimationAccess<'_, '_> {
         let mut controller = self.system.state.take_controller(id).unwrap();
         let old = controller.snapshot.state;
         let mut event = None;
+        if matches!(
+            control,
+            AnimationPlaybackControl::PlayAtSpeed(_)
+                | AnimationPlaybackControl::Seek(_)
+                | AnimationPlaybackControl::Restart
+                | AnimationPlaybackControl::Stop
+        ) {
+            controller.snapshot.motion = None;
+        }
         match control {
+            AnimationPlaybackControl::Motion(motion) => {
+                let velocity = motion.velocity.unwrap_or_else(|| {
+                    controller
+                        .snapshot
+                        .motion
+                        .map_or(0.0, |state| state.velocity)
+                });
+                controller.snapshot.time = motion
+                    .position
+                    .unwrap_or(controller.snapshot.time)
+                    .clamp(motion.min, motion.max);
+                controller.snapshot.motion = Some(AnimationMotionState {
+                    mode: motion.mode,
+                    velocity,
+                    min: motion.min,
+                    max: motion.max,
+                });
+                controller.snapshot.state = if motion.mode == AnimationMotionMode::Hold {
+                    AnimationPlaybackStatus::Paused
+                } else {
+                    AnimationPlaybackStatus::Playing
+                };
+                controller.sought = motion.position.is_some();
+                controller.directional_start_pending = false;
+                if let Some(incarnations) = incarnations {
+                    controller.incarnations = incarnations;
+                }
+                if old != controller.snapshot.state {
+                    event = Some(
+                        if controller.snapshot.state == AnimationPlaybackStatus::Playing {
+                            AnimationPlaybackEventKind::Started
+                        } else {
+                            AnimationPlaybackEventKind::Paused
+                        },
+                    );
+                }
+            }
             AnimationPlaybackControl::Play
             | AnimationPlaybackControl::PlayAtSpeed(_)
             | AnimationPlaybackControl::Restart => {
@@ -609,7 +677,11 @@ impl AnimationAccess<'_, '_> {
                 self.read()
                     .validate_controller_description(&snapshot.description, snapshot.time)?
             };
+            self.validate_restored_motion(&snapshot, &incarnations)?;
             let directional_start_pending = directional_starts.contains(&snapshot.id);
+            if directional_start_pending && snapshot.motion.is_some() {
+                return Err(ErrorReason::InvalidValue);
+            }
             controllers.insert(
                 snapshot.id,
                 AnimationController {
@@ -780,6 +852,21 @@ impl AnimationAccess<'_, '_> {
         })
     }
 
+    fn validate_restored_motion(
+        &self,
+        snapshot: &AnimationControllerSnapshot,
+        incarnations: &[(u64, AnimationTrackTarget)],
+    ) -> Result<(), ErrorReason> {
+        if let Some(motion) = snapshot.motion {
+            motion.validate(snapshot.time)?;
+            if snapshot.description.looping || snapshot.transition.is_some() {
+                return Err(ErrorReason::InvalidValue);
+            }
+            self.validate_transition_targets(&snapshot.description, incarnations)?;
+        }
+        Ok(())
+    }
+
     fn restored_transition_controller(
         &self,
         snapshot: AnimationControllerSnapshot,
@@ -795,6 +882,7 @@ impl AnimationAccess<'_, '_> {
             self.read()
                 .validate_controller_description(&snapshot.description, snapshot.time)?
         };
+        self.validate_restored_motion(&snapshot, &incarnations)?;
         Ok(AnimationController {
             snapshot,
             drivers: Vec::new(),
@@ -855,6 +943,9 @@ impl AnimationAccess<'_, '_> {
 pub(in crate::world::systems::animation) fn validate_control(
     control: AnimationPlaybackControl,
 ) -> Result<(), ErrorReason> {
+    if let AnimationPlaybackControl::Motion(motion) = control {
+        motion.validate()?;
+    }
     if matches!(control, AnimationPlaybackControl::Seek(time) if !time.is_finite() || time < 0.0)
         || matches!(control, AnimationPlaybackControl::PlayAtSpeed(speed) if !speed.is_finite())
     {

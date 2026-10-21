@@ -103,7 +103,7 @@ test("cockpit bridge and GUI mount retain their world geometry across browser as
           initial,
           "viewport resize cannot change physical bridge or cylinder geometry",
         );
-        assertCylinder(state.scene, state.componentIds, 8.8);
+        assertCylinder(state.scene, state.componentIds, 10);
         await app.capture(`cockpit-spatial-${width}x${height}`);
         const frame = await app.call<RgbaImage>("image");
         assert.equal(frame.width, width);

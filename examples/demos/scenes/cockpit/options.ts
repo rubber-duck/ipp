@@ -47,7 +47,7 @@ export const COCKPIT_DEFAULTS: CockpitOptions = {
   charge: 0.7,
   panelOpacity: 0.98,
   skin: "glass",
-  projection: COCKPIT_SCREEN_DISTANCE.min,
+  projection: 10,
   surface: "curved",
   surfaceCaching: "off",
   surfaceRefreshHz: 5,

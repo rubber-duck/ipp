@@ -70,6 +70,7 @@ for (const name of ["headless", "render"] as const) {
           assert.equal(result.contract?.synchronizedTargets, 2);
           assert.equal(result.contract?.withdrawnBase, 88);
           assert.equal(result.contract?.signedPlayback, true);
+          assert.equal(result.contract?.analyticalMotion, true);
           return;
         }
         const [left, middle, right, paused, stopped] = result.captures;

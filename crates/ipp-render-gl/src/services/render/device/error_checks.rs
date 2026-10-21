@@ -2,8 +2,10 @@
 //!
 //! `getError` waits for the GL implementation to process every queued command,
 //! so each poll is a CPU/GPU synchronization. Allocations, compilation, resource
-//! uploads and passes whose results are kept (Surface cache repaints, glyph
-//! atlas population and shadow passes) check when they finish. Draws, uniforms,
+//! uploads and passes whose results are kept check when they finish. WebGL
+//! coalesces Surface/Camera pass checks at the owning frame's end; a failed
+//! frame invalidates derived Surface images before reuse. Glyph atlas population
+//! and shadow passes still check immediately. Draws, uniforms,
 //! transient streams, retained-batch and instance-stream replacement and the
 //! frame start check only in exhaustive mode, which attributes an error to the
 //! call that raised it.

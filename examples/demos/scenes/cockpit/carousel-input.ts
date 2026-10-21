@@ -17,11 +17,14 @@ interface Grab {
   readonly pointer: bigint;
   readonly start: readonly [number, number];
   point: readonly [number, number];
-  readonly focus: number;
+  focus: number;
   admitted: boolean;
   released: boolean;
   angle: number;
   basis: readonly (readonly number[])[];
+  sampleFocus: number;
+  sampleTime: number;
+  velocity: number;
 }
 
 export class CockpitCarouselInput implements GallerySceneInput {
@@ -31,22 +34,28 @@ export class CockpitCarouselInput implements GallerySceneInput {
   private wheelIntent: number | undefined;
   private wheelSequence = 0;
   private gestureSequence = 0;
+  private wheelEnd: ReturnType<typeof setTimeout> | undefined;
 
   constructor(
     private readonly controls: {
       signal: AbortSignal;
+      ready(): boolean;
       camera: Pose;
       client: PickingWorldClient;
       view(): ViewQueryTarget;
       panes(): readonly { client: Client; grip: bigint }[];
       ownsWheelHit?(outcome: GuiInputRoutingOutcome): boolean;
       wheel(focus: number, current: () => boolean): Promise<void>;
+      releaseWheel(focus: number, current: () => boolean): Promise<void>;
+      begin(current: () => boolean): Promise<number>;
+      onError(error: unknown): void;
       focus(): number;
       step(): number;
       update(
         focus: number,
         dragging: boolean,
         current?: () => boolean,
+        velocity?: number,
       ): Promise<void>;
     },
   ) {}
@@ -56,6 +65,8 @@ export class CockpitCarouselInput implements GallerySceneInput {
   }
 
   cancelWheel() {
+    clearTimeout(this.wheelEnd);
+    this.wheelEnd = undefined;
     this.wheelActive = false;
     ++this.wheelSequence;
     this.wheelIntent = undefined;
@@ -118,10 +129,35 @@ export class CockpitCarouselInput implements GallerySceneInput {
         previous = point;
         const angle = this.angle(point, grab);
         if (this.grab !== grab || this.controls.signal.aborted) return;
+        const focus = Math.max(
+          0,
+          Math.min(
+            COCKPIT_PANE_COUNT - 1,
+            grab.focus - (angle - grab.angle) / this.controls.step(),
+          ),
+        );
+        const now = performance.now();
+        const elapsed = (now - grab.sampleTime) / 1000;
+        if (focus !== grab.sampleFocus && elapsed > 0) {
+          const measured = Math.max(
+            -8,
+            Math.min(
+              8,
+              (focus - grab.sampleFocus) / Math.max(elapsed, 1 / 120),
+            ),
+          );
+          // This estimates an input gesture's release velocity, not animation.
+          // The Host owns every subsequent motion sample.
+          grab.velocity =
+            elapsed > 0.15 ? measured : grab.velocity * 0.25 + measured * 0.75;
+          grab.sampleTime = now;
+          grab.sampleFocus = focus;
+        }
         await this.controls.update(
-          grab.focus - (angle - grab.angle) / this.controls.step(),
+          focus,
           true,
           () => this.grab === grab && !this.controls.signal.aborted,
+          grab.velocity,
         );
       }
     })().finally(() => {
@@ -130,8 +166,22 @@ export class CockpitCarouselInput implements GallerySceneInput {
     return this.moving;
   }
 
+  private async release(grab: Grab) {
+    const age = Math.max(0, performance.now() - grab.sampleTime) / 1000;
+    const velocity = grab.velocity * Math.exp(-age / 0.08);
+    const selected = Math.round(this.controls.focus() + velocity * 0.16);
+    this.cancel();
+    const sequence = this.gestureSequence;
+    await this.controls.update(
+      selected,
+      false,
+      () => sequence === this.gestureSequence && !this.controls.signal.aborted,
+      velocity,
+    );
+  }
+
   async handle(input: GuiPhysicalInput, outcome: GuiInputRoutingOutcome) {
-    if (this.controls.signal.aborted) return;
+    if (this.controls.signal.aborted || !this.controls.ready()) return;
     if (input.kind === "pointerCancel" && this.grab?.pointer !== input.pointer)
       return;
     if (
@@ -173,17 +223,23 @@ export class CockpitCarouselInput implements GallerySceneInput {
       this.wheelActive = true;
       this.wheelIntent = focus;
       const sequence = ++this.wheelSequence;
-      try {
-        await this.controls.wheel(
-          focus,
-          () =>
-            sequence === this.wheelSequence &&
-            !this.grab &&
-            !this.controls.signal.aborted,
-        );
-      } finally {
-        if (sequence === this.wheelSequence) this.wheelIntent = undefined;
-      }
+      const current = () =>
+        sequence === this.wheelSequence &&
+        !this.grab &&
+        !this.controls.signal.aborted;
+      clearTimeout(this.wheelEnd);
+      // Browsers expose no portable wheel-end event. This timer identifies the
+      // gesture boundary only; the Host alone advances momentum and springs.
+      this.wheelEnd = setTimeout(() => {
+        if (!current()) return;
+        void this.controls
+          .releaseWheel(focus, current)
+          .then(() => {
+            if (current()) this.cancelWheel();
+          })
+          .catch((error) => this.controls.onError(error));
+      }, 160);
+      await this.controls.wheel(focus, current);
       return;
     }
     if (input.kind === "pointerDown") {
@@ -217,6 +273,9 @@ export class CockpitCarouselInput implements GallerySceneInput {
         released: false,
         angle: 0,
         basis: [],
+        sampleFocus: focus,
+        sampleTime: performance.now(),
+        velocity: 0,
       };
       this.grab = grab;
       const hits = await Promise.all(
@@ -235,6 +294,12 @@ export class CockpitCarouselInput implements GallerySceneInput {
         this.cancel();
         return;
       }
+      grab.focus = await this.controls.begin(
+        () => this.grab === grab && !this.controls.signal.aborted,
+      );
+      if (this.grab !== grab || this.controls.signal.aborted) return;
+      grab.sampleFocus = grab.focus;
+      grab.sampleTime = performance.now();
       // Camera/view are fixed for this gesture. Native projection supplies an
       // affine plane basis once; later moves need no query or transport delay.
       grab.basis = await Promise.all([
@@ -253,8 +318,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
       if (this.grab !== grab || this.controls.signal.aborted) return;
       await this.move();
       if (grab.released && this.grab === grab) {
-        this.cancel();
-        await this.controls.update(Math.round(this.controls.focus()), false);
+        await this.release(grab);
       }
     } else if (
       (input.kind === "pointerMove" || input.kind === "pointerUp") &&
@@ -265,8 +329,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
       if (input.kind === "pointerUp") grab.released = true;
       await this.move();
       if (grab.admitted && grab.released && this.grab === grab) {
-        this.cancel();
-        await this.controls.update(Math.round(this.controls.focus()), false);
+        await this.release(grab);
       }
     }
   }

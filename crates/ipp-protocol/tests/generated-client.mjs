@@ -272,6 +272,7 @@ const TAG_SPACES = {
   53: "gui-action",
   54: "output-target",
   67: "gui-client-input",
+  68: "animation-motion-mode",
 };
 
 export function manifestVariant(client, name) {
@@ -302,7 +303,7 @@ export function encodeManifestLayout(client, name, values) {
     else if (field.encoding === "u32") chunks.push(integer(value, 4));
     else if (field.encoding === "u64") chunks.push(integer(value, 8));
     else if (field.encoding === "finite-f32") chunks.push(float(value, 4));
-    else if (field.encoding === "nonnegative-finite-f64")
+    else if (["finite-f64", "nonnegative-finite-f64"].includes(field.encoding))
       chunks.push(float(value, 8));
     else if (field.encoding === "utf8") {
       const bytes = new TextEncoder().encode(value);

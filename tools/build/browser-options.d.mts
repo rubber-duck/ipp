@@ -1,6 +1,9 @@
 export function browserLaunchOptions(
   rendering?: boolean,
-  options?: { htmlInCanvas?: boolean },
+  options?: {
+    htmlInCanvas?: boolean;
+    experimentalWebPlatformFeatures?: boolean;
+  },
 ): import("playwright").LaunchOptions;
 export const browserPin: {
   channel: string;

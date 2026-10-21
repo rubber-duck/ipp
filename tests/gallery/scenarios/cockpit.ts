@@ -26,8 +26,8 @@ export interface CockpitTrackingEvidence {
     from: number;
     pose: number;
     observationMs: number;
-    elapsed: number | undefined;
-    duration: number | undefined;
+    velocity: number | undefined;
+    mode: string | undefined;
   }[];
   handlerMs: number[];
   viewport: readonly [number, number];
@@ -257,23 +257,12 @@ export async function exerciseCockpitTracking(driver: CockpitDriver) {
     ),
     "held native poses progress monotonically through each burst",
   );
-  // The focused 960px fixture resolves a bounded tracking interval. The wide
-  // software renderer still validates endpoints/geometry without a hardware FPS claim.
-  if (evidence.viewport[0] <= 960) {
-    assert.ok(
-      evidence.samples.some(
-        (sample) =>
-          sample.elapsed !== undefined &&
-          sample.elapsed > 0 &&
-          sample.duration !== undefined &&
-          sample.duration <= 0.24 &&
-          sample.elapsed < sample.duration &&
-          sample.pose > sample.from + 0.0001 &&
-          sample.pose < sample.target - 0.0001,
-      ),
-      `held frames interpolate within a burst: ${JSON.stringify(evidence)}`,
-    );
-  }
+  assert.ok(
+    evidence.samples.some(
+      (sample) => sample.mode === "hold" && (sample.velocity ?? 0) > 0,
+    ),
+    "direct manipulation holds a runtime sample and retains gesture velocity",
+  );
   assert.ok(
     Math.abs(evidence.converged - evidence.target) < 0.01,
     "held pose converges to the latest pointer without release",
@@ -655,8 +644,7 @@ export async function exerciseCockpit(
   }
   if (part === "carousel") {
     const tracking = await exerciseCockpitTracking(driver);
-    const nearDistance = Number(initial.options.projection) - 1;
-    await driver.action("projection", nearDistance);
+    await driver.action("projection", 8);
     await driver.advance(0.3);
     const near = await driver.state();
     assert.equal(

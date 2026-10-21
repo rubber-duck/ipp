@@ -1447,6 +1447,18 @@
     ],
     "commands": [
       {
+        "name": "motion",
+        "command": ["cargo", "test", "-p", "ipp-core", "--lib", "--locked", "--", "world::systems::animation::"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "protocol",
+        "command": ["cargo", "test", "-p", "ipp-protocol", "--lib", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
         "name": "core",
         "command": [
           "cargo",

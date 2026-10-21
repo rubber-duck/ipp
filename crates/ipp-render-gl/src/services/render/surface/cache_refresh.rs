@@ -522,6 +522,12 @@ impl<D: RenderDevice> RenderService<D> {
             self.canvas_caches.retain(|selection, state| {
                 Some(state.root) != frame.root || frame.bindings.contains_key(selection)
             });
+        } else {
+            for state in self.canvas_caches.values_mut() {
+                state.painted_current = false;
+                state.painted_stamp = None;
+            }
+            self.invalidate_projected_images();
         }
     }
 

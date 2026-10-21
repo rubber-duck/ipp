@@ -7,9 +7,8 @@ use crate::systems::animation::{
     system_state::AnimationTransitionSource,
 };
 
-/// Format version of the AnimationSystem's saved state. Version 8 saves each
-/// controller's contributions instead of the originals its drivers kept.
-const STATE_VERSION: u32 = 8;
+/// Version 9 retains procedural cursor motion beside applied contributions.
+const STATE_VERSION: u32 = 9;
 
 /// Complete persistent controller state, including deleted identity high-water.
 #[derive(Clone, Debug, PartialEq)]

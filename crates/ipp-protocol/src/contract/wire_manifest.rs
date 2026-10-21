@@ -90,6 +90,7 @@ pub(crate) enum TagSpace {
     AssetRepresentation = 65,
     AssetExportFormat = 66,
     GuiClientInput = 67,
+    AnimationMotionMode = 68,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,6 +112,7 @@ pub(crate) enum FieldEncoding {
     Bool = 14,
     Masked = 15,
     U8CountedList = 16,
+    FiniteF64 = 17,
 }
 
 /// Byte fields bounded only by the complete message budget, declared once from
@@ -1076,8 +1078,15 @@ layouts! {
     "animation-controller" => [
         field!("state", Named => "controller-state"),
         field!("description", Named => "controller-description"),
+        field!("motion", Option => "animation-motion-state"),
         field!("transition", Option => "controller-transition-state"),
     ];
+    "animation-motion-number" => [field!("value", FiniteF64)];
+    "animation-motion-hold" => [field!("tag", Variant => "animation-motion-mode")];
+    "animation-motion-spring" => [field!("tag", Variant => "animation-motion-mode"), field!("target", NonnegativeFiniteF64), field!("frequency", NonnegativeFiniteF64), field!("damping", NonnegativeFiniteF64)];
+    "animation-motion-decay" => [field!("tag", Variant => "animation-motion-mode"), field!("friction", NonnegativeFiniteF64)];
+    "animation-motion-state" => [field!("mode", Union => "animation-motion-mode"), field!("min", NonnegativeFiniteF64), field!("max", NonnegativeFiniteF64), field!("velocity", FiniteF64)];
+    "animation-motion-control" => [field!("mode", Union => "animation-motion-mode"), field!("min", NonnegativeFiniteF64), field!("max", NonnegativeFiniteF64), field!("position", Option => "animation-motion-number"), field!("velocity", Option => "animation-motion-number")];
     "controller-transition-state" => [
         field!("duration", NonnegativeFiniteF64),
         field!("elapsed", NonnegativeFiniteF64),
@@ -1138,6 +1147,7 @@ layouts! {
         field!("control", U32),
         field!("time", NonnegativeFiniteF64),
         field!("speed", FiniteF32),
+        field!("motion", Option => "animation-motion-control"),
     ];
     "request-controller-transition" => [
         field!("session", U64),
@@ -1175,6 +1185,7 @@ layouts! {
         field!("control", U32),
         field!("time", NonnegativeFiniteF64),
         field!("speed", FiniteF32),
+        field!("motion", Option => "animation-motion-control"),
     ];
     "response-playback" => [
         field!("session", U64),
@@ -1579,6 +1590,10 @@ tags! {
     AnimationTransitionStartTime ANIMATION_TRANSITION_MATCH_PHASE = 2 => "empty";
     AnimationTransitionStartTime ANIMATION_TRANSITION_SEEK = 3 => "empty";
     PlaybackControl PLAYBACK_CONTROL_PLAY_AT_SPEED = 5 => "empty";
+    PlaybackControl PLAYBACK_CONTROL_MOTION = 6 => "empty";
+    AnimationMotionMode ANIMATION_MOTION_HOLD = 0 => "animation-motion-hold";
+    AnimationMotionMode ANIMATION_MOTION_SPRING = 1 => "animation-motion-spring";
+    AnimationMotionMode ANIMATION_MOTION_DECAY = 2 => "animation-motion-decay";
 
     Response RESPONSE_BATCH_ABORTED = 24 => "response-batch-aborted";
     Request REQUEST_SUBMIT_BATCH = 1 => "request-submit-batch";

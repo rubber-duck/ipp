@@ -88,13 +88,7 @@ export function CockpitPane({
         <PanelHeader
           id={`cockpit-header-${index}`}
           title={COCKPIT_SCREEN_TITLES[index]!}
-        >
-          <TextLine
-            text={`0${index + 1} / 0${COCKPIT_SCREEN_TITLES.length}`}
-            tone="neutral"
-            size="small"
-          />
-        </PanelHeader>
+        />
         <ScrollArea
           id={`cockpit-content-${index}`}
           ref={(handle) => wheelTarget?.("content", handle?.target ?? null)}

@@ -1598,7 +1598,18 @@ impl GuiInputRouter {
             return Ok(None);
         };
         if let Some(active) = context.pointers.get_mut(&pointer) {
-            active.target = target.clone();
+            // The lease still belongs to its original control. Refresh that
+            // control's publication before cancelling its feedback; replacing
+            // it with the new hit would pair the old lease with the wrong target.
+            active.target = refresh(host, view, &active.target)?;
+        }
+        if phase == 1
+            && context
+                .pointers
+                .get(&pointer)
+                .is_some_and(|active| !active.pressed)
+        {
+            self.leave_hover(host, context, pointer, delivery)?;
         }
         let identity = target.control.record.target;
         let local = if let Some(point) = point {

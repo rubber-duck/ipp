@@ -44,13 +44,15 @@ function browserExecutable() {
 /** Latest Stable Chrome, resolved to an exact pin; HTML-in-Canvas is opt-out only for capability tests. */
 export function browserLaunchOptions(
   rendering = true,
-  { htmlInCanvas = true } = {},
+  { htmlInCanvas = true, experimentalWebPlatformFeatures = true } = {},
 ) {
   const angle = process.env.IPP_BROWSER_ANGLE;
   const args = htmlInCanvas
     ? [
         "--enable-blink-features=CanvasDrawElement",
-        "--enable-experimental-web-platform-features",
+        ...(experimentalWebPlatformFeatures
+          ? ["--enable-experimental-web-platform-features"]
+          : []),
       ]
     : ["--disable-blink-features=CanvasDrawElement"];
   const base = { headless: true, executablePath: browserExecutable() };

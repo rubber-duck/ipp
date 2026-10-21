@@ -63,9 +63,15 @@ export function cockpitBrowserDriver(
   let left = false;
   return {
     press,
+    async hover(id) {
+      const point = await app.cockpitCoordinates(3, `cockpit-browser-${id}`);
+      await app.page.mouse.move(point.x, point.y);
+      await app.settle();
+    },
     async pagePress(id, fraction) {
       const count = await observeInput("pointerup");
       const point = await pagePoint(id, fraction);
+      await app.page.mouse.move(point.x, point.y, { steps: 8 });
       await app.page.mouse.click(point.x, point.y);
       await delivered("pointerup", count);
     },
@@ -166,6 +172,9 @@ export function cockpitBrowserDriver(
     },
     async skin(value) {
       await app.action("skin", value);
+    },
+    async presentation(surface, caching) {
+      await app.call("options", { surface, surfaceCaching: caching });
     },
     async frame(label) {
       // Source registration is asynchronous; wait for completed HTML pixels.

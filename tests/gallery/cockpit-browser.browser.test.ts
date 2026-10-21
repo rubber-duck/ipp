@@ -48,7 +48,11 @@ test("cockpit HTML forms and history receive real Surface input at 2x display sc
   );
 });
 
-for (const mode of ["flag-disabled", "other-browser"] as const)
+for (const mode of [
+  "flag-disabled",
+  "geometry-disabled",
+  "other-browser",
+] as const)
   test(`cockpit HTML ${mode} explains availability`, {
     timeout: 180_000,
   }, async (context) => {
@@ -57,7 +61,8 @@ for (const mode of ["flag-disabled", "other-browser"] as const)
       {
         ...applicationEnvironment,
         operationTimeoutMs: 90_000,
-        htmlInCanvas: false,
+        htmlInCanvas: mode === "geometry-disabled",
+        experimentalWebPlatformFeatures: false,
         ...(mode === "other-browser"
           ? { userAgent: "Mozilla/5.0 Firefox/145.0" }
           : {}),
@@ -80,26 +85,42 @@ for (const mode of ["flag-disabled", "other-browser"] as const)
         const state = await driver.state();
         assert.match(
           state.status,
-          mode === "flag-disabled"
-            ? /Enable HTML-in-Canvas/
-            : /Not supported outside of Chrome/,
+          mode === "other-browser"
+            ? /Not supported outside of Chrome/
+            : /Enable both Chrome flags/,
         );
         assert.equal(state.domSources, 0);
-        if (mode === "flag-disabled") {
+        if (mode === "geometry-disabled")
+          assert.equal(
+            await env.page.evaluate(
+              () => "updateElementGeometry" in HTMLCanvasElement.prototype,
+            ),
+            true,
+            "the incomplete flag configuration exposes the API",
+          );
+        if (mode !== "other-browser") {
           await env.page
             .context()
             .grantPermissions(["clipboard-read", "clipboard-write"]);
-          await driver.press("copy");
-          let copied = "";
-          const deadline = performance.now() + 10_000;
-          while (performance.now() < deadline) {
-            copied = await env.page.evaluate(() =>
-              navigator.clipboard.readText(),
-            );
-            if (copied === "chrome://flags/#canvas-draw-element") break;
-            await env.page.waitForTimeout(50);
+          for (const [button, address] of [
+            ["copy", "chrome://flags/#canvas-draw-element"],
+            [
+              "copy-experimental",
+              "chrome://flags/#enable-experimental-web-platform-features",
+            ],
+          ] as const) {
+            await driver.press(button);
+            let copied = "";
+            const deadline = performance.now() + 10_000;
+            while (performance.now() < deadline) {
+              copied = await env.page.evaluate(() =>
+                navigator.clipboard.readText(),
+              );
+              if (copied === address) break;
+              await env.page.waitForTimeout(50);
+            }
+            assert.equal(copied, address);
           }
-          assert.equal(copied, "chrome://flags/#canvas-draw-element");
         }
         await app.capture(mode);
         assert.deepEqual(app.errors, []);

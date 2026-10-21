@@ -624,7 +624,8 @@ impl RenderDevice for WebGlRenderDevice {
     }
 
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
-        // SAFETY: No arguments; the bridge restores its saved target and checks errors.
+        // SAFETY: No arguments or borrowed memory; the bridge restores its saved
+        // target and schedules a frame-end error check without retaining pointers.
         self.check(unsafe { end_surface_cache_target() })
     }
 

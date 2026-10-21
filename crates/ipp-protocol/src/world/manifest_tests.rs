@@ -391,6 +391,7 @@ fn manifest_tag_space(space: TagSpace) -> &'static str {
         TagSpace::LifecycleMembershipRejection => "lifecycle-membership-rejection",
         TagSpace::LifecycleWatchKinds => "lifecycle-watch-kinds",
         TagSpace::GuiClientInput => "gui-client-input",
+        TagSpace::AnimationMotionMode => "animation-motion-mode",
         TagSpace::GuiPhysicalRequest => "gui-physical-request",
         TagSpace::GuiPhysicalEvent => "gui-physical-event",
         TagSpace::GuiPhysicalResponse => "gui-physical-response",
@@ -484,8 +485,11 @@ fn encode_manifest_value(
             assert!(value.is_finite());
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        (FieldEncoding::NonnegativeFiniteF64, ManifestValue::F64(value)) => {
-            assert!(value.is_finite() && *value >= 0.0);
+        (
+            FieldEncoding::NonnegativeFiniteF64 | FieldEncoding::FiniteF64,
+            ManifestValue::F64(value),
+        ) => {
+            assert!(value.is_finite() && (encoding == FieldEncoding::FiniteF64 || *value >= 0.0));
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         (FieldEncoding::Utf8, ManifestValue::String(value)) => {
@@ -1375,6 +1379,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                     values.push(("control", ManifestValue::U32(3)));
                     values.push(("time", ManifestValue::F64(1.25)));
                     values.push(("speed", ManifestValue::F32(0.0)));
+                    values.push(("motion", ManifestValue::None));
                 }
                 AnimationControllerCommand::Transition {
                     transition,
@@ -1430,6 +1435,7 @@ fn rust_request_decoder_conforms_to_every_enabled_manifest_branch() {
                 ("control", ManifestValue::U32(action)),
                 ("time", ManifestValue::F64(time)),
                 ("speed", ManifestValue::F32(speed)),
+                ("motion", ManifestValue::None),
             ],
         );
         let expected = match action {
@@ -2115,6 +2121,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
         ("render_diagnostics", ManifestValue::List(Vec::new())),
     ];
     let inspected_controller = ipp_core::systems::animation::AnimationControllerSnapshot {
+        motion: None,
         id: ipp_core::systems::animation::AnimationControllerId::from_bits(42),
         description: ipp_core::systems::animation::AnimationControllerDescription {
             speed: -1.0,
@@ -2158,6 +2165,7 @@ fn rust_response_encoder_conforms_to_every_enabled_manifest_branch() {
                         ],
                     ),
                 ),
+                ("motion", ManifestValue::None),
                 (
                     "transition",
                     ManifestValue::Some(Box::new(manifest_layout(

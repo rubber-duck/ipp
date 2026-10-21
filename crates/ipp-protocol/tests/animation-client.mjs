@@ -50,6 +50,7 @@ test("every playback control agrees with the wire manifest and reserves identity
         control: index,
         time: control.time ?? 0,
         speed: control.speed ?? 0,
+        motion: null,
       }).bytes,
     );
     assert.throws(
@@ -150,6 +151,7 @@ test("playback events and controller clocks decode from manifest bytes with stri
             looping: false,
             drivers: [],
           }),
+          motion: null,
           transition: null,
         }),
       ],
@@ -352,7 +354,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
     [
       "control",
       "REQUEST_CONTROLLER_CONTROL",
-      { id: 13n, control: 3, time: 0.75, speed: 0 },
+      { id: 13n, control: 3, time: 0.75, speed: 0, motion: null },
     ],
     [
       "transition",
@@ -450,6 +452,7 @@ test("controller descriptions encode indexed multi-entity drivers and correlated
       layout("animation-controller", {
         state,
         description: manifestDescription,
+        motion: null,
         transition: layout("controller-transition-state", {
           duration: 0.5,
           elapsed: 0.25,
@@ -690,6 +693,7 @@ test("structural drivers preserve explicit empty and large clip-local binding ta
             looping: false,
             drivers: [encodedDriver],
           }),
+          motion: null,
           transition: null,
         }),
       ],
@@ -750,4 +754,55 @@ test("structural drivers preserve explicit empty and large clip-local binding ta
       }),
     /message limit/,
   );
+});
+
+test("motion controls match manifest payloads with signed velocity", () => {
+  for (const [mode, tag, parameters] of [
+    [{ kind: "hold" }, "ANIMATION_MOTION_HOLD", {}],
+    [
+      { kind: "spring", target: 1, frequency: 4, damping: 0.8 },
+      "ANIMATION_MOTION_SPRING",
+      { target: 1, frequency: 4, damping: 0.8 },
+    ],
+    [{ kind: "decay", friction: 5 }, "ANIMATION_MOTION_DECAY", { friction: 5 }],
+  ]) {
+    const control = {
+      action: "motion",
+      motion: { mode, min: 0, max: 2, position: 0.6, velocity: -3.5 },
+    };
+    const motion = layout("animation-motion-control", {
+      mode: layout(`animation-motion-${mode.kind}`, {
+        tag: manifestVariant(client, tag),
+        ...parameters,
+      }),
+      min: 0,
+      max: 2,
+      position: layout("animation-motion-number", { value: 0.6 }),
+      velocity: layout("animation-motion-number", { value: -3.5 }),
+    });
+    assert.deepEqual(
+      codec.encodeRequest({
+        session: 7n,
+        requestId: 0n,
+        body: {
+          kind: "command",
+          command: {
+            type: "AnimationPlaybackCommand",
+            controller: 41n,
+            control,
+          },
+        },
+      }),
+      layout("request-playback", {
+        session: 7n,
+        request_id: 0n,
+        tag: manifestVariant(client, "REQUEST_PLAYBACK"),
+        controller: 41n,
+        control: codec.WIRE.PLAYBACK_CONTROL_MOTION,
+        time: 0,
+        speed: 0,
+        motion,
+      }).bytes,
+    );
+  }
 });

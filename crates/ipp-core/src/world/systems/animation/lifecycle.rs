@@ -139,6 +139,7 @@ impl AnimationSystem {
             controller.clear_drivers();
             controller.transition = None;
             controller.snapshot.transition = None;
+            controller.snapshot.motion = None;
             controller.snapshot.state = AnimationPlaybackStatus::Stopped;
             self.state.playback_events.push(AnimationPlaybackEvent {
                 controller: AnimationControllerState {
@@ -296,6 +297,7 @@ impl AnimationSystem {
                 .retain(|driver| !removed.contains(driver.description()));
             controller.reindex_drivers();
             if controller.drivers.is_empty() && controller.structural_drivers.is_empty() {
+                controller.snapshot.motion = None;
                 controller.snapshot.state = AnimationPlaybackStatus::Stopped;
             }
             events.push(AnimationPlaybackEvent {
@@ -379,6 +381,7 @@ impl AnimationSystem {
             controller.clear_drivers();
             controller.transition = None;
             controller.snapshot.transition = None;
+            controller.snapshot.motion = None;
             controller.snapshot.state = AnimationPlaybackStatus::Stopped;
             self.state.playback_events.push(AnimationPlaybackEvent {
                 controller: AnimationControllerState {

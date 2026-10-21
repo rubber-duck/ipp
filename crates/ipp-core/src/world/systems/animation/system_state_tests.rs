@@ -3,6 +3,7 @@ use super::*;
 fn structural_controller(id: AnimationControllerId, target: EntityId) -> AnimationController {
     AnimationController {
         snapshot: AnimationControllerSnapshot {
+            motion: None,
             id,
             description: AnimationControllerDescription {
                 drivers: vec![AnimationDriverDescription {

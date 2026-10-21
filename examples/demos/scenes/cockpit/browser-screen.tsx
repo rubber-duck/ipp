@@ -16,7 +16,20 @@ import {
   useGuiKit,
 } from "@ipp/react/gui-kit";
 
-const FLAG = "chrome://flags/#canvas-draw-element";
+const FLAGS = [
+  {
+    id: "flag",
+    copy: "copy",
+    label: "HTML-in-Canvas",
+    address: "chrome://flags/#canvas-draw-element",
+  },
+  {
+    id: "experimental-flag",
+    copy: "copy-experimental",
+    label: "Experimental Web Platform features",
+    address: "chrome://flags/#enable-experimental-web-platform-features",
+  },
+] as const;
 const PAGES = [
   { name: "Welcome", file: "welcome.html" },
   { name: "Mission", file: "mission.html" },
@@ -222,30 +235,40 @@ export function BrowserScreen({
         <Column gap="label">
           <TextLine
             id="cockpit-browser-status"
-            text="Enable HTML-in-Canvas in Chrome to view these pages."
+            text="Enable both Chrome flags to view and interact with these pages."
           />
-          <TextLine text="1. Copy this address and paste it into a new Chrome tab." />
-          <TextField id="cockpit-browser-flag" value={FLAG} />
-          <Row>
-            <Button
-              id="cockpit-browser-copy"
-              label="Copy flag address"
-              onPress={() => {
-                void (
-                  navigator.clipboard?.writeText(FLAG) ??
-                  Promise.reject(new Error("Clipboard unavailable"))
-                ).then(
-                  () => setCopied("Copied. Paste into Chrome's address bar."),
-                  () =>
-                    setCopied(
-                      "Copy unavailable. Select the address above and copy it.",
-                    ),
-                );
-              }}
-            />
-            <TextLine text={copied} tone="neutral" />
-          </Row>
-          <TextLine text="2. Set HTML-in-Canvas to Enabled, then relaunch Chrome." />
+          <TextLine text="1. Paste each address into a new Chrome tab." />
+          {FLAGS.map((flag) => (
+            <Column key={flag.id} gap="label">
+              <TextLine text={flag.label} />
+              <Row>
+                <TextField
+                  id={`cockpit-browser-${flag.id}`}
+                  value={flag.address}
+                  flex={1}
+                />
+                <Button
+                  id={`cockpit-browser-${flag.copy}`}
+                  label="Copy"
+                  onPress={() => {
+                    void (
+                      navigator.clipboard?.writeText(flag.address) ??
+                      Promise.reject(new Error("Clipboard unavailable"))
+                    ).then(
+                      () =>
+                        setCopied("Copied. Paste into Chrome's address bar."),
+                      () =>
+                        setCopied(
+                          "Copy unavailable. Select the address and copy it.",
+                        ),
+                    );
+                  }}
+                />
+              </Row>
+            </Column>
+          ))}
+          <TextLine text={copied} tone="neutral" />
+          <TextLine text="2. Set both flags to Enabled, then relaunch Chrome." />
           <TextLine text="3. Return here and open the browser pane." />
           <TextLine
             text="If the flag is missing, update Chrome to a version with HTML-in-Canvas."

@@ -637,6 +637,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
    * Rust device decides which frame ends poll; every import checks loss.
    */
   let exhaustiveDrawChecks = false;
+  // Kept Surface/Camera passes share one check at the owning frame's end.
+  // A failed frame invalidates its derived images before they can be reused.
+  let surfacePassPending = false;
+  let surfacePassError: Error | undefined;
   function checkDraw(): void {
     if (exhaustiveDrawChecks) check();
   }
@@ -645,7 +649,11 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     live();
     const error = gl.getError();
     if (error !== gl.NO_ERROR) {
-      throw new Error(`WebGL error 0x${error.toString(16)}`);
+      const failure = new Error(`WebGL error 0x${error.toString(16)}`);
+      // An intervening resource check may consume an earlier pass's error.
+      // The frame must still reject all images whose validity is uncertain.
+      if (surfacePassPending) surfacePassError ??= failure;
+      throw failure;
     }
   }
 
@@ -2033,6 +2041,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             );
             gl.bindRenderbuffer(gl.RENDERBUFFER, null);
           }
+          const previous = currentTarget();
+          bindFramebuffers(target.framebuffer, target.framebuffer);
+          const complete =
+            gl.checkFramebufferStatus(gl.FRAMEBUFFER) ===
+            gl.FRAMEBUFFER_COMPLETE;
+          bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+          if (!complete) throw new Error("Resized Surface target incomplete");
           target.width = width;
           target.height = height;
           target.activeWidth = width;
@@ -2071,6 +2086,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             throw new Error("Surface cache targets cannot nest");
           if (glyphAtlasTarget)
             throw new Error("Surface cache target inside atlas population");
+          surfacePassPending = true;
           surfaceCacheTarget = {
             handle: handle >>> 0,
             width: target.activeWidth,
@@ -2086,7 +2102,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           blendMode = undefined;
           gl.clearColor(0, 0, 0, 0);
           gl.clear(gl.COLOR_BUFFER_BIT);
-          // The end of the repaint checks the whole pass.
+          // The owning frame checks all repaints together.
           try {
             checkDraw();
           } catch (error) {
@@ -2101,6 +2117,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           const target = surfaceCacheTargets.get(handle >>> 0);
           if (!target || surfaceCacheTarget || glyphAtlasTarget)
             throw new Error("Unavailable Camera target");
+          surfacePassPending = true;
           surfaceCacheTarget = {
             handle: handle >>> 0,
             width: target.activeWidth,
@@ -2114,26 +2131,32 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             if (!target.depth) {
               const depth = gl.createRenderbuffer();
               if (!depth) throw new Error("Camera depth allocation failed");
-              target.depth = depth;
-              gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
-              gl.renderbufferStorage(
-                gl.RENDERBUFFER,
-                gl.DEPTH_COMPONENT24,
-                target.width,
-                target.height,
-              );
-              gl.framebufferRenderbuffer(
-                gl.FRAMEBUFFER,
-                gl.DEPTH_ATTACHMENT,
-                gl.RENDERBUFFER,
-                depth,
-              );
+              try {
+                gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+                gl.renderbufferStorage(
+                  gl.RENDERBUFFER,
+                  gl.DEPTH_COMPONENT24,
+                  target.width,
+                  target.height,
+                );
+                gl.framebufferRenderbuffer(
+                  gl.FRAMEBUFFER,
+                  gl.DEPTH_ATTACHMENT,
+                  gl.RENDERBUFFER,
+                  depth,
+                );
+                if (
+                  gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
+                  gl.FRAMEBUFFER_COMPLETE
+                )
+                  throw new Error("Camera target incomplete");
+                check();
+                target.depth = depth;
+              } catch (error) {
+                gl.deleteRenderbuffer(depth);
+                throw error;
+              }
             }
-            if (
-              gl.checkFramebufferStatus(gl.FRAMEBUFFER) !==
-              gl.FRAMEBUFFER_COMPLETE
-            )
-              throw new Error("Camera target incomplete");
             const clear = floats(clearPointer >>> 0, 4);
             gl.enable(gl.DEPTH_TEST);
             gl.enable(gl.CULL_FACE);
@@ -2153,7 +2176,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.clearColor(clear[0]!, clear[1]!, clear[2]!, clear[3]!);
             gl.clearDepth(1);
             gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-            check();
+            checkDraw();
             return 1;
           } catch (error) {
             restoreSurfaceCacheTarget();
@@ -2164,8 +2187,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       end_surface_cache_target(): number {
         return status(() => {
           restoreSurfaceCacheTarget();
-          // A failed repaint must not be kept as a complete image.
-          check();
+          surfacePassPending = true;
+          checkDraw();
           return 1;
         });
       },
@@ -2765,7 +2788,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
     draw: drawMesh,
     /**
-     * Present, then poll the error state only when `poll` is set. Loss during
+     * Present, then check requested frames and frames containing kept passes.
+     * Coalescing pass checks avoids a GPU round trip after every pane. Loss during
      * the frame always fails, so recovery never waits for a sampled check.
      */
     end_frame(poll: number): number {
@@ -2782,8 +2806,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           gl.bindTexture(gl.TEXTURE_2D, null);
           gl.bindSampler(0, null);
         }
-        if (poll) check();
+        const checkSurfacePasses = surfacePassPending;
+        const passError = surfacePassError;
+        surfacePassPending = false;
+        surfacePassError = undefined;
+        if (poll || checkSurfacePasses) check();
         else live();
+        if (passError) throw passError;
         return 1;
       });
     },

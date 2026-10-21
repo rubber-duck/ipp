@@ -978,6 +978,11 @@ impl<T> SurfaceTextureCache<T> {
             // Nothing planned was necessarily presented.
             for (_, entry) in self.entries.range_mut(world_range(world)) {
                 entry.shown = false;
+                if !completed {
+                    // A backend may coalesce retained-pass error checks at frame
+                    // end. Preserve capacity, but never reuse an unverified image.
+                    entry.painted = None;
+                }
             }
             return false;
         }

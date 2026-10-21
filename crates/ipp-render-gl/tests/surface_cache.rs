@@ -1443,6 +1443,34 @@ fn a_repaint_without_gui_storage_presents_directly_and_recovers() {
 }
 
 #[test]
+fn frame_end_failure_invalidates_flat_and_projected_images() {
+    for curved in [false, true] {
+        let mut host = support::task_scheduler::host();
+        let (mut renderer, state, world, panel) = scene(&mut host);
+        if curved {
+            projected(&mut host, panel, 0.5, 0.0);
+        }
+        cache_policy(&mut host, panel, Some(ALWAYS));
+        frame(&mut renderer, &mut host, world, 0.0);
+        let resident = state.cache_targets_live.get();
+
+        // Repaint succeeds locally, then the backend reports an error at the
+        // shared frame boundary. Neither unchanged content nor refresh caps
+        // may cause that unverified image to be reused.
+        recolor(&mut host, panel, 1);
+        let error = RenderError::RenderDevice("injected frame error".into());
+        *state.fail_frame_end.borrow_mut() = Some(error.clone());
+        assert_eq!(try_frame(&mut renderer, &mut host, world, 0.1), Err(error));
+        *state.fail_frame_end.borrow_mut() = None;
+
+        let recovered = frame(&mut renderer, &mut host, world, 0.01);
+        assert_eq!(recovered.surface_cache_repaints, 1);
+        assert_eq!(recovered.surface_cache_allocations, 0);
+        assert_eq!(state.cache_targets_live.get(), resident);
+    }
+}
+
+#[test]
 fn context_loss_fails_the_frame_and_recovery_repaints() {
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) = scene(&mut host);

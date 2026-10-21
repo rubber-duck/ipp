@@ -131,6 +131,15 @@ impl<D: RenderDevice> ProjectedSurface<D> {
 }
 
 impl<D: RenderDevice> RenderService<D> {
+    pub(super) fn invalidate_projected_images(&mut self) {
+        for state in self.projected_surfaces.values_mut() {
+            state.stamp = None;
+            state.current_image = false;
+            state.painted_current = false;
+        }
+        self.camera_completed.clear();
+    }
+
     pub(in crate::services::render) fn begin_projected_frame(
         &mut self,
         time: f64,

@@ -195,7 +195,10 @@ export class AnimationSession {
     );
   }
 
-  async control(selection: string, control: AnimationPlaybackControl) {
+  async control(
+    selection: string,
+    control: Exclude<AnimationPlaybackControl, { action: "motion" }>,
+  ) {
     if (this.closed) return;
     for (const id of this.selected(selection)) {
       const ref = this.refs[this.players.indexOf(id)]!.current;

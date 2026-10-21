@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 interface HtmlFrame {
   width: number;
   height: number;
+  pixelRatio: number;
   pixels: number[];
   errors: string[];
 }
@@ -12,6 +13,8 @@ export interface StaticHtmlDriver {
 }
 
 function pixel(frame: HtmlFrame, x: number, y: number) {
+  x = Math.floor(x * frame.pixelRatio);
+  y = Math.floor(y * frame.pixelRatio);
   return frame.pixels.slice(
     (y * frame.width + x) * 4,
     (y * frame.width + x) * 4 + 3,
@@ -51,7 +54,23 @@ async function capture(
 }
 
 export async function staticHtmlScenario(driver: StaticHtmlDriver) {
-  await capture(driver, "html-alpha", [0, 255, 0], [188, 0, 188]);
+  const initial = await capture(
+    driver,
+    "html-alpha",
+    [0, 255, 0],
+    [188, 0, 188],
+  );
+  if (initial.pixelRatio === 2) {
+    const detail = Array.from(
+      { length: 40 },
+      (_, x) => pixel(initial, 50 + x / 2, 8)[0]!,
+    );
+    assert.ok(
+      detail.filter((value) => value < 40).length >= 16 &&
+        detail.filter((value) => value > 215).length >= 16,
+      `half-CSS-pixel HTML detail survives at 2x display scale: ${detail}`,
+    );
+  }
   await driver.call("replace");
   await capture(driver, "html-replaced", [255, 0, 0], [0, 188, 188]);
   await driver.call("resize");

@@ -19,7 +19,8 @@ export interface CockpitWheelEvidence {
   samples: {
     pose: number;
     target: number;
-    elapsed: number | undefined;
+    velocity: number | undefined;
+    moving: boolean;
     tick: string;
   }[];
 }
@@ -124,18 +125,14 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   await wheel(1, "cockpit-header-1", [40, 0], 0.85);
   close(
     await focus(),
-    1.25,
-    "horizontal trackpad movement advances a quarter pane",
+    1,
+    "a short horizontal gesture springs back to the selected pane",
   );
-  await wheel(1, "cockpit-header-1", [0, 40], 0.85);
-  close(
-    await focus(),
-    1.5,
-    "vertical wheel provides the same navigation fallback",
-  );
+  await wheel(1, "cockpit-header-1", [0, 96], 0.85);
+  close(await focus(), 2, "vertical wheel selects and centers the next pane");
   // At this angle the middle header sits behind the app toolbar; use the
   // exposed next header so the burst exercises carousel input, not the overlay.
-  const burst = await wheel(2, "cockpit-header-2", [4, 0], 0.5, 10);
+  const burst = await wheel(2, "cockpit-header-2", [-10, 0], 0.5, 10);
   assert.equal(
     burst.controller,
     burst.retainedController,
@@ -145,18 +142,23 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
     assert.ok(
       burst.samples.some(
         (sample) =>
-          sample.pose > 1.5001 &&
-          sample.pose < sample.target - 0.0001 &&
-          sample.elapsed !== undefined,
+          sample.pose > sample.target + 0.0001 &&
+          sample.pose < 1.9999 &&
+          sample.moving &&
+          (sample.velocity ?? 0) < 0,
       ),
-      "the focused 960px fixture observes a native pose inside an active wheel transition",
+      "the focused 960px fixture observes a native pose during spring motion",
     );
   }
-  close(await focus(), 1.75, "a rapid trackpad burst accumulates every delta");
-  const reverse = await wheel(2, "cockpit-header-2", [-4, 0], 0.5, 10);
   close(
     await focus(),
-    1.5,
+    1,
+    "a rapid trackpad burst accumulates enough movement to select the previous pane",
+  );
+  const reverse = await wheel(1, "cockpit-header-1", [10, 0], 0.85, 10);
+  close(
+    await focus(),
+    2,
     "a rapid direction reversal accumulates without an older target returning",
   );
   const curved = await driver.capture("cockpit-wheel-curved");
@@ -174,7 +176,7 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   const afterBurst = await driver.state();
   close(
     renderedFocus(afterBurst),
-    1.5,
+    2,
     "the actual evaluated rotor reaches the accumulated wheel target",
   );
   assertCylinder(
@@ -185,10 +187,10 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
 
   await driver.options({ carousel: 2 });
   await driver.advance(0.3);
-  await wheel(2, "cockpit-content-2", [0, -40], 0.96);
+  await wheel(2, "cockpit-content-2", [0, -96], 0.96);
   close(
     await focus(),
-    1.75,
+    1,
     "unused window content passes unconsumed wheel to the carousel",
   );
 
@@ -256,12 +258,12 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
 
   await driver.options({ surface: "flat", carousel: 1 });
   await driver.advance(0.3);
-  await wheel(1, "cockpit-header-1", [-40, 0]);
-  close(await focus(), 0.75, "flat windows use the same wheel navigation");
+  await wheel(1, "cockpit-header-1", [-96, 0]);
+  close(await focus(), 0, "flat windows use the same wheel navigation");
   const flat = await driver.state();
   close(
     renderedFocus(flat),
-    0.75,
+    0,
     "the flat window rotor reaches its wheel target",
   );
   assertFlat(flat.scene, flat.componentIds, Number(flat.options.projection));
@@ -274,18 +276,14 @@ export async function exerciseCockpitWheel(driver: CockpitWheelDriver) {
   // that controller without reauthoring the surrounding pane Worlds.
   await wheel(0, "cockpit-header-0", [-40, 0]);
   close(await focus(), 0, "wheel navigation clamps at the first pane");
-  await wheel(0, "cockpit-header-0", [40, 0]);
-  close(
-    await focus(),
-    0.25,
-    "wheel leaves the first endpoint without a full pane render",
-  );
+  await wheel(0, "cockpit-header-0", [96, 0]);
+  close(await focus(), 1, "wheel selects the next pane");
   assert.equal(
     await navigationControl("cockpit-previous", true),
     previous,
     "tracking enables the mounted Previous button without replacing it",
   );
-  await driver.press(0, "cockpit-previous");
+  await driver.action("carousel", -1);
   await driver.advance(0.3);
   close(
     await focus(),

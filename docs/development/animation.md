@@ -164,7 +164,31 @@ Receipts/resource inspection establish readiness. Events carry identity/status/t
 
 Binding matching includes generation, incarnation and exact coverage. A controller keeps one applied contribution per target it drives and counts a new total as applied only once its component write lands. For float fields it keeps, in f64, exactly what its writes added, so rounding each stored f32 never accumulates and stopping returns the base exactly; a rejected write is retried with the same change next frame, and a failing or pending controller keeps what it applied. A client write replaces the field, contributions included, and the controller adds only later changes; stop, removal, invalidation and asset removal subtract the applied contribution from whatever the field holds. A constraint or other absolute overwrite resets the contributions to that field so they apply in full again. Rejected updates preserve existing bindings/clocks where unchanged; malformed sampling rejects that controller's full contribution and emits a transition only when failure changes.
 
-Snapshots (format version 8) retain descriptions/status/time, each controller's applied contributions and controller identity high-water mark; fields hold what was saved, and restoring keeps them as they are. Reload remaps driver targets and structural slot bindings through durable entity identity, then samples saved time after resource readiness. Immutable clip keys are never rewritten per World or load. Retain producer clip namespaces for nested references; external clips may introduce producer references only in the driver's current World. Ordinary entity-valued component keys retain their existing component-field semantics.
+Snapshots (format version 9) retain descriptions/status/time and motion, each controller's applied contributions and controller identity high-water mark; fields hold what was saved, and restoring keeps them as they are. Reload remaps driver targets and structural slot bindings through durable entity identity, then samples saved time after resource readiness. Immutable clip keys are never rewritten per World or load. Retain producer clip namespaces for nested references; external clips may introduce producer references only in the driver's current World. Ordinary entity-valued component keys retain their existing component-field semantics.
+
+## Spring and momentum playback
+
+A nonlooping numeric, rotation or pose controller can move its sample cursor using an analytical spring or exponential decay. Its existing drivers still produce the contribution. Inspect `controller.time` for position and `controller.motion` for velocity and the motion law. Bounds must fit the controller duration. The [motion module](../../crates/ipp-core/src/world/systems/animation/motion.rs) owns equations, units and numerical limits.
+
+```ts
+// A direct manipulation sample, with release velocity in clip units/second.
+await client.controlAnimationController(controllerId, {
+  action: "motion",
+  motion: { mode: { kind: "hold" }, min: 0, max: 2, position: 0.6, velocity: 1.2 },
+});
+// Omitted position/velocity preserve the current state when retargeting.
+await client.controlAnimationController(controllerId, {
+  action: "motion",
+  motion: {
+    mode: { kind: "spring", target: 1, frequency: 4.5, damping: 0.82 },
+    min: 0, max: 2,
+  },
+});
+```
+
+`hold` retains a direct sample and release velocity; `decay` slows velocity with positive `friction`; `spring` moves toward its target with natural frequency in Hz and damping ratio (one is critical damping). The Host advances motion and publishes completion when settled. Applications choose snap points and submit gesture samples or destinations; they do not submit animation frames. React animation refs expose the same control as `ref.current.motion(...)`.
+
+Pause/play retain the motion law and velocity. Seek, restart, stop and play-at-speed clear it. A motion control is rejected during an active crossfade; a subsequent transition may blend away a moving source. Motion excludes discrete and structural drivers. Saved motion resumes at its saved sample after readiness, with no catch-up interval.
 
 ## Bounds and validation
 

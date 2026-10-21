@@ -55,6 +55,7 @@ export interface BrowserHarnessConfiguration {
   readonly deviceScaleFactor?: number;
   readonly hasTouch?: boolean;
   readonly htmlInCanvas?: boolean;
+  readonly experimentalWebPlatformFeatures?: boolean;
   readonly userAgent?: string;
   /** Whether the build presents frames; defaults to render-prefixed build names. */
   readonly rendering?: boolean;
@@ -384,6 +385,8 @@ class BrowserEnvironment {
     this.#launching = chromium.launch({
       ...browserLaunchOptions(this.#rendering, {
         htmlInCanvas: this.#configuration.htmlInCanvas ?? true,
+        experimentalWebPlatformFeatures:
+          this.#configuration.experimentalWebPlatformFeatures ?? true,
       }),
       timeout:
         this.#configuration.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS,
@@ -440,6 +443,8 @@ class BrowserEnvironment {
       chromium: browser.version(),
       launchOptions: browserLaunchOptions(this.#rendering, {
         htmlInCanvas: this.#configuration.htmlInCanvas ?? true,
+        experimentalWebPlatformFeatures:
+          this.#configuration.experimentalWebPlatformFeatures ?? true,
       }),
       page: page.url(),
       urls,

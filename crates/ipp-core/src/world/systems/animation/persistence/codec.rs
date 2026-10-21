@@ -216,6 +216,10 @@ fn encode_controller(
     writer.u64(controller.time.to_bits())?;
     writer.u32(controller.description.speed.to_bits())?;
     writer.u8(u8::from(controller.description.looping))?;
+    writer.u8(u8::from(controller.motion.is_some()))?;
+    if let Some(motion) = controller.motion {
+        encode_motion(writer, motion)?;
+    }
     writer.u8(u8::from(controller.transition.is_some()))?;
     if let Some(transition) = controller.transition {
         writer.u64(transition.duration.to_bits())?;
@@ -256,6 +260,11 @@ fn decode_controller(
     let time = f64::from_bits(reader.u64()?);
     let speed = f32::from_bits(reader.u32()?);
     let looping = boolean(reader)?;
+    let motion = if boolean(reader)? {
+        Some(decode_motion(reader)?)
+    } else {
+        None
+    };
     let transition = if boolean(reader)? {
         Some(AnimationControllerTransitionState {
             duration: f64::from_bits(reader.u64()?),
@@ -302,11 +311,62 @@ fn decode_controller(
         state,
         time,
         transition,
+        motion,
         description: AnimationControllerDescription {
             drivers,
             speed,
             looping,
         },
+    })
+}
+
+fn encode_motion(
+    writer: &mut WorldBinaryWriter,
+    motion: AnimationMotionState,
+) -> Result<(), String> {
+    match motion.mode {
+        AnimationMotionMode::Hold => writer.u8(0)?,
+        AnimationMotionMode::Spring {
+            target,
+            frequency,
+            damping,
+        } => {
+            writer.u8(1)?;
+            for value in [target, frequency, damping] {
+                writer.u64(value.to_bits())?;
+            }
+        }
+        AnimationMotionMode::Decay {
+            friction,
+        } => {
+            writer.u8(2)?;
+            writer.u64(friction.to_bits())?;
+        }
+    }
+    for value in [motion.min, motion.max, motion.velocity] {
+        writer.u64(value.to_bits())?;
+    }
+    Ok(())
+}
+
+fn decode_motion(reader: &mut WorldBinaryReader<'_>) -> Result<AnimationMotionState, String> {
+    let mode = match reader.u8()? {
+        0 => AnimationMotionMode::Hold,
+        1 => AnimationMotionMode::Spring {
+            target: f64::from_bits(reader.u64()?),
+            frequency: f64::from_bits(reader.u64()?),
+            damping: f64::from_bits(reader.u64()?),
+        },
+        2 => AnimationMotionMode::Decay {
+            friction: f64::from_bits(reader.u64()?),
+        },
+        _ => return Err("Invalid saved motion mode".into()),
+    };
+    Ok(AnimationMotionState {
+        mode,
+        min: f64::from_bits(reader.u64()?),
+        max: f64::from_bits(reader.u64()?),
+        velocity: f64::from_bits(reader.u64()?),
     })
 }
 
@@ -553,6 +613,7 @@ pub(in crate::world::systems::animation) fn validate_values(
             .get(&bits)
             .ok_or("Saved directional start references a missing controller")?;
         if !directional_ids.insert(bits)
+            || controller.motion.is_some()
             || !matches!(
                 controller.state,
                 AnimationPlaybackStatus::Playing | AnimationPlaybackStatus::Paused
@@ -686,6 +747,14 @@ fn validate_controller(
             || transition.elapsed > transition.duration)
     {
         return Err("Invalid saved transition summary".into());
+    }
+    if let Some(motion) = controller.motion {
+        motion
+            .validate(controller.time)
+            .map_err(|_| "Invalid saved motion")?;
+        if controller.transition.is_some() || controller.description.looping {
+            return Err("Motion cannot loop or crossfade".into());
+        }
     }
     for driver in &controller.description.drivers {
         validate_target(&driver.property, false)?;

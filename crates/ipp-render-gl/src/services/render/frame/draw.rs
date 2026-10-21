@@ -91,6 +91,11 @@ impl<D: RenderDevice> RenderService<D> {
             None,
         );
         let result = self.draw_contents(host, selection, publication, viewport, presentation_time);
+        if result.is_err() {
+            // This also covers errors in nested prepasses before begin_frame.
+            // Deferred device errors cannot leave derived images reusable.
+            self.finish_canvas_caches(false);
+        }
         #[cfg(feature = "instrumentation")]
         if matches!(result, Err(RenderError::ContextLost)) {
             self.gpu_context_lost();

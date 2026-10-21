@@ -12,6 +12,7 @@ import type {
   AnimationTransitionStartTime,
   AnimationPlaybackControl,
   AnimationPlaybackEvent,
+  AnimationMotionControl,
 } from "@ipp/client";
 import type { AssetReference } from "../assets/declarations.js";
 import type { ReactEntityReference } from "../reconciler/entity-references.js";
@@ -24,6 +25,7 @@ export interface AnimationHandle {
   stop(): Promise<void>;
   restart(): Promise<void>;
   seek(time: number): Promise<void>;
+  motion(control: AnimationMotionControl): Promise<void>;
 }
 export interface AnimationBinding
   extends Omit<
@@ -100,6 +102,7 @@ export function Animation({ ref, ...props }: AnimationProps) {
       stop: () => commands.control({ action: "stop" }),
       restart: () => commands.control({ action: "restart" }),
       seek: (time) => commands.control({ action: "seek", time }),
+      motion: (motion) => commands.control({ action: "motion", motion }),
     }),
     [commands],
   );

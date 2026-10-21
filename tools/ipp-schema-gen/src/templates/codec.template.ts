@@ -77,6 +77,8 @@ import type {
   BatchOperationEffect,
   SystemCommand,
   AnimationPlaybackControl,
+  AnimationMotionMode,
+  AnimationMotionState,
   AnimationPlaybackEvent,
   AnimationPlaybackEventPayload,
   AnimationControllerState,
@@ -582,6 +584,11 @@ class Writer {
       fail("nonfinite f32");
     this.reserve(4).setFloat32(0, v, true);
     this.at += 4;
+  }
+  finiteF64(v: number): void {
+    if (!Number.isFinite(v)) fail("nonfinite f64");
+    this.reserve(8).setFloat64(0, v, true);
+    this.at += 8;
   }
   f64(v: number): void {
     if (!Number.isFinite(v) || v < 0) fail("invalid animation time");
@@ -2240,6 +2247,7 @@ export function decodeResponse(
       controllers.push({
         ...readControllerState(r),
         description: readControllerDescription(r),
+        ...readControllerMotion(r),
         ...readControllerTransitionState(r),
       });
     body.controllers = controllers;
@@ -2501,9 +2509,11 @@ function writePlaybackControl(
     control,
     control.action === "seek"
       ? ["action", "time"]
-      : control.action === "playAtSpeed"
-        ? ["action", "speed"]
-        : ["action"],
+      : control.action === "motion"
+        ? ["action", "motion"]
+        : control.action === "playAtSpeed"
+          ? ["action", "speed"]
+          : ["action"],
   );
   const action = {
     play: WIRE.PLAYBACK_CONTROL_PLAY,
@@ -2512,11 +2522,77 @@ function writePlaybackControl(
     seek: WIRE.PLAYBACK_CONTROL_SEEK,
     restart: WIRE.PLAYBACK_CONTROL_RESTART,
     playAtSpeed: WIRE.PLAYBACK_CONTROL_PLAY_AT_SPEED,
+    motion: WIRE.PLAYBACK_CONTROL_MOTION,
   }[control.action];
   if (action === undefined) fail("playback control");
   w.u32(action);
   w.f64(control.action === "seek" ? control.time : 0);
   w.f32(control.action === "playAtSpeed" ? control.speed : 0);
+  w.u8(control.action === "motion" ? WIRE.OPTION_SOME : WIRE.OPTION_NONE);
+  if (control.action === "motion") {
+    const motion = control.motion;
+    exactFields(motion, ["mode", "min", "max", "position", "velocity"]);
+    writeMotionMode(w, motion.mode);
+    w.f64(motion.min);
+    w.f64(motion.max);
+    w.u8(motion.position === undefined ? WIRE.OPTION_NONE : WIRE.OPTION_SOME);
+    if (motion.position !== undefined) w.f64(motion.position);
+    w.u8(motion.velocity === undefined ? WIRE.OPTION_NONE : WIRE.OPTION_SOME);
+    if (motion.velocity !== undefined) w.finiteF64(motion.velocity);
+  }
+}
+
+function writeMotionMode(w: Writer, mode: AnimationMotionMode): void {
+  switch (mode.kind) {
+    case "hold":
+      exactFields(mode, ["kind"]);
+      w.u8(WIRE.ANIMATION_MOTION_HOLD);
+      break;
+    case "spring":
+      exactFields(mode, ["kind", "target", "frequency", "damping"]);
+      w.u8(WIRE.ANIMATION_MOTION_SPRING);
+      w.f64(mode.target);
+      w.f64(mode.frequency);
+      w.f64(mode.damping);
+      break;
+    case "decay":
+      exactFields(mode, ["kind", "friction"]);
+      w.u8(WIRE.ANIMATION_MOTION_DECAY);
+      w.f64(mode.friction);
+      break;
+    default:
+      fail("animation motion mode");
+  }
+}
+
+function readControllerMotion(r: Reader): { motion?: AnimationMotionState } {
+  const option = r.u8();
+  if (option === WIRE.OPTION_NONE) return {};
+  if (option !== WIRE.OPTION_SOME) fail("animation motion option");
+  let mode: AnimationMotionMode;
+  switch (r.u8()) {
+    case WIRE.ANIMATION_MOTION_HOLD:
+      mode = { kind: "hold" };
+      break;
+    case WIRE.ANIMATION_MOTION_SPRING:
+      mode = {
+        kind: "spring",
+        target: r.f64(),
+        frequency: r.f64(),
+        damping: r.f64(),
+      };
+      break;
+    case WIRE.ANIMATION_MOTION_DECAY:
+      mode = { kind: "decay", friction: r.f64() };
+      break;
+    default:
+      return fail("animation motion mode");
+  }
+  const min = r.f64(),
+    max = r.f64(),
+    velocity = r.f64();
+  if (min < 0 || max <= min) fail("animation motion bounds");
+  return { motion: { mode, min, max, velocity } };
 }
 
 function writeControllerDescription(

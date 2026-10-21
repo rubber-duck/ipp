@@ -34,6 +34,7 @@ pub(super) enum WireEncoding {
     U64,
     FiniteF32,
     NonnegativeFiniteF64,
+    FiniteF64,
     Utf8,
     Bytes,
     Named,

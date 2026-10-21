@@ -330,7 +330,8 @@ function driver(
         return {
           pose: (2 * Math.atan2(Number(pose.qy), Number(pose.qw))) / step,
           target: Number(app.options.carousel),
-          elapsed: controllers.controllers?.[0]?.transition?.elapsed,
+          velocity: controllers.controllers?.[0]?.motion?.velocity,
+          moving: controllers.controllers?.[0]?.state === "playing",
           tick: snapshot.tick.toString(),
         };
       };
@@ -389,7 +390,7 @@ function driver(
         do {
           const sample = await observe();
           samples.push(sample);
-          if (completed && sample.elapsed === undefined) break;
+          if (completed) break;
           assert.ok(
             performance.now() < deadline,
             "wheel tracking settles on the Host clock",
@@ -405,13 +406,13 @@ function driver(
           await app.sceneClient!.inspectPage({ collection: "controllers" })
         ).controllers?.some(
           (controller) =>
-            controller.transition &&
+            controller.state === "playing" &&
             controller.description.drivers.some((driver) =>
               driver.source.includes("cockpit-carousel-rotation"),
             ),
         )
       ) {
-        assert.ok(performance.now() < deadline, "native wheel easing settles");
+        assert.ok(performance.now() < deadline, "native wheel spring settles");
         await context.host.presentation.frame(view);
       }
       const retainedController = (
@@ -463,17 +464,17 @@ function driver(
           }),
         ]);
         const pose = rotor(snapshot);
-        const transition = controllers.controllers?.find((controller) =>
+        const motion = controllers.controllers?.find((controller) =>
           controller.description.drivers.some((driver) =>
             driver.source.includes("cockpit-carousel-rotation"),
           ),
-        )?.transition;
+        )?.motion;
         return {
           pose: (2 * Math.atan2(Number(pose.qy), Number(pose.qw))) / step,
           tick: snapshot.tick.toString(),
           time: snapshot.time,
-          elapsed: transition?.elapsed,
-          duration: transition?.duration,
+          velocity: motion?.velocity,
+          mode: motion?.mode.kind,
         };
       };
       await send({ kind: "pointerMove", pointer: 3n, point: start });
@@ -516,7 +517,7 @@ function driver(
             !capturedInterior &&
             observed.pose > from + 0.0001 &&
             observed.pose < Number(app.options.carousel) - 0.0001 &&
-            observed.elapsed !== undefined
+            observed.mode === "hold"
           ) {
             capturedInterior = true;
             // Capture completes near this observation; the sample owns its exact tick.
@@ -547,16 +548,17 @@ function driver(
           );
       }
       const target = Number(app.options.carousel);
-      // Completed Host frames settle the held target; no client clock is advanced.
+      // A stationary hold removes release velocity; Host time alone settles motion.
       for (let index = 0; index < 8; index++)
         await context.host.presentation.frame(view);
       const converged = (await observe()).pose;
+      await setTimeout(300);
       await send({
         kind: "pointerUp",
         pointer: 3n,
         point: [start[0] - 0.18, start[1]],
       });
-      await setTimeout(300);
+      await setTimeout(800);
       await frame();
       const released = (await observe()).pose;
       const retainedController = (

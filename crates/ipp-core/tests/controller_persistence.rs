@@ -163,6 +163,7 @@ fn many_controllers_resolve_late_durable_targets_and_reject_excluded_references(
         next_id: 65,
         controllers: (1..65)
             .map(|id| AnimationControllerSnapshot {
+                motion: None,
                 id: AnimationControllerId::from_bits(id),
                 state: AnimationPlaybackStatus::Paused,
                 time: 0.0,

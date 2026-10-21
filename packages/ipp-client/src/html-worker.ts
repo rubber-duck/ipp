@@ -7,6 +7,7 @@ interface HtmlRuntime {
   ipp_html_changed(source: number): void;
   ipp_html_requests_ptr(): number;
   ipp_html_requests_len(): number;
+  ipp_html_reserve(ticket: number, width: number, height: number): number;
   ipp_html_complete(ticket: number, image: number): number;
   ipp_html_error_ptr(): number;
   ipp_html_error_len(): number;
@@ -47,6 +48,24 @@ export class HtmlWorkerService {
   }
 
   receive(data: Record<string, unknown>): boolean {
+    if (data.type === "html-reserve") {
+      const accepted = this.runtime.ipp_html_reserve(
+        Number(data.ticket),
+        Number(data.width),
+        Number(data.height),
+      );
+      this.post(
+        {
+          type: "html-admitted",
+          ticket: data.ticket,
+          ...(accepted === 1
+            ? {}
+            : { error: this.error() || "HTML capture admission failed" }),
+        },
+        [],
+      );
+      return true;
+    }
     if (data.type === "html-register") {
       const source = Number(data.source);
       const accepted = this.runtime.ipp_html_register(source) === 1;
@@ -85,15 +104,13 @@ export class HtmlWorkerService {
         stage,
       );
       if (accepted === 2) error = undefined;
-      if (accepted === 0 && !error && !this.device.isContextLost())
-        error =
-          new TextDecoder().decode(
-            new Uint8Array(
-              this.runtime.memory.buffer,
-              this.runtime.ipp_html_error_ptr() >>> 0,
-              this.runtime.ipp_html_error_len() >>> 0,
-            ),
-          ) || "HTML capture could not be imported";
+      if (
+        accepted === 0 &&
+        !error &&
+        !data.retry &&
+        !this.device.isContextLost()
+      )
+        error = this.error() || "HTML capture could not be imported";
     } catch (failure) {
       error = this.device.isContextLost() ? undefined : String(failure);
       this.runtime.ipp_html_complete(Number(data.ticket), 0);
@@ -109,5 +126,15 @@ export class HtmlWorkerService {
       [],
     );
     return true;
+  }
+
+  private error(): string {
+    return new TextDecoder().decode(
+      new Uint8Array(
+        this.runtime.memory.buffer,
+        this.runtime.ipp_html_error_ptr() >>> 0,
+        this.runtime.ipp_html_error_len() >>> 0,
+      ),
+    );
   }
 }

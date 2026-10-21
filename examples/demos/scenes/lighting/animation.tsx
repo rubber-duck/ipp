@@ -50,8 +50,9 @@ export function AnimationControls({
       setError(String(failure));
     }
   };
-  const control = (control: AnimationPlaybackControl) =>
-    run(() => demo.session?.control(selection, control));
+  const control = (
+    control: Exclude<AnimationPlaybackControl, { action: "motion" }>,
+  ) => run(() => demo.session?.control(selection, control));
 
   return (
     <>

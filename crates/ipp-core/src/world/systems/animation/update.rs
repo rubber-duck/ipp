@@ -17,6 +17,12 @@ fn advance_transition_source(
     if controller.snapshot.state == AnimationPlaybackStatus::Stopped {
         return Ok(());
     }
+    if let Some(motion) = &mut controller.snapshot.motion {
+        if controller.snapshot.state == AnimationPlaybackStatus::Playing {
+            motion.advance(&mut controller.snapshot.time, dt);
+        }
+        return Ok(());
+    }
     let advance = dt * f64::from(controller.snapshot.description.speed);
     if !advance.is_finite() {
         return Err(ErrorReason::InvalidValue);
@@ -290,6 +296,13 @@ impl AnimationAccess<'_, '_> {
                 }
                 ready_controllers.push(id);
                 let duration = controller.duration;
+                if controller
+                    .snapshot
+                    .motion
+                    .is_some_and(|motion| motion.max > duration)
+                {
+                    return Err(ErrorReason::InvalidValue);
+                }
                 if controller.directional_start_pending {
                     controller.snapshot.time =
                         directional_start(controller.snapshot.description.speed, duration);
@@ -400,44 +413,51 @@ impl AnimationAccess<'_, '_> {
                 if controller.snapshot.state == AnimationPlaybackStatus::Playing
                     && !controller.sought
                 {
-                    let advance = dt * f64::from(controller.snapshot.description.speed);
-                    if !advance.is_finite() {
-                        return Err(ErrorReason::InvalidValue);
-                    }
-                    if controller.snapshot.description.looping && advance != 0.0 {
-                        let crossed_boundary = if advance > 0.0 {
-                            controller.snapshot.time + advance >= duration
-                        } else {
-                            controller.snapshot.time + advance < 0.0
-                        };
-                        if crossed_boundary {
-                            for driver in &mut controller.structural_drivers {
-                                driver.reset_selection();
-                            }
-                        }
-                        controller.snapshot.time = if duration == 0.0 {
-                            0.0
-                        } else {
-                            (controller.snapshot.time + advance.rem_euclid(duration))
-                                .rem_euclid(duration)
-                        };
-                    } else if !controller.snapshot.description.looping {
-                        controller.snapshot.time =
-                            (controller.snapshot.time + advance).clamp(0.0, duration);
-                        if controller.snapshot.transition.is_none()
-                            && ((advance > 0.0 && controller.snapshot.time == duration)
-                                || (advance < 0.0 && controller.snapshot.time == 0.0))
-                        {
+                    if let Some(motion) = &mut controller.snapshot.motion {
+                        if motion.advance(&mut controller.snapshot.time, dt) {
                             controller.snapshot.state = AnimationPlaybackStatus::Completed;
                             self.event(controller, AnimationPlaybackEventKind::Completed, None);
                         }
-                    }
-                    if let Some(runtime) = &mut controller.transition {
-                        if let AnimationTransitionSource::Live(source) = &mut runtime.source {
-                            advance_transition_source(source, dt)?;
+                    } else {
+                        let advance = dt * f64::from(controller.snapshot.description.speed);
+                        if !advance.is_finite() {
+                            return Err(ErrorReason::InvalidValue);
                         }
-                        let summary = controller.snapshot.transition.as_mut().unwrap();
-                        summary.elapsed = (summary.elapsed + dt).min(summary.duration);
+                        if controller.snapshot.description.looping && advance != 0.0 {
+                            let crossed_boundary = if advance > 0.0 {
+                                controller.snapshot.time + advance >= duration
+                            } else {
+                                controller.snapshot.time + advance < 0.0
+                            };
+                            if crossed_boundary {
+                                for driver in &mut controller.structural_drivers {
+                                    driver.reset_selection();
+                                }
+                            }
+                            controller.snapshot.time = if duration == 0.0 {
+                                0.0
+                            } else {
+                                (controller.snapshot.time + advance.rem_euclid(duration))
+                                    .rem_euclid(duration)
+                            };
+                        } else if !controller.snapshot.description.looping {
+                            controller.snapshot.time =
+                                (controller.snapshot.time + advance).clamp(0.0, duration);
+                            if controller.snapshot.transition.is_none()
+                                && ((advance > 0.0 && controller.snapshot.time == duration)
+                                    || (advance < 0.0 && controller.snapshot.time == 0.0))
+                            {
+                                controller.snapshot.state = AnimationPlaybackStatus::Completed;
+                                self.event(controller, AnimationPlaybackEventKind::Completed, None);
+                            }
+                        }
+                        if let Some(runtime) = &mut controller.transition {
+                            if let AnimationTransitionSource::Live(source) = &mut runtime.source {
+                                advance_transition_source(source, dt)?;
+                            }
+                            let summary = controller.snapshot.transition.as_mut().unwrap();
+                            summary.elapsed = (summary.elapsed + dt).min(summary.duration);
+                        }
                     }
                 }
                 if controller.sought {
@@ -455,6 +475,7 @@ impl AnimationAccess<'_, '_> {
                     // controller is installed for lifecycle callbacks.
                     invalidated.push(id);
                     controller.snapshot.transition = None;
+                    controller.snapshot.motion = None;
                     controller.snapshot.state = AnimationPlaybackStatus::Stopped;
                     self.event(
                         controller,

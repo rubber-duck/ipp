@@ -19,6 +19,7 @@ fn property(offset: u32) -> AnimationTrackTarget {
 
 fn controller(id: u64, transition: bool) -> AnimationControllerSnapshot {
     AnimationControllerSnapshot {
+        motion: None,
         id: AnimationControllerId::from_bits(id),
         description: AnimationControllerDescription {
             drivers: vec![AnimationDriverDescription {
@@ -107,13 +108,13 @@ fn live_and_frozen_state() -> AnimationPersistentState {
 
 fn unchecked_bytes(state: &AnimationPersistentState) -> Vec<u8> {
     let mut writer = WorldBinaryWriter::new(1 << 20);
-    writer.u32(8).unwrap();
+    writer.u32(9).unwrap();
     encode(&mut writer, state).unwrap();
     writer.bytes
 }
 
 #[test]
-fn version_eight_round_trips_transitions_directional_starts_and_contributions() {
+fn version_nine_round_trips_transitions_directional_starts_and_contributions() {
     let state = live_and_frozen_state();
     let bytes = state.encode(1 << 20).unwrap();
     assert_eq!(
@@ -141,7 +142,7 @@ fn controller_state_rejects_legacy_versions_and_keeps_large_binding_tables() {
         AnimationPersistentState::decode(&bytes, 1 << 20).unwrap(),
         state
     );
-    for legacy in [6_u32, 7] {
+    for legacy in [6_u32, 7, 8] {
         bytes[..4].copy_from_slice(&legacy.to_le_bytes());
         assert!(AnimationPersistentState::decode(&bytes, 1 << 20).is_err());
     }
@@ -266,4 +267,43 @@ fn contributions_require_a_controller_a_unique_field_and_a_finite_float_or_rotat
     let mut structural = live_and_frozen_state();
     structural.contributions[0].property = AnimationTrackTarget::EntityLink;
     assert!(structural.encode(1 << 20).is_err());
+}
+
+#[test]
+fn motion_state_round_trips_and_rejects_inconsistent_bounds() {
+    use crate::systems::animation::{AnimationMotionMode, AnimationMotionState};
+    let mut state = AnimationPersistentState {
+        next_id: 2,
+        controllers: vec![controller(1, false)],
+        ..Default::default()
+    };
+    state.controllers[0].description.looping = false;
+    for mode in [
+        AnimationMotionMode::Hold,
+        AnimationMotionMode::Spring {
+            target: 1.0,
+            frequency: 4.0,
+            damping: 0.8,
+        },
+        AnimationMotionMode::Decay {
+            friction: 5.0,
+        },
+    ] {
+        state.controllers[0].motion = Some(AnimationMotionState {
+            mode,
+            min: 0.0,
+            max: 2.0,
+            velocity: -3.5,
+        });
+        let bytes = state.encode(1 << 20).unwrap();
+        assert_eq!(
+            AnimationPersistentState::decode(&bytes, 1 << 20).unwrap(),
+            state
+        );
+    }
+    state.controllers[0].motion.as_mut().unwrap().max = 1.0;
+    assert!(state.encode(1 << 20).is_err());
+    state.controllers[0].motion.as_mut().unwrap().max = 2.0;
+    state.controllers[0].description.looping = true;
+    assert!(state.encode(1 << 20).is_err());
 }

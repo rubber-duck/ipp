@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 export interface CockpitBrowserDriver {
   press(id: string): Promise<void>;
+  hover(id: string): Promise<void>;
   pagePress(id: string, fraction?: number): Promise<void>;
   type(text: string): Promise<void>;
   paste(text: string): Promise<void>;
@@ -21,6 +22,10 @@ export interface CockpitBrowserDriver {
     domSources: number;
   }>;
   skin(value: "glass" | "cybertron"): Promise<void>;
+  presentation(
+    surface: "flat" | "curved",
+    caching: "off" | "force",
+  ): Promise<void>;
   frame(
     label: string,
   ): Promise<{ blue: number; green: number; orange: number; light: number }>;
@@ -56,6 +61,8 @@ export async function cockpitBrowserScenario(driver: CockpitBrowserDriver) {
     welcome.blue > 100 && welcome.light > 1000,
     JSON.stringify(welcome),
   );
+  // Real users cross GUI controls before reaching the nested page.
+  await driver.hover("address/input");
   await driver.pagePress("callsign");
   assert.equal((await driver.dom()).focus, "callsign");
   await driver.type("Vega");
@@ -74,6 +81,16 @@ export async function cockpitBrowserScenario(driver: CockpitBrowserDriver) {
   await driver.paste("Ready for launch");
   await driver.key("Enter");
   await driver.type("All clear.");
+  await driver.hover("address/input");
+  await driver.pagePress("updates");
+  assert.equal((await driver.dom()).fields.updates, true);
+  // A focused checkbox must not steal a click aimed at another page control.
+  await driver.pagePress("callsign");
+  const refocused = await driver.dom();
+  assert.equal(refocused.focus, "callsign");
+  assert.equal(refocused.fields.updates, true);
+  await driver.pagePress("updates");
+  assert.equal((await driver.dom()).fields.updates, false);
   await driver.pagePress("updates");
   await driver.pagePress("send");
   const form = await driver.dom();
@@ -142,6 +159,13 @@ export async function cockpitBrowserScenario(driver: CockpitBrowserDriver) {
   );
   const crew = await driver.frame("browser-crew-cybertron");
   assert.ok(crew.orange > 100 && crew.light > 1000, JSON.stringify(crew));
+  for (const caching of ["force", "off"] as const) {
+    await driver.presentation("flat", caching);
+    const flat = await driver.frame(`browser-crew-flat-${caching}`);
+    assert.ok(flat.orange > 100 && flat.light > 1000, JSON.stringify(flat));
+    await driver.pagePress("crew-search");
+    assert.equal((await driver.dom()).focus, "crew-search");
+  }
   await driver.press("forward");
   assert.ok(
     (await driver.state()).address.endsWith("crew.html"),
@@ -150,6 +174,7 @@ export async function cockpitBrowserScenario(driver: CockpitBrowserDriver) {
   await driver.pagePress("crew-search");
   await driver.type("Mira");
   assert.equal((await driver.dom()).fields["crew-search"], "Mira");
+  await driver.presentation("curved", "off");
   await driver.resize();
   await driver.frame("browser-resized");
   assert.equal(

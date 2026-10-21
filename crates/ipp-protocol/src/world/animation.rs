@@ -16,14 +16,21 @@ impl Reader<'_> {
             u8::try_from(self.u32()?).map_err(|_| ProtocolError::Malformed("playback control"))?;
         let time = self.f64()?;
         let speed = self.f32()?;
+        let motion = match self.u8()? {
+            OPTION_NONE => None,
+            OPTION_SOME => Some(self.motion_control()?),
+            _ => return Err(ProtocolError::Malformed("animation motion option")),
+        };
         if !time.is_finite()
             || time < 0.0
             || action != PLAYBACK_CONTROL_SEEK && time != 0.0
             || action != PLAYBACK_CONTROL_PLAY_AT_SPEED && speed != 0.0
+            || (action == PLAYBACK_CONTROL_MOTION) != motion.is_some()
         {
             return Err(ProtocolError::Malformed("playback control time"));
         }
         Ok(match action {
+            PLAYBACK_CONTROL_MOTION => AnimationPlaybackControl::Motion(motion.unwrap()),
             PLAYBACK_CONTROL_PLAY => AnimationPlaybackControl::Play,
             PLAYBACK_CONTROL_PAUSE => AnimationPlaybackControl::Pause,
             PLAYBACK_CONTROL_STOP => AnimationPlaybackControl::Stop,
@@ -32,6 +39,43 @@ impl Reader<'_> {
             PLAYBACK_CONTROL_PLAY_AT_SPEED => AnimationPlaybackControl::PlayAtSpeed(speed),
             _ => return Err(ProtocolError::Malformed("playback control")),
         })
+    }
+
+    fn motion_mode(&mut self) -> Result<AnimationMotionMode, ProtocolError> {
+        Ok(match self.u8()? {
+            ANIMATION_MOTION_HOLD => AnimationMotionMode::Hold,
+            ANIMATION_MOTION_SPRING => AnimationMotionMode::Spring {
+                target: self.f64()?,
+                frequency: self.f64()?,
+                damping: self.f64()?,
+            },
+            ANIMATION_MOTION_DECAY => AnimationMotionMode::Decay {
+                friction: self.f64()?,
+            },
+            _ => return Err(ProtocolError::Malformed("animation motion mode")),
+        })
+    }
+
+    fn motion_control(&mut self) -> Result<AnimationMotionControl, ProtocolError> {
+        let mode = self.motion_mode()?;
+        let min = self.f64()?;
+        let max = self.f64()?;
+        let mut optional = || match self.u8()? {
+            OPTION_NONE => Ok(None),
+            OPTION_SOME => Ok(Some(self.f64()?)),
+            _ => Err(ProtocolError::Malformed("motion value option")),
+        };
+        let value = AnimationMotionControl {
+            mode,
+            min,
+            max,
+            position: optional()?,
+            velocity: optional()?,
+        };
+        value
+            .validate()
+            .map_err(|_| ProtocolError::Malformed("animation motion"))?;
+        Ok(value)
     }
 
     pub(super) fn controller_description(
@@ -155,6 +199,16 @@ impl Writer {
             time: controller.time,
         })?;
         self.controller_description(&controller.description)?;
+        match controller.motion {
+            None => self.u8(OPTION_NONE)?,
+            Some(motion) => {
+                self.u8(OPTION_SOME)?;
+                self.motion_mode(motion.mode)?;
+                self.f64(motion.min)?;
+                self.f64(motion.max)?;
+                self.finite_f64(motion.velocity)?;
+            }
+        }
         let Some(transition) = &controller.transition else {
             return self.u8(OPTION_NONE);
         };
@@ -166,6 +220,28 @@ impl Writer {
             AnimationTransitionEasing::Smoothstep => ANIMATION_TRANSITION_SMOOTHSTEP,
         }))?;
         self.u8(u8::from(transition.pending))
+    }
+
+    fn motion_mode(&mut self, mode: AnimationMotionMode) -> Result<(), ProtocolError> {
+        match mode {
+            AnimationMotionMode::Hold => self.u8(ANIMATION_MOTION_HOLD),
+            AnimationMotionMode::Spring {
+                target,
+                frequency,
+                damping,
+            } => {
+                self.u8(ANIMATION_MOTION_SPRING)?;
+                self.f64(target)?;
+                self.f64(frequency)?;
+                self.f64(damping)
+            }
+            AnimationMotionMode::Decay {
+                friction,
+            } => {
+                self.u8(ANIMATION_MOTION_DECAY)?;
+                self.f64(friction)
+            }
+        }
     }
 
     fn controller_description(

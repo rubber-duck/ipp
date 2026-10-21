@@ -18,6 +18,64 @@ interface DrawableCanvas extends HTMLCanvasElement {
   layoutSubtree: boolean;
   requestPaint(): void;
   captureElementImage(element: Element): HtmlElementImage;
+  updateElementGeometry(
+    element: Element,
+    options: { canvasTransform: DOMMatrix },
+  ): void;
+}
+
+let geometryAvailable: boolean | undefined;
+
+/** DOM layout and input stay in CSS units; capture admission counts device pixels.
+ * offsetWidth/Height exclude the temporary geometry used for routed hit testing. */
+function captureExtent(content: HTMLElement): readonly [number, number] {
+  let scale = content.ownerDocument.defaultView!.devicePixelRatio;
+  for (
+    let element: HTMLElement | null = content;
+    element;
+    element = element.parentElement
+  )
+    scale *= Number.parseFloat(getComputedStyle(element).zoom) || 1;
+  return [
+    Math.ceil(content.offsetWidth * scale),
+    Math.ceil(content.offsetHeight * scale),
+  ];
+}
+
+/** Chrome can expose updateElementGeometry while its separate transform
+ * feature is disabled. Check applied geometry, not just API presence. */
+function htmlGeometryAvailable(): boolean {
+  if (geometryAvailable !== undefined) return geometryAvailable;
+  if (typeof document === "undefined" || !document.documentElement)
+    return false;
+  const canvas = document.createElement("canvas") as DrawableCanvas;
+  const content = document.createElement("div");
+  canvas.layoutSubtree = true;
+  canvas.width = canvas.height = 32;
+  canvas.style.cssText =
+    "all: initial; position: fixed; width: 32px; height: 32px; visibility: hidden; pointer-events: none;";
+  content.setAttribute("drawable", "");
+  content.style.cssText =
+    "all: initial; display: block; width: 8px; height: 8px;";
+  canvas.append(content);
+  document.documentElement.append(canvas);
+  try {
+    const before = content.getBoundingClientRect();
+    canvas.updateElementGeometry(content, {
+      canvasTransform: new DOMMatrix().scale(2),
+    });
+    const after = content.getBoundingClientRect();
+    geometryAvailable =
+      before.width > 0 &&
+      before.height > 0 &&
+      Math.abs(after.width - 2 * before.width) < 0.1 &&
+      Math.abs(after.height - 2 * before.height) < 0.1;
+  } catch {
+    geometryAvailable = false;
+  } finally {
+    canvas.remove();
+  }
+  return geometryAvailable;
 }
 
 export function htmlCanvasAvailable(): boolean {
@@ -29,7 +87,8 @@ export function htmlCanvasAvailable(): boolean {
     "updateElementGeometry" in HTMLCanvasElement.prototype &&
     "clearElementGeometry" in HTMLCanvasElement.prototype &&
     typeof WebGL2RenderingContext !== "undefined" &&
-    "texElementSubImage2D" in WebGL2RenderingContext.prototype
+    "texElementSubImage2D" in WebGL2RenderingContext.prototype &&
+    htmlGeometryAvailable()
   );
 }
 
@@ -82,6 +141,7 @@ export class HtmlSources {
     }
   >();
   readonly #captures = new Map<number, number>();
+  readonly #admissions = new Map<number, (error?: Error) => void>();
   readonly #cancel = new AbortController();
 
   constructor(
@@ -91,6 +151,14 @@ export class HtmlSources {
       transfer?: Transferable[],
     ) => void,
   ) {
+    canvas?.ownerDocument.defaultView?.addEventListener(
+      "resize",
+      () => {
+        for (const source of this.#sources.keys())
+          this.post({ type: "html-changed", source });
+      },
+      { signal: this.#cancel.signal },
+    );
     canvas?.addEventListener(
       "paint",
       (event) => {
@@ -158,6 +226,12 @@ export class HtmlSources {
   }
 
   receive(data: Record<string, unknown>): boolean {
+    if (data.type === "html-admitted") {
+      this.#admissions.get(Number(data.ticket))?.(
+        data.error ? new Error(String(data.error)) : undefined,
+      );
+      return true;
+    }
     if (data.type === "html-registered") {
       const record = this.#sources.get(Number(data.source));
       if (data.error) record?.ready?.reject(new Error(String(data.error)));
@@ -201,6 +275,36 @@ export class HtmlSources {
       const canvas = this.canvas as DrawableCanvas;
       record.content.style.width = `${width}px`;
       record.content.style.height = `${height}px`;
+      const extent = captureExtent(record.content);
+      if (
+        extent.some(
+          (value) =>
+            !Number.isSafeInteger(value) || value <= 0 || value > 0xffff_ffff,
+        )
+      )
+        throw new Error("Invalid HTML capture extent");
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timer);
+          this.#admissions.delete(ticket);
+          this.#cancel.signal.removeEventListener("abort", aborted);
+          if (error) reject(error);
+          else resolve();
+        };
+        const aborted = () => finish(new Error("HTML producer closed"));
+        const timer = setTimeout(
+          () => finish(new Error("HTML capture admission timed out")),
+          10_000,
+        );
+        this.#admissions.set(ticket, finish);
+        this.#cancel.signal.addEventListener("abort", aborted, { once: true });
+        this.post({
+          type: "html-reserve",
+          ticket,
+          width: extent[0],
+          height: extent[1],
+        });
+      });
       await new Promise<void>((resolve, reject) => {
         const finish = (error?: Error) => {
           clearTimeout(timer);
@@ -225,6 +329,17 @@ export class HtmlSources {
       });
       if (this.#sources.get(source) !== record || this.#closed)
         throw new Error("HTML source released");
+      if (
+        captureExtent(record.content).some(
+          (value, index) => value !== extent[index],
+        )
+      ) {
+        // Zoom or layout changed while admission/paint was in flight. Release
+        // the old reservation and negotiate again before creating a snapshot.
+        this.post({ type: "html-frame", ticket, retry: true });
+        this.post({ type: "html-changed", source });
+        return;
+      }
       image = canvas.captureElementImage(record.content);
       this.post({ type: "html-frame", ticket, image }, [
         image as unknown as Transferable,

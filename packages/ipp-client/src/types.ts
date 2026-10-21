@@ -777,7 +777,28 @@ export interface AnimationControllerTransitionState {
 }
 export interface AnimationControllerSnapshot extends AnimationControllerState {
   description: AnimationControllerDescription;
+  motion?: AnimationMotionState;
   transition?: AnimationControllerTransitionState;
+}
+/** The Host advances this law on the controller's existing sample position. */
+export type AnimationMotionMode =
+  | { kind: "hold" }
+  | { kind: "spring"; target: number; frequency: number; damping: number }
+  | { kind: "decay"; friction: number };
+export interface AnimationMotionState {
+  mode: AnimationMotionMode;
+  min: number;
+  max: number;
+  velocity: number;
+}
+export interface AnimationMotionControl {
+  mode: AnimationMotionMode;
+  min: number;
+  max: number;
+  /** Omit to preserve the current rendered position. */
+  position?: number;
+  /** Omit to preserve momentum across a retarget. */
+  velocity?: number;
 }
 export type AnimationControllerCommand =
   | { action: "create"; description: AnimationControllerDescription }
@@ -796,7 +817,8 @@ export type AnimationControllerCommand =
 export type AnimationPlaybackControl =
   | { action: "play" | "pause" | "stop" | "restart" }
   | { action: "seek"; time: number }
-  | { action: "playAtSpeed"; speed: number };
+  | { action: "playAtSpeed"; speed: number }
+  | { action: "motion"; motion: AnimationMotionControl };
 export interface AnimationPlaybackCommand {
   type: "AnimationPlaybackCommand";
   controller: bigint;

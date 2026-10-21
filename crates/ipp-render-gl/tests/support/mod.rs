@@ -41,6 +41,7 @@ pub struct DeviceState {
     pub shadow_attempts: Cell<u32>,
     pub live_meshes: Cell<u32>,
     pub ended_frames: Cell<u32>,
+    pub fail_frame_end: RefCell<Option<RenderError>>,
     pub context_lost: Cell<bool>,
     pub surface_path_attempts: Cell<u32>,
     pub surface_double_sided: Cell<bool>,
@@ -787,7 +788,10 @@ impl RenderDevice for TestDevice {
 
     fn end_frame(&mut self) -> Result<(), RenderError> {
         self.0.ended_frames.set(self.0.ended_frames.get() + 1);
-        Ok(())
+        match self.0.fail_frame_end.borrow().clone() {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 
     fn delete_mesh(&mut self, _mesh: ()) {

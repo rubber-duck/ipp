@@ -4,7 +4,7 @@ import type { GalleryDiagnosticsMonitor } from "../../frame-rate.js";
 import type { FrameRateContract } from "../../frame-rate-panel.js";
 import type {
   AnimationWorldClient,
-  AnimationControllerDescription,
+  AnimationMotionControl,
   PickingWorldClient,
   CameraWorldClient,
   Client,
@@ -59,7 +59,8 @@ import {
   CarouselRotation,
   CarouselQuality,
   CAROUSEL_ASSET,
-  CAROUSEL_TRACKING_SECONDS,
+  CAROUSEL_SPRING_FREQUENCY,
+  CAROUSEL_SPRING_DAMPING,
   CAROUSEL_ENTITY,
   carouselStep,
 } from "./carousel.js";
@@ -220,8 +221,6 @@ function CockpitWorld({
                 (field) => transform.fields[field]!.offset,
               )}
               step={carouselStep(placements[0]!.extent[0], state.projection)}
-              focus={state.carousel}
-              dragging={state.carouselDragging}
             />
             <Children>
               {Array.from({ length: COCKPIT_PANE_COUNT }, (_, index) =>
@@ -582,92 +581,102 @@ export const cockpitScene: GallerySceneDefinition = {
       throw failure;
     });
     let carouselController: bigint | undefined;
-    let trackingDescription: AnimationControllerDescription | undefined;
+    let carouselReady = false;
     let trackingFocus: number | undefined;
     let trackingEpoch = 0;
     let trackingKind: "drag" | "wheel" | undefined;
-    let preparingTracking: Promise<void> | undefined;
     const pendingTracking = new Set<Promise<void>>();
-    const track = async (
-      focus: number,
-      kind: "drag" | "wheel",
-      current: () => boolean,
+    const animation = client as AnimationWorldClient;
+    const boundFocus = (focus: number) =>
+      Math.max(0, Math.min(COCKPIT_PANE_COUNT - 1, focus));
+    const sendMotion = (
+      motion: Omit<AnimationMotionControl, "min" | "max">,
     ) => {
-      if (!current()) return;
-      const carousel = Math.max(0, Math.min(COCKPIT_PANE_COUNT - 1, focus));
-      if (trackingKind !== kind) {
-        ++trackingEpoch;
-        trackingDescription = undefined;
-        preparingTracking = undefined;
-        trackingKind = kind;
-      }
-      trackingFocus = carousel;
-      notifyNavigation();
-      if (!carouselController)
+      if (carouselController === undefined)
         throw new Error("Carousel controller is not ready");
-      if (!trackingDescription) {
-        if (!preparingTracking) {
-          const preparing = trackingEpoch;
-          preparingTracking = (async () => {
-            if (pendingTracking.size)
-              await Promise.allSettled([...pendingTracking]);
-            if (preparing !== trackingEpoch || context.signal.aborted) return;
-            // Freeze declaration-owned seek once. Both pointer and wheel tracking
-            // then reuse the prepared clip without rendering the panel Worlds.
-            await base.update({
-              ...cockpitOptions({
-                ...base.options,
-                carousel,
-                carouselDragging: true,
-              }),
-            });
-            if (preparing !== trackingEpoch || context.signal.aborted) return;
-            const prepared = (await client.inspect()).controllers?.find(
-              (entry) => entry.id === carouselController,
-            )?.description;
-            if (preparing !== trackingEpoch || context.signal.aborted) return;
-            if (!prepared) throw new Error("Carousel controller was retired");
-            trackingDescription = prepared;
-          })().finally(() => {
-            if (preparing === trackingEpoch) preparingTracking = undefined;
-          });
-        }
-        await preparingTracking;
-      }
-      if (!current() || trackingKind !== kind || !trackingDescription) return;
-      // Reuse the prepared clip: pointer tracking needs one small Host command,
-      // not an animation asset replacement and eight Canvas render barriers.
-      const submittedEpoch = trackingEpoch;
-      const pending = (
-        client as AnimationWorldClient
-      ).transitionAnimationController(carouselController, {
-        description: trackingDescription,
-        duration: kind === "drag" ? CAROUSEL_TRACKING_SECONDS : 0.24,
-        easing: "linear",
-        startTime: { policy: "seek", time: carousel },
+      const pending = animation.controlAnimationController(carouselController, {
+        action: "motion",
+        motion: { ...motion, min: 0, max: COCKPIT_PANE_COUNT - 1 },
       });
       pendingTracking.add(pending);
       void pending.then(
         () => pendingTracking.delete(pending),
-        (failure) => {
+        (error) => {
           pendingTracking.delete(pending);
-          if (submittedEpoch === trackingEpoch && !context.signal.aborted) {
-            ++trackingEpoch;
-            trackingFocus = undefined;
-            trackingDescription = undefined;
-            mount.sceneInput?.cancel();
-            void mount
-              .update({ carousel, carouselDragging: false })
-              .catch(report);
-          }
-          report(failure);
+          if (!context.signal.aborted) report(error);
         },
       );
-      // Submit in pointer order without waiting for acknowledgments; the Host
-      // interpolates while later input arrives. Release drains submitted work.
-      // trackingFocus exposes the latest application intent immediately.
-      // Publish React state once on release, keeping all panel Canvas Worlds
-      // out of the pointer tracking path.
+      return pending;
+    };
+    const spring = (target: number, velocity?: number) =>
+      sendMotion({
+        mode: {
+          kind: "spring",
+          target: boundFocus(target),
+          frequency: CAROUSEL_SPRING_FREQUENCY,
+          damping: CAROUSEL_SPRING_DAMPING,
+        },
+        ...(velocity === undefined ? {} : { velocity }),
+      });
+    const readMotion = async () => {
+      const page = await client.inspectPage({ collection: "controllers" });
+      const state = page.controllers?.find(
+        (entry) => entry.id === carouselController,
+      );
+      if (!state) throw new Error("Carousel controller was retired");
+      return state;
+    };
+    const track = async (
+      focus: number,
+      kind: "drag" | "wheel",
+      current: () => boolean,
+      velocity = 0,
+    ) => {
+      if (!current()) return;
+      trackingFocus = boundFocus(focus);
+      trackingKind = kind;
+      notifyNavigation();
+      // Gesture samples update one persistent Host controller. Pane trees never
+      // rerender to advance motion, and retargeting preserves native velocity.
+      if (kind === "drag")
+        void sendMotion({
+          mode: { kind: "hold" },
+          position: trackingFocus,
+          velocity,
+        });
+      else
+        void sendMotion({
+          mode: {
+            kind: "spring",
+            target: trackingFocus,
+            frequency: 7,
+            damping: 1,
+          },
+        });
+    };
+    const settle = async (
+      focus: number,
+      current: () => boolean,
+      velocity?: number,
+    ) => {
+      const ending = ++trackingEpoch;
+      if (pendingTracking.size) await Promise.allSettled([...pendingTracking]);
+      if (!current() || ending !== trackingEpoch || context.signal.aborted)
+        return;
+      const selected = boundFocus(Math.round(focus));
+      await spring(selected, velocity);
+      if (!current() || ending !== trackingEpoch || context.signal.aborted)
+        return;
+      trackingKind = undefined;
+      trackingFocus = undefined;
+      await base.update({
+        ...cockpitOptions({
+          ...base.options,
+          carousel: selected,
+          carouselDragging: false,
+        }),
+      });
+      notifyNavigation();
     };
     const ready = Promise.all([base.ready, panelReady]).then(async () => {
       for (const [, world] of [...panels].sort((a, b) => a[0] - b[0])) {
@@ -711,6 +720,7 @@ export const cockpitScene: GallerySceneDefinition = {
           waitResources(observer, context.signal),
         ),
       );
+      carouselReady = true;
     });
     void ready.catch(report);
     const unsubscribeBase = base.subscribe?.(notify);
@@ -728,6 +738,7 @@ export const cockpitScene: GallerySceneDefinition = {
       },
       sceneInput: new CockpitCarouselInput({
         signal: context.signal,
+        ready: () => carouselReady,
         camera: readPose(cameraPose),
         client: context.presentationClient ?? (client as PickingWorldClient),
         view: () => {
@@ -791,37 +802,39 @@ export const cockpitScene: GallerySceneDefinition = {
             Number(mount.options.projection),
           ),
         wheel: (focus, current) => track(focus, "wheel", current),
+        releaseWheel: async (focus, current) => {
+          if (pendingTracking.size)
+            await Promise.allSettled([...pendingTracking]);
+          if (!current()) return;
+          const state = await readMotion();
+          if (!current()) return;
+          // The spring's current velocity includes the arriving wheel stream;
+          // preserve it once, including a trackpad's own decaying tail.
+          await settle(focus + (state.motion?.velocity ?? 0) * 0.12, current);
+        },
+        begin: async (current) => {
+          ++trackingEpoch;
+          if (pendingTracking.size)
+            await Promise.allSettled([...pendingTracking]);
+          if (!current()) return Number(mount.options.carousel);
+          await sendMotion({ mode: { kind: "hold" }, velocity: 0 });
+          const state = await readMotion();
+          if (!current()) return state.time;
+          trackingFocus = state.time;
+          trackingKind = "drag";
+          notifyNavigation();
+          return state.time;
+        },
+        onError: report,
         update: async (
           focus,
           dragging,
           current = () => !context.signal.aborted,
+          velocity = 0,
         ) => {
           if (!current()) return;
-          const carousel = Math.max(0, Math.min(COCKPIT_PANE_COUNT - 1, focus));
-          if (!dragging) {
-            const ending = ++trackingEpoch;
-            trackingDescription = undefined;
-            preparingTracking = undefined;
-            // Every already-submitted held command precedes the release snap.
-            if (pendingTracking.size)
-              await Promise.allSettled([...pendingTracking]);
-            if (
-              !current() ||
-              ending !== trackingEpoch ||
-              context.signal.aborted
-            )
-              return;
-            const value = cockpitOptions({
-              ...mount.options,
-              carousel,
-              carouselDragging: false,
-            });
-            trackingKind = undefined;
-            trackingFocus = undefined;
-            await base.update({ ...value });
-            return;
-          }
-          await track(carousel, "drag", current);
+          if (dragging) await track(focus, "drag", current, velocity);
+          else await settle(focus, current, velocity);
         },
       }),
       controller: {
@@ -860,15 +873,15 @@ export const cockpitScene: GallerySceneDefinition = {
       },
       async update(patch: GalleryOptions) {
         const value = cockpitOptions({ ...mount.options, ...patch });
-        // External navigation returns ownership to declarations. Already-issued
-        // native writes precede this render in the same ordered client transport.
+        // External navigation retargets the same Host-owned motion. Existing
+        // samples precede it in the ordered transport; no component pose is reset.
         ++trackingEpoch;
         trackingFocus = undefined;
-        trackingDescription = undefined;
-        preparingTracking = undefined;
         trackingKind = undefined;
         mount.sceneInput?.cancel();
         await base.update({ ...value, carouselDragging: false });
+        await ready;
+        await spring(value.carousel);
       },
       async inspect() {
         return {
@@ -888,7 +901,7 @@ export const cockpitScene: GallerySceneDefinition = {
         wheelTargets.clear();
         ++trackingEpoch;
         trackingFocus = undefined;
-        trackingDescription = undefined;
+        trackingKind = undefined;
         await Promise.allSettled([...pendingTracking]);
         rejectPanels(new Error("Cockpit disposed"));
         const failures: unknown[] = [];

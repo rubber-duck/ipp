@@ -569,6 +569,26 @@ fn failed_frames_do_not_count_as_presented() {
 }
 
 #[test]
+fn failed_frame_invalidates_unchanged_images_without_reallocating() {
+    let mut store = Store::new();
+    let content = input(1, 5.0, 1, 1);
+    store.frame(0.0, &[content]);
+    let resident = store.cache.resident();
+    store
+        .cache
+        .plan(WORLD, 0.01, 4096, &[content], &mut store.targets)
+        .unwrap();
+    store
+        .cache
+        .finish_frame(WORLD, 0.01, false, &mut store.targets);
+
+    assert_eq!(store.cache.resident(), resident);
+    let next = store.frame(0.02, &[content]);
+    assert_eq!(next.repaints, 1);
+    assert_eq!(next.allocations, 0);
+}
+
+#[test]
 fn worlds_share_the_budget_and_forget_only_their_own_entries() {
     let mut store = Store::new();
     store.cache.set_budget(4 * 104 * 52);

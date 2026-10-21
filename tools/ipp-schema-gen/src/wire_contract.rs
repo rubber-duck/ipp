@@ -249,13 +249,14 @@ fn tag_space_name(id: u8) -> Result<&'static str, String> {
         65 => Ok("asset-representation"),
         66 => Ok("asset-export-format"),
         67 => Ok("gui-client-input"),
+        68 => Ok("animation-motion-mode"),
 
         _ => Err("unknown wire tag space".into()),
     }
 }
 
 fn is_tag_space_name(name: &str) -> bool {
-    (1..=67).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
+    (1..=68).any(|id| tag_space_name(id).is_ok_and(|candidate| candidate == name))
 }
 
 impl WireEncoding {
@@ -277,6 +278,7 @@ impl WireEncoding {
             14 => Self::Bool,
             15 => Self::Masked,
             16 => Self::U8CountedList,
+            17 => Self::FiniteF64,
             _ => return Err("unknown wire field encoding".into()),
         })
     }
@@ -288,6 +290,7 @@ impl WireEncoding {
             Self::U32 => "u32",
             Self::U64 => "u64",
             Self::FiniteF32 => "finite-f32",
+            Self::FiniteF64 => "finite-f64",
             Self::NonnegativeFiniteF64 => "nonnegative-finite-f64",
             Self::Utf8 => "utf8",
             Self::Bytes => "bytes",

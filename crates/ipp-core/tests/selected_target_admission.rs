@@ -71,6 +71,7 @@ fn persistent(description: AnimationControllerDescription) -> AnimationPersisten
     AnimationPersistentState {
         next_id: 2,
         controllers: vec![AnimationControllerSnapshot {
+            motion: None,
             id: AnimationControllerId::from_bits(1),
             description,
             state: AnimationPlaybackStatus::Stopped,

@@ -92,6 +92,13 @@ impl Writer {
         self.raw(&v.to_le_bytes())
     }
 
+    pub(crate) fn finite_f64(&mut self, v: f64) -> Result<(), ProtocolError> {
+        if !v.is_finite() {
+            return Err(ProtocolError::Malformed("nonfinite f64"));
+        }
+        self.raw(&v.to_le_bytes())
+    }
+
     pub(crate) fn f64(&mut self, v: f64) -> Result<(), ProtocolError> {
         if !v.is_finite() || v < 0.0 {
             return Err(ProtocolError::Malformed("invalid simulation time"));

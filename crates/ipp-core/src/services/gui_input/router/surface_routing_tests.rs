@@ -878,7 +878,7 @@ fn captured_nested_input_refreshes_moving_slot_plane_from_current_publication() 
 }
 
 #[test]
-fn client_input_binding_refreshes_previous_focus_and_releases_on_curved_miss() {
+fn client_input_binding_leaves_previous_hover_refreshes_focus_and_releases_on_curved_miss() {
     use crate::services::reliable_output::{OutputCharge, OutputLimits, ReliableOutputAccount};
     use crate::systems::gui::GuiSystem;
     use crate::systems::gui::local::{GuiClientInput, GuiInputTarget, GuiLocalEffectKind};
@@ -973,6 +973,23 @@ fn client_input_binding_refreshes_previous_focus_and_releases_on_curved_miss() {
         )],
     );
     rig.frame();
+    let bounds = rig.bounds(world, address);
+    let address_point = independent_pixel(
+        false,
+        0.5,
+        [
+            f64::from(bounds[0] + bounds[2] / 2.0),
+            f64::from(bounds[1] + bounds[3] / 2.0),
+        ],
+        0.0,
+    );
+    rig.send(movement(71, address_point));
+    assert!(rig.snapshot(world, address).interaction.hovered);
+    rig.send(movement(71, [0.5, 0.5]));
+    assert!(
+        !rig.snapshot(world, address).interaction.hovered,
+        "Entering client content must retire the previous control's hover"
+    );
     rig.send(press(71, [0.5, 0.5]));
     assert!(rig.snapshot(world, entity).focused);
     assert!(!rig.snapshot(world, address).focused);
@@ -1001,5 +1018,14 @@ fn client_input_binding_refreshes_previous_focus_and_releases_on_curved_miss() {
         cancelled,
         "A release outside the curved projection cancels the client pointer too"
     );
+    // A direct press can cross the boundary without an intervening hover move.
+    rig.send(movement(71, address_point));
+    assert!(rig.snapshot(world, address).interaction.hovered);
+    rig.frame();
+    rig.send(press(71, [0.5, 0.5]));
+    assert!(!rig.snapshot(world, address).interaction.hovered);
+    assert!(rig.snapshot(world, entity).interaction.captured);
+    rig.send(release(71, [0.5, 0.5]));
+    assert!(rig.rejected().is_empty(), "{:?}", rig.rejected());
     rig.finish();
 }

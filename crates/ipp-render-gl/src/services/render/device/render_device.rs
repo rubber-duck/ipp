@@ -105,7 +105,8 @@ pub trait RenderDevice: 'static {
     /// attributing an error to the failing call.
     ///
     /// Otherwise allocations, compilation, resource uploads and kept passes
-    /// check when they finish, and the frame end checks on a sampled subset of
+    /// check when they finish (WebGL coalesces Surface/Camera passes at frame
+    /// end, invalidating derived images on failure), and the frame end checks on a sampled subset of
     /// frames and after retained-storage replacement, so other errors may be
     /// reported at a later frame end. Context loss is still reported within the
     /// frame in which the device observes it.

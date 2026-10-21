@@ -445,6 +445,7 @@ impl AnimationSystemState {
             controller,
             AnimationController {
                 snapshot: AnimationControllerSnapshot {
+                    motion: None,
                     id,
                     description: AnimationControllerDescription::default(),
                     state: AnimationPlaybackStatus::Stopped,

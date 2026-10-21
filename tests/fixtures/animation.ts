@@ -567,6 +567,97 @@ export async function propertyAnimationScenario(
     fixture.value(inspection, reverseTarget, "Scalar", "value") === heldValue,
     "destination readiness changed a paused transition sample",
   );
+  // The same generated controls exercise real native and worker Host clocks.
+  const movingTarget = await fixture.create("motion-target", {
+    Scalar: { value: 10 },
+  });
+  const linear = fixture.curve("Scalar", "value", 0, 20);
+  linear.tracks[0]!.keys[0]!.interpolation = { kind: "linear" };
+  const motionSource = await fixture.upload(linear, 504n);
+  const moving = await fixture.controller([
+    fixture.driver(movingTarget, motionSource, 0, "Scalar", ["value"]),
+  ]);
+  const control = async (
+    motion: import("@ipp/client").AnimationMotionControl,
+  ) => {
+    await client.controlAnimationController(moving, {
+      action: "motion",
+      motion,
+    });
+  };
+  await control({
+    mode: { kind: "hold" },
+    min: 0,
+    max: 2,
+    position: 0.5,
+    velocity: -0.75,
+  });
+  inspection = await fixture.inspect();
+  check(
+    fixture.value(inspection, movingTarget, "Scalar", "value") === 15,
+    "direct manipulation samples the clip",
+  );
+  check(
+    fixture.state(inspection, moving).motion?.velocity === -0.75,
+    "signed motion velocity survives the wire",
+  );
+  await client.controlAnimationController(moving, { action: "pause" });
+  for (let frame = 0; frame < 3; frame++) await client.waitForFrame();
+  inspection = await fixture.inspect();
+  check(
+    fixture.state(inspection, moving).time === 0.5,
+    "paused motion advanced",
+  );
+  await control({
+    mode: { kind: "spring", target: 1.5, frequency: 3, damping: 0.8 },
+    min: 0,
+    max: 2,
+  });
+  let intermediate = false;
+  const deadline = performance.now() + 10000;
+  for (;;) {
+    await client.waitForFrame();
+    inspection = await fixture.inspect();
+    const sample = fixture.state(inspection, moving);
+    intermediate ||=
+      sample.state === "playing" && sample.time > 0.5 && sample.time < 1.5;
+    if (sample.state === "completed") break;
+    check(performance.now() < deadline, "spring did not settle on Host time");
+  }
+  check(intermediate, "spring never exposed intermediate motion");
+  check(
+    fixture.state(inspection, moving).time === 1.5,
+    "spring did not snap exactly",
+  );
+  check(
+    Math.abs(fixture.value(inspection, movingTarget, "Scalar", "value") - 25) <
+      1e-4,
+    "motion did not update the real component",
+  );
+  await control({
+    mode: { kind: "decay", friction: 8 },
+    min: 0,
+    max: 2,
+    velocity: -4,
+  });
+  for (;;) {
+    await client.waitForFrame();
+    inspection = await fixture.inspect();
+    if (fixture.state(inspection, moving).state === "completed") break;
+    check(performance.now() < deadline, "decay did not settle on Host time");
+  }
+  check(
+    Math.abs(fixture.state(inspection, moving).time - 1) < 1e-4,
+    "decay distance differs from velocity/friction",
+  );
+  await client.controlAnimationController(moving, { action: "stop" });
+  inspection = await fixture.inspect();
+  check(
+    Math.abs(fixture.value(inspection, movingTarget, "Scalar", "value") - 10) <
+      1e-4,
+    "stop left motion contributions behind",
+  );
+  await client.deleteAnimationController(moving);
   await client.deleteAnimationController(reverse);
   await client.deleteAnimationController(pa);
   await record("animation.transitions", fixture.events);
@@ -576,6 +667,7 @@ export async function propertyAnimationScenario(
     withdrawnBase: 88,
     bezierMidpoint: 6,
     signedPlayback: true,
+    analyticalMotion: true,
     events: fixture.events.length,
   };
 }

@@ -4,8 +4,8 @@
  * (`crates/ipp-render-gl/examples/smoke/error_checks.rs`). An error is raised
  * mid-frame through the canvas's own context, as a failed driver call would.
  * Outside exhaustive mode later draws, Surface cache composites and an
- * unpolled frame end do not report it, a polled frame end does, and a Surface
- * cache repaint's end, not its begin, rejects the image. Exhaustive mode
+ * unpolled frame end do not report it, a polled frame end does, and Surface
+ * cache passes force one shared frame-end check. Exhaustive mode
  * reports it at the next draw. Context loss fails even
  * an unpolled frame end, so recovery never waits for a sampled check.
  */
@@ -30,10 +30,22 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
     createWebGlDevice(canvas: OffscreenCanvas): WebGlBridge;
   };
   const canvas = new OffscreenCanvas(SIZE, SIZE);
-  const device = createWebGlDevice(canvas);
-  // A canvas returns its existing context for the same context type.
-  const gl = canvas.getContext("webgl2");
+  const gl = canvas.getContext("webgl2", { alpha: false, antialias: false });
   if (!gl) throw new Error("The bridge context is unavailable");
+  const getError = gl.getError.bind(gl);
+  const framebufferStatus = gl.checkFramebufferStatus.bind(gl);
+  let errorPolls = 0;
+  let framebufferPolls = 0;
+  gl.getError = () => {
+    errorPolls++;
+    return getError();
+  };
+  gl.checkFramebufferStatus = (target) => {
+    framebufferPolls++;
+    return framebufferStatus(target);
+  };
+  // Instrument the actual context before the bridge binds its methods.
+  const device = createWebGlDevice(canvas);
   const memory = new WebAssembly.Memory({ initial: 16 });
   device.setMemory(memory);
   let top = 1024;
@@ -147,14 +159,52 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
     ok("same frame", ...draw);
     report.sameFrameEnd = reports("same frame", "end_frame", 1);
 
-    // The end of a repaint checks the whole pass, so an image whose pass
-    // raised an error is never kept.
+    // Kept passes require a check even when the Rust frame schedule is not due.
     const target = call("create_surface_cache_target", 32, 16);
     if (target === 0) throw new Error(`Cache target failed: ${message()}`);
     raise();
     ok("repaint", "begin_surface_cache_target", target);
     ok("repaint", ...draw);
-    report.repaintEnd = reports("repaint", "end_surface_cache_target");
+    ok("repaint", "end_surface_cache_target");
+    report.repaintFrameEnd = reports("repaint", "end_frame", 0);
+
+    // Warm the Camera depth attachment, then verify that retained targets do
+    // not synchronously query framebuffer status or errors between passes.
+    ok("camera allocation", "begin_camera_target", target, clear);
+    ok("camera allocation", "end_surface_cache_target");
+    ok("camera allocation", "end_frame", 0);
+    const errorsBefore = errorPolls;
+    const framebuffersBefore = framebufferPolls;
+    begin("multiple passes");
+    for (let pass = 0; pass < 3; pass++) {
+      ok("multiple passes", "begin_camera_target", target, clear);
+      ok("multiple passes", ...draw);
+      ok("multiple passes", "end_surface_cache_target");
+    }
+    if (errorPolls !== errorsBefore || framebufferPolls !== framebuffersBefore)
+      throw new Error("Retained Camera passes performed synchronous queries");
+    ok("multiple passes", "end_frame", 0);
+    if (errorPolls !== errorsBefore + 1)
+      throw new Error(
+        "Kept passes must share exactly one frame-end error check",
+      );
+    report.retainedPassErrorPolls = errorPolls - errorsBefore;
+    report.retainedPassFramebufferPolls = framebufferPolls - framebuffersBefore;
+
+    // A checked resource operation may consume the GL error before frame end.
+    // The frame still fails, so its earlier images cannot be marked reusable.
+    ok("intervening check", "begin_surface_cache_target", target);
+    ok("intervening check", ...draw);
+    raise();
+    ok("intervening check", "end_surface_cache_target");
+    reports(
+      "intervening check",
+      "create_texture",
+      1,
+      1,
+      ...bytes(new Uint8Array([255, 255, 255, 255])),
+    );
+    report.consumedPassError = reports("intervening check", "end_frame", 0);
 
     // Composites are routine draws; the frame end reports their errors.
     const compositor = call(
@@ -203,6 +253,8 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
     report.lossFrameEnd = message();
     return report;
   } finally {
+    gl.getError = getError;
+    gl.checkFramebufferStatus = framebufferStatus;
     device.dispose();
   }
 }

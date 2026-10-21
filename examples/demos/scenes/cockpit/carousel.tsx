@@ -1,11 +1,5 @@
 /** One Host-driven rotor moves every persistent pane through the same cylinder. */
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import { Animation, AnimationAsset, SurfaceCache, assetRef } from "@ipp/react";
 import type { AnimationClipSource } from "@ipp/client";
 import type { CockpitNavigationSource } from "./control-screen.js";
@@ -13,7 +7,8 @@ import { COCKPIT_PANE_COUNT, type CockpitOptions } from "./options.js";
 
 export const CAROUSEL_ENTITY = "cockpit-carousel";
 export const CAROUSEL_ASSET = "cockpit-carousel-rotation";
-export const CAROUSEL_TRACKING_SECONDS = 0.2;
+export const CAROUSEL_SPRING_FREQUENCY = 4.5;
+export const CAROUSEL_SPRING_DAMPING = 0.82;
 export const CAROUSEL_GAP = 0.07;
 
 /** Only this small declaration observes drag progress; pane trees stay retained.
@@ -41,9 +36,9 @@ export function CarouselQuality({
       setRetained(true);
       return;
     }
-    // Keep the outgoing pane sharp beyond the rotor's 240 ms transition.
+    // Keep the outgoing pane sharp through the rotor's spring settling.
     // This delays only a quality downgrade; native motion owns the actual pose.
-    const timer = setTimeout(() => setRetained(false), 400);
+    const timer = setTimeout(() => setRetained(false), 800);
     return () => clearTimeout(timer);
   }, [near]);
   // Disabling optional caching keeps even side panes current. Curved geometry
@@ -70,22 +65,11 @@ export function CarouselRotation({
   component,
   offsets,
   step,
-  focus,
-  dragging,
 }: {
   component: number;
   offsets: readonly number[];
   step: number;
-  focus: number;
-  dragging: boolean;
 }) {
-  // During a grab the input owner retargets this controller directly. Keep
-  // React publications from replacing that target until declarative snapping resumes.
-  const settled = useRef(focus);
-  const seek = dragging ? settled.current : focus;
-  useLayoutEffect(() => {
-    if (!dragging) settled.current = focus;
-  }, [dragging, focus]);
   const rotation = (value: number) => ({
     kind: "rotation" as const,
     value: [0, Math.sin(value / 2), 0, Math.cos(value / 2)] as const,
@@ -116,11 +100,6 @@ export function CarouselRotation({
         target={CAROUSEL_ENTITY}
         speed={0}
         autoPlay={false}
-        transition={{
-          duration: dragging ? CAROUSEL_TRACKING_SECONDS : 0.24,
-          easing: "smoothstep",
-          startTime: { policy: "seek", time: seek },
-        }}
       />
     </>
   );

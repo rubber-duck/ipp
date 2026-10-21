@@ -41,6 +41,7 @@ fn playback_controls_reject_invalid_identity_time_and_tags_before_queueing() {
         bytes.extend_from_slice(&control.to_le_bytes());
         bytes.extend_from_slice(&time.to_le_bytes());
         bytes.extend_from_slice(&speed.to_le_bytes());
+        bytes.push(0);
         assert!(decode_request(&bytes, 7).is_err());
     }
     let mut bytes = request(REQUEST_PLAYBACK);
@@ -48,6 +49,7 @@ fn playback_controls_reject_invalid_identity_time_and_tags_before_queueing() {
     bytes.extend_from_slice(&0u32.to_le_bytes());
     bytes.extend_from_slice(&0f64.to_le_bytes());
     bytes.extend_from_slice(&0f32.to_le_bytes());
+    bytes.push(0);
     assert!(decode_request(&bytes, 7).is_err());
     bytes[8..16].fill(0);
     assert!(decode_request(&bytes, 7).is_ok());
@@ -63,6 +65,7 @@ fn playback_controls_reject_invalid_identity_time_and_tags_before_queueing() {
     bytes.extend_from_slice(&(PLAYBACK_CONTROL_PLAY_AT_SPEED as u32).to_le_bytes());
     bytes.extend_from_slice(&0f64.to_le_bytes());
     bytes.extend_from_slice(&(-1.0f32).to_le_bytes());
+    bytes.push(0);
     assert!(decode_request(&bytes, 7).is_ok());
 
     for speed in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
@@ -72,6 +75,7 @@ fn playback_controls_reject_invalid_identity_time_and_tags_before_queueing() {
         bytes.extend_from_slice(&(PLAYBACK_CONTROL_PLAY_AT_SPEED as u32).to_le_bytes());
         bytes.extend_from_slice(&0f64.to_le_bytes());
         bytes.extend_from_slice(&speed.to_le_bytes());
+        bytes.push(0);
         assert!(decode_request(&bytes, 7).is_err());
     }
 }
@@ -1076,4 +1080,94 @@ fn malformed_page_content_belongs_to_its_batch_and_a_malformed_header_to_the_con
         decode_world_request(&page(0, &[delete]), Some(8), &mut Vec::new()),
         Err(RequestDecodeError::Request(ProtocolError::SessionMismatch))
     );
+}
+
+#[test]
+fn motion_controls_preserve_signed_velocity_and_reject_malformed_payloads() {
+    use ipp_core::systems::animation::{
+        AnimationMotionControl, AnimationMotionMode, AnimationPlaybackControl,
+    };
+    for (mode, tag, parameters) in [
+        (AnimationMotionMode::Hold, ANIMATION_MOTION_HOLD, vec![]),
+        (
+            AnimationMotionMode::Spring {
+                target: 1.0,
+                frequency: 4.0,
+                damping: 0.8,
+            },
+            ANIMATION_MOTION_SPRING,
+            vec![1.0_f64, 4.0, 0.8],
+        ),
+        (
+            AnimationMotionMode::Decay {
+                friction: 5.0,
+            },
+            ANIMATION_MOTION_DECAY,
+            vec![5.0],
+        ),
+    ] {
+        let mut bytes = (PLAYBACK_CONTROL_MOTION as u32).to_le_bytes().to_vec();
+        bytes.extend_from_slice(&0_f64.to_le_bytes());
+        bytes.extend_from_slice(&0_f32.to_le_bytes());
+        bytes.extend_from_slice(&[OPTION_SOME, tag]);
+        for value in parameters {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&0_f64.to_le_bytes());
+        bytes.extend_from_slice(&2_f64.to_le_bytes());
+        bytes.push(OPTION_NONE);
+        bytes.push(OPTION_SOME);
+        bytes.extend_from_slice(&(-3.5_f64).to_le_bytes());
+        fn decode(bytes: &[u8]) -> Result<AnimationPlaybackControl, ProtocolError> {
+            Reader {
+                bytes,
+                at: 0,
+            }
+            .playback_control()
+        }
+        assert_eq!(
+            decode(&bytes).unwrap(),
+            AnimationPlaybackControl::Motion(AnimationMotionControl {
+                mode,
+                min: 0.0,
+                max: 2.0,
+                position: None,
+                velocity: Some(-3.5),
+            })
+        );
+        for end in 0..bytes.len() {
+            assert!(decode(&bytes[..end]).is_err());
+        }
+        let end = bytes.len();
+        bytes[end - 8..].copy_from_slice(&f64::NAN.to_le_bytes());
+        assert!(decode(&bytes).is_err());
+        bytes[end - 8..].copy_from_slice(&(-3.5_f64).to_le_bytes());
+        bytes[..4].copy_from_slice(&(PLAYBACK_CONTROL_PLAY as u32).to_le_bytes());
+        assert!(decode(&bytes).is_err());
+    }
+}
+
+#[test]
+fn inspected_motion_encodes_negative_velocity_without_relaxing_time_checks() {
+    use ipp_core::systems::animation::*;
+    let mut writer = Writer::new(Vec::new());
+    writer
+        .controller(&AnimationControllerSnapshot {
+            id: AnimationControllerId::from_bits(1),
+            description: AnimationControllerDescription::default(),
+            state: AnimationPlaybackStatus::Paused,
+            time: 0.5,
+            motion: Some(AnimationMotionState {
+                mode: AnimationMotionMode::Hold,
+                min: 0.0,
+                max: 2.0,
+                velocity: -3.5,
+            }),
+            transition: None,
+        })
+        .unwrap();
+    let end = writer.0.len();
+    assert_eq!(&writer.0[end - 9..end - 1], &(-3.5_f64).to_le_bytes());
+    assert!(writer.f64(-1.0).is_err());
+    assert!(writer.finite_f64(f64::NAN).is_err());
 }

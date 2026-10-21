@@ -14,7 +14,7 @@ use crate::BOUNDARY;
 pub(super) struct BrowserWebContent {
     sources: BTreeMap<u32, WebContentSourceId>,
     served: BTreeSet<WebContentRequestId>,
-    pending: BTreeMap<u32, (WebContentRequestId, WebImageReservation)>,
+    pending: BTreeMap<u32, (WebContentRequestId, Option<WebImageReservation>)>,
     next_source: u32,
     next_ticket: u32,
     records: Vec<u32>,
@@ -62,19 +62,9 @@ impl RenderSurfaceService {
             let Some(ticket_id) = state.next_ticket.checked_add(1) else {
                 break;
             };
-            let Ok(ticket) = self.renderer.reserve_web_image(
-                host,
-                request.id,
-                WebContentImageDescription {
-                    pixel_size: size,
-                },
-                size[0] as usize * size[1] as usize * 4,
-            ) else {
-                continue;
-            };
             state.next_ticket = ticket_id;
             state.served.insert(request.id);
-            state.pending.insert(ticket_id, (request.id, ticket));
+            state.pending.insert(ticket_id, (request.id, None));
             state.records.extend([ticket_id, source, size[0], size[1]]);
         }
         state.records.as_ptr()
@@ -124,7 +114,8 @@ pub extern "C" fn ipp_html_revoke(id: u32) {
     });
 }
 
-/// Reserve capture capacity and return records of ticket, source, width and height.
+/// Return layout requests as ticket, source, logical width and logical height.
+/// The producer must reserve its physical image extent before capturing pixels.
 // SAFETY: Unique export. Storage stays valid until the next poll or Host destruction;
 // JavaScript copies it synchronously before making another runtime call.
 #[unsafe(no_mangle)]
@@ -144,6 +135,43 @@ pub extern "C" fn ipp_html_requests_len() -> u32 {
         boundary
             .presentation()
             .map_or(0, |surface| surface.web_content.records.len() as u32)
+    })
+}
+
+/// Admit the producer's measured physical extent without changing its logical layout.
+// SAFETY: Unique export; exclusive Host access, scalar arguments and no reentry.
+#[unsafe(no_mangle)]
+pub extern "C" fn ipp_html_reserve(ticket_id: u32, width: u32, height: u32) -> u32 {
+    BOUNDARY.with_borrow_mut(|boundary| {
+        let Some((surface, host)) = boundary.presentation_host() else {
+            return 0;
+        };
+        surface.web_content.error.clear();
+        let Some((request, reservation)) = surface.web_content.pending.get_mut(&ticket_id) else {
+            surface.web_content.error = "HTML layout ticket is no longer pending".into();
+            return 0;
+        };
+        if reservation.is_some() || width == 0 || height == 0 || width > 4096 || height > 4096 {
+            surface.web_content.error = "HTML capture extent is invalid or already reserved".into();
+            return 0;
+        }
+        match surface.renderer.reserve_web_image(
+            host,
+            *request,
+            WebContentImageDescription {
+                pixel_size: [width, height],
+            },
+            width as usize * height as usize * 4,
+        ) {
+            Ok(ticket) => {
+                *reservation = Some(ticket);
+                1
+            }
+            Err(error) => {
+                surface.web_content.error = format!("HTML capture admission failed: {error}");
+                0
+            }
+        }
     })
 }
 
@@ -171,6 +199,10 @@ pub extern "C" fn ipp_html_complete(ticket_id: u32, image: u32) -> u32 {
             let _ = surface.renderer.refresh_web_images(host);
             return 0;
         }
+        let Some(ticket) = ticket else {
+            surface.web_content.error = "HTML capture was not admitted".into();
+            return 0;
+        };
         let size = ticket.pixel_size();
         match surface
             .renderer

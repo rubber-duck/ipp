@@ -79,7 +79,7 @@ export const lightingScene: GallerySceneDefinition = {
     let unsubscribe: (() => void) | undefined;
     let owned: AnimationSession | undefined;
     const control = async (
-      action: AnimationPlaybackControl["action"],
+      action: Exclude<AnimationPlaybackControl["action"], "motion">,
       args?: unknown,
     ) => {
       await ready;

@@ -273,6 +273,13 @@ export async function startTrace(maxEvents: number, maxArtifactBytes: number) {
     maxArtifactBytes,
   });
 }
+export async function startProfile() {
+  return hostProfiling(canvas().host).start({
+    counters: true,
+    gpu: "passes",
+    glCalls: true,
+  });
+}
 export async function stopTrace() {
   return hostProfiling(canvas().host).stop();
 }

@@ -30,6 +30,10 @@ function content(green: boolean) {
   const marker = document.createElement("div");
   marker.style.cssText = `position:absolute;left:0;top:0;width:24px;height:16px;background:${green ? "#ff0000" : "#00ff00"}`;
   root.append(marker);
+  const detail = document.createElement("div");
+  detail.style.cssText =
+    "position:absolute;left:48px;top:0;width:40px;height:16px;background:repeating-linear-gradient(to right,#000 0 .5px,#fff .5px 1px)";
+  root.append(detail);
   return root;
 }
 
@@ -40,8 +44,10 @@ export async function create(configuration: {
   zoom: number;
 }) {
   canvas = document.createElement("canvas");
-  canvas.width = 96;
-  canvas.height = 64;
+  canvas.width = Math.round(96 * devicePixelRatio);
+  canvas.height = Math.round(64 * devicePixelRatio);
+  canvas.style.width = "96px";
+  canvas.style.height = "64px";
   canvas.style.zoom = String(configuration.zoom);
   document.body.append(canvas);
   const module = await import(configuration.generated);
@@ -84,9 +90,9 @@ export async function create(configuration: {
   );
   entity = aliasId(outcome, 2);
   const binding = await host.setRootOutput(canvasOutput(world.reference), {
-    width: 96,
-    height: 64,
-    devicePixelRatio: 1,
+    width: canvas.width,
+    height: canvas.height,
+    devicePixelRatio,
   });
   view = await host.presentation.select(
     await host.presentation.surface(),
@@ -145,8 +151,9 @@ export function withdraw() {
 export async function capture() {
   const frame = await host.presentation.capture(view);
   return {
-    width: 96,
-    height: 64,
+    width: canvas.width,
+    height: canvas.height,
+    pixelRatio: devicePixelRatio,
     pixels: Array.from(new Uint8Array(frame.pixels)),
     errors: [...errors],
   };

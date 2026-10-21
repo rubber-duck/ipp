@@ -2441,6 +2441,7 @@ fn restored_producer_clip_preserves_its_original_nested_source_namespace() {
         .restore_animation_controllers(AnimationPersistentState {
             next_id: 2,
             controllers: vec![AnimationControllerSnapshot {
+                motion: None,
                 id: controller,
                 description: parameters,
                 state: AnimationPlaybackStatus::Playing,
@@ -3476,4 +3477,163 @@ fn a_discrete_driver_leaves_its_last_value_when_it_stops() {
         .unwrap();
     assert_eq!(driver.source, second);
     assert_eq!(scalar(&world, target), 2.0);
+}
+
+#[test]
+fn motion_retarget_pause_persistence_and_stop_preserve_contribution_ownership() {
+    let mut host = crate::support::task_scheduler::host();
+    let id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let target = create(&mut world, 20.0);
+    let clip = curve(AnimationInterpolation::Linear);
+    let controller = player(&mut world, target, &clip, 1);
+    let motion = |mode, position, velocity| {
+        AnimationPlaybackControl::Motion(AnimationMotionControl {
+            mode,
+            min: 0.0,
+            max: 2.0,
+            position,
+            velocity,
+        })
+    };
+    world
+        .control_animation_controller(
+            controller,
+            motion(AnimationMotionMode::Hold, Some(0.5), Some(1.0)),
+        )
+        .unwrap();
+    world.update_for_test(1.0).unwrap();
+    assert_eq!(scalar(&world, target), 22.5);
+    world
+        .control_animation_controller(
+            controller,
+            motion(
+                AnimationMotionMode::Spring {
+                    target: 1.5,
+                    frequency: 2.0,
+                    damping: 0.8,
+                },
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+    world.update_for_test(0.05).unwrap();
+    let moving = world.animation_controller(controller).unwrap();
+    assert!(moving.time > 0.5 && moving.motion.unwrap().velocity > 1.0);
+    world
+        .control_animation_controller(
+            controller,
+            motion(
+                AnimationMotionMode::Spring {
+                    target: 0.25,
+                    frequency: 2.0,
+                    damping: 0.8,
+                },
+                None,
+                None,
+            ),
+        )
+        .unwrap();
+    let retargeted = world.animation_controller(controller).unwrap();
+    assert_eq!(retargeted.time, moving.time);
+    assert_eq!(
+        retargeted.motion.unwrap().velocity,
+        moving.motion.unwrap().velocity
+    );
+    world
+        .control_animation_controller(controller, AnimationPlaybackControl::Pause)
+        .unwrap();
+    world.update_for_test(10.0).unwrap();
+    assert_eq!(
+        world.animation_controller(controller).unwrap().time,
+        moving.time
+    );
+    let persistent = world.animation_persistent_state();
+    let encoded = persistent.encode(1 << 20).unwrap();
+    world
+        .restore_animation_controllers(AnimationPersistentState::decode(&encoded, 1 << 20).unwrap())
+        .unwrap();
+    world.update_for_test(1.0).unwrap();
+    assert_eq!(
+        world.animation_controller(controller).unwrap().motion,
+        retargeted.motion
+    );
+    world
+        .control_animation_controller(controller, AnimationPlaybackControl::Play)
+        .unwrap();
+    world.update_for_test(5.0).unwrap();
+    let settled = world.animation_controller(controller).unwrap();
+    assert_eq!(
+        (settled.time, settled.state),
+        (0.25, AnimationPlaybackStatus::Completed)
+    );
+    assert_eq!(scalar(&world, target), 21.25);
+    let mut looping = settled.description.clone();
+    looping.looping = true;
+    assert_eq!(
+        world.update_animation_controller(controller, looping),
+        Err(ErrorReason::InvalidValue)
+    );
+    world
+        .control_animation_controller(controller, AnimationPlaybackControl::Stop)
+        .unwrap();
+    world.update_for_test(0.0).unwrap();
+    assert_eq!(scalar(&world, target), 20.0);
+    assert!(
+        world
+            .animation_controller(controller)
+            .unwrap()
+            .motion
+            .is_none()
+    );
+}
+
+#[test]
+fn pending_motion_waits_for_assets_and_lifetime_invalidation_clears_velocity() {
+    let mut host = crate::support::task_scheduler::host();
+    let id = host
+        .create_world(WorldLimits::default(), &select(&[ASSETS, CONSTRAINTS]))
+        .unwrap();
+    let mut world = host.world_mut(id).unwrap();
+    let target = create(&mut world, 20.0);
+    let clip = curve(AnimationInterpolation::Linear);
+    let controller = world
+        .create_animation_controller(description(target, &clip, 99))
+        .unwrap();
+    world
+        .control_animation_controller(
+            controller,
+            AnimationPlaybackControl::Motion(AnimationMotionControl {
+                mode: AnimationMotionMode::Spring {
+                    target: 1.5,
+                    frequency: 2.0,
+                    damping: 1.0,
+                },
+                min: 0.0,
+                max: 2.0,
+                position: Some(0.5),
+                velocity: Some(1.0),
+            }),
+        )
+        .unwrap();
+    world.update_for_test(100.0).unwrap();
+    assert_eq!(world.animation_controller(controller).unwrap().time, 0.5);
+    assert_eq!(scalar(&world, target), 20.0);
+    upload(&mut world, &clip, 99);
+    world.update_for_test(0.0).unwrap();
+    assert_eq!(scalar(&world, target), 22.5);
+    world.update_for_test(0.05).unwrap();
+    assert!(world.animation_controller(controller).unwrap().time > 0.5);
+    submit(
+        &mut world,
+        vec![Command::Delete {
+            entity: EntityRef::Handle(target),
+        }],
+    );
+    let invalidated = world.animation_controller(controller).unwrap();
+    assert_eq!(invalidated.state, AnimationPlaybackStatus::Stopped);
+    assert!(invalidated.motion.is_none());
 }

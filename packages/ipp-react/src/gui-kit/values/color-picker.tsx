@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -64,7 +65,7 @@ import { InlineAlert } from "../feedback/inline-alert.js";
 import { useGuiKit, type GuiKitScope, type GuiKitTone } from "../kit.js";
 
 import { useOwnRow } from "../row-motion.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 /** One explicit choice of colour. */
 export interface ColorPreset {
@@ -262,219 +263,226 @@ export function ColorPicker(props: ColorPickerProps) {
     (presetsRow ? g.gap + g.swatch : 0) +
     2 * (g.gap + g.field);
   const small = kit.typeSize("small");
+  const measured = useTextMeasurements(
+    (alpha ? ["Hue", "Opacity"] : ["Hue"]).map(
+      (name) => [name, small] as const,
+    ),
+  );
 
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        width={g.width}
-        height={height}
-        {...layout}
-      />
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        <Entity id={`${id}/caption`}>
-          <PresentationGate open />
-          <Layout kind={LAYOUT_STACK} height={g.row} />
-          <Children>
-            {label !== undefined && (
-              <Placed id={`${id}/label`} x={g.labelInset} height={g.row}>
-                <TextLine
-                  id={`${id}/label/text`}
-                  text={label}
-                  tone={tone("accent")}
-                />
-              </Placed>
-            )}
-            {(alpha ? ["Hue", "Opacity"] : ["Hue"]).map((name, index) => {
-              const width = lineWidth(name, small);
-              return (
-                <Placed
-                  key={name}
-                  id={`${id}/${name.toLowerCase()}`}
-                  x={g.rail(index) - width / 2}
-                  height={g.row}
-                >
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          width={g.width}
+          height={height}
+          {...layout}
+        />
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          <Entity id={`${id}/caption`}>
+            <PresentationGate open />
+            <Layout kind={LAYOUT_STACK} height={g.row} />
+            <Children>
+              {label !== undefined && (
+                <Placed id={`${id}/label`} x={g.labelInset} height={g.row}>
                   <TextLine
-                    id={`${id}/${name.toLowerCase()}/text`}
-                    text={name}
-                    tone="neutral"
-                    size="small"
+                    id={`${id}/label/text`}
+                    text={label}
+                    tone={tone("accent")}
                   />
                 </Placed>
-              );
-            })}
-          </Children>
-        </Entity>
-        <Entity id={`${id}/main`}>
-          <PresentationGate open />
-          <Layout kind={LAYOUT_ROW} height={g.control[1]} />
-          <Children>
-            <Entity id={`${id}/control`}>
-              <PresentationGate open />
-              <Layout
-                kind={LAYOUT_LEAF}
-                width={g.control[0]}
-                height={g.control[1]}
-              />
-              <Behavior
-                enabled={!disabled}
-                {...(label === undefined ? {} : { semantic_label: label })}
-              />
-              {kit.controlTheme("color") && (
-                <Skin theme={kit.controlTheme("color")!} />
               )}
-              <Color
-                {...color.control}
-                alpha_rail={alpha}
-                onColorCommit={(event) => {
-                  color.control.onColorCommit(event);
-                  // The next colour replaces any typed hex.
-                  typedHex.current = undefined;
-                  settle(event.tick);
-                }}
-              />
-            </Entity>
-            <Entity id={`${id}/channels`}>
+              {(alpha ? ["Hue", "Opacity"] : ["Hue"]).map((name, index) => {
+                const width = measured.lineWidth(name, small);
+                return (
+                  <Placed
+                    key={name}
+                    id={`${id}/${name.toLowerCase()}`}
+                    x={g.rail(index) - width / 2}
+                    height={g.row}
+                  >
+                    <TextLine
+                      id={`${id}/${name.toLowerCase()}/text`}
+                      text={name}
+                      tone="neutral"
+                      size="small"
+                    />
+                  </Placed>
+                );
+              })}
+            </Children>
+          </Entity>
+          <Entity id={`${id}/main`}>
+            <PresentationGate open />
+            <Layout kind={LAYOUT_ROW} height={g.control[1]} />
+            <Children>
+              <Entity id={`${id}/control`}>
+                <PresentationGate open />
+                <Layout
+                  kind={LAYOUT_LEAF}
+                  width={g.control[0]}
+                  height={g.control[1]}
+                />
+                <Behavior
+                  enabled={!disabled}
+                  {...(label === undefined ? {} : { semantic_label: label })}
+                />
+                {kit.controlTheme("color") && (
+                  <Skin theme={kit.controlTheme("color")!} />
+                )}
+                <Color
+                  {...color.control}
+                  alpha_rail={alpha}
+                  onColorCommit={(event) => {
+                    color.control.onColorCommit(event);
+                    // The next colour replaces any typed hex.
+                    typedHex.current = undefined;
+                    settle(event.tick);
+                  }}
+                />
+              </Entity>
+              <Entity id={`${id}/channels`}>
+                <PresentationGate open />
+                <Layout
+                  kind={LAYOUT_COLUMN}
+                  width={kit.unit(CHANNELS)}
+                  margin_left={kit.unit(t.inset)}
+                />
+                <Children>
+                  {CHANNEL_ROWS.filter(
+                    ({ channel }) => alpha || channel !== "alpha",
+                  ).map(({ channel, letter, max, units }, index) => (
+                    <ChannelField
+                      key={channel}
+                      id={`${id}/${channel}`}
+                      letter={letter}
+                      max={max}
+                      units={units}
+                      number={
+                        channel === "alpha"
+                          ? Math.round(rgba.alpha * 100)
+                          : rgba[channel]
+                      }
+                      disabled={disabled}
+                      first={index === 0}
+                      onCommit={(event) => channelCommit(channel, event)}
+                      onReject={(event) =>
+                        fail(event.tick, channel, `${letter}: ${NOT_A_NUMBER}`)
+                      }
+                      onDiscard={(event) => settle(event.tick, channel)}
+                      onFocusChange={(event) => focusChange(channel, event)}
+                    />
+                  ))}
+                </Children>
+              </Entity>
+            </Children>
+          </Entity>
+          {presetsRow && (
+            <Entity id={`${id}/presets`}>
               <PresentationGate open />
               <Layout
-                kind={LAYOUT_COLUMN}
-                width={kit.unit(CHANNELS)}
-                margin_left={kit.unit(t.inset)}
+                kind={LAYOUT_ROW}
+                height={g.swatch}
+                margin_top={g.gap}
+                padding_left={g.labelInset}
               />
+              <Group axis={0} selection={0} />
               <Children>
-                {CHANNEL_ROWS.filter(
-                  ({ channel }) => alpha || channel !== "alpha",
-                ).map(({ channel, letter, max, units }, index) => (
-                  <ChannelField
-                    key={channel}
-                    id={`${id}/${channel}`}
-                    letter={letter}
-                    max={max}
-                    units={units}
-                    number={
-                      channel === "alpha"
-                        ? Math.round(rgba.alpha * 100)
-                        : rgba[channel]
-                    }
+                <Row
+                  gap={0}
+                  id={`${id}/presets/caption`}
+                  height={kit.unit(t.smallHeight)}
+                  layout={{
+                    fit_width: true,
+                  }}
+                >
+                  <TextLine
+                    id={`${id}/presets/caption/text`}
+                    text="Presets"
+                    tone={tone("text")}
+                  />
+                </Row>
+                {presets.map((preset, index) => (
+                  <Swatch
+                    key={index}
+                    id={`${id}/preset/${index}`}
+                    preset={preset}
                     disabled={disabled}
-                    first={index === 0}
-                    onCommit={(event) => channelCommit(channel, event)}
-                    onReject={(event) =>
-                      fail(event.tick, channel, `${letter}: ${NOT_A_NUMBER}`)
-                    }
-                    onDiscard={(event) => settle(event.tick, channel)}
-                    onFocusChange={(event) => focusChange(channel, event)}
+                    onPress={() => color.enter(preset.value)}
                   />
                 ))}
               </Children>
             </Entity>
-          </Children>
-        </Entity>
-        {presetsRow && (
-          <Entity id={`${id}/presets`}>
-            <PresentationGate open />
-            <Layout
-              kind={LAYOUT_ROW}
-              height={g.swatch}
-              margin_top={g.gap}
-              padding_left={g.labelInset}
-            />
-            <Group axis={0} selection={0} />
-            <Children>
-              <Row
-                gap={0}
-                id={`${id}/presets/caption`}
-                height={kit.unit(t.smallHeight)}
-                layout={{
-                  width: lineWidth("Presets", kit.typeSize("body")),
-                }}
-              >
-                <TextLine
-                  id={`${id}/presets/caption/text`}
-                  text="Presets"
-                  tone={tone("text")}
-                />
-              </Row>
-              {presets.map((preset, index) => (
-                <Swatch
-                  key={index}
-                  id={`${id}/preset/${index}`}
-                  preset={preset}
-                  disabled={disabled}
-                  onPress={() => color.enter(preset.value)}
-                />
-              ))}
-            </Children>
-          </Entity>
-        )}
-        <Row
-          gap={0}
-          id={`${id}/hex`}
-          height={kit.unit(t.controlHeight)}
-          layout={{ margin_top: g.gap }}
-        >
-          <TextLine
-            id={`${id}/hex/label`}
-            text="Hex"
-            tone={tone("text")}
-            layout={{ margin_left: g.labelInset }}
-          />
-          <Entity id={`${id}/hex/field`}>
-            <PresentationGate open />
-            <Layout
-              kind={LAYOUT_LEAF}
-              height={g.field}
-              flex={1}
-              margin_left={g.gap}
-            />
-            <Behavior enabled={!disabled} semantic_label="Hex" />
-            {kit.controlTheme("textInput") && (
-              <Skin theme={kit.controlTheme("textInput")!} />
-            )}
-            <TextInput
-              text={hex}
-              ref={(handle) => {
-                hexHandle.current = handle;
-              }}
-              onTextCommit={(event) => {
-                if (
-                  entered("hex", event.tick) &&
-                  event.value !== declaredHex.current
-                )
-                  typedHex.current = event.value;
-              }}
-              onSubmit={(event) => hexEntry(event.value, event.tick)}
-              onFocusChange={(event) => {
-                focusChange("hex", event);
-                const typed = typedHex.current;
-                if (!event.focused && typed !== undefined)
-                  hexEntry(typed, event.tick);
-              }}
-            />
-          </Entity>
-          <TextLine
-            id={`${id}/hex/space`}
-            text="sRGB"
-            tone={tone("text")}
-            layout={{
-              width: lineWidth("sRGB", kit.typeSize("body")),
-              margin_left: g.gap,
-            }}
-          />
-        </Row>
-        {error !== undefined && (
-          <InlineAlert
-            id={`${id}/error`}
-            severity="error"
-            text={error.text}
+          )}
+          <Row
+            gap={0}
+            id={`${id}/hex`}
+            height={kit.unit(t.controlHeight)}
             layout={{ margin_top: g.gap }}
-          />
-        )}
-      </Children>
-    </Entity>
+          >
+            <TextLine
+              id={`${id}/hex/label`}
+              text="Hex"
+              tone={tone("text")}
+              layout={{ margin_left: g.labelInset }}
+            />
+            <Entity id={`${id}/hex/field`}>
+              <PresentationGate open />
+              <Layout
+                kind={LAYOUT_LEAF}
+                height={g.field}
+                flex={1}
+                margin_left={g.gap}
+              />
+              <Behavior enabled={!disabled} semantic_label="Hex" />
+              {kit.controlTheme("textInput") && (
+                <Skin theme={kit.controlTheme("textInput")!} />
+              )}
+              <TextInput
+                text={hex}
+                ref={(handle) => {
+                  hexHandle.current = handle;
+                }}
+                onTextCommit={(event) => {
+                  if (
+                    entered("hex", event.tick) &&
+                    event.value !== declaredHex.current
+                  )
+                    typedHex.current = event.value;
+                }}
+                onSubmit={(event) => hexEntry(event.value, event.tick)}
+                onFocusChange={(event) => {
+                  focusChange("hex", event);
+                  const typed = typedHex.current;
+                  if (!event.focused && typed !== undefined)
+                    hexEntry(typed, event.tick);
+                }}
+              />
+            </Entity>
+            <TextLine
+              id={`${id}/hex/space`}
+              text="sRGB"
+              tone={tone("text")}
+              layout={{
+                margin_left: g.gap,
+              }}
+            />
+          </Row>
+          {error !== undefined && (
+            <InlineAlert
+              id={`${id}/error`}
+              severity="error"
+              text={error.text}
+              layout={{ margin_top: g.gap }}
+            />
+          )}
+        </Children>
+      </Entity>
+    </>
   );
 }
 
@@ -531,7 +539,6 @@ function ChannelField({
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const t = kit.tokens;
-  const body = kit.typeSize("body");
   const gap = kit.unit(t.inset / 2);
   const tone: GuiKitTone = disabled ? "neutral" : "text";
   return (
@@ -541,12 +548,7 @@ function ChannelField({
       height={kit.unit(t.controlHeight)}
       {...(first ? {} : { layout: { margin_top: gap } })}
     >
-      <TextLine
-        id={`${id}/letter`}
-        text={letter}
-        tone={tone}
-        layout={{ width: lineWidth(letter, body) }}
-      />
+      <TextLine id={`${id}/letter`} text={letter} tone={tone} />
       <Entity id={`${id}/field`}>
         <PresentationGate open />
         <Layout
@@ -577,7 +579,7 @@ function ChannelField({
         id={`${id}/units`}
         text={units ?? ""}
         tone={tone}
-        layout={{ width: lineWidth("%", body), margin_left: gap }}
+        layout={{ margin_left: gap }}
       />
     </Row>
   );

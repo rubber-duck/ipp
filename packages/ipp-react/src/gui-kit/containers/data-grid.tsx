@@ -50,7 +50,7 @@ import { usePanelSurface } from "./panel.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
 
 import { Separator } from "../separator.js";
-import { Icon, TextLine, textWidth } from "../text.js";
+import { Icon, TextLine } from "../text.js";
 
 export interface DataGridColumn {
   readonly key: string;
@@ -505,34 +505,36 @@ function Cells({
                       }
                     />
                   ) : (
-                    <TextLine
-                      id={`${cell}/text`}
-                      text={text}
-                      tone={header ? "accent" : "text"}
-                      size={header ? "small" : "body"}
-                      layout={
-                        end
+                    <Entity id={`${cell}/label`}>
+                      <Layout
+                        kind={LAYOUT_ROW}
+                        fit_width
+                        align_y={0}
+                        {...(end
                           ? { align_x: 1, margin_right: g.inset }
-                          : { align_x: -1, margin_left: g.inset }
-                      }
-                    />
-                  )}
-                  {sorted && (
-                    <Icon
-                      id={`${cell}/sort`}
-                      icon={
-                        sort.direction === "ascending"
-                          ? "sortAscending"
-                          : "sortDescending"
-                      }
-                      size={kit.tokens.textBody}
-                      layout={{
-                        align_x: -1,
-                        margin_left:
-                          g.inset * (1 + SORT_GAP_INSETS) +
-                          textWidth(text, kit.typeSize("small")),
-                      }}
-                    />
+                          : { align_x: -1, margin_left: g.inset })}
+                      />
+                      <Children>
+                        <TextLine
+                          id={`${cell}/text`}
+                          text={text}
+                          tone={header ? "accent" : "text"}
+                          size={header ? "small" : "body"}
+                        />
+                        {sorted && (
+                          <Icon
+                            id={`${cell}/sort`}
+                            icon={
+                              sort.direction === "ascending"
+                                ? "sortAscending"
+                                : "sortDescending"
+                            }
+                            size={kit.tokens.textBody}
+                            layout={{ margin_left: g.inset * SORT_GAP_INSETS }}
+                          />
+                        )}
+                      </Children>
+                    </Entity>
                   )}
                   {at(focusedCell, column) && (
                     // The focus edge is centred on the cell's four lines.

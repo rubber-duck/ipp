@@ -60,7 +60,7 @@ Runtime interaction owns hover, press/cancel, capture, focus scopes, groups, ove
 
 ## Text and skins
 
-Text measurement and rendering share immutable font metrics and original glyph identities. Preserve Unicode source text and edit at grapheme boundaries, while rendering guarantees remain basic LTR Latin. Wrapping, glyph placement, caret and selection geometry use the same headless metrics. Runtime and browser text offsets require explicit conversion against the text they index.
+Text measurement and rendering share immutable font metrics and original glyph identities. Preserve Unicode source text and edit at grapheme boundaries, while rendering guarantees remain basic LTR Latin. Wrapping, glyph placement, caret and selection geometry use the same headless metrics. The runtime owns text width calculation for proportional and fixed-width fonts. Clients declare content sizing and constraints; client presentation decisions that need measured dimensions consume evaluated results rather than estimating glyph advances. Runtime and browser text offsets require explicit conversion against the text they index.
 
 A masked input presents one mask glyph per grapheme, including provisional composition, while committed and provisional text and native editing offsets retain the actual Unicode text. Reveal changes presentation on the same control without replacing its value, selection or composition; placeholders remain readable. This is a presentation capability, not an authentication or secret-storage boundary.
 

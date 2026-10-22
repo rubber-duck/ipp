@@ -24,7 +24,7 @@ import { Skin } from "../../gui/theme.js";
 import type { GuiKitIcon } from "../icons.js";
 import { useGuiKit, type GuiKitTone } from "../kit.js";
 
-import { Icon, TextLine, glyphSizeForWidth, textWidth } from "../text.js";
+import { Icon, TextLine, glyphSizeForWidth } from "../text.js";
 import type { KitThemeName } from "../themes.js";
 
 /**
@@ -91,16 +91,14 @@ export function StatusBadge(props: StatusBadgeProps) {
   // the label as far from the end; half an inset separates them.
   const edge = (t.smallHeight - MARKER) / 2;
   const gap = t.inset / 2;
-  const width =
-    kit.unit(edge + MARKER + gap + edge) +
-    textWidth(label, kit.typeSize("small"));
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
       <KitLayout
         kind={LAYOUT_ROW}
-        width={width}
+        fit_width
+        padding_right={kit.unit(edge)}
         height={kit.unit(t.smallHeight)}
         padding_left={kit.unit(edge)}
         {...layout}

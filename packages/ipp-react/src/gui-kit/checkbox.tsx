@@ -12,7 +12,6 @@ import {
   useLayoutFields,
   type GuiKitLayoutProps,
 } from "./layout.js";
-import { textWidth } from "./text.js";
 import { useCheckedValue } from "./values/checked-value.js";
 
 export interface CheckboxProps
@@ -108,10 +107,8 @@ function CheckedField({
             clip,
           },
           {
-            width:
-              textWidth(text, kit.fontSize) +
-              indicatorWidth +
-              (text ? kit.spacing.label : 0),
+            fit_width: true,
+            min_width: indicatorWidth,
             height: Math.max(indicatorHeight, text ? kit.fontSize : 0),
           },
         )}

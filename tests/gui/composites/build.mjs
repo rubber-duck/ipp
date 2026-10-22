@@ -16,6 +16,10 @@ const output = resolve(process.env.IPP_BUILD_OUTPUT ?? "target/gui-composites");
 
 /** Each part's page module, which the page loads, and its cases' test. */
 const PARTS = {
+  "proportional-fonts": [
+    "tests/gui/composites/pages/proportional-fonts.ts",
+    "tests/gui/composites/proportional-fonts.test.ts",
+  ],
   foundations: [
     "tests/gui/composites/pages/foundations.ts",
     "tests/gui/composites/foundations.test.ts",

@@ -313,7 +313,7 @@ function TreeRow({
               height={g.icon}
               align_y={0}
             />
-            <Font source={kit.font} font_size={g.icon} />
+            <Font source={kit.iconFont} font_size={g.icon} />
             <Skin theme={kit.theme("treeChevron")} />
             <Behavior
               focusable={false}
@@ -341,7 +341,7 @@ function TreeRow({
               blue={color[2]}
               alpha={color[3]}
             />
-            <Text text={node.icon} source={kit.font} font_size={g.icon} />
+            <Text text={node.icon} source={kit.iconFont} font_size={g.icon} />
           </Entity>
         )}
         <TextLine

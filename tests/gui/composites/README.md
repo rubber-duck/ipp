@@ -19,6 +19,7 @@ The family is split into parts. Each part runs once per host in a browser of its
 | `number` | numeric entry, rejection, Escape, keys and step parts on the Host clock |
 | `overlays` | light, modal and hint overlays, with focus entry and return |
 | `toast` | the kit's toast stack over a focused panel, paused and dismissed on the Host clock |
+| `proportional-fonts` | Noto Sans advances, kerning, fitted controls, separate icons and font replacement while typing |
 | `kit-choice` | the kit's radio group, tab strip and tree view |
 | `kit-overlays` | the kit's context menu, confirmation dialog, popover and tooltip |
 | `kit-select` | the kit's dropdown, searchable dropdown, multi-select and autocomplete |
@@ -57,3 +58,13 @@ With the prerequisites built (`python tools/ipp.py build native gles-host browse
 ## Budgets
 
 A part's budget bounds its setup and cases on one host; launching and closing the browser and Host have their own allowance. A part takes at most a sixth of its budget alone under software rendering, so a machine running several suites at once still passes; today's parts take 2 to 8 seconds against 60. A part that outgrows this is split, not given a larger budget.
+
+The proportional-font specimen also runs in a persistent native development session:
+
+```sh
+node tools/shared-host/shared-host.mjs session start tests/gui/composites/drivers/native-proportional-fonts.tsx --name proportional-fonts
+node tools/shared-host/shared-host.mjs session capture proportional-fonts
+node tools/shared-host/shared-host.mjs session stop proportional-fonts
+```
+
+It uses the shared Host and produces Cybertron and Glass screenshots; the maintained part above owns regression assertions on both backends.

@@ -79,9 +79,9 @@ test("InlineAlert draws its severity's frame, icon and tone with optional action
   assert.equal(world.fields("alert/action", "GuiFont").get("font_size"), 26);
   const action = world.fields("alert/action", "GuiLayout");
   assert.equal(action.get("height"), 64);
-  assert.ok(
-    Math.abs((action.get("width") as number) - (9 * 0.54 * 26 + 64)) < 1e-9,
-  );
+  assert.equal(action.get("fit_width"), true);
+  assert.equal(action.get("padding_left"), 32);
+  assert.equal(action.get("padding_right"), 32);
 
   await draw(
     h(InlineAlert, { id: "alert", severity: "error", text: "Failed." }),
@@ -164,13 +164,10 @@ test("StatusBadge gives each status its frame, marker shape and tone, hugging it
     // Badges are not controls.
     assert.equal(world.entity(id).components.has("GuiButton"), false);
   }
-  const label = "Online".length * 0.54 * 13;
-  assert.ok(
-    Math.abs(
-      (world.fields("active", "GuiLayout").get("width") as number) -
-        (10 + 12 + 8 + 10 + label),
-    ) < 1e-9,
-  );
+  const badge = world.fields("active", "GuiLayout");
+  assert.equal(badge.get("fit_width"), true);
+  assert.equal(badge.get("padding_left"), 10);
+  assert.equal(badge.get("padding_right"), 10);
 });
 
 const upload = (props: Partial<ProgressBarProps>) =>
@@ -581,11 +578,7 @@ test("Spinner turns a lit quarter over a quiet track once a second beside its te
   const layout = world.fields("busy", "GuiLayout");
   assert.equal(layout.get("kind"), 1);
   assert.equal(layout.get("height"), 48);
-  // The text and a hundredth of its size, so rounding never wraps it.
-  assert.ok(
-    Math.abs((layout.get("width") as number) - (64 + 12 * 0.54 * 32 + 0.32)) <
-      1e-9,
-  );
+  assert.equal(layout.get("fit_width"), true);
   assert.equal(world.fields("busy", "GuiFont").get("font_size"), 32);
   assert.deepEqual(world.children("busy"), [
     "busy/strut",
@@ -646,7 +639,8 @@ test("CircularProgress draws the reported fraction from twelve o'clock and its o
   const { world, draw } = await render(ringProgress({ value: 0.656 }));
   const layout = world.fields("upload", "GuiLayout");
   assert.equal(layout.get("kind"), 2);
-  assert.equal(layout.get("width"), 128);
+  assert.equal(layout.get("fit_width"), true);
+  assert.equal(layout.get("min_width"), 128);
   assert.equal(layout.get("height"), 128 + 8 + 24);
   assert.deepEqual(world.children("upload"), ["upload/ring", "upload/caption"]);
   assert.equal(world.skin("upload/ring"), "arcTrack");
@@ -677,9 +671,7 @@ test("CircularProgress draws the reported fraction from twelve o'clock and its o
   const caption = world.fields("upload/caption", "GuiLayout");
   assert.equal(caption.get("align_x"), 0);
   assert.equal(caption.get("margin_top"), 8);
-  assert.ok(
-    Math.abs((caption.get("width") as number) - (9 * 0.54 * 16 + 0.16)) < 1e-9,
-  );
+  assert.equal(caption.get("fit_width"), true);
   assert.deepEqual(world.children("upload/caption"), ["upload/label"]);
   assert.equal(
     world.fields("upload/label", "CanvasText").get("text"),
@@ -730,11 +722,9 @@ test("CircularProgress draws the reported fraction from twelve o'clock and its o
     world.fields("upload/outcome", "GuiLayout").get("margin_left"),
     8,
   );
-  assert.ok(
-    Math.abs(
-      (world.fields("upload/caption", "GuiLayout").get("width") as number) -
-        (13 * 0.54 * 16 + 8 + 0.16),
-    ) < 1e-9,
+  assert.equal(
+    world.fields("upload/caption", "GuiLayout").get("fit_width"),
+    true,
   );
 
   // Failed: the reached arc in the error colour, the error icon in its centre.
@@ -796,10 +786,9 @@ test("a ring of unknown total turns the spinner's quarter and shows no percentag
     ringProgress({ label: "Scanning", size: "small" }),
   );
   const layout = world.fields("upload", "GuiLayout");
-  // The caption is wider than the small ring, so it sets the width.
-  assert.ok(
-    Math.abs((layout.get("width") as number) - (8 * 0.54 * 16 + 0.16)) < 1e-9,
-  );
+  // Runtime content sizing takes the wider of the caption and the ring.
+  assert.equal(layout.get("fit_width"), true);
+  assert.equal(layout.get("min_width"), 64);
   assert.equal(layout.get("height"), 64 + 8 + 24);
   assert.equal(world.fields("upload/ring", "GuiLayout").get("width"), 64);
   assert.deepEqual(skinRows(world, "upload/ring"), ring(8, 1));

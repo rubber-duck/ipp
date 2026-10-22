@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -51,7 +52,7 @@ import {
   type SliderCompositeProps,
 } from "./slider-rail.js";
 import { defaultFormat, useScalarValue, withUnits } from "./scalar-value.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 /** A range's lower and upper values. */
 export type RangeValue = readonly [number, number];
@@ -105,6 +106,11 @@ export function RangeSlider(inputProps: RangeSliderProps) {
   const tones = textTones(disabled);
   const text = (number: number) => withUnits(format(number), units);
   const readouts = state.current.map(text);
+  const measured = useTextMeasurements(
+    (vertical ? [min, max, ...state.current] : []).map(
+      (number) => [text(number), kit.typeSize("small")] as const,
+    ),
+  );
   // Readouts sit half an inset past the thumb, right of a vertical one; a
   // horizontal one's dense row starts at the slider's edge.
   const offset = vertical ? (g.depth + g.thumb) / 2 + g.gap : g.depth;
@@ -130,71 +136,74 @@ export function RangeSlider(inputProps: RangeSliderProps) {
     const rail = kit.unit(length);
     const widest = Math.max(
       ...[min, max, ...state.current].map((number) =>
-        lineWidth(text(number), kit.typeSize("small")),
+        measured.lineWidth(text(number), kit.typeSize("small")),
       ),
     );
     const box = offset + widest;
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0);
     return (
-      <Entity id={id}>
-        <PresentationGate open />
-        <Style layer={layer} />
-        <KitLayout
-          kind={LAYOUT_COLUMN}
-          height={rows * g.row + rail}
-          {...layout}
-        />
-        <Font source={kit.font} font_size={kit.fontSize} />
-        <Children>
-          {label !== undefined && (
-            <CentredLine id={`${id}/label`} text={label} tone={tones.label} />
-          )}
-          {bounds && (
-            <CentredLine
-              id={`${id}/max`}
-              text={text(max)}
-              tone={tones.secondary}
-              size="small"
-            />
-          )}
-          <Entity id={`${id}/track`}>
-            <PresentationGate open />
-            <Layout kind={LAYOUT_STACK} height={rail} />
-            <Children>
-              {/* The rail centred: the readouts' reach past it takes no room. */}
-              <Entity id={`${id}/rail`}>
-                <PresentationGate open />
-                <Layout
-                  kind={LAYOUT_STACK}
-                  width={box}
-                  height={rail}
-                  align_x={0}
-                  margin_right={g.depth - box}
-                />
-                <Children>
-                  {readoutMarks}
-                  <SliderControl
-                    id={`${id}/slider`}
-                    props={props}
-                    value={state}
-                    axis={1}
-                    range
-                    layout={{ width: g.depth, height: rail }}
+      <>
+        {measured.nodes}
+        <Entity id={id}>
+          <PresentationGate open />
+          <Style layer={layer} />
+          <KitLayout
+            kind={LAYOUT_COLUMN}
+            height={rows * g.row + rail}
+            {...layout}
+          />
+          <Font source={kit.font} font_size={kit.fontSize} />
+          <Children>
+            {label !== undefined && (
+              <CentredLine id={`${id}/label`} text={label} tone={tones.label} />
+            )}
+            {bounds && (
+              <CentredLine
+                id={`${id}/max`}
+                text={text(max)}
+                tone={tones.secondary}
+                size="small"
+              />
+            )}
+            <Entity id={`${id}/track`}>
+              <PresentationGate open />
+              <Layout kind={LAYOUT_STACK} height={rail} />
+              <Children>
+                {/* The rail centred: the readouts' reach past it takes no room. */}
+                <Entity id={`${id}/rail`}>
+                  <PresentationGate open />
+                  <Layout
+                    kind={LAYOUT_STACK}
+                    width={box}
+                    height={rail}
+                    align_x={0}
+                    margin_right={g.depth - box}
                   />
-                </Children>
-              </Entity>
-            </Children>
-          </Entity>
-          {bounds && (
-            <CentredLine
-              id={`${id}/min`}
-              text={text(min)}
-              tone={tones.secondary}
-              size="small"
-            />
-          )}
-        </Children>
-      </Entity>
+                  <Children>
+                    {readoutMarks}
+                    <SliderControl
+                      id={`${id}/slider`}
+                      props={props}
+                      value={state}
+                      axis={1}
+                      range
+                      layout={{ width: g.depth, height: rail }}
+                    />
+                  </Children>
+                </Entity>
+              </Children>
+            </Entity>
+            {bounds && (
+              <CentredLine
+                id={`${id}/min`}
+                text={text(min)}
+                tone={tones.secondary}
+                size="small"
+              />
+            )}
+          </Children>
+        </Entity>
+      </>
     );
   }
 

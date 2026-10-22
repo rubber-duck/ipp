@@ -15,7 +15,7 @@ import { useEntityId } from "../../scope/identity.js";
 import { useGuiKit } from "../kit.js";
 import { Row } from "../layout.js";
 import { Floating } from "./overlay.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 export interface TooltipProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
@@ -38,7 +38,6 @@ export function Tooltip({
   const kit = useGuiKit();
   const t = kit.tokens;
   const lines = typeof text === "string" ? [text] : text;
-  const size = kit.typeSize("small");
   const margin = kit.unit(t.inset / 2);
   const gap = kit.unit(t.inset / 4);
   const offset: readonly [number, number] =
@@ -60,8 +59,7 @@ export function Tooltip({
       small
       offset={offset}
       layout={{
-        width:
-          Math.max(...lines.map((line) => lineWidth(line, size))) + 2 * margin,
+        fit_width: true,
         padding_left: margin,
         padding_right: margin,
         padding_top: kit.unit(t.inset / 4),
@@ -73,6 +71,7 @@ export function Tooltip({
           gap={0}
           key={index}
           id={`${id}/line/${index}`}
+          fitWidth
           height={kit.unit(t.denseRow)}
         >
           <TextLine id={`${id}/line/${index}/text`} text={line} size="small" />

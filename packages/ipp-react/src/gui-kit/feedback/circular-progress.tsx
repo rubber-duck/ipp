@@ -40,9 +40,7 @@ import {
   Icon,
   TextLine,
   glyphSizeForWidth,
-  lineWidth,
   percentage,
-  textWidth,
 } from "../text.js";
 import type { KitThemeName } from "../themes.js";
 
@@ -136,10 +134,6 @@ export function CircularProgress(props: CircularProgressProps) {
   const running = fraction !== undefined && !outcome;
   const lead = running ? LEAD / (Math.PI * (diameter - thickness)) : 0;
   const gap = t.inset / 2;
-  const body = kit.typeSize("body");
-  const caption = outcome
-    ? textWidth(label, body) + kit.unit(gap) + lineWidth(outcome.word, body)
-    : lineWidth(label, body);
 
   const centre =
     outcome && status === "complete" ? (
@@ -170,7 +164,8 @@ export function CircularProgress(props: CircularProgressProps) {
       <Style layer={layer} />
       <KitLayout
         kind={LAYOUT_COLUMN}
-        width={Math.max(kit.unit(diameter), caption)}
+        fit_width
+        min_width={kit.unit(diameter)}
         height={kit.unit(diameter + CAPTION_GAP + t.denseRow)}
         {...layout}
       />
@@ -221,7 +216,7 @@ export function CircularProgress(props: CircularProgressProps) {
           id={`${id}/caption`}
           height={kit.unit(t.denseRow)}
           layout={{
-            width: caption,
+            fit_width: true,
             align_x: 0,
             margin_top: kit.unit(CAPTION_GAP),
           }}

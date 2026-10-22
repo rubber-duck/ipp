@@ -809,3 +809,106 @@ fn surface_cache_policy_survives_world_save_and_load_while_canvas_output_is_rebu
         Some(SurfaceCachePolicy::new(&policy).unwrap())
     );
 }
+
+#[test]
+fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
+    let mut panel = GuiPanel::with_canvas(PANEL, None);
+    panel
+        .host
+        .register_stream_resource_provider("raw-text-font")
+        .unwrap();
+    let label = panel.create(
+        None,
+        vec![
+            ComponentValue::CanvasText(CanvasText {
+                text: "AA".into(),
+                source: "raw-text-font:///font.ippf".into(),
+                variant: 0,
+                font_size: 10.0,
+            }),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                opacity: 0.0,
+                x: 10.0,
+                y: 20.0,
+                scale_x: -2.0,
+                scale_y: -3.0,
+                ..Default::default()
+            }),
+            ComponentValue::CanvasBounds(Default::default()),
+        ],
+    );
+    let read = |panel: &mut GuiPanel| {
+        panel
+            .host
+            .world_mut(panel.world)
+            .unwrap()
+            .inspect(label)
+            .unwrap()
+            .components
+            .into_iter()
+            .find_map(|value| match value {
+                ComponentValue::CanvasBounds(bounds) => {
+                    Some([bounds.x, bounds.y, bounds.width, bounds.height])
+                }
+                _ => None,
+            })
+            .unwrap()
+    };
+    panel.frame();
+    assert_eq!(read(&mut panel), [10.0, 20.0, 0.0, 0.0]);
+    for _ in 0..16 {
+        for request in panel.host.take_resource_requests() {
+            panel
+                .host
+                .complete_resource(request.id, Ok(support::canvas_font_bytes()))
+                .unwrap();
+        }
+        panel.frame();
+        if read(&mut panel)[3] > 0.0 {
+            break;
+        }
+    }
+    assert_eq!(read(&mut panel), [-14.0, -16.0, 24.0, 36.0]);
+    panel
+        .set(
+            label,
+            ComponentValue::CANVAS_TEXT,
+            offset_of!(CanvasText, text),
+            FieldValue::String("".into()),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), [10.0, -16.0, 0.0, 36.0]);
+    panel
+        .set(
+            label,
+            ComponentValue::CANVAS_TEXT,
+            offset_of!(CanvasText, text),
+            FieldValue::String("A".into()),
+        )
+        .result
+        .unwrap();
+    panel
+        .set(
+            label,
+            ComponentValue::CANVAS_TEXT,
+            offset_of!(CanvasText, font_size),
+            FieldValue::F32(20.0),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), [-14.0, -52.0, 24.0, 72.0]);
+    panel
+        .set(
+            label,
+            ComponentValue::CANVAS_TEXT,
+            offset_of!(CanvasText, source),
+            FieldValue::String("raw-text-font:///pending.ippf".into()),
+        )
+        .result
+        .unwrap();
+    panel.frame();
+    assert_eq!(read(&mut panel), [10.0, 20.0, 0.0, 0.0]);
+}

@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -48,7 +49,7 @@ import { useGuiKit } from "../kit.js";
 
 import { textTones } from "./slider-rail.js";
 import { formatValue, useScalarValue, withUnits } from "./scalar-value.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 export interface NumericStepperProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
@@ -157,8 +158,12 @@ export function NumericStepper(props: NumericStepperProps) {
       bound === undefined ? 0 : formatValue(bound, precision, false).length,
     ),
   );
+  const measured = useTextMeasurements([
+    ["0".repeat(digits), kit.fontSize],
+    ...(units === undefined ? [] : [[units, kit.typeSize("body")] as const]),
+  ]);
   const entryWidth =
-    lineWidth("0".repeat(digits), kit.fontSize) +
+    measured.lineWidth("0".repeat(digits), kit.fontSize) +
     kit.unit(2 * t.inset + (stepParts ? 2 * t.controlHeight : 0));
   const rowWidth =
     layout?.width !== undefined || (layout?.flex ?? 0) > 0
@@ -166,107 +171,109 @@ export function NumericStepper(props: NumericStepperProps) {
       : entryWidth +
         (units === undefined
           ? 0
-          : gap + lineWidth(units, kit.typeSize("body")));
+          : gap + measured.lineWidth(units, kit.typeSize("body")));
 
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        height={contentHeight}
-        gap={gap}
-        {...layout}
-      />
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        {caption && (
-          <Row gap={0} id={`${id}/caption`} height={kit.unit(t.denseRow)}>
-            {label === undefined ? (
-              <Entity id={`${id}/space`}>
-                <PresentationGate open />
-                <Layout kind={LAYOUT_LEAF} flex={1} />
-              </Entity>
-            ) : (
-              <TextLine
-                id={`${id}/label`}
-                text={label}
-                tone={tones.label}
-                layout={{ flex: 1 }}
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          height={contentHeight}
+          gap={gap}
+          {...layout}
+        />
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          {caption && (
+            <Row gap={0} id={`${id}/caption`} height={kit.unit(t.denseRow)}>
+              {label === undefined ? (
+                <Entity id={`${id}/space`}>
+                  <PresentationGate open />
+                  <Layout kind={LAYOUT_LEAF} flex={1} />
+                </Entity>
+              ) : (
+                <TextLine
+                  id={`${id}/label`}
+                  text={label}
+                  tone={tones.label}
+                  layout={{ flex: 1 }}
+                />
+              )}
+              {ends !== undefined && (
+                <TextLine
+                  id={`${id}/ends`}
+                  text={ends}
+                  tone={tones.secondary}
+                  size="small"
+                />
+              )}
+            </Row>
+          )}
+          <Row
+            gap={0}
+            id={`${id}/row`}
+            width={rowWidth}
+            height={kit.unit(t.controlHeight)}
+          >
+            <Entity id={`${id}/field`}>
+              <PresentationGate open />
+              <Layout
+                kind={LAYOUT_LEAF}
+                height={kit.unit(t.controlHeight)}
+                flex={1}
               />
-            )}
-            {ends !== undefined && (
+              <Behavior
+                enabled={!disabled}
+                {...(label === undefined ? {} : { semantic_label: label })}
+              />
+              {kit.controlTheme("textInput") && (
+                <Skin theme={kit.controlTheme("textInput")!} />
+              )}
+              <TextInput
+                numeric
+                value={state.control.value}
+                {...(min === undefined ? {} : { min })}
+                {...(max === undefined ? {} : { max })}
+                step={step}
+                fine_step={fineStep}
+                precision={precision}
+                step_parts={stepParts}
+                ref={state.control.ref}
+                onScalarCommit={(event: GuiScalarEvent) => {
+                  state.control.onScalarCommit(event);
+                  settle(event.tick);
+                }}
+                onSubmit={(event) => settle(event.tick)}
+                onDiscard={(event) => settle(event.tick)}
+                onReject={(event) => {
+                  if (event.tick > settled.current)
+                    setError(invalidMessage(event.value));
+                }}
+                onFocusChange={(event: GuiFocusChangeEvent) => {
+                  if (!event.focused) settle(event.tick);
+                  onFocusChange?.(event);
+                }}
+              />
+            </Entity>
+            {units !== undefined && (
               <TextLine
-                id={`${id}/ends`}
-                text={ends}
-                tone={tones.secondary}
-                size="small"
+                id={`${id}/units`}
+                text={units}
+                tone={tones.readout}
+                layout={{
+                  margin_left: gap,
+                }}
               />
             )}
           </Row>
-        )}
-        <Row
-          gap={0}
-          id={`${id}/row`}
-          width={rowWidth}
-          height={kit.unit(t.controlHeight)}
-        >
-          <Entity id={`${id}/field`}>
-            <PresentationGate open />
-            <Layout
-              kind={LAYOUT_LEAF}
-              height={kit.unit(t.controlHeight)}
-              flex={1}
-            />
-            <Behavior
-              enabled={!disabled}
-              {...(label === undefined ? {} : { semantic_label: label })}
-            />
-            {kit.controlTheme("textInput") && (
-              <Skin theme={kit.controlTheme("textInput")!} />
-            )}
-            <TextInput
-              numeric
-              value={state.control.value}
-              {...(min === undefined ? {} : { min })}
-              {...(max === undefined ? {} : { max })}
-              step={step}
-              fine_step={fineStep}
-              precision={precision}
-              step_parts={stepParts}
-              ref={state.control.ref}
-              onScalarCommit={(event: GuiScalarEvent) => {
-                state.control.onScalarCommit(event);
-                settle(event.tick);
-              }}
-              onSubmit={(event) => settle(event.tick)}
-              onDiscard={(event) => settle(event.tick)}
-              onReject={(event) => {
-                if (event.tick > settled.current)
-                  setError(invalidMessage(event.value));
-              }}
-              onFocusChange={(event: GuiFocusChangeEvent) => {
-                if (!event.focused) settle(event.tick);
-                onFocusChange?.(event);
-              }}
-            />
-          </Entity>
-          {units !== undefined && (
-            <TextLine
-              id={`${id}/units`}
-              text={units}
-              tone={tones.readout}
-              layout={{
-                width: lineWidth(units, kit.typeSize("body")),
-                margin_left: gap,
-              }}
-            />
+          {error !== undefined && (
+            <InlineAlert id={`${id}/error`} severity="error" text={error} />
           )}
-        </Row>
-        {error !== undefined && (
-          <InlineAlert id={`${id}/error`} severity="error" text={error} />
-        )}
-      </Children>
-    </Entity>
+        </Children>
+      </Entity>
+    </>
   );
 }

@@ -20,7 +20,8 @@ import { useGuiKit } from "../kit.js";
 import { OptionList, type SelectOption } from "./option-list.js";
 import { useOverlayOpen, type OverlayOpenProps } from "../overlays/overlay.js";
 import { SelectList, SelectTrigger, selectTextRoom } from "./select-trigger.js";
-import { textWidth } from "../text.js";
+import { useTextMeasurements } from "../text-measurement.js";
+import { useField } from "../../scope/field.js";
 
 export interface MultiSelectProps extends OverlayOpenProps, GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
@@ -44,16 +45,16 @@ export interface MultiSelectProps extends OverlayOpenProps, GuiKitLayoutProps {
 }
 
 /**
- * The summary of the selected `labels` in `room` at body size `size`: the
+ * The summary of selected `labels` in `room` using a runtime-measured width: the
  * labels joined while they fit, otherwise their count.
  */
 export function selectionSummary(
   labels: readonly string[],
   room: number,
-  size: number,
+  measuredWidth: number,
 ): string {
   const joined = labels.join(", ");
-  return textWidth(joined, size) <= room ? joined : `${labels.length} selected`;
+  return measuredWidth <= room ? joined : `${labels.length} selected`;
 }
 
 export function MultiSelect(props: MultiSelectProps) {
@@ -97,38 +98,51 @@ export function MultiSelect(props: MultiSelectProps) {
     setOwn(next);
     onChange?.(next);
   };
-  const summary = selectionSummary(
-    selected.map((option) => option.label),
-    selectTextRoom(kit, layout),
-    kit.typeSize("body"),
-  );
+  const labels = selected.map((option) => option.label);
+  const joined = labels.join(", ");
+  const measured = useTextMeasurements([[joined, kit.typeSize("body")]]);
+  const bounds = useField(id, "CanvasBounds", "width");
+  const actualLayout =
+    bounds.status === "ready" && typeof bounds.value === "number"
+      ? { ...layout, width: bounds.value }
+      : layout;
+  const summary = measured.ready
+    ? selectionSummary(
+        labels,
+        selectTextRoom(kit, actualLayout),
+        measured.width(joined, kit.typeSize("body")),
+      )
+    : `${labels.length} selected`;
   return (
-    <SelectTrigger
-      id={id}
-      layer={layer}
-      text={selected.length > 0 ? summary : placeholder}
-      placeholder={selected.length === 0}
-      open={overlay.open}
-      onPress={overlay.toggle}
-      disabled={disabled}
-      {...(label === undefined ? {} : { label })}
-      {...(layout ? { layout } : {})}
-    >
-      <SelectList
-        id={`${id}/list`}
+    <>
+      {measured.nodes}
+      <SelectTrigger
+        id={id}
+        layer={layer}
+        text={selected.length > 0 ? summary : placeholder}
+        placeholder={selected.length === 0}
         open={overlay.open}
-        controlled={overlay.controlled}
-        onVisibleChange={overlay.onVisibleChange}
+        onPress={overlay.toggle}
+        disabled={disabled}
+        {...(label === undefined ? {} : { label })}
+        {...(layout ? { layout } : {})}
       >
-        <OptionList
-          id={`${id}/options`}
-          options={options}
-          selected={selected.map((option) => option.key)}
-          mark="check"
-          onPick={toggle}
-          {...(maxRows === undefined ? {} : { maxRows })}
-        />
-      </SelectList>
-    </SelectTrigger>
+        <SelectList
+          id={`${id}/list`}
+          open={overlay.open}
+          controlled={overlay.controlled}
+          onVisibleChange={overlay.onVisibleChange}
+        >
+          <OptionList
+            id={`${id}/options`}
+            options={options}
+            selected={selected.map((option) => option.key)}
+            mark="check"
+            onPick={toggle}
+            {...(maxRows === undefined ? {} : { maxRows })}
+          />
+        </SelectList>
+      </SelectTrigger>
+    </>
   );
 }

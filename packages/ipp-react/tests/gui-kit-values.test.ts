@@ -502,7 +502,8 @@ test("Knob: the dial's housing holds the readout under the dial and the ends at 
   );
   const layout = world.fields("gain", "GuiLayout");
   assert.equal(layout.get("kind"), 2);
-  assert.equal(layout.get("width"), 80);
+  assert.equal(layout.get("fit_width"), true);
+  assert.equal(layout.get("min_width"), 80);
   assert.equal(layout.get("height"), -1);
   assert.equal(layout.get("fit_height"), true);
   assert.equal(layout.get("gap"), 8);
@@ -575,7 +576,7 @@ test("Knob: the dial's housing holds the readout under the dial and the ends at 
 
   // A larger dial gives longer end captions room.
   await draw(knob({ size: 112, defaultValue: 65 }));
-  assert.equal(world.fields("gain", "GuiLayout").get("width"), 112);
+  assert.equal(world.fields("gain", "GuiLayout").get("min_width"), 112);
   const larger = world.fields("gain/dial", "GuiLayout");
   assert.equal(larger.get("width"), 112);
   assert.equal(larger.get("height"), 112 + 24);

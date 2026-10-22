@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -52,7 +53,6 @@ import { useGuiKit } from "../kit.js";
 
 import { Menu } from "../overlays/menu.js";
 import { Floating, useOverlayOpen } from "../overlays/overlay.js";
-import { lineWidth } from "../text.js";
 
 export interface TabItem {
   /** The tab's value, unique in its strip and part of its entities' ids. */
@@ -97,8 +97,11 @@ export function Tabs(inputProps: TabsProps) {
   const choice = useChoice(props);
   const height = kit.unit(t.controlHeight);
   const body = kit.typeSize("body");
+  const measured = useTextMeasurements(
+    tabs.map((tab) => [tab.label, body] as const),
+  );
   const widths = tabs.map(
-    (tab) => lineWidth(tab.label, body) + kit.unit(2 * t.inset),
+    (tab) => measured.lineWidth(tab.label, body) + kit.unit(2 * t.inset),
   );
   const strip = useRef<GuiControlHandle>(null);
   const [range, setRange] = useState<GuiVirtualRange | null>(null);
@@ -129,89 +132,92 @@ export function Tabs(inputProps: TabsProps) {
         .catch(() => {});
   };
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout kind={LAYOUT_COLUMN} {...layout} />
-      {!parentSurface && <Skin theme={kit.theme("tabSurface")} />}
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        <Entity id={`${id}/strip`}>
-          <PresentationGate open />
-          <Layout kind={LAYOUT_ROW} height={height} />
-          <Skin theme={kit.theme("tabRail")} />
-          <Children>
-            {overflowing && (
-              <ScrollButton
-                id={`${id}/previous`}
-                direction="previous"
-                disabled={offset <= 0}
-                onPress={scroll(-1)}
-              />
-            )}
-            <Entity id={`${id}/view`}>
-              <PresentationGate open />
-              <Layout kind={LAYOUT_LEAF} flex={1} height={height} />
-              <Skin theme={kit.theme("gridBody")} />
-              <ScrollView
-                axis={SCROLL_HORIZONTAL}
-                bar_thickness={0}
-                ref={strip}
-                onRangeChange={setRange}
-                onScroll={(event) => setOffset(event.value.offset[0])}
-              />
-              <Children>
-                <Entity id={`${id}/tabs`}>
-                  <PresentationGate open />
-                  <Layout
-                    kind={LAYOUT_ROW}
-                    width={widths.reduce((sum, width) => sum + width, 0)}
-                    height={height}
-                  />
-                  <Group axis={GROUP_HORIZONTAL} selection={SELECT_SINGLE} />
-                  <Children>
-                    {tabs.map((tab, index) => (
-                      <Tab
-                        key={tab.value}
-                        id={`${id}/tab/${tab.value}`}
-                        tab={tab}
-                        width={widths[index]!}
-                        choice={choice}
-                      />
-                    ))}
-                  </Children>
-                </Entity>
-              </Children>
-            </Entity>
-            {overflowing && (
-              <ScrollButton
-                id={`${id}/next`}
-                direction="next"
-                disabled={offset >= capacity}
-                onPress={scroll(1)}
-              />
-            )}
-            {overflowing && overflowMenu && (
-              <MoreMenu id={`${id}/more`} tabs={tabs} onPick={pick} />
-            )}
-            {more}
-          </Children>
-        </Entity>
-        {content !== undefined && (
-          <Entity id={`${id}/content`}>
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout kind={LAYOUT_COLUMN} {...layout} />
+        {!parentSurface && <Skin theme={kit.theme("tabSurface")} />}
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          <Entity id={`${id}/strip`}>
             <PresentationGate open />
-            <Layout
-              kind={LAYOUT_COLUMN}
-              flex={1}
-              padding_left={kit.unit(t.inset)}
-              padding_right={kit.unit(t.inset)}
-              padding_top={kit.unit(t.inset)}
-            />
-            <Children>{content}</Children>
+            <Layout kind={LAYOUT_ROW} height={height} />
+            <Skin theme={kit.theme("tabRail")} />
+            <Children>
+              {overflowing && (
+                <ScrollButton
+                  id={`${id}/previous`}
+                  direction="previous"
+                  disabled={offset <= 0}
+                  onPress={scroll(-1)}
+                />
+              )}
+              <Entity id={`${id}/view`}>
+                <PresentationGate open />
+                <Layout kind={LAYOUT_LEAF} flex={1} height={height} />
+                <Skin theme={kit.theme("gridBody")} />
+                <ScrollView
+                  axis={SCROLL_HORIZONTAL}
+                  bar_thickness={0}
+                  ref={strip}
+                  onRangeChange={setRange}
+                  onScroll={(event) => setOffset(event.value.offset[0])}
+                />
+                <Children>
+                  <Entity id={`${id}/tabs`}>
+                    <PresentationGate open />
+                    <Layout
+                      kind={LAYOUT_ROW}
+                      width={widths.reduce((sum, width) => sum + width, 0)}
+                      height={height}
+                    />
+                    <Group axis={GROUP_HORIZONTAL} selection={SELECT_SINGLE} />
+                    <Children>
+                      {tabs.map((tab, index) => (
+                        <Tab
+                          key={tab.value}
+                          id={`${id}/tab/${tab.value}`}
+                          tab={tab}
+                          width={widths[index]!}
+                          choice={choice}
+                        />
+                      ))}
+                    </Children>
+                  </Entity>
+                </Children>
+              </Entity>
+              {overflowing && (
+                <ScrollButton
+                  id={`${id}/next`}
+                  direction="next"
+                  disabled={offset >= capacity}
+                  onPress={scroll(1)}
+                />
+              )}
+              {overflowing && overflowMenu && (
+                <MoreMenu id={`${id}/more`} tabs={tabs} onPick={pick} />
+              )}
+              {more}
+            </Children>
           </Entity>
-        )}
-      </Children>
-    </Entity>
+          {content !== undefined && (
+            <Entity id={`${id}/content`}>
+              <PresentationGate open />
+              <Layout
+                kind={LAYOUT_COLUMN}
+                flex={1}
+                padding_left={kit.unit(t.inset)}
+                padding_right={kit.unit(t.inset)}
+                padding_top={kit.unit(t.inset)}
+              />
+              <Children>{content}</Children>
+            </Entity>
+          )}
+        </Children>
+      </Entity>
+    </>
   );
 }
 
@@ -273,7 +279,7 @@ function ScrollButton({
         width={kit.unit(t.dockedWidth)}
         height={kit.unit(t.controlHeight)}
       />
-      <Font source={kit.font} font_size={kit.unit(t.icon)} />
+      <Font source={kit.iconFont} font_size={kit.unit(t.icon)} />
       <Skin theme={kit.theme("dockedIcon")} />
       <Behavior
         focusable={false}
@@ -312,7 +318,7 @@ function MoreMenu({
         width={kit.unit(t.dockedWidth)}
         height={kit.unit(t.controlHeight)}
       />
-      <Font source={kit.font} font_size={kit.unit(t.icon)} />
+      <Font source={kit.iconFont} font_size={kit.unit(t.icon)} />
       <Skin theme={kit.theme("dockedIcon")} />
       <Behavior focusable={false} semantic_label="More tabs" />
       <Button

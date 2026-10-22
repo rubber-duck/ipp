@@ -853,6 +853,35 @@ impl CanvasSystem {
                     _ => None,
                 };
             }
+            // Raw text has no GUI layout placement. Publish its measured extent
+            // as ordinary Canvas bounds, including unavailable font transitions.
+            if mapping.is_none()
+                && component == ComponentValue::CANVAS_TEXT
+                && world
+                    .components
+                    .canvas_bounds(entity.index() as usize)
+                    .is_some()
+            {
+                let size = match &geometry {
+                    Some(CanvasGeometry::Glyphs {
+                        size,
+                        ..
+                    }) => *size,
+                    _ => [0.0; 2],
+                };
+                // Keep the line height even for empty text, including reflected scales.
+                let extent = [size[0] * placed.scale[0], size[1] * placed.scale[1]];
+                walk.bounds.push((
+                    entity,
+                    [
+                        placed.position[0] + extent[0].min(0.0),
+                        placed.position[1] + extent[1].min(0.0),
+                        extent[0].abs(),
+                        extent[1].abs(),
+                    ],
+                ));
+            }
+
             let changed_geometry = (rebuild_geometry || override_geometry.is_some())
                 && previous
                     .as_ref()

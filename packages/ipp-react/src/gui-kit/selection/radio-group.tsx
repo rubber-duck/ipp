@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -48,7 +49,7 @@ import {
 } from "../choice.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
 
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 export interface RadioOption {
   /** The option's value, unique in its group and part of its entities' ids. */
@@ -98,8 +99,11 @@ export function RadioGroup(inputProps: RadioGroupProps) {
   const g = geometry(kit);
   const choice = useChoice(props);
   const body = kit.typeSize("body");
+  const measured = useTextMeasurements(
+    options.map((option) => [option.label, body] as const),
+  );
   const widths = options.map(
-    (option) => g.mark + g.gap + lineWidth(option.label, body),
+    (option) => g.mark + g.gap + measured.lineWidth(option.label, body),
   );
   const spacing =
     optionGap ?? (horizontal ? kit.spacing.field : kit.spacing.compact);
@@ -109,53 +113,56 @@ export function RadioGroup(inputProps: RadioGroupProps) {
   const captionGap =
     label === undefined ? 0 : (layout?.gap ?? kit.spacing.label);
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        height={
-          (label === undefined ? 0 : g.caption + captionGap) + optionsHeight
-        }
-        gap={captionGap}
-        {...layout}
-      />
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        {label !== undefined && (
-          <Row
-            gap={0}
-            id={`${id}/caption`}
-            height={kit.unit(kit.tokens.denseRow)}
-          >
-            <TextLine id={`${id}/caption/text`} text={label} tone="accent" />
-          </Row>
-        )}
-        <Entity id={`${id}/options`}>
-          <PresentationGate open />
-          <Layout
-            kind={horizontal ? LAYOUT_ROW : LAYOUT_COLUMN}
-            height={optionsHeight}
-            gap={spacing}
-          />
-          <Group
-            axis={horizontal ? GROUP_HORIZONTAL : GROUP_VERTICAL}
-            selection={SELECT_FOLLOW}
-          />
-          <Children>
-            {options.map((option, index) => (
-              <Option
-                key={option.value}
-                id={`${id}/${option.value}`}
-                option={option}
-                choice={choice}
-                width={widths[index]!}
-              />
-            ))}
-          </Children>
-        </Entity>
-      </Children>
-    </Entity>
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          height={
+            (label === undefined ? 0 : g.caption + captionGap) + optionsHeight
+          }
+          gap={captionGap}
+          {...layout}
+        />
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          {label !== undefined && (
+            <Row
+              gap={0}
+              id={`${id}/caption`}
+              height={kit.unit(kit.tokens.denseRow)}
+            >
+              <TextLine id={`${id}/caption/text`} text={label} tone="accent" />
+            </Row>
+          )}
+          <Entity id={`${id}/options`}>
+            <PresentationGate open />
+            <Layout
+              kind={horizontal ? LAYOUT_ROW : LAYOUT_COLUMN}
+              height={optionsHeight}
+              gap={spacing}
+            />
+            <Group
+              axis={horizontal ? GROUP_HORIZONTAL : GROUP_VERTICAL}
+              selection={SELECT_FOLLOW}
+            />
+            <Children>
+              {options.map((option, index) => (
+                <Option
+                  key={option.value}
+                  id={`${id}/${option.value}`}
+                  option={option}
+                  choice={choice}
+                  width={widths[index]!}
+                />
+              ))}
+            </Children>
+          </Entity>
+        </Children>
+      </Entity>
+    </>
   );
 }
 

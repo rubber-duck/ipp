@@ -3,7 +3,8 @@ import {
   useGuiKitLayout,
   type GuiKitLayoutProps,
   LAYOUT_COLUMN,
-  LAYOUT_LEAF,
+  LAYOUT_ROW,
+  Strut,
 } from "../layout.js";
 
 import { useEntityId } from "../../scope/identity.js";
@@ -30,7 +31,6 @@ import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
-import { GUI_KIT_ICONS } from "../icons.js";
 import { useGuiKit } from "../kit.js";
 
 import {
@@ -40,7 +40,7 @@ import {
   type OverlayOpen,
 } from "./overlay.js";
 import { PanelHeader } from "../containers/panel.js";
-import { textWidth } from "../text.js";
+import { Icon, TextLine } from "../text.js";
 import { WindowControl } from "../containers/window-controls.js";
 
 /**
@@ -87,15 +87,16 @@ function PopoverView(props: PopoverProps) {
   const overlay = useOverlayOpen(open);
   const compact = size === "compact";
   const textSize = compact ? kit.typeSize("small") : kit.fontSize;
-  const text = `${label} ${GUI_KIT_ICONS.sortDescending}`;
   const inset = kit.unit(t.inset);
   return (
     <Entity id={id}>
       <PresentationGate open />
       <Style layer={layer} />
       <KitLayout
-        kind={LAYOUT_LEAF}
-        width={textWidth(text, textSize) + 2 * inset}
+        kind={LAYOUT_ROW}
+        fit_width
+        padding_left={inset}
+        padding_right={inset}
         height={kit.unit(compact ? t.smallHeight : t.controlHeight)}
         align_y={0}
         {...layout}
@@ -103,8 +104,20 @@ function PopoverView(props: PopoverProps) {
       <Font source={kit.font} font_size={textSize} />
       <Skin theme={kit.theme(compact ? "secondarySmall" : "secondary")} />
       <Behavior semantic_label={label} />
-      <Button label={text} selected={overlay.open} onPress={overlay.toggle} />
+      <Button label="" selected={overlay.open} onPress={overlay.toggle} />
       <Children>
+        <Strut height={kit.unit(compact ? t.smallHeight : t.controlHeight)} />
+        <TextLine
+          id={`${id}/label`}
+          text={label}
+          size={compact ? "small" : "body"}
+        />
+        <Icon
+          id={`${id}/caret`}
+          icon="sortDescending"
+          size={compact ? t.textSmall : t.textBody}
+          layout={{ margin_left: inset / 2 }}
+        />
         <Floating
           id={`${id}/popover`}
           mode="light"

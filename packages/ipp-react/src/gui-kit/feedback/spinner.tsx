@@ -24,7 +24,7 @@ import { Style, Font } from "../../gui/components.js";
 import { Arc, TURNING_SWEEP } from "../arc.js";
 import { useGuiKit } from "../kit.js";
 
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 export interface SpinnerProps extends GuiKitLayoutProps {
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
@@ -49,7 +49,7 @@ export function Spinner(props: SpinnerProps) {
       <Style layer={layer} />
       <KitLayout
         kind={LAYOUT_ROW}
-        width={kit.unit(t.icon + gap) + lineWidth(label, kit.typeSize("body"))}
+        fit_width
         height={kit.unit(t.icon)}
         {...layout}
       />

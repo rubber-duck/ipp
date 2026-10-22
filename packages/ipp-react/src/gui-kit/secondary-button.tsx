@@ -24,8 +24,6 @@ import type {
 import type { GuiControlRef } from "../gui/control-ref.js";
 import { useGuiKit } from "./kit.js";
 
-import { textWidth } from "./text.js";
-
 export interface SecondaryButtonProps
   extends GuiFeedbackListeners,
     GuiKitLayoutProps {
@@ -63,7 +61,9 @@ export function SecondaryButton(props: SecondaryButtonProps) {
       <Style layer={layer} />
       <KitLayout
         kind={LAYOUT_LEAF}
-        width={textWidth(label, size) + kit.unit(2 * t.inset)}
+        fit_width
+        padding_left={kit.unit(t.inset)}
+        padding_right={kit.unit(t.inset)}
         height={kit.unit(t.smallHeight)}
         align_y={0}
         {...layout}

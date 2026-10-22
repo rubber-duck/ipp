@@ -100,7 +100,7 @@ export function WindowControl(props: WindowControlProps) {
         align_y={0}
         {...layout}
       />
-      <Font source={kit.font} font_size={kit.unit(t.icon)} />
+      <Font source={kit.iconFont} font_size={kit.unit(t.icon)} />
       <Skin theme={kit.theme(theme)} />
       <Behavior
         semantic_label={label}

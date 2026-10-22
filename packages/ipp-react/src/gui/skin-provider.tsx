@@ -29,6 +29,8 @@ export interface SkinProviderProps {
    * inherit.
    */
   readonly font?: string | AssetReference;
+  /** Icon font, independent of proportional body text. Defaults to the inherited icon font or the text font. */
+  readonly iconFont?: string | AssetReference;
   /**
    * Body text size in the World's logical units. Kit lengths are drawn
    * `fontSize / tokens.em` times their design size. Omit it inside
@@ -61,6 +63,7 @@ export interface SkinProviderProps {
 export function SkinProvider({
   contract,
   font,
+  iconFont,
   fontSize,
   reducedMotion,
   appearance,
@@ -97,6 +100,7 @@ export function SkinProvider({
       world?.contract ??
       (outer?.container === container ? outer.contract : undefined),
     font: font ?? outer?.font,
+    iconFont: iconFont ?? outer?.iconFont ?? font ?? outer?.font,
     fontSize: fontSize ?? outer?.fontSize,
     reducedMotion: reducedMotion ?? outer?.reducedMotion,
     appearance:
@@ -125,6 +129,7 @@ export function SkinProvider({
       emptyParts,
       contract: resolved.contract!,
       font: resolved.font!,
+      iconFont: resolved.iconFont!,
       fontSize: resolved.fontSize!,
       reducedMotion: resolved.reducedMotion,
       appearance: resolved.appearance!,
@@ -134,6 +139,7 @@ export function SkinProvider({
       emptyParts,
       resolved.contract,
       resolved.font,
+      resolved.iconFont,
       resolved.fontSize,
       resolved.reducedMotion,
       resolved.appearance,

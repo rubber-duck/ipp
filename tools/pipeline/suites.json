@@ -2601,6 +2601,20 @@
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
+        "name": "proportional-fonts-webgl",
+        "command": ["@node", "--test", "--test-name-pattern", "worker WASM/WebGL", "target/gui-composites/proportional-fonts.test.js"],
+        "builds": ["browser:render", "font-assets", "gui-composites-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "proportional-fonts-gles",
+        "command": ["@node", "--test", "--test-name-pattern", "native WebSocket/GLES", "target/gui-composites/proportional-fonts.test.js"],
+        "builds": ["gles-host", "font-assets", "gui-composites-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
         "name": "kit-overlays-webgl",
         "command": ["@node", "--test", "--test-name-pattern", "worker WASM/WebGL", "target/gui-composites/kit-overlays.test.js"],
         "builds": ["browser:render", "font-assets", "gui-composites-fixtures"],

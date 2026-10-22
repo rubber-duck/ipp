@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -37,7 +38,7 @@ import { useGuiKit, type GuiKitScope } from "../kit.js";
 
 import type { OverlayOpen } from "./overlay.js";
 import { Separator } from "../separator.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 /** One command of a menu. */
 export interface MenuItem {
@@ -69,15 +70,11 @@ export interface MenuProps extends GuiKitLayoutProps {
 export const MENU_MIN_WIDTH = 160;
 
 /** The menu's geometry in the World's units. */
-function geometry(kit: GuiKitScope, items: readonly MenuItem[]) {
+function geometry(kit: GuiKitScope, items: readonly MenuItem[], label: number) {
   const t = kit.tokens;
   const gap = kit.unit(t.inset / 2);
   const icons = items.some((item) => item.icon !== undefined);
   const icon = icons ? kit.unit(t.icon) + gap : 0;
-  const label = Math.max(
-    0,
-    ...items.map((item) => lineWidth(item.label, kit.typeSize("body"))),
-  );
   // A separator is one idle line with a quarter inset either side.
   const separator = kit.unit(t.lineWidth + t.inset / 2);
   const separators = items.filter(
@@ -106,7 +103,19 @@ export function Menu(props: MenuProps) {
   } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
-  const g = geometry(kit, items);
+  const measured = useTextMeasurements(
+    items.map((item) => [item.label, kit.typeSize("body")] as const),
+  );
+  const g = geometry(
+    kit,
+    items,
+    Math.max(
+      0,
+      ...items.map((item) =>
+        measured.lineWidth(item.label, kit.typeSize("body")),
+      ),
+    ),
+  );
   // Separators span the rows' width between their half-inset margins.
   const separator = (layout?.width ?? g.width) - 4 * g.gap;
   const activate = (key: string) => {
@@ -117,34 +126,37 @@ export function Menu(props: MenuProps) {
     onSelect?.(key);
   };
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        width={g.width}
-        height={g.height}
-        padding_left={g.gap}
-        padding_right={g.gap}
-        padding_top={g.gap}
-        padding_bottom={g.gap}
-        {...layout}
-      />
-      <Group axis={GROUP_VERTICAL} />
-      <Children>
-        {items.map((item, index) => (
-          <MenuRow
-            key={item.key}
-            id={`${id}/${item.key}`}
-            item={item}
-            icons={g.icons}
-            divided={!!item.separator && index > 0}
-            separator={separator}
-            onPress={() => activate(item.key)}
-          />
-        ))}
-      </Children>
-    </Entity>
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          width={g.width}
+          height={g.height}
+          padding_left={g.gap}
+          padding_right={g.gap}
+          padding_top={g.gap}
+          padding_bottom={g.gap}
+          {...layout}
+        />
+        <Group axis={GROUP_VERTICAL} />
+        <Children>
+          {items.map((item, index) => (
+            <MenuRow
+              key={item.key}
+              id={`${id}/${item.key}`}
+              item={item}
+              icons={g.icons}
+              divided={!!item.separator && index > 0}
+              separator={separator}
+              onPress={() => activate(item.key)}
+            />
+          ))}
+        </Children>
+      </Entity>
+    </>
   );
 }
 
@@ -215,7 +227,7 @@ function MenuRow({
               {item.icon !== undefined && (
                 <Text
                   text={item.icon}
-                  source={kit.font}
+                  source={kit.iconFont}
                   font_size={kit.unit(t.icon)}
                 />
               )}

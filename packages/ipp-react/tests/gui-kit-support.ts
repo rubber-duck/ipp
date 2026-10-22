@@ -136,6 +136,9 @@ const SCROLL_VIEW_STATE = Object.fromEntries(
 export const DESCRIPTORS = Object.fromEntries(
   Object.entries({
     ...guiComponentContract,
+    CanvasBounds: {
+      fields: { x: "number", y: "number", width: "number", height: "number" },
+    },
     PresentationGate: componentContract.PresentationGate,
     PlotFrame2d: componentContract.PlotFrame2d,
     PlotFrame3d: componentContract.PlotFrame3d,
@@ -693,7 +696,26 @@ export class KitWorld
         const [component, descriptor] = Object.entries(DESCRIPTORS).find(
           ([, descriptor]) => descriptor.id === target.component,
         )!;
-        const fields = this.fields(symbol, component);
+        // These recording tests exercise declaration structure, not text layout.
+        // Supply fixed fixture replies for runtime-owned bounds; actual Noto
+        // advances, kerning, font replacement and pixels run in gui-composites.
+        const text = this.entity(symbol).components.get("CanvasText");
+        const layout = this.entity(symbol).components.get("GuiLayout");
+        const size = Number(text?.get("font_size") ?? 16);
+        const fields =
+          component === "CanvasBounds"
+            ? new Map<string, unknown>([
+                ["x", 0],
+                ["y", 0],
+                [
+                  "width",
+                  text
+                    ? [...String(text.get("text") ?? "")].length * 0.54 * size
+                    : (layout?.get("width") ?? 0),
+                ],
+                ["height", size * 1.2],
+              ])
+            : this.fields(symbol, component);
         listener({
           kind: "value",
           world: this.worldReference,

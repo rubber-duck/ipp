@@ -13,7 +13,6 @@ import {
   useLayoutFields,
   type GuiKitLayoutProps,
 } from "./layout.js";
-import { textWidth } from "./text.js";
 
 /** A complete entity-owning button; native Button remains a component declaration. */
 export interface ButtonProps
@@ -87,7 +86,9 @@ export function Button({
       clip,
     },
     {
-      width: textWidth(text, kit.fontSize) + kit.unit(2 * kit.tokens.inset),
+      fit_width: true,
+      padding_left: kit.unit(kit.tokens.inset),
+      padding_right: kit.unit(kit.tokens.inset),
       height: kit.unit(kit.tokens.controlHeight),
     },
   );

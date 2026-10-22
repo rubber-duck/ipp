@@ -69,6 +69,7 @@ export interface CompositeSetup {
   readonly host: HostClientBase<Client>;
   readonly canvas: HTMLCanvasElement;
   readonly fontBytes: ArrayBuffer;
+  readonly iconFontBytes?: ArrayBuffer;
   /** The Host's generated contract module, for the GUI kit. */
   readonly contract: GuiKitContract;
 }
@@ -80,6 +81,7 @@ export interface PanelContext {
   readonly client: PanelClient;
   /** The shared GUI font, as an asset source of the panel's World. */
   readonly font: string;
+  readonly iconFont: string;
   readonly contract: GuiKitContract;
   /** Errors a React root reports; any fails the part's next wait. */
   readonly report: (error: Error) => void;
@@ -412,11 +414,20 @@ export async function openCompositePage(
     const font = (
       await (client as unknown as AssetWorldClient).createAsset(17, fontBytes)
     ).source;
+    const iconFont = setup.iconFontBytes
+      ? (
+          await (client as unknown as AssetWorldClient).createAsset(
+            17,
+            setup.iconFontBytes,
+          )
+        ).source
+      : font;
     const build = await spec.build({
       host,
       world,
       client,
       font,
+      iconFont,
       contract,
       report,
     });

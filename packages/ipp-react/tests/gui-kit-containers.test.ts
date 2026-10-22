@@ -405,9 +405,9 @@ test("Panel parts: a header strip with window controls, a labelled division and 
   assert.equal(footer.get("padding_right"), 32);
   assert.equal(world.skin("monitor/clear"), "secondarySmall");
   assert.equal(world.fields("monitor/clear", "GuiLayout").get("height"), 64);
-  near(
-    world.fields("monitor/clear", "GuiLayout").get("width"),
-    5 * 0.54 * 26 + 64,
+  assert.equal(
+    world.fields("monitor/clear", "GuiLayout").get("fit_width"),
+    true,
   );
 
   // Presses reach the application's callbacks.
@@ -532,7 +532,7 @@ test("DataGrid lays out header, rows and lines; rows are Buttons the application
     13,
   );
   assert.equal(
-    world.fields("grid/header/signal/text", "GuiLayout").get("align_x"),
+    world.fields("grid/header/signal/label", "GuiLayout").get("align_x"),
     -1,
   );
   assert.equal(
@@ -541,7 +541,7 @@ test("DataGrid lays out header, rows and lines; rows are Buttons the application
   );
   near(
     world.fields("grid/header/signal/sort", "GuiLayout").get("margin_left"),
-    16 + 6 * 0.54 * 13 + 4,
+    4,
   );
   assert.equal(world.entities.has("grid/header/node/sort"), false);
 
@@ -577,10 +577,10 @@ test("DataGrid lays out header, rows and lines; rows are Buttons the application
     world.fields("grid/row/bravo/signal", "GuiLayout").get("width"),
     96,
   );
-  const end = world.fields("grid/row/bravo/signal/text", "GuiLayout");
+  const end = world.fields("grid/row/bravo/signal/label", "GuiLayout");
   assert.equal(end.get("align_x"), 1);
   assert.equal(end.get("margin_right"), 16);
-  const start = world.fields("grid/row/bravo/node/text", "GuiLayout");
+  const start = world.fields("grid/row/bravo/node/label", "GuiLayout");
   assert.equal(start.get("align_x"), -1);
   assert.equal(start.get("margin_left"), 16);
   assert.deepEqual(world.tone("grid/row/bravo/node/text"), TOKENS.text);

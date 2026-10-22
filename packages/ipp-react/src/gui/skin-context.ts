@@ -7,6 +7,7 @@ export interface GuiSkinContextValue {
   readonly emptyParts: Uint8Array<ArrayBuffer>;
   readonly contract: GuiKitContract;
   readonly font: string | AssetReference;
+  readonly iconFont: string | AssetReference;
   readonly fontSize: number;
   /** The setting given to this kit or the nearest enclosing one. */
   readonly reducedMotion: boolean | undefined;

@@ -156,6 +156,8 @@ export interface CompositePartOptions {
    * given a larger budget (see README.md).
    */
   readonly budget: number;
+  readonly font?: string;
+  readonly iconFont?: string;
 }
 
 /**
@@ -207,7 +209,7 @@ export function compositeTests<
             try {
               return await environment.execute(part, { host }, async () => {
                 await page.evaluate(
-                  async ({ urls, endpoint, part, font }) => {
+                  async ({ urls, endpoint, part, font, iconFont }) => {
                     const contract = await import(urls.generated);
                     const scenario = await import(
                       `${urls.origin}/target/gui-composites/${part}.js`
@@ -242,9 +244,22 @@ export function compositeTests<
                         await fetch(`${urls.origin}/${font}`)
                       ).arrayBuffer(),
                       contract,
+                      ...(iconFont
+                        ? {
+                            iconFontBytes: await (
+                              await fetch(`${urls.origin}/${iconFont}`)
+                            ).arrayBuffer(),
+                          }
+                        : {}),
                     });
                   },
-                  { urls: environment.urls, endpoint, part, font: FONT },
+                  {
+                    urls: environment.urls,
+                    endpoint,
+                    part,
+                    font: options.font ?? FONT,
+                    iconFont: options.iconFont,
+                  },
                 );
                 ready = performance.now();
                 const bounds = await page.locator("#composite").boundingBox();

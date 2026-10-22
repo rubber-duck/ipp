@@ -180,6 +180,7 @@ export interface GuiKitScope {
   readonly tokens: GuiKitTokens;
   readonly contract: GuiKitContract;
   readonly font: string | AssetReference;
+  readonly iconFont: string | AssetReference;
   /** Body text size in the World's units. */
   readonly fontSize: number;
   /** Resolved skin/client spacing roles in World logical units. */
@@ -225,6 +226,7 @@ export function useGuiKit(): GuiKitScope {
       tokens,
       contract: kit.contract,
       font: kit.font,
+      iconFont: kit.iconFont,
       fontSize: kit.fontSize,
       spacing: guiKitSpacing(tokens, scale),
       reducedMotion: kit.reducedMotion ?? false,

@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -119,12 +120,23 @@ export function LabelledSlider(inputProps: LabelledSliderProps) {
     ...(origin === undefined ? {} : { origin }),
     ...scale,
   };
+  const scaleText = marks
+    ? scaleLabels(min, scaleValues(min, max, marks), marks)
+    : [];
+  const measured = useTextMeasurements(
+    scaleText.map((label) => [label, kit.typeSize("small")] as const),
+  );
   const scaleExtent =
     marks &&
     scaleGeometry(
       kit,
       vertical,
-      scaleLabels(min, scaleValues(min, max, marks), marks),
+      Math.max(
+        0,
+        ...scaleText.map((label) =>
+          measured.lineWidth(label, kit.typeSize("small")),
+        ),
+      ),
     ).extent;
 
   const slider = (layoutFields: GuiKitLayout) => (
@@ -153,125 +165,135 @@ export function LabelledSlider(inputProps: LabelledSliderProps) {
     const box = Math.max(g.depth, scaleExtent ?? 0);
     const rows = (label === undefined ? 0 : 1) + (bounds ? 2 : 0) + 1;
     return (
-      <Entity id={id}>
-        <PresentationGate open />
-        <Style layer={layer} />
-        <KitLayout
-          kind={LAYOUT_COLUMN}
-          height={rows * g.row + rail}
-          {...layout}
-        />
-        <Font source={kit.font} font_size={kit.fontSize} />
-        <Children>
-          {label !== undefined && (
-            <CentredLine id={`${id}/label`} text={label} tone={tones.label} />
-          )}
-          {bounds && (
-            <CentredLine
-              id={`${id}/max`}
-              text={text(max)}
-              tone={tones.secondary}
-              size="small"
-            />
-          )}
-          <Entity id={`${id}/track`}>
-            <PresentationGate open />
-            <Layout kind={LAYOUT_STACK} height={rail} />
-            <Children>
-              {/* The rail centred: the scale's reach past it takes no room. */}
-              <Entity id={`${id}/rail`}>
-                <PresentationGate open />
-                <Layout
-                  kind={LAYOUT_STACK}
-                  width={box}
-                  height={rail}
-                  align_x={0}
-                  margin_right={g.depth - box}
-                />
-                <Children>
-                  {scaleOf}
-                  {slider({ width: g.depth, height: rail })}
-                </Children>
-              </Entity>
-            </Children>
-          </Entity>
-          {bounds && (
-            <CentredLine
-              id={`${id}/min`}
-              text={text(min)}
-              tone={tones.secondary}
-              size="small"
-            />
-          )}
-          <CentredLine
-            id={`${id}/readout`}
-            text={readout}
-            tone={tones.readout}
+      <>
+        {measured.nodes}
+        <Entity id={id}>
+          <PresentationGate open />
+          <Style layer={layer} />
+          <KitLayout
+            kind={LAYOUT_COLUMN}
+            height={rows * g.row + rail}
+            {...layout}
           />
-        </Children>
-      </Entity>
+          <Font source={kit.font} font_size={kit.fontSize} />
+          <Children>
+            {label !== undefined && (
+              <CentredLine id={`${id}/label`} text={label} tone={tones.label} />
+            )}
+            {bounds && (
+              <CentredLine
+                id={`${id}/max`}
+                text={text(max)}
+                tone={tones.secondary}
+                size="small"
+              />
+            )}
+            <Entity id={`${id}/track`}>
+              <PresentationGate open />
+              <Layout kind={LAYOUT_STACK} height={rail} />
+              <Children>
+                {/* The rail centred: the scale's reach past it takes no room. */}
+                <Entity id={`${id}/rail`}>
+                  <PresentationGate open />
+                  <Layout
+                    kind={LAYOUT_STACK}
+                    width={box}
+                    height={rail}
+                    align_x={0}
+                    margin_right={g.depth - box}
+                  />
+                  <Children>
+                    {scaleOf}
+                    {slider({ width: g.depth, height: rail })}
+                  </Children>
+                </Entity>
+              </Children>
+            </Entity>
+            {bounds && (
+              <CentredLine
+                id={`${id}/min`}
+                text={text(min)}
+                tone={tones.secondary}
+                size="small"
+              />
+            )}
+            <CentredLine
+              id={`${id}/readout`}
+              text={readout}
+              tone={tones.readout}
+            />
+          </Children>
+        </Entity>
+      </>
     );
   }
 
   const box = Math.max(g.depth, scaleExtent ?? 0);
   const gap = layout?.gap ?? kit.spacing.label;
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        height={g.row + gap + box}
-        gap={gap}
-        {...layout}
-      />
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        <Row gap={0} id={`${id}/header`} height={kit.unit(t.denseRow)}>
-          {label === undefined ? (
-            <Entity id={`${id}/space`}>
-              <PresentationGate open />
-              <Layout kind={LAYOUT_LEAF} flex={1} />
-            </Entity>
-          ) : (
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          height={g.row + gap + box}
+          gap={gap}
+          {...layout}
+        />
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          <Row gap={0} id={`${id}/header`} height={kit.unit(t.denseRow)}>
+            {label === undefined ? (
+              <Entity id={`${id}/space`}>
+                <PresentationGate open />
+                <Layout kind={LAYOUT_LEAF} flex={1} />
+              </Entity>
+            ) : (
+              <TextLine
+                id={`${id}/label`}
+                text={label}
+                tone={tones.label}
+                layout={{ flex: 1 }}
+              />
+            )}
             <TextLine
-              id={`${id}/label`}
-              text={label}
-              tone={tones.label}
-              layout={{ flex: 1 }}
+              id={`${id}/readout`}
+              text={readout}
+              tone={tones.readout}
             />
-          )}
-          <TextLine id={`${id}/readout`} text={readout} tone={tones.readout} />
-        </Row>
-        <Entity id={`${id}/rail-row`}>
-          <PresentationGate open />
-          <Layout kind={LAYOUT_ROW} height={box} />
-          <Children>
-            {bounds && (
-              <EndCaption
-                id={`${id}/min`}
-                text={text(min)}
-                layout={{ margin_right: g.gap }}
-              />
-            )}
-            <Entity id={`${id}/rail`}>
-              <PresentationGate open />
-              <Layout kind={LAYOUT_STACK} height={box} flex={1} />
-              <Children>
-                {scaleOf}
-                {slider({ height: g.depth })}
-              </Children>
-            </Entity>
-            {bounds && (
-              <EndCaption
-                id={`${id}/max`}
-                text={text(max)}
-                layout={{ margin_left: g.gap }}
-              />
-            )}
-          </Children>
-        </Entity>
-      </Children>
-    </Entity>
+          </Row>
+          <Entity id={`${id}/rail-row`}>
+            <PresentationGate open />
+            <Layout kind={LAYOUT_ROW} height={box} />
+            <Children>
+              {bounds && (
+                <EndCaption
+                  id={`${id}/min`}
+                  text={text(min)}
+                  layout={{ margin_right: g.gap }}
+                />
+              )}
+              <Entity id={`${id}/rail`}>
+                <PresentationGate open />
+                <Layout kind={LAYOUT_STACK} height={box} flex={1} />
+                <Children>
+                  {scaleOf}
+                  {slider({ height: g.depth })}
+                </Children>
+              </Entity>
+              {bounds && (
+                <EndCaption
+                  id={`${id}/max`}
+                  text={text(max)}
+                  layout={{ margin_left: g.gap }}
+                />
+              )}
+            </Children>
+          </Entity>
+        </Children>
+      </Entity>
+    </>
   );
 }

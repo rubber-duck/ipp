@@ -17,21 +17,12 @@ import { Skin } from "../gui/theme.js";
 import { GUI_KIT_ICONS, type GuiKitIcon } from "./icons.js";
 import { useGuiKit, type GuiKitTone, type GuiKitTypeSize } from "./kit.js";
 
-/**
- * The shared font's advance in em: every glyph of the monospaced Shure Tech
- * Mono Nerd Font, icons included. Layout boxes size containers only from
- * explicit lengths, so a kit part that hugs its text measures it with this.
- */
-const FONT_ADVANCE = 0.54;
-
-/** The width of one line of `text` at font size `size`, in the same units. */
-export function textWidth(text: string, size: number): number {
-  return [...text].length * FONT_ADVANCE * size;
-}
+/** Design calibration of the kit's Nerd Font icon artwork. */
+const ICON_ADVANCE = 0.54;
 
 /** The font size whose glyph ink, which fills the advance, is `width` wide. */
 export function glyphSizeForWidth(width: number): number {
-  return width / FONT_ADVANCE;
+  return width / ICON_ADVANCE;
 }
 
 export interface TextLineProps extends GuiKitLayoutProps {
@@ -109,20 +100,11 @@ export function Icon(props: IconProps) {
       />
       <Text
         text={GUI_KIT_ICONS[icon]}
-        source={kit.font}
+        source={kit.iconFont}
         font_size={kit.unit(size ?? kit.tokens.icon)}
       />
     </Entity>
   );
-}
-
-/**
- * The width a container gives one line of `text` at font size `size` when
- * the line ends at the container's own edge: the line's width and a hundredth
- * of the size, so that rounding in layout never wraps its last glyph.
- */
-export function lineWidth(text: string, size: number): number {
-  return textWidth(text, size) + size / 100;
 }
 
 /**

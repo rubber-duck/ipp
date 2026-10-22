@@ -1353,11 +1353,11 @@ test("MultiSelect: the trigger summarises the selection; options toggle with a c
   // Labels while they fit, measured with the shared font, else the count.
   const advance = 0.54 * 16;
   assert.equal(
-    selectionSummary(["Render", "Physics"], 15 * advance, 16),
+    selectionSummary(["Render", "Physics"], 15 * advance, 15 * advance),
     "Render, Physics",
   );
   assert.equal(
-    selectionSummary(["Render", "Physics"], 15 * advance - 1, 16),
+    selectionSummary(["Render", "Physics"], 15 * advance - 1, 15 * advance),
     "2 selected",
   );
 

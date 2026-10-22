@@ -1,4 +1,4 @@
-"""Prepare shared font sources and convert the complete application font."""
+"""Prepare shared font sources and convert the complete application fonts."""
 
 import json
 from pathlib import Path
@@ -16,6 +16,7 @@ def main() -> None:
     fonts = {name: font_source(name) for name in sources()}
     source = fonts["shure-tech-mono"]
     convert_font(source, output / "shure-tech-mono.ippf")
+    convert_font(fonts["noto-sans"], output / "noto-sans.ippf")
     with TTFont(source) as font:
         cmap = font.getBestCmap()
         metrics = {

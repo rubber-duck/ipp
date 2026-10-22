@@ -39,7 +39,8 @@ test("Switch defaults keep a wide low track at body scale and explicit sizes rem
     { fontSize: 20 },
   );
   try {
-    assert.equal(world.fields("track", "GuiLayout").get("width"), 50);
+    assert.equal(world.fields("track", "GuiLayout").get("fit_width"), true);
+    assert.equal(world.fields("track", "GuiLayout").get("min_width"), 50);
     assert.equal(world.fields("track", "GuiLayout").get("height"), 27.5);
     assert.equal(world.fields("track", "GuiCheckbox").get("label"), "");
     assert.equal(

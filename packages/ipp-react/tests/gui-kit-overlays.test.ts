@@ -651,19 +651,27 @@ test("Popover: a trigger with a caret opens a titled light surface of the applic
     );
   const { world, root } = await render(popover());
   // The default trigger matches regular buttons in body type and control height.
-  const label = `Options ${GUI_KIT_ICONS.sortDescending}`;
-  assert.equal(world.fields("options", "GuiButton").get("label"), label);
+  assert.equal(world.fields("options", "GuiButton").get("label"), "");
+  assert.equal(
+    world.fields("options/label", "CanvasText").get("text"),
+    "Options",
+  );
+  assert.equal(
+    world.fields("options/caret", "CanvasText").get("text"),
+    GUI_KIT_ICONS.sortDescending,
+  );
   assert.equal(world.fields("options", "GuiButton").get("selected"), false);
   assert.equal(world.skin("options"), "secondary");
-  near(
-    world.fields("options", "GuiLayout").get("width"),
-    [...label].length * 0.54 * 16 + 32,
-  );
+  assert.equal(world.fields("options", "GuiLayout").get("fit_width"), true);
   assert.equal(world.fields("options", "GuiLayout").get("height"), 40);
   assert.equal(world.fields("options", "GuiFont").get("font_size"), 16);
   // The surface below it, a quarter inset away, its header strip with the
   // title and a close button that takes no focus, then the content.
-  assert.deepEqual(world.children("options"), ["options/popover"]);
+  assert.deepEqual(world.children("options").slice(1), [
+    "options/label",
+    "options/caret",
+    "options/popover",
+  ]);
   const overlay = world.fields("options/popover", "GuiOverlay");
   assert.deepEqual(
     [overlay.get("side"), overlay.get("align"), overlay.get("mode")],
@@ -735,7 +743,7 @@ test("Tooltip: a closed hint of its control on the small surface", async () => {
   assert.equal(world.skin("help/tip"), "floatingSmall");
   assert.equal(world.fields("help/tip", "CanvasStyle").get("y"), -4);
   const layout = world.fields("help/tip", "GuiLayout");
-  near(layout.get("width"), 20 * 0.54 * 13 + 0.13 + 16);
+  assert.equal(layout.get("fit_width"), true);
   assert.equal(layout.get("padding_top"), 4);
   assert.equal(layout.get("padding_left"), 8);
   assert.deepEqual(world.children("help/tip"), [

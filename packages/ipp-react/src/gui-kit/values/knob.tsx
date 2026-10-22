@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import { KitLayout, useGuiKitLayout, LAYOUT_COLUMN, Row } from "../layout.js";
 
 import type { ValueChangeHandler } from "./value-synchronization.js";
@@ -47,7 +48,7 @@ import {
 } from "./slider-rail.js";
 import { defaultFormat, useScalarValue, withUnits } from "./scalar-value.js";
 import { useOwnRow } from "../row-motion.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 export interface KnobProps extends SliderCompositeProps {
   /** The value, controlled; pair it with `onChange`. */
@@ -111,20 +112,21 @@ export function Knob(inputProps: KnobProps) {
   const tones = textTones(disabled);
   const text = (number: number) => withUnits(format(number), units);
   const small = kit.typeSize("small");
-  const body = kit.typeSize("body");
 
+  const measured = useTextMeasurements(
+    [min, max].map((number) => [text(number), small] as const),
+  );
   const side = kit.unit(size ?? t.dial);
   const housingScale = t.dialHousingScale ?? 1;
   const housingInset = (side * (housingScale - 1)) / 2;
   const housing = useOwnRow({ outset: [housingInset, housingInset] });
-  const caption = label === undefined ? 0 : lineWidth(label, body);
   // An end caption centres a small size below where the tick ring's outer
   // edge ends, at half past seven and half past four, but keeps half an
   // inset inside the housing, clear of its line and cut.
   const reach = (side / 2 - TICK_INSET_EMS * kit.fontSize) / Math.SQRT2;
   const end = (name: "min" | "max", number: number) => {
     const words = text(number);
-    const width = lineWidth(words, small);
+    const width = measured.lineWidth(words, small);
     const room = side / 2 - gap - width / 2;
     const x = side / 2 + Math.min(reach, room) * (name === "min" ? -1 : 1);
     return (
@@ -149,78 +151,81 @@ export function Knob(inputProps: KnobProps) {
   };
   const readout = text(state.current[0]!);
   const readoutType = readoutInside ? "small" : "body";
-  const readoutSize = kit.typeSize(readoutType);
 
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_COLUMN}
-        width={Math.max(side, caption)}
-        height={-1}
-        fit_height
-        gap={kit.spacing.label}
-        {...layout}
-      />
-      <Font source={kit.font} font_size={kit.fontSize} />
-      <Children>
-        {label !== undefined && (
-          <Row
-            gap={0}
-            id={`${id}/caption`}
-            height={kit.unit(t.denseRow)}
-            layout={{ width: caption, align_x: 0 }}
-          >
-            <TextLine id={`${id}/label`} text={label} tone={tones.label} />
-          </Row>
-        )}
-        <SliderControl
-          id={`${id}/dial`}
-          props={props}
-          value={state}
-          axis={2}
-          origin={origin}
-          {...(housingScale !== 1 ? { skinParts: housing } : {})}
-          layout={{
-            width: side,
-            height: side + (readoutInside ? 0 : row),
-            align_x: 0,
-          }}
-        >
-          {bounds && end("min", min)}
-          {bounds && end("max", max)}
-          <Row
-            gap={0}
-            id={`${id}/readout`}
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_COLUMN}
+          fit_width
+          min_width={side}
+          height={-1}
+          fit_height
+          gap={kit.spacing.label}
+          {...layout}
+        />
+        <Font source={kit.font} font_size={kit.fontSize} />
+        <Children>
+          {label !== undefined && (
+            <Row
+              gap={0}
+              id={`${id}/caption`}
+              height={kit.unit(t.denseRow)}
+              layout={{ fit_width: true, align_x: 0 }}
+            >
+              <TextLine id={`${id}/label`} text={label} tone={tones.label} />
+            </Row>
+          )}
+          <SliderControl
+            id={`${id}/dial`}
+            props={props}
+            value={state}
+            axis={2}
+            origin={origin}
+            {...(housingScale !== 1 ? { skinParts: housing } : {})}
             layout={{
-              width: lineWidth(readout, readoutSize),
-              height: row,
-              margin_top: readoutInside ? (side - row) / 2 : side,
+              width: side,
+              height: side + (readoutInside ? 0 : row),
               align_x: 0,
             }}
           >
-            <TextLine
-              id={`${id}/readout/text`}
-              text={readout}
-              size={readoutType}
-              tone={tones.readout}
-            />
-          </Row>
-        </SliderControl>
-        {children !== undefined && (
-          <Entity id={`${id}/slot`}>
-            <PresentationGate open />
-            <Layout
-              kind={LAYOUT_COLUMN}
-              height={-1}
-              fit_height
-              margin_top={0}
-            />
-            <Children>{children}</Children>
-          </Entity>
-        )}
-      </Children>
-    </Entity>
+            {bounds && end("min", min)}
+            {bounds && end("max", max)}
+            <Row
+              gap={0}
+              id={`${id}/readout`}
+              layout={{
+                fit_width: true,
+                height: row,
+                margin_top: readoutInside ? (side - row) / 2 : side,
+                align_x: 0,
+              }}
+            >
+              <TextLine
+                id={`${id}/readout/text`}
+                text={readout}
+                size={readoutType}
+                tone={tones.readout}
+              />
+            </Row>
+          </SliderControl>
+          {children !== undefined && (
+            <Entity id={`${id}/slot`}>
+              <PresentationGate open />
+              <Layout
+                kind={LAYOUT_COLUMN}
+                height={-1}
+                fit_height
+                margin_top={0}
+              />
+              <Children>{children}</Children>
+            </Entity>
+          )}
+        </Children>
+      </Entity>
+    </>
   );
 }

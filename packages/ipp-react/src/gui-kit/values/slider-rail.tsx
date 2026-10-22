@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   type GuiKitLayoutProps,
@@ -32,7 +33,7 @@ import { Skin } from "../../gui/theme.js";
 import { useGuiKit, type GuiKitScope, type GuiKitTone } from "../kit.js";
 
 import type { ScalarValue } from "./scalar-value.js";
-import { TextLine, lineWidth } from "../text.js";
+import { TextLine } from "../text.js";
 
 /**
  * The runtime's unsized slider depth across its rail, in ems: its thumb,
@@ -161,7 +162,8 @@ export function MarkText({
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { thumb, row } = railGeometry(kit);
-  const width = lineWidth(text, kit.typeSize(size));
+  const measured = useTextMeasurements([[text, kit.typeSize(size)]]);
+  const width = measured.lineWidth(text, kit.typeSize(size));
   // The row's extent along the rail and its start from the mark's start,
   // where the minimum lies at the start horizontally and the end vertically.
   const length = vertical ? row : width;
@@ -175,31 +177,36 @@ export function MarkText({
         : thumb / 2 - clear - length;
   const end = thumb - length - start;
   return (
-    <Row
-      gap={0}
-      id={id}
-      layout={
-        vertical
-          ? {
-              width,
-              height: row,
-              margin_left: offset,
-              margin_right: -width,
-              margin_top: start,
-              margin_bottom: end,
-            }
-          : {
-              width,
-              height: row,
-              margin_top: offset,
-              margin_bottom: -row,
-              margin_left: start,
-              margin_right: end,
-            }
-      }
-    >
-      <TextLine id={`${id}/text`} text={text} tone={tone} size={size} />
-    </Row>
+    <>
+      {measured.nodes}
+      <Row
+        gap={0}
+        id={id}
+        layout={
+          vertical
+            ? {
+                width,
+                height: row,
+                margin_left: offset,
+                margin_right: -width,
+                margin_top: start,
+                margin_bottom: end,
+              }
+            : {
+                width,
+                height: row,
+                margin_top: offset,
+                margin_bottom: -row,
+                margin_left: start,
+                margin_right: end,
+              }
+        }
+      >
+        {measured.ready && (
+          <TextLine id={`${id}/text`} text={text} tone={tone} size={size} />
+        )}
+      </Row>
+    </>
   );
 }
 
@@ -294,7 +301,7 @@ export function EndCaption({
       gap={0}
       id={id}
       layout={{
-        width: lineWidth(text, kit.typeSize("small")),
+        fit_width: true,
         height: depth,
         ...layout,
       }}
@@ -327,7 +334,7 @@ export function CentredLine({
       gap={0}
       id={id}
       height={kit.unit(kit.tokens.denseRow)}
-      layout={{ width: lineWidth(text, kit.typeSize(size)), align_x: 0 }}
+      layout={{ fit_width: true, align_x: 0 }}
     >
       <TextLine id={`${id}/text`} text={text} tone={tone} size={size} />
     </Row>

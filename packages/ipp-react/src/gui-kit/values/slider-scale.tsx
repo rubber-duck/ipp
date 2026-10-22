@@ -1,3 +1,4 @@
+import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -36,7 +37,6 @@ import {
   railGeometry,
 } from "./slider-rail.js";
 import { decimalsOf, formatValue, withUnits } from "./scalar-value.js";
-import { lineWidth } from "../text.js";
 
 /** What a scale marks, besides the range it spans. */
 export interface SliderScaleMarks {
@@ -104,17 +104,13 @@ export function scaleLabels(
 export function scaleGeometry(
   kit: GuiKitScope,
   vertical: boolean,
-  labels: readonly string[],
+  widest: number,
 ) {
   const { depth, thumb, bar, gap, row } = railGeometry(kit);
   const centre = depth / 2;
   const tick = centre + thumb / 2 + bar / 2;
   const end = tick + kit.unit(TICK_LENGTH);
   const text = vertical ? end + gap : end;
-  const widest = Math.max(
-    0,
-    ...labels.map((label) => lineWidth(label, kit.typeSize("small"))),
-  );
   return {
     tick,
     origin: centre + bar / 2,
@@ -139,64 +135,79 @@ export function SliderScale(props: SliderScaleProps) {
   const kit = useGuiKit();
   const values = scaleValues(min, max, marks);
   const labels = scaleLabels(min, values, marks);
-  const g = scaleGeometry(kit, vertical, labels);
+  const measured = useTextMeasurements(
+    labels.map((label) => [label, kit.typeSize("small")] as const),
+  );
+  const g = scaleGeometry(
+    kit,
+    vertical,
+    Math.max(
+      0,
+      ...labels.map((label) =>
+        measured.lineWidth(label, kit.typeSize("small")),
+      ),
+    ),
+  );
   const line = kit.unit(kit.tokens.lineWidth);
   return (
-    <Entity id={id}>
-      <PresentationGate open />
-      <Style layer={layer} />
-      <KitLayout
-        kind={LAYOUT_STACK}
-        {...(vertical
-          ? { width: g.extent, height: kit.unit(length) }
-          : { height: g.extent })}
-        {...layout}
-      />
-      <Children>
-        {values.map((value, index) => {
-          const mark = `${id}/mark/${index}`;
-          const origin =
-            marks.origin !== undefined &&
-            Math.fround(value) === Math.fround(marks.origin);
-          const start = origin ? g.origin : g.tick;
-          return (
-            <RailMark
-              key={mark}
-              id={mark}
-              fraction={fractionOf(value, min, max)}
-              vertical={vertical}
-            >
-              <Entity id={`${mark}/tick`}>
-                <PresentationGate open />
-                <Layout
-                  kind={LAYOUT_LEAF}
-                  {...(vertical
-                    ? {
-                        width: g.end - start,
-                        height: line,
-                        margin_left: start,
-                        align_y: 0,
-                      }
-                    : {
-                        width: line,
-                        height: g.end - start,
-                        margin_top: start,
-                        align_x: 0,
-                      })}
-                />
-                <Skin theme={kit.theme(origin ? "division" : "quiet")} />
-              </Entity>
-              <MarkText
-                id={`${mark}/label`}
-                text={labels[index]!}
-                offset={g.text}
+    <>
+      {measured.nodes}
+      <Entity id={id}>
+        <PresentationGate open />
+        <Style layer={layer} />
+        <KitLayout
+          kind={LAYOUT_STACK}
+          {...(vertical
+            ? { width: g.extent, height: kit.unit(length) }
+            : { height: g.extent })}
+          {...layout}
+        />
+        <Children>
+          {values.map((value, index) => {
+            const mark = `${id}/mark/${index}`;
+            const origin =
+              marks.origin !== undefined &&
+              Math.fround(value) === Math.fround(marks.origin);
+            const start = origin ? g.origin : g.tick;
+            return (
+              <RailMark
+                key={mark}
+                id={mark}
+                fraction={fractionOf(value, min, max)}
                 vertical={vertical}
-                tone="neutral"
-              />
-            </RailMark>
-          );
-        })}
-      </Children>
-    </Entity>
+              >
+                <Entity id={`${mark}/tick`}>
+                  <PresentationGate open />
+                  <Layout
+                    kind={LAYOUT_LEAF}
+                    {...(vertical
+                      ? {
+                          width: g.end - start,
+                          height: line,
+                          margin_left: start,
+                          align_y: 0,
+                        }
+                      : {
+                          width: line,
+                          height: g.end - start,
+                          margin_top: start,
+                          align_x: 0,
+                        })}
+                  />
+                  <Skin theme={kit.theme(origin ? "division" : "quiet")} />
+                </Entity>
+                <MarkText
+                  id={`${mark}/label`}
+                  text={labels[index]!}
+                  offset={g.text}
+                  vertical={vertical}
+                  tone="neutral"
+                />
+              </RailMark>
+            );
+          })}
+        </Children>
+      </Entity>
+    </>
   );
 }

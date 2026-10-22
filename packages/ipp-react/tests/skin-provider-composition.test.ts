@@ -103,3 +103,47 @@ test("explicit local and native ancestor fonts take precedence over provider fal
     await root.unmount();
   }
 });
+
+test("body font changes inherit the independent icon font", async () => {
+  const { Icon, TextLine } = await import("../src/gui-kit.js");
+  const world = new KitWorld();
+  const root = createRoot(world);
+  const inputs = contract();
+  const scene = (font: string) =>
+    h(
+      SkinProvider,
+      {
+        contract: inputs,
+        skin: skinFixture(inputs),
+        font: FONT,
+        iconFont: "memory:icons",
+        fontSize: 16,
+      },
+      h(
+        SkinProvider,
+        { font },
+        h(Icon, { id: "icon", icon: "search" }),
+        h(TextLine, { id: "text", text: "Search" }),
+      ),
+    );
+  try {
+    await root.render(scene("memory:noto"));
+    assert.equal(
+      world.fields("text", "CanvasText").get("source"),
+      "memory:noto",
+    );
+    assert.equal(
+      world.fields("icon", "CanvasText").get("source"),
+      "memory:icons",
+    );
+    const icon = world.entity("icon");
+    await root.render(scene("memory:another-body-font"));
+    assert.equal(world.entity("icon"), icon);
+    assert.equal(
+      world.fields("icon", "CanvasText").get("source"),
+      "memory:icons",
+    );
+  } finally {
+    await root.unmount();
+  }
+});

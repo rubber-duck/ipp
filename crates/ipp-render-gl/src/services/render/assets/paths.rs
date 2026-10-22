@@ -494,25 +494,27 @@ fn quantize(points: &[PointTexel]) -> (SurfaceCurveTexels, f32) {
         }
         bits.clamp(-120, 120)
     };
-    let fixed = |bits: i32, value: f32| {
+    let fixed = |factor: f64, value: f32| {
         if value.is_finite() {
-            (f64::from(value) * 2f64.powi(bits)).round()
+            (f64::from(value) * factor).round()
         } else {
             0.0
         }
     };
 
     if fraction_bits <= range_bits(I16_LIMIT) {
+        let factor = 2f64.powi(fraction_bits);
         let texels = points
             .iter()
-            .map(|point| point.lanes.map(|value| fixed(fraction_bits, value) as i16))
+            .map(|point| point.lanes.map(|value| fixed(factor, value) as i16))
             .collect();
         (SurfaceCurveTexels::Int16(texels), 2f32.powi(-fraction_bits))
     } else {
         let bits = fraction_bits.min(range_bits(I32_LIMIT));
+        let factor = 2f64.powi(bits);
         let texels = points
             .iter()
-            .map(|point| point.lanes.map(|value| fixed(bits, value) as i32))
+            .map(|point| point.lanes.map(|value| fixed(factor, value) as i32))
             .collect();
         (SurfaceCurveTexels::Int32(texels), 2f32.powi(-bits))
     }
@@ -717,25 +719,27 @@ async fn quantize_async(points: &[PointTexel]) -> (SurfaceCurveTexels, f32) {
         }
         bits.clamp(-120, 120)
     };
-    let fixed = |bits: i32, value: f32| {
+    let fixed = |factor: f64, value: f32| {
         if value.is_finite() {
-            (f64::from(value) * 2f64.powi(bits)).round()
+            (f64::from(value) * factor).round()
         } else {
             0.0
         }
     };
     if fraction_bits <= range_bits(I16_LIMIT) {
+        let factor = 2f64.powi(fraction_bits);
         let mut texels = Vec::with_capacity(points.len());
         for point in points {
-            texels.push(point.lanes.map(|value| fixed(fraction_bits, value) as i16));
+            texels.push(point.lanes.map(|value| fixed(factor, value) as i16));
             budget.advance(0).await;
         }
         (SurfaceCurveTexels::Int16(texels), 2f32.powi(-fraction_bits))
     } else {
         let bits = fraction_bits.min(range_bits(I32_LIMIT));
+        let factor = 2f64.powi(bits);
         let mut texels = Vec::with_capacity(points.len());
         for point in points {
-            texels.push(point.lanes.map(|value| fixed(bits, value) as i32));
+            texels.push(point.lanes.map(|value| fixed(factor, value) as i32));
             budget.advance(0).await;
         }
         (SurfaceCurveTexels::Int32(texels), 2f32.powi(-bits))

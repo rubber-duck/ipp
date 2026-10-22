@@ -284,7 +284,7 @@ export class NativeGallerySession {
     readonly id: string,
     private readonly module: string,
     private readonly assetRoot: string,
-    private readonly viewport: PresentationViewport,
+    private viewport: PresentationViewport,
     private options: GalleryOptions,
   ) {}
 
@@ -421,6 +421,21 @@ export class NativeGallerySession {
     operation: (view: import("@ipp/client").PresentationView) => Promise<T>,
   ) {
     return this.requireMounted().canvas.withPresentation(operation);
+  }
+
+  /** Resize the physical root and authored layout together, retaining the scene. */
+  resize(viewport: PresentationViewport) {
+    return this.ordered(async () => {
+      const mounted = this.requireMounted();
+      const binding = await this.context.host.setRootOutput(
+        mounted.scene.output,
+        viewport,
+      );
+      mounted.canvas.bind(binding);
+      this.viewport = viewport;
+      await mounted.scene.resize(viewport);
+      await mounted.canvas.flush();
+    });
   }
 
   capture() {

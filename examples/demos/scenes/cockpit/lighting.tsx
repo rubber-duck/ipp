@@ -11,11 +11,16 @@ import {
 } from "@ipp/react";
 import type { AnimationClipSource } from "@ipp/client";
 import type { CockpitOptions } from "./options.js";
-import { textureSource, type CockpitRuntime } from "./runtime.js";
+import type { CockpitRuntime } from "./runtime.js";
+import {
+  lightTextureParameters,
+  lightTextureProperties,
+  lightTextureSampling,
+} from "./light-textures.js";
 
 const GROUPS = ["cabin", "dashboard", "buttons", "dials"] as const;
 const PARAMETERS = {
-  base: "texture2D",
+  ...lightTextureParameters(3),
   illumination: "f32",
   cabinPhase: "f32",
   dashboardPhase: "f32",
@@ -28,8 +33,8 @@ const PARAMETERS = {
 } as const;
 
 function fragment(zones: CockpitRuntime["lighting"]["zones"]): string {
-  // UV regions isolate actual lamps from the silver casing. Emission is
-  // attenuated from the authored exposure, so it never blooms beyond the source.
+  // Regions assign the separate lamp image to independently animated groups.
+  // Base metalwork never participates in the animation or brightness control.
   const rectangles = zones
     .map(({ rect, group }) => {
       const value = rect.map((number) => number.toFixed(9));
@@ -43,40 +48,24 @@ function fragment(zones: CockpitRuntime["lighting"]["zones"]): string {
          float wave = 0.5 + 0.5 * cos(p_buttonsPhase - lamp * 0.9 - ${value[0]} * 6.2831853);
          gain = p_buttonsTint * (0.18 + 0.82 * wave * wave);`
             : `gain = p_${group}Tint * (0.78 + 0.22 * cos(p_${group}Phase + v_uv.x));`;
-      const footprint =
-        group === "buttons"
-          ? `float bank = min(v_uv.x, 1.0 - v_uv.x);
-           float footprint = 1.0 - smoothstep(0.014, 0.025, abs(v_uv.y - (0.529 - 0.407 * bank)));`
-          : group === "dials"
-            ? `float footprint = 1.0 - smoothstep(0.98, 1.08, length((local - 0.5) * 2.0));`
-            : `float footprint = 1.0;`;
       return `if (all(greaterThanEqual(v_uv,vec2(${value[0]},${value[1]}))) && all(lessThanEqual(v_uv,vec2(${value[2]},${value[3]})))) {
       vec2 local = (v_uv - vec2(${value[0]},${value[1]})) / vec2(${(rect[2] - rect[0]).toFixed(9)},${(rect[3] - rect[1]).toFixed(9)});
-      vec3 gain;
       ${motion}
-      ${footprint}
-      // Follow the curved button bank and elliptical dials so their rectangular
-      // registration regions cannot dim the silver casing underneath them.
-      float lampMask = footprint * smoothstep(0.18, 0.72, max(base.r, max(base.g, base.b)));
-      color = mix(base, base * (0.035 + 0.965 * gain * p_illumination), lampMask);
     }`;
     })
     .join("\n");
-  return `vec4 materialFragment() {
-    vec4 authored = ippSample(p_base, v_uv);
+  return (
+    lightTextureSampling(3) +
+    `vec4 materialFragment() {
+    vec4 authored = cockpitBase(v_uv);
     if (authored.a < 0.65) ippDiscard();
-    vec3 base = authored.rgb;
-    vec3 color = base;
+    vec3 gain = p_cabinTint * (0.78 + 0.22 * cos(p_cabinPhase));
     ${rectangles}
-    return vec4(color, 1.0);
-  }`;
+    float contribution = cockpitContribution(v_uv).a;
+    return vec4(authored.rgb / authored.a + gain * contribution * p_illumination, 1.0);
+  }`
+  );
 }
-
-const texture = (source: string) =>
-  ({
-    kind: "asset",
-    value: { kind: 2, source: textureSource(source) },
-  }) as const;
 
 export function CockpitLighting({
   runtime,
@@ -128,16 +117,16 @@ export function CockpitLighting({
           <CustomMaterial
             source={assetRef("cockpit-light-mask-shader")}
             alpha_mode={1}
-            base={texture(body.baseTexture)}
+            {...lightTextureProperties(body.tiles)}
             illumination={state.illumination}
             cabinPhase={0}
             dashboardPhase={0}
             buttonsPhase={0}
             dialsPhase={0}
-            cabinTint={[1, 1, 1]}
-            dashboardTint={[1, 1, 1]}
-            buttonsTint={[1, 1, 1]}
-            dialsTint={[1, 1, 1]}
+            cabinTint={[1, 0.86, 0.68]}
+            dashboardTint={[1, 0.92, 0.8]}
+            buttonsTint={[1, 0.86, 0.68]}
+            dialsTint={[1, 0.86, 0.68]}
             receives_light={false}
             receives_shadows={false}
             casts_shadows={false}

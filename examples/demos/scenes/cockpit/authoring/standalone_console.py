@@ -11,14 +11,18 @@ import bpy
 ROOT = Path(__file__).resolve().parent
 LEFT, TOP, WIDTH = 64, 587, 1544
 
-# Normalized source-image regions constrain shader light extraction to lamps;
-# bright metal and the blank instrument displays must never pulse.
+# Normalized source-image regions assign scalar contributions to light controls.
+# The lamps-off base artwork is independent of all light animation.
 ZONES = [
     ("centre-white", "dashboard", (0.43, 0.29, 0.57, 0.35)),
-    ("port-white", "dashboard", (0.18, 0.47, 0.205, 0.56)),
-    ("starboard-white", "dashboard", (0.795, 0.47, 0.82, 0.56)),
-    ("port-buttons", "buttons", (0.185, 0.35, 0.375, 0.47)),
-    ("starboard-buttons", "buttons", (0.625, 0.35, 0.815, 0.47)),
+    ("port-white", "dashboard", (0.175, 0.475, 0.20, 0.57)),
+    ("starboard-white", "dashboard", (0.80, 0.475, 0.825, 0.57)),
+    ("port-buttons", "buttons", (0.205, 0.35, 0.30, 0.47)),
+    ("port-inner-buttons", "buttons", (0.30, 0.33, 0.375, 0.44)),
+    ("starboard-buttons", "buttons", (0.70, 0.35, 0.795, 0.47)),
+    ("starboard-inner-buttons", "buttons", (0.625, 0.33, 0.70, 0.44)),
+    ("port-tip-button", "buttons", (0.175, 0.39, 0.20, 0.475)),
+    ("starboard-tip-button", "buttons", (0.80, 0.39, 0.825, 0.475)),
     ("left-dial", "dials", (0.31, 0.47, 0.375, 0.59)),
     ("centre-dial", "dials", (0.435, 0.405, 0.565, 0.615)),
     ("right-dial", "dials", (0.625, 0.47, 0.69, 0.59)),
@@ -29,10 +33,10 @@ ZONES = [
 
 def build(projected_mesh, material, anchor):
     image = bpy.data.images.load(
-        str(ROOT / "console-standalone.png"), check_existing=False
+        str(ROOT / "console-matched-base.png"), check_existing=False
     )
     image.pack()
-    image.filepath = "//console-standalone.png"
+    image.filepath = "//console-matched-base.png"
     height = WIDTH * image.size[1] / image.size[0]
 
     def reference(uv):
@@ -45,6 +49,7 @@ def build(projected_mesh, material, anchor):
     mat = material(image)
     obj = projected_mesh("cockpit-console-shell", polygon, depth, mat, step=32)
     obj["alpha_cutout"] = True
+    obj["lighting_key"] = "console"
     # projected_mesh initially writes the original reference-camera UVs.
     for uv in obj.data.uv_layers.active.data:
         x, y = uv.uv.x * 1672, (1 - uv.uv.y) * 941
@@ -52,6 +57,19 @@ def build(projected_mesh, material, anchor):
     nodes, links = mat.node_tree.nodes, mat.node_tree.links
     texture = next(node for node in nodes if node.type == "TEX_IMAGE")
     emission = next(node for node in nodes if node.type == "EMISSION")
+    lamps = bpy.data.images.load(
+        str(ROOT / "console-contribution.png"), check_existing=True
+    )
+    lamps.pack()
+    lamps.filepath = "//console-contribution.png"
+    lamp_texture = nodes.new("ShaderNodeTexImage")
+    lamp_texture.image = lamps
+    combined = nodes.new("ShaderNodeMixRGB")
+    combined.blend_type = "ADD"
+    combined.inputs[0].default_value = 1
+    links.new(texture.outputs["Color"], combined.inputs[1])
+    links.new(lamp_texture.outputs["Color"], combined.inputs[2])
+    links.new(combined.outputs[0], emission.inputs["Color"])
     transparent = nodes.new("ShaderNodeBsdfTransparent")
     mix = nodes.new("ShaderNodeMixShader")
     links.new(texture.outputs["Alpha"], mix.inputs[0])

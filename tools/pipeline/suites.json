@@ -44,6 +44,7 @@
       "crates/ipp-core/src/math.rs",
       "crates/ipp-core/src/math_tests.rs",
       "crates/ipp-core/tests/composed_queries.rs",
+      "crates/ipp-core/tests/camera_navigation.rs",
       "crates/ipp-host-session/src/session/view_queries_tests.rs",
       "crates/ipp-host-session/src/session/view_queries.rs",
       "crates/ipp-host-session/src/services/connection/command_batches.rs",
@@ -67,7 +68,7 @@
       },
       {
         "name": "navigation",
-        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--lib", "--locked", "--", "camera", "view_queries"],
+        "command": ["cargo", "test", "-p", "ipp-host-session", "-p", "ipp-protocol", "--lib", "--locked", "--", "camera", "view_queries", "manifest_tests"],
         "builds": [], "requirements": ["rust"]
       },
       {
@@ -77,12 +78,12 @@
       },
       {
         "name": "core",
-        "command": ["cargo", "test", "-p", "ipp-core", "--test", "composed_queries", "--test", "view_queries", "--test", "camera_publication", "--locked"],
+        "command": ["cargo", "test", "-p", "ipp-core", "--test", "composed_queries", "--test", "view_queries", "--test", "camera_publication", "--test", "camera_navigation", "--locked"],
         "builds": [], "requirements": ["rust"]
       },
       {
         "name": "lint",
-        "command": ["cargo", "clippy", "-p", "ipp-core", "--lib", "--test", "composed_queries", "--locked", "--", "-D", "warnings"],
+        "command": ["cargo", "clippy", "-p", "ipp-core", "--lib", "--test", "composed_queries", "--test", "camera_navigation", "--locked", "--", "-D", "warnings"],
         "builds": [], "requirements": ["rust"]
       },
       {
@@ -136,6 +137,12 @@
       {
         "name": "web-content",
         "command": ["cargo", "test", "-p", "ipp-core", "--lib", "--locked", "--", "web_content"],
+        "builds": [],
+        "requirements": ["rust"]
+      },
+      {
+        "name": "canvas-layers",
+        "command": ["cargo", "test", "-p", "ipp-render-gl", "--test", "canvas_layers", "--locked"],
         "builds": [],
         "requirements": ["rust"]
       },
@@ -4375,6 +4382,7 @@
       "tests/gallery/scenarios/surface-quality.ts",
       "tests/gallery/platformer.browser.test.ts",
       "tests/gallery/cockpit-lights.browser.test.ts",
+      "tests/gallery/cockpit-camera.browser.test.ts",
       "tests/gallery/scenarios/cockpit-lights.ts",
       "tests/gallery/scenarios/platformer-startup.ts",
       "tests/gallery/scenarios/platformer-controls.ts",
@@ -4397,6 +4405,7 @@
       "dist/tests/gallery/surface-quality.browser.test.js",
       "dist/tests/gallery/platformer.browser.test.js",
       "dist/tests/gallery/cockpit-lights.browser.test.js",
+      "dist/tests/gallery/cockpit-camera.browser.test.js",
       "dist/tests/gallery/render-scale.browser.test.js",
       "dist/tests/gallery/chart-programs.browser.test.js"
     ]
@@ -4408,13 +4417,41 @@
       "tests/gallery/cockpit-oracle.ts",
       "tests/gallery/cockpit.native.test.ts",
       "tests/gallery/scenarios/cockpit.ts",
+      "tests/gallery/scenarios/cockpit-camera.ts",
+      "tests/gallery/cockpit-camera.browser.test.ts",
       "tests/gallery/scenarios/cockpit-lights.ts",
       "tests/gallery/drivers/native-cockpit.ts",
       "tests/gallery/scenarios/cockpit-wheel.ts",
       "tests/gallery/scenarios/cockpit-quality.ts",
-      "tests/gallery/scenarios/cockpit-spatial.ts"
+      "tests/gallery/scenarios/cockpit-spatial.ts",
+      "tests/gallery/scenarios/cockpit-framing.ts",
+      "tests/gallery/scenarios/cockpit-light-textures.ts",
+      "tests/gallery/drivers/native-cockpit-framing.ts"
     ],
     "commands": [
+      {
+        "name": "camera",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit camera ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
       {
         "name": "spatial",
         "command": [
@@ -4422,6 +4459,29 @@
           "--test",
           "--test-name-pattern",
           "cockpit spatial ",
+          "dist/tests/gallery/cockpit.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "shared-host",
+          "font-assets",
+          "demos-cockpit-native-assets",
+          "demos-drawings"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "framing",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "cockpit framing ",
           "dist/tests/gallery/cockpit.native.test.js"
         ],
         "builds": [

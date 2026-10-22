@@ -157,6 +157,7 @@ unsafe extern "C" {
         bands: *const u8,
         band_count: usize,
         band_bits: u32,
+        reuse: u32,
     ) -> u32;
 
     pub(super) fn draw_surface_path(
@@ -204,6 +205,9 @@ unsafe extern "C" {
         color: *const f32,
     ) -> u32;
 
+    pub(super) fn set_surface_owner(owner: u32);
+    pub(super) fn set_surface_cutout(owner: u32);
+    pub(super) fn set_surface_cache_ownership(target: u32, enabled: u32) -> u32;
     pub(super) fn surface_cache_limit() -> u32;
 
     pub(super) fn create_surface_cache_target(width: u32, height: u32) -> u32;
@@ -213,7 +217,7 @@ unsafe extern "C" {
     pub(super) fn set_surface_cache_target_active_size(target: u32, width: u32, height: u32)
     -> u32;
 
-    pub(super) fn begin_surface_cache_target(target: u32) -> u32;
+    pub(super) fn begin_surface_cache_target(target: u32, damage: *const u32) -> u32;
 
     pub(super) fn begin_camera_target(target: u32, clear: *const f32) -> u32;
 
@@ -240,8 +244,8 @@ unsafe extern "C" {
         clip: *const f32,
         opacity: f32,
         flip_image: u32,
-        first_index: u32,
-        index_count: u32,
+        ranges: *const u32,
+        range_count: u32,
     ) -> u32;
 
     pub(super) fn create_gui_batch(byte_length: u32, layout_ptr: *const u32) -> u32;

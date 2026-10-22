@@ -167,6 +167,25 @@ export async function exerciseCockpitQuality(
       }
       await driver.capture(`caching-${surface}-${caching}`);
     }
+    await driver.press(0, "cockpit-exploded");
+    await driver.advance(0.2);
+    const exploded = await driver.state();
+    assert.equal(exploded.options.exploded, true);
+    assert.deepEqual(exploded.panelWorlds, panelWorlds);
+    assert.ok(
+      Number(
+        cockpitFields(
+          exploded.scene,
+          "cockpit-screen-0",
+          exploded.componentIds[
+            surface === "flat" ? "FlatSurface" : "CylinderSurface"
+          ]!,
+        ).layer_spacing,
+      ) > 0,
+    );
+    await driver.capture(`exploded-${surface}`);
+    await driver.press(0, "cockpit-exploded");
+    assert.equal((await driver.state()).options.exploded, false);
     await driver.press(0, "cockpit-surface-refresh/slider", 0.25);
     const refresh = Number((await driver.state()).options.surfaceRefreshHz);
     assert.ok(refresh >= 6 && refresh <= 10, `slider selected ${refresh} Hz`);

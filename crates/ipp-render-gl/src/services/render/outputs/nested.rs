@@ -189,7 +189,7 @@ impl<D: RenderDevice> RenderService<D> {
                         ) else {
                             continue;
                         };
-                        let size = if surface.geometry.exact_affine(0.0).is_none() {
+                        let size = if surface.image_presentation() {
                             self.projected_raster_size(host, surface, projected_mvp, job.viewport)?
                         } else {
                             size
@@ -261,7 +261,7 @@ impl<D: RenderDevice> RenderService<D> {
                             });
                             cache = surface
                                 .cache_policy
-                                .filter(|_| surface.geometry.exact_affine(0.0).is_some())
+                                .filter(|_| !surface.image_presentation())
                                 .map(|policy| CanvasCacheRequest {
                                     owner: surface.entity.world,
                                     anchor: surface.entity.entity,
@@ -284,11 +284,7 @@ impl<D: RenderDevice> RenderService<D> {
                             projection_extent: surface.extent.map(f64::from),
                             canvas,
                             cache,
-                            projected: surface
-                                .geometry
-                                .exact_affine(0.0)
-                                .is_none()
-                                .then(|| surface.clone()),
+                            projected: surface.image_presentation().then(|| surface.clone()),
                             projected_mvp,
                             projected_viewport: job.viewport,
                             screen_coverage,
@@ -516,15 +512,8 @@ impl<D: RenderDevice> RenderService<D> {
                 if surface.layer_spacing == 0.0 {
                     1
                 } else {
-                    let scene = CanvasScene::new(host, job.selection, job.publication)?;
-                    scene
-                        .canvas
-                        .entries
-                        .iter()
-                        .map(|entry| entry.layer())
-                        .collect::<std::collections::BTreeSet<_>>()
-                        .len()
-                        .max(1)
+                    // One flattened color image and one ownership attachment.
+                    2
                 }
             } else {
                 0

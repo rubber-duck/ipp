@@ -96,6 +96,9 @@ export interface HostGuiLayoutStatistics {
 export interface SurfaceRenderStatistics {
   analyticGlyphResidentBytes: number;
   surfaceCacheRepaints: number;
+  surfaceCachePartialRepaints: number;
+  surfaceCacheRepaintPixels: number;
+  surfaceCacheFullPixels: number;
   surfaceCacheReuses: number;
   surfaceCacheDirect: number;
   surfaceCacheFallbacks: number;
@@ -104,6 +107,9 @@ export interface SurfaceRenderStatistics {
   surfaceCacheEntries: number;
   surfaceCacheResidentBytes: number;
   totalSurfaceCacheRepaints: number;
+  totalSurfaceCachePartialRepaints: number;
+  totalSurfaceCacheRepaintPixels: number;
+  totalSurfaceCacheFullPixels: number;
   totalSurfaceCacheReuses: number;
   totalSurfaceCacheDirect: number;
   totalSurfaceCacheFallbacks: number;

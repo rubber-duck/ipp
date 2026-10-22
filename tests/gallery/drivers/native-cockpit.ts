@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { renderDiagnostics } from "@ipp/client/diagnostics";
 import { nativePresentationTransport } from "@ipp/client/testing";
 import { exerciseCockpitSpatial } from "../scenarios/cockpit-spatial.js";
+import { exerciseCockpitCamera } from "../scenarios/cockpit-camera.js";
+import { captureCockpitFraming } from "./native-cockpit-framing.js";
 import { exerciseCockpitQuality } from "../scenarios/cockpit-quality.js";
 import { setTimeout } from "node:timers/promises";
 import type {
@@ -686,8 +688,8 @@ function driver(
       await setTimeout(seconds * 1000);
       await frame();
     },
-    navigate: () =>
-      app.navigateCamera({ kind: "rotate", yaw: 0.3, pitch: 0.1 }, binding()),
+    navigate: (motion = { kind: "rotate", yaw: 0.3, pitch: 0.1 }) =>
+      app.navigateCamera(motion, binding()),
   };
 }
 
@@ -752,6 +754,8 @@ export default defineClient<State>({
     }
   },
   async capture(state, context, args) {
+    if (args[0] === "framing")
+      return captureCockpitFraming(state.gallery, context);
     const images: Record<string, RgbaImage> = {};
     const binding = state.gallery.application.sceneCanvas?.view?.binding;
     assert.ok(binding);
@@ -764,7 +768,9 @@ export default defineClient<State>({
         let failure: string | undefined;
         let carouselEvidence: unknown;
         try {
-          if (args[0] === "spatial") {
+          if (args[0] === "camera") {
+            carouselEvidence = await exerciseCockpitCamera(subject);
+          } else if (args[0] === "spatial") {
             carouselEvidence = await exerciseCockpitSpatial(subject);
           } else if (args[0] === "quality") {
             carouselEvidence = await exerciseCockpitQuality({

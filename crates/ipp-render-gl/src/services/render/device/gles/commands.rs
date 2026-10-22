@@ -215,6 +215,9 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn set_surface_double_sided(&mut self, enabled: bool) -> Result<(), RenderError> {
+        if self.submission.surface_double_sided.replace(Some(enabled)) == Some(enabled) {
+            return self.check_draw();
+        }
         // SAFETY: This changes only scalar rasterization state in the current
         // context. Frame setup establishes BACK as the ordinary cull face.
         unsafe {
@@ -237,6 +240,14 @@ impl RenderDevice for GlesRenderDevice {
         texels: &crate::SurfacePathTexels,
     ) -> Result<Self::SurfacePath, RenderError> {
         self.create_surface_path(texels)
+    }
+
+    fn update_surface_path(
+        &mut self,
+        path: &mut Self::SurfacePath,
+        texels: &crate::SurfacePathTexels,
+    ) -> Result<bool, RenderError> {
+        self.update_surface_path(path, texels)
     }
 
     fn draw_surface_path(
@@ -305,6 +316,27 @@ impl RenderDevice for GlesRenderDevice {
         self.draw_surface_bitmap(program, texture, mvp, placement, clip, color)
     }
 
+    fn set_surface_cache_ownership(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        enabled: bool,
+    ) -> Result<(), RenderError> {
+        self.set_surface_cache_ownership(target, enabled)
+    }
+
+    fn set_surface_owner(&mut self, owner: u32) -> Result<(), RenderError> {
+        if owner > 0x00ff_ffff {
+            return Err(RenderError::UnavailableOutput);
+        }
+        self.submission.surface_owner.set(owner);
+        Ok(())
+    }
+
+    fn set_surface_cutout(&mut self, owner: u32) -> Result<(), RenderError> {
+        self.submission.surface_cutout.set(owner);
+        Ok(())
+    }
+
     fn surface_cache_limit(&self) -> u32 {
         self.surface_cache_dimension_limit()
     }
@@ -340,6 +372,14 @@ impl RenderDevice for GlesRenderDevice {
         target: &Self::SurfaceCacheTarget,
     ) -> Result<(), RenderError> {
         self.begin_surface_cache_target(target)
+    }
+
+    fn begin_surface_cache_region(
+        &mut self,
+        target: &Self::SurfaceCacheTarget,
+        region: Option<[u32; 4]>,
+    ) -> Result<(), RenderError> {
+        self.begin_surface_cache_region(target, region)
     }
 
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
@@ -488,8 +528,9 @@ impl RenderDevice for GlesRenderDevice {
         vertex: &str,
         fragment: &str,
     ) -> Result<GlesRenderProgram, RenderError> {
+        let fragment = super::super::surface_ownership::fragment(fragment);
         let vertex = self.shader(VERTEX_SHADER, vertex)?;
-        let fragment = match self.shader(FRAGMENT_SHADER, fragment) {
+        let fragment = match self.shader(FRAGMENT_SHADER, &fragment) {
             Ok(shader) => shader,
             Err(error) => {
                 // SAFETY: vertex is a live exclusively owned context handle.
@@ -563,8 +604,8 @@ impl RenderDevice for GlesRenderDevice {
         clip: &[f32; 4],
         opacity: f32,
         flip_image: bool,
-        indices: std::ops::Range<u32>,
-    ) -> Result<(), RenderError> {
+        indices: &[[u32; 2]],
+    ) -> Result<u32, RenderError> {
         self.draw_surface_image_mesh(
             program, target, mesh, mvp, size, clip, opacity, flip_image, indices,
         )
@@ -1043,6 +1084,10 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn delete_program(&mut self, program: GlesRenderProgram) {
+        self.submission
+            .owner_uniforms
+            .borrow_mut()
+            .remove(&program.id);
         self.submission.invalidate();
         // SAFETY: This consumes the owned program in its still-current context.
         unsafe { self.gl.delete_program(program.id) };

@@ -47,6 +47,12 @@ pub(in crate::services::render) struct SceneOutputSurface {
 }
 
 impl SceneOutputSurface {
+    /// Curvature and separated image cutouts require sampled presentation even
+    /// when temporal caching is off. Coincident affine content remains direct.
+    pub fn image_presentation(&self) -> bool {
+        self.geometry.exact_affine(0.0).is_none() || self.layered()
+    }
+
     /// Whether layer planes leave the Surface's own plane.
     pub fn layered(&self) -> bool {
         self.layer_depth != 0.0

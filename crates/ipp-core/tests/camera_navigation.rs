@@ -111,6 +111,87 @@ fn project(
 }
 
 #[test]
+fn turning_in_place_preserves_position_scale_and_projection() {
+    for projection in [0, 1] {
+        let mut host = crate::support::task_scheduler::host();
+        let world_id = host.create_world(WorldLimits::default(), CAMERA).unwrap();
+        let mut world = host.world_mut(world_id).unwrap();
+        let entity = create(
+            &mut world,
+            Camera {
+                projection,
+                ..Camera::default()
+            },
+            Transform {
+                x: 7.0,
+                y: 3.4,
+                z: -8.0,
+                sx: 2.0,
+                sy: 3.0,
+                sz: 4.0,
+                ..Transform::default()
+            },
+        );
+        world.enqueue_camera_activate(entity).unwrap();
+        world.update_for_test(0.0).unwrap();
+        let (camera, original) = inputs(&world, entity);
+
+        navigate(
+            &mut world,
+            CameraMotion::Turn {
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+            },
+        );
+        let (next_camera, turned) = inputs(&world, entity);
+        assert_eq!(next_camera, camera);
+        assert_eq!(
+            [
+                turned.x, turned.y, turned.z, turned.sx, turned.sy, turned.sz
+            ],
+            [
+                original.x,
+                original.y,
+                original.z,
+                original.sx,
+                original.sy,
+                original.sz
+            ]
+        );
+        close(
+            f64::from(turned.qy),
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.000001,
+        );
+        close(
+            f64::from(turned.qw),
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.000001,
+        );
+        assert_eq!([turned.qx, turned.qz], [0.0, 0.0]);
+
+        navigate(
+            &mut world,
+            CameraMotion::Turn {
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: std::f32::consts::FRAC_PI_2,
+            },
+        );
+        let (_, pitched) = inputs(&world, entity);
+        assert_eq!(
+            [pitched.x, pitched.y, pitched.z],
+            [original.x, original.y, original.z]
+        );
+        close(
+            f64::from(pitched.qx),
+            std::f64::consts::FRAC_1_SQRT_2,
+            0.000001,
+        );
+        close(f64::from(pitched.qy), 0.0, 0.000001);
+    }
+}
+
+#[test]
 fn repeated_local_orbits_preserve_the_implied_pivot_with_nonuniform_scale() {
     for projection in [0, 1] {
         let mut world_host = crate::support::task_scheduler::host();
@@ -402,6 +483,18 @@ fn invalid_and_unrepresentable_navigation_preserves_every_component() {
 
     let before = world.inspect(entity).unwrap();
     for motion in [
+        CameraMotion::Turn {
+            yaw: f32::NAN,
+            pitch: 0.0,
+        },
+        CameraMotion::Turn {
+            yaw: 1.0,
+            pitch: f32::INFINITY,
+        },
+        CameraMotion::Turn {
+            yaw: 0.0,
+            pitch: 0.0,
+        },
         CameraMotion::Rotate {
             yaw: f32::NAN,
             pitch: 0.0,

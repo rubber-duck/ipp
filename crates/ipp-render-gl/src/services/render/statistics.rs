@@ -80,11 +80,17 @@ pub struct RenderStatistics {
     /// World presented through this context, sixteen `f32` lanes per instance.
     pub analytic_glyph_resident_bytes: u32,
     /// Surface images repainted during this submission, including required projected
-    /// Canvas images counted separately for each separated layer,
+    /// Canvas images shared across their separated layers,
     /// before the main pass. Each repaint also counts its primitive draws.
     pub surface_cache_repaints: u32,
-    /// Surface images presented without repainting, including each separated
-    /// projected Canvas layer. Projected images may submit several mesh patches.
+    /// Repaints preserving pixels outside a bounded damaged rectangle.
+    pub surface_cache_partial_repaints: u32,
+    /// Texels cleared/replayed in successful image repaints this frame.
+    pub surface_cache_repaint_pixels: u32,
+    /// Active texels those images would have repainted without damage tracking.
+    pub surface_cache_full_pixels: u32,
+    /// Surface images presented without repainting, including each shared
+    /// projected Canvas image. Projected images may submit several mesh patches.
     pub surface_cache_reuses: u32,
     /// Opted-in visible Surfaces presented directly: inside their direct distance,
     /// under GUI interaction, after a fallback, while animated or without cache
@@ -106,7 +112,7 @@ pub struct RenderStatistics {
     /// after this submission's releases.
     pub surface_cache_entries: u32,
     /// Resident bytes of optional cache and required projected Canvas images across this
-    /// context, four per texel.
+    /// context, including four ownership bytes per texel for separated images.
     pub surface_cache_resident_bytes: u32,
 }
 
@@ -118,6 +124,20 @@ pub(crate) struct RenderFrameWork {
 }
 
 impl RenderFrameWork {
+    pub fn image_repaint(&mut self, size: [u32; 2], region: Option<[u32; 4]>) {
+        let full = size[0].saturating_mul(size[1]);
+        let pixels = region.map_or(full, |rect| rect[2].saturating_mul(rect[3]));
+        self.statistics.surface_cache_partial_repaints += u32::from(region.is_some());
+        self.statistics.surface_cache_repaint_pixels = self
+            .statistics
+            .surface_cache_repaint_pixels
+            .saturating_add(pixels);
+        self.statistics.surface_cache_full_pixels = self
+            .statistics
+            .surface_cache_full_pixels
+            .saturating_add(full);
+    }
+
     /// Count one draw submission of `triangles` triangles.
     pub(crate) fn draw(&mut self, triangles: u32) {
         self.summary.draw_calls += 1;

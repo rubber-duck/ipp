@@ -16,7 +16,7 @@ pub(super) struct StatisticsTotals {
     uploaded_bytes: u32,
     gui: [u32; 7],
     layout: ipp_host_session::statistics::HostGuiLayoutStatistics,
-    surface_cache: [u32; 5],
+    surface_cache: [u32; 8],
 }
 
 impl StatisticsTotals {
@@ -60,13 +60,16 @@ fn gui_accumulated(statistics: &RenderStatistics) -> [u32; 7] {
     ]
 }
 
-fn surface_cache_accumulated(statistics: &RenderStatistics) -> [u32; 5] {
+fn surface_cache_accumulated(statistics: &RenderStatistics) -> [u32; 8] {
     [
         statistics.surface_cache_repaints,
         statistics.surface_cache_reuses,
         statistics.surface_cache_direct,
         statistics.surface_cache_fallbacks,
         statistics.surface_cache_allocations,
+        statistics.surface_cache_partial_repaints,
+        statistics.surface_cache_repaint_pixels,
+        statistics.surface_cache_full_pixels,
     ]
 }
 
@@ -132,12 +135,19 @@ pub(super) fn snapshot(
         total_direct,
         total_fallbacks,
         total_allocations,
+        total_partial_repaints,
+        total_repaint_pixels,
+        total_full_pixels,
     ] = totals.surface_cache;
+    write!(json, ",\"surfaces\":{{\"totalSurfaceCachePartialRepaints\":{total_partial_repaints},\"totalSurfaceCacheRepaintPixels\":{total_repaint_pixels},\"totalSurfaceCacheFullPixels\":{total_full_pixels}").expect("string write");
     write!(
         json,
-        ",\"surfaces\":{{\"analyticGlyphResidentBytes\":{},\"surfaceCacheRepaints\":{},\"surfaceCacheReuses\":{},\"surfaceCacheDirect\":{},\"surfaceCacheFallbacks\":{},\"surfaceCacheAnimated\":{},\"surfaceCacheAllocations\":{},\"surfaceCacheEntries\":{},\"surfaceCacheResidentBytes\":{},\"totalSurfaceCacheRepaints\":{total_repaints},\"totalSurfaceCacheReuses\":{total_reuses},\"totalSurfaceCacheDirect\":{total_direct},\"totalSurfaceCacheFallbacks\":{total_fallbacks},\"totalSurfaceCacheAllocations\":{total_allocations},\"surfaceCaches\":[",
+        ",\"analyticGlyphResidentBytes\":{},\"surfaceCacheRepaints\":{},\"surfaceCachePartialRepaints\":{},\"surfaceCacheRepaintPixels\":{},\"surfaceCacheFullPixels\":{},\"surfaceCacheReuses\":{},\"surfaceCacheDirect\":{},\"surfaceCacheFallbacks\":{},\"surfaceCacheAnimated\":{},\"surfaceCacheAllocations\":{},\"surfaceCacheEntries\":{},\"surfaceCacheResidentBytes\":{},\"totalSurfaceCacheRepaints\":{total_repaints},\"totalSurfaceCacheReuses\":{total_reuses},\"totalSurfaceCacheDirect\":{total_direct},\"totalSurfaceCacheFallbacks\":{total_fallbacks},\"totalSurfaceCacheAllocations\":{total_allocations},\"surfaceCaches\":[",
         statistics.analytic_glyph_resident_bytes,
         statistics.surface_cache_repaints,
+        statistics.surface_cache_partial_repaints,
+        statistics.surface_cache_repaint_pixels,
+        statistics.surface_cache_full_pixels,
         statistics.surface_cache_reuses,
         statistics.surface_cache_direct,
         statistics.surface_cache_fallbacks,

@@ -338,6 +338,7 @@ test("all motion variants conform to the canonical manifest and malformed fields
   try {
     for (const [kind, motion, first, second] of [
       [0, { kind: "rotate", yaw: 0.25, pitch: -0.5 }, 0.25, -0.5],
+      [3, { kind: "turn", yaw: 0.25, pitch: -0.5 }, 0.25, -0.5],
       [1, { kind: "pan", x: 0.25, y: -0.5 }, 0.25, -0.5],
       [2, { kind: "zoom", amount: 0.25 }, 0.25, 0],
     ]) {
@@ -361,6 +362,8 @@ test("all motion variants conform to the canonical manifest and malformed fields
     }
     for (const motion of [
       { kind: "rotate", yaw: NaN, pitch: 0 },
+      { kind: "turn", yaw: 0, pitch: Infinity },
+      { kind: "turn", yaw: 0, pitch: 0, extra: 1 },
       { kind: "rotate", yaw: 0, pitch: 0, extra: 1 },
       { kind: "pan", x: 0, y: 0, width: 10, height: 10 },
       { kind: "zoom", amount: Infinity },

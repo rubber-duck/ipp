@@ -312,8 +312,9 @@ export class DemoApplication implements GallerySceneMount {
     const handle = this.active?.canvas.handle;
     return handle ? [cameraAttachment(handle.attachment)] : [];
   }
-  get navigationMode(): "orbit" | "charts" | "following" | "fixed" {
+  get navigationMode(): "orbit" | "charts" | "following" | "fixed" | "yaw" {
     if (this.active?.definition.cameraNavigation === false) return "fixed";
+    if (this.active?.definition.cameraNavigation === "yaw") return "yaw";
     return this.active?.definition.id === "charts"
       ? "charts"
       : this.active?.definition.id === "platformer"
@@ -1028,6 +1029,14 @@ export class DemoApplication implements GallerySceneMount {
     if (!scene || scene.lifetime.signal.aborted)
       throw new Error("No active scene camera");
     if (scene.definition.cameraNavigation === false) return;
+    if (scene.definition.cameraNavigation === "yaw") {
+      if (
+        (motion.kind !== "rotate" && motion.kind !== "turn") ||
+        motion.yaw === 0
+      )
+        return;
+      motion = { kind: "turn", yaw: motion.yaw, pitch: 0 };
+    }
     if (scene.definition.actions.includes("navigate")) {
       await scene.mount.action("navigate", motion);
       return;

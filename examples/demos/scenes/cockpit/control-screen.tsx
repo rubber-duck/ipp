@@ -354,6 +354,12 @@ function GuiControls({
               bounds={false}
               onChange={(projection) => update({ projection })}
             />
+            <Checkbox
+              id="cockpit-exploded"
+              label="Exploded view"
+              checked={state.exploded}
+              onCheckedChange={(exploded) => update({ exploded })}
+            />
             <Field
               label="Screen navigation"
               description="Swipe empty space or scroll to move between screens."

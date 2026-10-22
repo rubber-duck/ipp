@@ -1,11 +1,7 @@
 //! Layered Canvas presentation through real Worlds and the recording render
-//! device: layer planes offset along the Surface normal by their published
-//! coordinate times the spacing through each draw's model-view-projection without rewriting
-//! retained GUI geometry, a plane's depth unchanged while another layer opens
-//! and closes, view-depth plane order from the front and from behind, bounds
-//! grown to the highest physical coordinate, and direct presentation for cached Surfaces
-//! that separate layers. The maintained GLES and WebGL scenarios own the image
-//! evidence.
+//! device: projected cutouts share one image, retain GUI geometry, preserve
+//! physical layer depths and front/back ordering, and expand culling bounds.
+//! The maintained GLES and WebGL scenarios own the image evidence.
 
 mod support;
 
@@ -52,6 +48,7 @@ fn scene_on(
 ) {
     let mut host = support::task_scheduler::host();
     let (world, renderer, state) = setup(&mut host);
+    state.cache_limit.set(4096);
     let world_id = world.id();
     drop(world);
     let surface = CanvasSurface::new(&mut host, world_id, 0.0, plain_box([0.0, 0.0], 0));
@@ -91,30 +88,64 @@ fn spacing(host: &mut HostRuntime, surface: CanvasSurface, layer_spacing: f32) {
     );
 }
 
-/// Render one frame and return its retained GUI draw matrices in draw order.
+/// A submitted plane's center and normal in homogeneous clip coordinates.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Placement {
+    center: [f32; 4],
+    normal: [f32; 4],
+}
+
+fn placement(mvp: [f32; 16], center: [f32; 3]) -> Placement {
+    Placement {
+        center: std::array::from_fn(|row| {
+            mvp[12 + row]
+                + (0..3)
+                    .map(|axis| center[axis] * mvp[axis * 4 + row])
+                    .sum::<f32>()
+        }),
+        normal: std::array::from_fn(|row| mvp[8 + row]),
+    }
+}
+
+/// Observe actual mesh vertices for image draws, or the unit Canvas center
+/// for direct GUI draws. Ignore the rasterization pass when an image is shown.
 fn draws(
     renderer: &mut RenderService<TestDevice>,
     state: &DeviceState,
     host: &mut HostRuntime,
     world: WorldId,
-) -> Vec<[f32; 16]> {
+) -> Vec<Placement> {
     state.gui_draw_mvps.borrow_mut().clear();
+    state.surface_mesh_draws.borrow_mut().clear();
     render_frame(renderer, host, world, 100, 100).unwrap();
-    state.gui_draw_mvps.take()
-}
-
-/// `mvp` translated by `offset` along content Z.
-fn offset(mvp: [f32; 16], offset: f32) -> [f32; 16] {
-    let mut placed = mvp;
-    for row in 0..4 {
-        placed[12 + row] += offset * mvp[8 + row];
+    let meshes = state.surface_mesh_draws.borrow();
+    if meshes.is_empty() {
+        state
+            .gui_draw_mvps
+            .take()
+            .into_iter()
+            .map(|mvp| placement(mvp, [0.5, 0.5, 0.0]))
+            .collect()
+    } else {
+        meshes
+            .iter()
+            .map(|draw| placement(draw.mvp, draw.center))
+            .collect()
     }
-    placed
 }
 
-fn near(left: [f32; 16], right: [f32; 16]) -> bool {
-    left.iter()
-        .zip(right)
+fn offset(mut plane: Placement, offset: f32) -> Placement {
+    for row in 0..4 {
+        plane.center[row] += offset * plane.normal[row];
+    }
+    plane
+}
+
+fn near(left: Placement, right: Placement) -> bool {
+    left.center
+        .iter()
+        .chain(&left.normal)
+        .zip(right.center.iter().chain(&right.normal))
         .all(|(left, right)| (left - right).abs() <= 1e-4 * (1.0 + right.abs()))
 }
 
@@ -175,7 +206,7 @@ fn fractional_transition_moves_retained_draws_and_expands_culling_bounds() {
 }
 
 #[test]
-fn layer_planes_move_through_draw_matrices_without_rewriting_geometry() {
+fn layer_planes_move_without_rewriting_retained_gui_geometry() {
     let (mut host, mut renderer, state, world, surface) = scene();
 
     // Without spacing both layers draw on the Surface plane, base first.
@@ -184,7 +215,7 @@ fn layer_planes_move_through_draw_matrices_without_rewriting_geometry() {
     assert_eq!(flat.len(), 2, "one retained range per layer");
     assert_eq!(flat[0], flat[1]);
 
-    // Spacing moves the raised layer's draw along the normal; nothing re-uploads
+    // Spacing moves the raised cutout along the normal; GUI records stay retained
     // and the camera in front still sees the base drawn first.
     let writes = state.gui_batch_writes.get();
     spacing(&mut host, surface, 0.5);
@@ -294,6 +325,7 @@ fn set_open(host: &mut HostRuntime, surface: CanvasSurface, entity: EntityId, op
 fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
     let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
+    state.cache_limit.set(4096);
     let world_id = world.id();
     drop(world);
     let surface = CanvasSurface::new(&mut host, world_id, 0.0, plain_box([0.0, 0.0], 0));
@@ -356,7 +388,7 @@ fn occupied_ranks_repack_when_an_overlay_opens_and_closes() {
 }
 
 #[test]
-fn a_cached_surface_that_separates_layers_presents_directly() {
+fn a_cached_surface_that_separates_layers_reuses_one_image_with_cutouts() {
     let (mut host, mut renderer, state, world, surface) = scene();
     state.cache_limit.set(4096);
     edit(
@@ -381,9 +413,29 @@ fn a_cached_surface_that_separates_layers_presents_directly() {
 
     spacing(&mut host, surface, 0.5);
     let exploded = draws(&mut renderer, &state, &mut host, world);
-    assert_eq!(presentation(&renderer), SurfaceCachePresentation::Layered);
+    assert_eq!(presentation(&renderer), SurfaceCachePresentation::Repainted);
+    let image = {
+        let submissions = state.surface_mesh_draws.borrow();
+        assert_eq!(submissions.len(), 2);
+        assert_eq!(submissions[0].target, submissions[1].target);
+        assert_eq!((submissions[0].cutout, submissions[1].cutout), (1, 2));
+        submissions[0].target
+    };
     assert_eq!(exploded.len(), 2);
     assert!(!near(exploded[0], exploded[1]));
+
+    let repaints = state.cache_begins.get();
+    let reused = draws(&mut renderer, &state, &mut host, world);
+    assert_eq!(presentation(&renderer), SurfaceCachePresentation::Reused);
+    assert_eq!(state.cache_begins.get(), repaints);
+    assert_eq!(reused, exploded);
+    assert!(
+        state
+            .surface_mesh_draws
+            .borrow()
+            .iter()
+            .all(|draw| draw.target == image)
+    );
 
     // Back on one plane, the flat image is exact again.
     spacing(&mut host, surface, 0.0);
@@ -397,6 +449,7 @@ fn a_single_occupied_priority_is_rank_zero_and_can_cache() {
     // at every spacing, so one flat image remains an exact presentation.
     let mut host = support::task_scheduler::host();
     let (world, mut renderer, state) = setup(&mut host);
+    state.cache_limit.set(4096);
     let world_id = world.id();
     drop(world);
     let surface = CanvasSurface::new(&mut host, world_id, 0.0, plain_box([0.0, 0.0], 2));

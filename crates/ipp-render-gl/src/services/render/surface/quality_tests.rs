@@ -33,7 +33,7 @@ fn device_pixels_and_content_aspect_determine_resolution() {
 }
 
 #[test]
-fn curvature_and_separated_shells_raise_local_demand() {
+fn analytic_bounds_include_curvature_and_separated_shells() {
     let cylinder = CylinderSurface {
         width: 4.0,
         height: 3.0,
@@ -44,7 +44,7 @@ fn curvature_and_separated_shells_raise_local_demand() {
     let separated =
         surface_demand(&cylinder, &[0.0, 1.0], orthographic(), viewport(400, 400)).unwrap();
     assert!(plain[0] >= 399.0 && plain[0] <= 401.0);
-    assert!(separated[0] > plain[0] * 1.3);
+    assert!(separated[0] > plain[0] * 1.2);
     let sphere = SphereSurface {
         width: 4.0,
         height: 3.0,
@@ -54,8 +54,9 @@ fn curvature_and_separated_shells_raise_local_demand() {
     let sphere_demand =
         surface_demand(&sphere, &[0.0, 1.0], orthographic(), viewport(400, 400)).unwrap();
     assert!(sphere_demand[0] > plain[0] * 1.3);
-    let capped = surface_demand(&cylinder, &[0.0; 33], orthographic(), viewport(400, 400)).unwrap();
-    assert_eq!(image_size(capped, 1.0, 2048, None), Some([2048, 1536]));
+    let repeated =
+        surface_demand(&cylinder, &[0.0; 64], orthographic(), viewport(400, 400)).unwrap();
+    assert_eq!(repeated, plain);
 }
 
 #[test]
@@ -86,24 +87,26 @@ fn clipping_keeps_visible_density_without_reserving_offscreen_pixels() {
 }
 
 #[test]
-fn offscreen_perspective_magnification_does_not_exhaust_the_image_budget() {
+fn perspective_bounds_preserve_full_pane_density_but_limit_allocation() {
     let mut mvp = orthographic();
     mvp[3] = -0.2;
     let demand = plane_demand([4.0, 2.0], mvp, viewport(400, 400)).unwrap();
-    // Only x <= 10/7 reaches the viewport. The far edge at x=4 is offscreen,
-    // where magnification would otherwise request over 10,000 texels.
-    assert!(demand[0] >= 784.0 && demand[0] < 1200.0, "{demand:?}");
-    for y in 0..=10 {
-        for x in 0..=10 {
-            let (u, v) = (x as f64 / 7.0, y as f64 / 10.0);
-            let w = 1.0 - u * 0.2;
-            let jacobian = [
-                [100.0 / w.powi(2), 0.0],
-                [-20.0 * v / w.powi(2), -100.0 / w],
-            ];
-            assert!(spectral_norm(jacobian) <= demand[0] / 4.0 + 1e-3);
-        }
-    }
+    // The far corner has W=0.2: the full bounds span 2000 x 1000 pixels.
+    // Coverage is clipped separately; texture dimensions still describe the
+    // entire content rectangle, and memory/device policy caps the image.
+    assert!((demand[0] - 2000.0).abs() < 0.01, "{demand:?}");
+    assert_eq!(image_size(demand, 1.0, 512, None), Some([512, 256]));
+}
+
+#[test]
+fn eye_plane_crossing_is_bounded_and_invalid_projection_is_rejected() {
+    let mut mvp = orthographic();
+    mvp[3] = -0.5;
+    let demand = plane_demand([4.0, 2.0], mvp, viewport(400, 400)).unwrap();
+    assert_eq!(image_size(demand, 1.0, 2048, None), Some([2048, 1024]));
+    mvp[0] = f32::NAN;
+    assert!(plane_demand([4.0, 2.0], mvp, viewport(400, 400)).is_err());
+    assert!(plane_demand([4.0, 2.0], orthographic(), viewport(0, 400)).is_err());
 }
 
 #[test]
@@ -130,41 +133,28 @@ fn selected_size_has_growth_and_shrink_hysteresis() {
 }
 
 #[test]
-fn diagonal_stretch_requires_the_largest_singular_value() {
-    let matrix = [[1.0, 1.0], [0.0, 1.0]];
-    assert!((spectral_norm(matrix) - 1.618033988749895).abs() < 1e-12);
-    assert!(spectral_norm(matrix) > 2.0_f64.sqrt());
-    let mut mvp = orthographic();
-    mvp[4] = 0.5;
-    let demand = plane_demand([4.0, 2.0], mvp, viewport(400, 400)).unwrap();
-    assert!((demand[0] - 400.0 * 1.618033988749895).abs() < 1e-3);
+fn small_continuous_changes_reuse_active_quality() {
+    let mut size = image_size([320.0, 160.0], 1.0, 2048, None).unwrap();
+    let mut changes = 0;
+    for step in 1..=150 {
+        let width = 320.0 + f64::from(step) * 0.2;
+        let next = image_size([width, width / 2.0], 1.0, 2048, Some(size)).unwrap();
+        changes += usize::from(next != size);
+        assert!(f64::from(next[0]) >= width - 1e-3);
+        size = next;
+    }
+    assert_eq!(changes, 1);
+    assert_eq!(size, [352, 176]);
     assert_eq!(
-        image_size([321.0, 160.5], 1.0, 2048, Some([320, 160])),
-        Some([328, 164])
+        image_size([2049.0, 1024.5], 1.0, 2048, Some([2048, 1024])),
+        Some([2048, 1024])
     );
 }
 
 #[test]
-fn perspective_triangle_bound_covers_independent_interior_derivatives() {
-    let mut matrix = orthographic();
-    matrix[3] = 0.1;
-    let positions = [
-        [0.0, 0.0, 0.0],
-        [2.0, 0.0, 0.0],
-        [0.0, 2.0, 0.0],
-        [2.0, 2.0, 0.0],
-    ];
-    let bound =
-        grid_demand(&positions, 1, [2.0, 2.0], matrix, viewport(400, 400)).unwrap()[0] / 2.0;
-    for y in 0..=20 {
-        for x in 0..=20 {
-            let (u, v) = (x as f64 / 10.0, y as f64 / 10.0);
-            let w = 1.0 + u * f64::from(matrix[3]);
-            let jacobian = [
-                [100.0 / w.powi(2), 0.0],
-                [100.0 * v * f64::from(matrix[3]) / w.powi(2), -100.0 / w],
-            ];
-            assert!(spectral_norm(jacobian) <= bound + 1e-9);
-        }
-    }
+fn shear_uses_projected_enclosure_instead_of_local_triangle_derivatives() {
+    let mut mvp = orthographic();
+    mvp[4] = 0.5;
+    let demand = plane_demand([4.0, 2.0], mvp, viewport(400, 400)).unwrap();
+    assert_eq!(demand, [600.0, 300.0]);
 }

@@ -91,8 +91,12 @@ impl GlesRenderDevice {
             curve_texels: curve_count as u32,
             curve_scale: texels.curve_scale,
             texture_width: width as i32,
+            texture_height: height,
+            curve_kind: 0,
             band_count: band_count as u32,
             band_width: band_width as i32,
+            band_height,
+            band_kind: 0,
         };
         let curves = match &texels.curves {
             SurfaceCurveTexels::Int16(values) => TexelUpload {
@@ -126,6 +130,8 @@ impl GlesRenderDevice {
                 kind: 0x1405,            // UNSIGNED_INT
             },
         };
+        path.curve_kind = curves.kind;
+        path.band_kind = bands.kind;
 
         // SAFETY: GL writes exclusive names and synchronously copies from the
         // borrowed texel slices, which outlive the calls. No CPU pointer survives.
@@ -143,9 +149,9 @@ impl GlesRenderDevice {
             self.gl.bind_buffer(0x88EC, 0);
             self.gl.pixel_store(0x0CF5, 1);
             self.gl.bind_texture(0x0DE1, path.texture);
-            self.upload_path_texels(&curves, curve_count, width, height);
+            self.upload_path_texels(&curves, curve_count, width, height, true);
             self.gl.bind_texture(0x0DE1, path.band_texture);
-            self.upload_path_texels(&bands, band_count, band_width, band_height);
+            self.upload_path_texels(&bands, band_count, band_width, band_height, true);
             self.gl.bind_texture(0x0DE1, 0);
         }
         if let Err(error) = self.check() {
@@ -153,6 +159,96 @@ impl GlesRenderDevice {
             return Err(error);
         }
         Ok(path)
+    }
+
+    pub(super) fn update_surface_path(
+        &mut self,
+        path: &mut GlesSurfacePath,
+        texels: &SurfacePathTexels,
+    ) -> Result<bool, RenderError> {
+        let limit = self.max_texture_size as usize;
+        let curve_count = texels.curves.len();
+        let band_count = texels.bands.len();
+        let curves = match &texels.curves {
+            SurfaceCurveTexels::Int16(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 8,
+                internal_format: 0x8D88, // RGBA16I
+                format: 0x8D99,          // RGBA_INTEGER
+                kind: 0x1402,            // SHORT
+            },
+            SurfaceCurveTexels::Int32(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 16,
+                internal_format: 0x8D82, // RGBA32I
+                format: 0x8D99,          // RGBA_INTEGER
+                kind: 0x1404,            // INT
+            },
+        };
+        let bands = match &texels.bands {
+            SurfaceBandTexels::Uint16(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 2,
+                internal_format: 0x8234, // R16UI
+                format: 0x8D94,          // RED_INTEGER
+                kind: 0x1403,            // UNSIGNED_SHORT
+            },
+            SurfaceBandTexels::Uint32(values) => TexelUpload {
+                pointer: values.as_ptr().cast(),
+                texel_bytes: 4,
+                internal_format: 0x8236, // R32UI
+                format: 0x8D94,          // RED_INTEGER
+                kind: 0x1405,            // UNSIGNED_INT
+            },
+        };
+        let keep_curves = path.curve_kind == curves.kind
+            && curve_count <= path.texture_width as usize * path.texture_height;
+        let keep_bands = path.band_kind == bands.kind
+            && band_count <= path.band_width as usize * path.band_height;
+        let reserve = |count: usize| {
+            texel_rows(
+                count
+                    .checked_next_power_of_two()
+                    .unwrap_or(usize::MAX)
+                    .min(limit * limit),
+                limit,
+            )
+            .filter(|(w, h)| w * h >= count)
+        };
+        let (width, height) = if keep_curves {
+            (path.texture_width as usize, path.texture_height)
+        } else {
+            reserve(curve_count).ok_or(RenderError::UnavailableOutput)?
+        };
+        let (band_width, band_height) = if keep_bands {
+            (path.band_width as usize, path.band_height)
+        } else {
+            reserve(band_count).ok_or(RenderError::UnavailableOutput)?
+        };
+        // SAFETY: This path exclusively owns both textures. GL copies live slices
+        // synchronously and orders replacement after queued draws; no CPU borrow
+        // survives. On failure the caller drops this unusable path.
+        unsafe {
+            self.gl.active_texture(0x84C0);
+            self.gl.bind_buffer(0x88EC, 0);
+            self.gl.pixel_store(0x0CF5, 1);
+            self.gl.bind_texture(0x0DE1, path.texture);
+            self.upload_path_texels(&curves, curve_count, width, height, !keep_curves);
+            self.gl.bind_texture(0x0DE1, path.band_texture);
+            self.upload_path_texels(&bands, band_count, band_width, band_height, !keep_bands);
+            self.gl.bind_texture(0x0DE1, 0);
+        }
+        self.check()?;
+        path.curve_texels = curve_count as u32;
+        path.curve_scale = texels.curve_scale;
+        path.texture_width = width as i32;
+        path.texture_height = height;
+        path.curve_kind = curves.kind;
+        path.band_count = band_count as u32;
+        path.band_width = band_width as i32;
+        path.band_height = band_height;
+        path.band_kind = bands.kind;
+        Ok(true)
     }
 
     /// Allocate the bound texture as `width` x `height` nearest-sampled texels and
@@ -170,27 +266,30 @@ impl GlesRenderDevice {
         count: usize,
         width: usize,
         height: usize,
+        allocate: bool,
     ) {
         let full_rows = count / width;
         let remainder = count % width;
 
         // SAFETY: Upheld by the caller; each copy reads inside the `count` texels.
         unsafe {
-            self.gl.tex_parameter(0x0DE1, 0x2801, 0x2600);
-            self.gl.tex_parameter(0x0DE1, 0x2800, 0x2600);
-            self.gl.tex_parameter(0x0DE1, 0x2802, 0x812F);
-            self.gl.tex_parameter(0x0DE1, 0x2803, 0x812F);
-            self.gl.tex_image(
-                0x0DE1,
-                0,
-                upload.internal_format,
-                width as i32,
-                height as i32,
-                0,
-                upload.format,
-                upload.kind,
-                ptr::null(),
-            );
+            if allocate {
+                self.gl.tex_parameter(0x0DE1, 0x2801, 0x2600);
+                self.gl.tex_parameter(0x0DE1, 0x2800, 0x2600);
+                self.gl.tex_parameter(0x0DE1, 0x2802, 0x812F);
+                self.gl.tex_parameter(0x0DE1, 0x2803, 0x812F);
+                self.gl.tex_image(
+                    0x0DE1,
+                    0,
+                    upload.internal_format,
+                    width as i32,
+                    height as i32,
+                    0,
+                    upload.format,
+                    upload.kind,
+                    ptr::null(),
+                );
+            }
             if full_rows > 0 {
                 self.gl.tex_sub_image(
                     0x0DE1,
@@ -839,6 +938,8 @@ impl GlesRenderDevice {
         self.surface_viewport = [page.width as f32, page.height as f32];
 
         // Directs subsequent draw commands to the atlas page framebuffer and viewport.
+        // SAFETY: Atlas population must not inherit an image damage scissor.
+        unsafe { self.gl.disable(0x0C11) };
         self.bind_framebuffers(page.framebuffer, page.framebuffer);
         self.set_viewport([0, 0, page.width as i32, page.height as i32]);
 
@@ -856,6 +957,7 @@ impl GlesRenderDevice {
             self.set_viewport(target.viewport);
         }
 
+        self.restore_surface_scissor();
         self.check()
     }
 }

@@ -43,6 +43,13 @@ export async function exerciseSurfaceQuality(
     atmospherePlaying: false,
     scanning: false,
   });
+  const stopped = () =>
+    app.waitFor(
+      (state) =>
+        state.controllers?.every((controller) => !controller.transition) ??
+        true,
+    );
+  await app.call("startCockpitInputTrace");
   for (const surface of ["flat", "curved"]) {
     await app.call("options", {
       surface,
@@ -50,7 +57,7 @@ export async function exerciseSurfaceQuality(
       surfaceCaching: "off",
       surfaceTextureSize: 2048,
     });
-    await app.page.waitForTimeout(700);
+    await stopped();
     await app.capture(`scene-quality-${surface}-before`);
     const before = await app.call<RgbaImage>("image");
     assert.equal(before.width, 2448);
@@ -83,22 +90,46 @@ export async function exerciseSurfaceQuality(
       `root GUI label remains visible above scene depth: ${labelPixels}`,
     );
     for (const [mode, cap, delta] of [
-      ["auto", 2048, 100],
-      ["force", 256, -200],
-      ["off", 2048, 100],
+      ["auto", 2048, 600],
+      ["force", 256, -1200],
+      ["off", 2048, 600],
     ] as const) {
       await app.call("options", {
         surfaceCaching: mode,
         surfaceTextureSize: cap,
         surfaceRefreshHz: 0.5,
       });
-      const point = await app.cockpitCoordinates(1, "cockpit-header-1");
-      await app.page.mouse.move(point.x, point.y);
+      // Target the centered pane after each spring settles. In this DPR-2
+      // fixture, six injected notches yield 120 logical units and cross the
+      // half-pane selection threshold.
       const previous = Number((await app.state()).options.carousel);
+      const selected = Math.round(previous);
+      const point = await app.cockpitCoordinates(
+        selected,
+        `cockpit-header-${selected}`,
+      );
+      await app.page.mouse.move(point.x, point.y);
       await app.page.mouse.wheel(0, delta);
-      await app.page.waitForTimeout(800);
-      const next = Number((await app.state()).options.carousel);
-      assert.ok(Math.abs(next - previous) > 0.05, "wheel moves the carousel");
+      const deadline = performance.now() + 30_000;
+      let next: number;
+      for (;;) {
+        next = Number((await app.state()).options.carousel);
+        if (Number.isInteger(next) && Math.abs(next - previous) > 0.05) break;
+        if (performance.now() >= deadline) {
+          await record("wheel-selection-timeout", {
+            surface,
+            mode,
+            previous,
+            next,
+            point,
+            diagnostics: await app.call("cockpitInputDiagnostics"),
+          });
+          assert.fail(
+            "wheel selects a different pane before the input deadline",
+          );
+        }
+      }
+      await stopped();
       await app.capture(`scene-quality-${surface}-${mode}-${cap}`);
       const after = await app.call<RgbaImage>("image");
       const pixels = dashboardDifference(before, after);

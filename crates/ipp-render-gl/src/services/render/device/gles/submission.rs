@@ -5,6 +5,10 @@ use std::cell::Cell;
 
 #[derive(Default)]
 pub(super) struct GlesSubmissionState {
+    pub surface_double_sided: Cell<Option<bool>>,
+    pub surface_owner: Cell<u32>,
+    pub surface_cutout: Cell<u32>,
+    pub owner_uniforms: std::cell::RefCell<std::collections::BTreeMap<u32, (i32, Option<u32>)>>,
     pub epoch: Cell<u64>,
     pub shadow_texture: Cell<Option<u32>>,
     program: Cell<Option<u32>>,
@@ -21,6 +25,7 @@ impl GlesSubmissionState {
         self.program.set(None);
         self.vertex_array.set(None);
         self.blend.set(None);
+        self.surface_double_sided.set(None);
     }
 }
 
@@ -31,6 +36,26 @@ impl GlesRenderDevice {
             // program changes use this helper; deletion and Host entry invalidate
             // the cache before names can be reused. No CPU pointer is passed.
             unsafe { self.gl.use_program(program) };
+        }
+        if program == 0 {
+            return;
+        }
+
+        let owner = self.submission.surface_owner.get();
+        let mut uniforms = self.submission.owner_uniforms.borrow_mut();
+        let (location, previous) = uniforms.entry(program).or_insert_with(|| {
+            // SAFETY: The program is live in this context; GL copies the static name.
+            (
+                unsafe {
+                    self.gl
+                        .uniform_location(program, c"u_surface_owner".as_ptr())
+                },
+                None,
+            )
+        });
+        if previous.replace(owner) != Some(owner) && *location >= 0 {
+            // SAFETY: The matching program is current; scalar upload retains no pointer.
+            unsafe { self.gl.uniform_float(*location, owner as f32) };
         }
     }
 

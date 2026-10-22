@@ -289,29 +289,32 @@ test("cockpit carousel browser swipe, wheel priority and cancellation", {
               return state;
             assert.ok(
               performance.now() < deadline,
-              `Wheel selects carousel ${expected}`,
+              `Wheel settles on pane ${expected}; observed ${state.options.carousel}`,
             );
           }
         };
         await app.call("options", { carousel: 1 });
         await stopped();
+        // DOM pixel deltas normalize to 40 logical units per 100 CSS pixels.
+        // Three notches cross the half-pane spring-selection threshold.
         let wheelHeader = await app.cockpitCoordinates(1, "cockpit-header-1");
         await app.page.mouse.move(wheelHeader.x, wheelHeader.y);
-        await app.page.mouse.wheel(100, 0);
-        await waitForWheelFocus(1.25);
+        await app.page.mouse.wheel(300, 0);
+        await waitForWheelFocus(2);
         await stopped();
-        wheelHeader = await app.cockpitCoordinates(1, "cockpit-header-1");
+        wheelHeader = await app.cockpitCoordinates(2, "cockpit-header-2");
         await app.page.mouse.move(wheelHeader.x, wheelHeader.y);
-        await app.page.mouse.wheel(0, 100);
-        await waitForWheelFocus(1.5);
+        await app.page.mouse.wheel(0, 300);
+        await waitForWheelFocus(3);
         await stopped();
-        wheelHeader = await app.cockpitCoordinates(1, "cockpit-header-1");
+        wheelHeader = await app.cockpitCoordinates(3, "cockpit-header-3");
         await app.page.mouse.move(wheelHeader.x, wheelHeader.y);
-        // Dispatch without native outcome waits: every fractional delta must survive.
+        // Dispatch without native outcome waits: accumulated fractional deltas
+        // must select the preceding pane before the spring settles.
         await Promise.all(
-          Array.from({ length: 10 }, () => app.page.mouse.wheel(10, 0)),
+          Array.from({ length: 10 }, () => app.page.mouse.wheel(-30, 0)),
         );
-        await waitForWheelFocus(1.75);
+        await waitForWheelFocus(2);
         await stopped();
         await app.call("options", { carousel: 0, gain: 1 });
         await stopped();
@@ -346,8 +349,8 @@ test("cockpit carousel browser swipe, wheel priority and cancellation", {
           0.96,
         );
         await app.page.mouse.move(wheelBody.x, wheelBody.y);
-        await app.page.mouse.wheel(0, -100);
-        await waitForWheelFocus(1.75);
+        await app.page.mouse.wheel(0, -300);
+        await waitForWheelFocus(1);
         await stopped();
         const wheelState = await app.state();
         assert.deepEqual(

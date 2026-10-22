@@ -1,4 +1,4 @@
-/** Native capture qualifies grabs; fixed-camera rays keep a moving pane from chasing the pointer. */
+/** Native capture qualifies grabs; gesture-local rays keep a moving pane from chasing the pointer. */
 import type {
   Client,
   GuiPhysicalInput,
@@ -22,6 +22,7 @@ interface Grab {
   released: boolean;
   angle: number;
   basis: readonly (readonly number[])[];
+  camera: Pose | undefined;
   sampleFocus: number;
   sampleTime: number;
   velocity: number;
@@ -40,7 +41,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
     private readonly controls: {
       signal: AbortSignal;
       ready(): boolean;
-      camera: Pose;
+      camera(): Promise<Pose>;
       client: PickingWorldClient;
       view(): ViewQueryTarget;
       panes(): readonly { client: Client; grip: bigint }[];
@@ -78,8 +79,8 @@ export class CockpitCarouselInput implements GallerySceneInput {
     this.cancelWheel();
   }
 
-  private async project(point: readonly [number, number]) {
-    const { camera, client } = this.controls;
+  private async project(point: readonly [number, number], camera: Pose) {
+    const { client } = this.controls;
     const normal = cameraForward(camera);
     const result = await client.query({
       type: "CameraProjectQuery",
@@ -110,7 +111,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
         (horizontal![index]! - value) * point[0] +
         (vertical![index]! - value) * point[1],
     );
-    return cameraRayAngle(position, this.controls.camera);
+    return cameraRayAngle(position, grab.camera!);
   }
 
   private move() {
@@ -273,6 +274,7 @@ export class CockpitCarouselInput implements GallerySceneInput {
         released: false,
         angle: 0,
         basis: [],
+        camera: undefined,
         sampleFocus: focus,
         sampleTime: performance.now(),
         velocity: 0,
@@ -300,12 +302,15 @@ export class CockpitCarouselInput implements GallerySceneInput {
       if (this.grab !== grab || this.controls.signal.aborted) return;
       grab.sampleFocus = grab.focus;
       grab.sampleTime = performance.now();
+      const camera = await this.controls.camera();
+      if (this.grab !== grab || this.controls.signal.aborted) return;
+      grab.camera = camera;
       // Camera/view are fixed for this gesture. Native projection supplies an
       // affine plane basis once; later moves need no query or transport delay.
       grab.basis = await Promise.all([
-        this.project([0, 0]),
-        this.project([1, 0]),
-        this.project([0, 1]),
+        this.project([0, 0], camera),
+        this.project([1, 0], camera),
+        this.project([0, 1], camera),
       ]);
       if (this.grab !== grab || this.controls.signal.aborted) return;
       grab.angle = this.angle(grab.start, grab);

@@ -166,7 +166,7 @@ pub(super) fn prepare(
         surfaces
             .iter()
             .enumerate()
-            .filter(|(_, item)| item.geometry.exact_affine(0.0).is_some())
+            .filter(|(_, item)| !item.image_presentation())
             .map(|(index, item)| RenderDraw {
                 index: RenderDrawIndex::Surface(index),
                 key: (item.entity, 2),

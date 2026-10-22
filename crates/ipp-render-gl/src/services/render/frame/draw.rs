@@ -91,6 +91,9 @@ impl<D: RenderDevice> RenderService<D> {
             None,
         );
         let result = self.draw_contents(host, selection, publication, viewport, presentation_time);
+        // Changed paths may be the last owner of their previous publication.
+        // Give their replacement a chance to reuse storage before reclaiming it.
+        self.generated_paths.retain_live_worlds(host);
         if result.is_err() {
             // This also covers errors in nested prepasses before begin_frame.
             // Deferred device errors cannot leave derived images reusable.
@@ -115,7 +118,6 @@ impl<D: RenderDevice> RenderService<D> {
     ) -> Result<RenderFrameSummary, RenderError> {
         let (width, height) = (viewport.width, viewport.height);
         self.inclusions.reset_frame();
-        self.generated_paths.retain_live_worlds(host);
         self.generated_meshes.retain_live_worlds(host);
         self.plot_plane_caches.retain(|(world, _, _), cache| {
             host.world_fault(*world).is_ok() && cache.source.strong_count() != 0
@@ -418,11 +420,23 @@ impl<D: RenderDevice> RenderService<D> {
                             continue;
                         }
                         self.device.borrow_mut().set_instances(&[])?;
-                        self.draw_projected_patch(
+                        let mut patches = vec![patch];
+                        // Consume only consecutive draws of the same image and shell:
+                        // transparent entries from other surfaces retain their exact order.
+                        while let Some(Item::SurfacePatch(next, next_group, next_patch)) =
+                            draws.peek()
+                        {
+                            if next.entity != surface.entity || *next_group != group {
+                                break;
+                            }
+                            patches.push(*next_patch);
+                            draws.next();
+                        }
+                        self.draw_projected_patches(
                             world.host,
                             surface,
                             group,
-                            patch,
+                            &patches,
                             view_projection,
                             &mut stats,
                         )?;

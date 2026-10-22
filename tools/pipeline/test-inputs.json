@@ -773,6 +773,10 @@
     "builds": ["typescript", "gallery", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]
   },
+  "dist/tests/gallery/cockpit-camera.browser.test.js": {
+    "builds": ["typescript", "gallery", "gallery-fixtures"],
+    "requirements": ["node", "npm", "browser"]
+  },
   "dist/tests/gallery/cockpit-lights.browser.test.js": {
     "builds": ["typescript", "gallery", "gallery-fixtures"],
     "requirements": ["node", "npm", "browser"]

@@ -93,9 +93,15 @@ const RECORD = {
   totalGuiTextMeasurements: 39,
   guiHashes: 40,
   totalGuiHashes: 41,
+  surfaceCachePartialRepaints: 42,
+  surfaceCacheRepaintPixels: 43,
+  surfaceCacheFullPixels: 44,
+  totalSurfaceCachePartialRepaints: 45,
+  totalSurfaceCacheRepaintPixels: 46,
+  totalSurfaceCacheFullPixels: 47,
 } as const;
 
-const RECORD_WORDS = 42;
+const RECORD_WORDS = 48;
 /** Bit of `RECORD.flags`: the GUI layout words hold a Host sample. */
 const RECORD_LAYOUT = 1;
 
@@ -397,6 +403,9 @@ export class RenderWorkerService {
         ...pick(words, [
           "analyticGlyphResidentBytes",
           "surfaceCacheRepaints",
+          "surfaceCachePartialRepaints",
+          "surfaceCacheRepaintPixels",
+          "surfaceCacheFullPixels",
           "surfaceCacheReuses",
           "surfaceCacheDirect",
           "surfaceCacheFallbacks",
@@ -405,6 +414,9 @@ export class RenderWorkerService {
           "surfaceCacheEntries",
           "surfaceCacheResidentBytes",
           "totalSurfaceCacheRepaints",
+          "totalSurfaceCachePartialRepaints",
+          "totalSurfaceCacheRepaintPixels",
+          "totalSurfaceCacheFullPixels",
           "totalSurfaceCacheReuses",
           "totalSurfaceCacheDirect",
           "totalSurfaceCacheFallbacks",

@@ -337,6 +337,7 @@ export interface CameraProjectQuery {
 /** Deltas in the exact view domain; pixel rounding never supplies projection aspect. */
 export type CameraViewMotion =
   | { kind: "rotate"; yaw: number; pitch: number }
+  | { kind: "turn"; yaw: number; pitch: number }
   | { kind: "pan"; x: number; y: number }
   | { kind: "zoom"; amount: number };
 

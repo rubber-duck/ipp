@@ -12,6 +12,8 @@ const execute = promisify(execFile);
 
 for (const [part, command, minimumFrames] of [
   ["spatial", "spatial", 3],
+  ["camera", "camera", 4],
+  ["framing", "framing", 5],
   ["carousel", "carousel", 13],
   ["quality", "quality", 8],
   ["presentation", "exercise", 17],
@@ -21,7 +23,7 @@ for (const [part, command, minimumFrames] of [
 ] as const) {
   for (const [label, args] of [
     ["wide", []],
-    ["narrow", ["narrow"]],
+    ...(part === "framing" ? [] : [["narrow", ["narrow"]] as const]),
     ...(part === "spatial"
       ? ([
           ["ultrawide", ["ultrawide"]],

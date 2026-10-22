@@ -542,6 +542,24 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     where
         D::Texture: 't,
     {
+        self.draw_pieces_region(shapes, glyphs, range, domain, None, atlas, mvp, stats)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_pieces_region<'t>(
+        &mut self,
+        shapes: &D::Program,
+        glyphs: &D::Program,
+        range: std::ops::Range<usize>,
+        domain: [f32; 4],
+        damage: Option<[f32; 4]>,
+        atlas: impl Fn(usize) -> Option<&'t D::Texture>,
+        mvp: &[f32; 16],
+        stats: &mut RenderFrameWork,
+    ) -> Result<(), RenderError>
+    where
+        D::Texture: 't,
+    {
         if range.is_empty() {
             return Ok(());
         }
@@ -552,6 +570,13 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             .ok_or_else(|| RenderError::RenderDevice("GUI storage missing".into()))?;
         let missing = || RenderError::RenderDevice("GUI storage missing".into());
         self.draw_order.begin(domain);
+        let intersects = |bounds: Option<[f32; 4]>| {
+            damage.is_none_or(|rect| {
+                bounds.is_some_and(|b| {
+                    b[0] <= rect[2] && rect[0] <= b[2] && b[1] <= rect[3] && rect[1] <= b[3]
+                })
+            })
+        };
         for piece in &self.order[range.clone()] {
             match *piece {
                 GuiPieceRef::Shapes(index) => {
@@ -564,16 +589,21 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                         continue;
                     };
                     for shape in &self.piece_shapes[boxes.clone()] {
-                        self.draw_order.push(GuiDrawItem::Shape {
-                            first,
-                            count: shape.records,
-                            bounds: shape.bounds,
-                        });
+                        if intersects(shape.bounds) {
+                            self.draw_order.push(GuiDrawItem::Shape {
+                                first,
+                                count: shape.records,
+                                bounds: shape.bounds,
+                            });
+                        }
                         first += shape.records;
                     }
                 }
                 GuiPieceRef::Glyphs(index) => {
                     let piece = &self.glyph_pieces[index];
+                    if !intersects(piece.bounds) {
+                        continue;
+                    }
                     self.draw_order.push(GuiDrawItem::Glyphs {
                         first: storage
                             .glyphs

@@ -86,6 +86,24 @@ impl<D: RenderDevice> RenderService<D> {
         stats: &mut RenderFrameWork,
         group: Option<u32>,
     ) -> Result<(), RenderError> {
+        self.draw_canvas_region(
+            scene, mvp, clip, opacity, layering, viewport, stats, group, None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::services::render) fn draw_canvas_region(
+        &mut self,
+        scene: &CanvasScene<'_>,
+        mvp: [f32; 16],
+        clip: CanvasClip,
+        opacity: f32,
+        layering: CanvasLayering,
+        viewport: ipp_core::WorldViewport,
+        stats: &mut RenderFrameWork,
+        group: Option<u32>,
+        damage: Option<CanvasClip>,
+    ) -> Result<(), RenderError> {
         if group.is_none() && self.draw_cached_canvas(scene, &mvp, clip, opacity, stats)? {
             return Ok(());
         }
@@ -124,6 +142,13 @@ impl<D: RenderDevice> RenderService<D> {
                     continue;
                 };
                 self.device.borrow_mut().set_surface_double_sided(true)?;
+                if frame.scene.canvas.selection == scene.canvas.selection {
+                    self.device.borrow_mut().set_surface_owner(
+                        op.layer()
+                            .checked_add(1)
+                            .ok_or(RenderError::UnavailableOutput)?,
+                    )?;
+                }
                 let coordinate = frame
                     .scene
                     .canvas
@@ -136,6 +161,7 @@ impl<D: RenderDevice> RenderService<D> {
                         frame.scene.canvas.selection,
                         range,
                         frame.clip,
+                        damage,
                         &mvp,
                         &presentation,
                         stats,
@@ -853,11 +879,13 @@ impl<D: RenderDevice> RenderService<D> {
     /// Draw committed GUI batches `range` of the current Surface, within the canvas
     /// content rectangle `clip`: shapes through the canvas program, holding the
     /// Surface's paint parameter blocks, and glyphs through the glyph program.
+    #[allow(clippy::too_many_arguments)]
     fn draw_gui_work(
         &mut self,
         output: ipp_core::OutputRef,
         range: std::ops::Range<usize>,
         clip: CanvasClip,
+        damage: Option<CanvasClip>,
         mvp: &[f32; 16],
         presentation: &super::presentation::CanvasPresentation,
         stats: &mut RenderFrameWork,
@@ -884,11 +912,12 @@ impl<D: RenderDevice> RenderService<D> {
             .as_ref()
             .expect("glyph program created above");
         let atlas = &self.glyph_atlas;
-        cache.draw_pieces(
+        cache.draw_pieces_region(
             shapes,
             glyphs,
             range,
             clip,
+            damage,
             |page| atlas.page_texture(page),
             mvp,
             stats,

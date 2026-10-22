@@ -120,6 +120,7 @@ impl GlesRenderDevice {
             self.bind_vertex_array(target.vao);
             self.gl.draw_arrays(TRIANGLES, 0, 3);
         }
+        self.submission.surface_double_sided.set(Some(true));
         self.set_viewport(previous.viewport);
         self.set_depth_mask(true);
     }

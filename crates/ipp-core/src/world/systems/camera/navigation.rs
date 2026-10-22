@@ -12,6 +12,13 @@ pub enum CameraMotion {
         /// Rotation about camera-local right after yaw.
         pitch: f32,
     },
+    /// Turn in place, retaining position, scale and projection.
+    Turn {
+        /// Rotation about camera-local up, in radians.
+        yaw: f32,
+        /// Rotation about camera-local right after yaw, in radians.
+        pitch: f32,
+    },
     /// Move the scene with a normalized viewport right/down drag.
     Pan {
         /// Horizontal viewport delta, positive right.
@@ -48,6 +55,10 @@ pub(super) fn navigate_in_view(
         CameraMotion::Rotate {
             yaw,
             pitch,
+        }
+        | CameraMotion::Turn {
+            yaw,
+            pitch,
         } => {
             if !yaw.is_finite() || !pitch.is_finite() {
                 return Err(ErrorReason::InvalidValue);
@@ -73,7 +84,9 @@ pub(super) fn navigate_in_view(
 
             // Use the rounded quaternion that will actually be committed, with
             // authored scale, so its local -Z focus remains at the old world pivot.
-            preserve_pivot(pivot, next_camera.focus_distance, &mut next_transform)?;
+            if matches!(motion, CameraMotion::Rotate { .. }) {
+                preserve_pivot(pivot, next_camera.focus_distance, &mut next_transform)?;
+            }
         }
         CameraMotion::Pan {
             x,

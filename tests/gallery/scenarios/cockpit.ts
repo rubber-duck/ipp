@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
-import type { DatasetPage, Inspection, WorldReference } from "@ipp/client";
+import type {
+  CameraViewMotion,
+  DatasetPage,
+  Inspection,
+  WorldReference,
+} from "@ipp/client";
 import type { RgbaImage } from "../../../tools/shared-host/images.js";
 import {
   assertCylinder,
@@ -61,7 +66,7 @@ export interface CockpitDriver {
   capture(name: string): Promise<RgbaImage>;
   action(name: string, value?: unknown): Promise<unknown>;
   advance(seconds: number): Promise<void>;
-  navigate(): Promise<void>;
+  navigate(motion?: CameraViewMotion): Promise<void>;
 }
 
 function entity(state: Inspection, id: string) {
@@ -582,7 +587,7 @@ export async function exerciseCockpit(
     }
   };
   const initial = await driver.state();
-  assert.equal(initial.navigation, "fixed");
+  assert.equal(initial.navigation, "yaw");
   assert.equal(initial.panels.length, 6);
   assert.ok(
     initial.panels.every((panel) =>
@@ -604,7 +609,7 @@ export async function exerciseCockpit(
     initial.componentIds,
     Number(initial.options.projection),
   );
-  await driver.navigate();
+  await driver.navigate({ kind: "pan", x: 0.2, y: 0.2 });
   assert.deepEqual(
     fields(
       (await driver.state()).scene,
@@ -612,7 +617,7 @@ export async function exerciseCockpit(
       initial.componentIds.Transform!,
     ),
     camera,
-    "public navigation preserves the authored fixed cockpit Camera",
+    "cockpit navigation preserves the seated position",
   );
   const identities = initial.panels.map((panel, index) =>
     panel.entities

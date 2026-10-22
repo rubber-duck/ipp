@@ -51,11 +51,35 @@ function spatial(state: CockpitState) {
     Number(planet.sy) < Number(planet.sx),
     "the planet has a flattened polar axis",
   );
-  for (const face of ["front", "back", "left", "right", "top", "bottom"])
-    assert.equal(
-      entity(state, `cockpit-bridge-${face}`).link.parent,
-      bridge.id,
-    );
+  const quadrants = [
+    "upper-left",
+    "upper-right",
+    "lower-left",
+    "lower-right",
+  ].map((name) => entity(state, `cockpit-bridge-${name}`));
+  const textures = new Set<string>();
+  for (const quadrant of quadrants) {
+    assert.equal(quadrant.link.parent, bridge.id);
+    const material = quadrant.components.find(
+      (item) => item.component === state.componentIds.CustomMaterial,
+    )?.properties;
+    for (const index of [0, 1]) {
+      assert.ok(
+        material?.[`base${index}`] && material[`contribution${index}`],
+        "each sphere section binds two square base/contribution pairs",
+      );
+      assert.notDeepEqual(
+        material[`base${index}`],
+        material[`contribution${index}`],
+      );
+      textures.add(JSON.stringify(material[`base${index}`]));
+    }
+  }
+  assert.equal(
+    textures.size,
+    8,
+    "the four sphere sections retain eight distinct base tiles",
+  );
   // Recess landmarks measured on the authored 1672 × 941 camera plate.
   // Check the actual exported Surface, independently of its builder metadata.
   const recess = [
@@ -99,7 +123,12 @@ function spatial(state: CockpitState) {
     state.componentIds,
     Number(state.options.projection),
   );
-  return [bridge, mount, entity(state, "cockpit-console-shell")].map((item) =>
+  return [
+    bridge,
+    mount,
+    entity(state, "cockpit-console-shell"),
+    ...quadrants,
+  ].map((item) =>
     cockpitFields(state.scene, item.metadata.symbolicId!, transform),
   );
 }

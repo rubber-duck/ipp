@@ -86,10 +86,12 @@ export function CockpitPane({
       </Entity>
       <Panel id={`cockpit-pane-${index}`} width={width} height={height}>
         <PanelHeader
+          layer={1}
           id={`cockpit-header-${index}`}
           title={COCKPIT_SCREEN_TITLES[index]!}
         />
         <ScrollArea
+          layer={2}
           id={`cockpit-content-${index}`}
           ref={(handle) => wheelTarget?.("content", handle?.target ?? null)}
           padding="inset"
@@ -185,7 +187,7 @@ export function CockpitControls(props: GallerySceneControlsProps) {
   return (
     <Column>
       <TextLine
-        text="Choose a bridge screen. Scene and display controls live together on the first screen."
+        text="Drag the bridge background left or right to look around. Reset view faces forward. Scene and display controls live on the first screen."
         tone="neutral"
         size="small"
       />

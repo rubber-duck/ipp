@@ -25,6 +25,7 @@ const PREMULTIPLIED_BLEND: u8 = 4;
 /// Context-owned premultiplied whole-Surface image and its framebuffer.
 pub struct GlesSurfaceCacheTarget {
     texture: u32,
+    ownership: u32,
     framebuffer: u32,
     depth: u32,
     width: u32,
@@ -37,6 +38,7 @@ pub(super) struct GlesSurfaceCacheBinding {
     framebuffer: u32,
     host: GlesTarget,
     surface_viewport: [f32; 2],
+    pub(super) damage: Option<[u32; 4]>,
 }
 
 impl GlesRenderDevice {
@@ -93,6 +95,7 @@ impl GlesRenderDevice {
         self.submission.invalidate();
         let mut target = GlesSurfaceCacheTarget {
             texture: 0,
+            ownership: 0,
             framebuffer: 0,
             depth: 0,
             width,
@@ -150,6 +153,107 @@ impl GlesRenderDevice {
         Ok(target)
     }
 
+    pub(super) fn set_surface_cache_ownership(
+        &mut self,
+        target: &mut GlesSurfaceCacheTarget,
+        enabled: bool,
+    ) -> Result<(), RenderError> {
+        if enabled == (target.ownership != 0) {
+            return Ok(());
+        }
+        let previous = self.current_target();
+        self.bind_framebuffers(target.framebuffer, target.framebuffer);
+        // SAFETY: All names belong exclusively to this current context. Storage
+        // uses no CPU pointer; the borrowed target binding is restored below.
+        let complete = unsafe {
+            if enabled {
+                self.gl.gen_textures(1, &mut target.ownership);
+                self.gl.active_texture(0x84C0);
+                self.gl.bind_texture(TEXTURE_2D, target.ownership);
+                self.gl.tex_image(
+                    TEXTURE_2D,
+                    0,
+                    0x8058,
+                    target.width as i32,
+                    target.height as i32,
+                    0,
+                    0x1908,
+                    0x1401,
+                    ptr::null(),
+                );
+                self.gl.tex_parameter(TEXTURE_2D, 0x2801, 0x2600);
+                self.gl.tex_parameter(TEXTURE_2D, 0x2800, 0x2600);
+                self.gl.tex_parameter(TEXTURE_2D, 0x2802, 0x812F);
+                self.gl.tex_parameter(TEXTURE_2D, 0x2803, 0x812F);
+                self.gl.bind_texture(TEXTURE_2D, 0);
+            }
+            self.gl.framebuffer_texture(
+                FRAMEBUFFER,
+                0x8CE1,
+                TEXTURE_2D,
+                if enabled {
+                    target.ownership
+                } else {
+                    0
+                },
+                0,
+            );
+            let buffers = [0x8CE0, 0x8CE1];
+            self.gl.draw_buffers(
+                if enabled {
+                    2
+                } else {
+                    1
+                },
+                buffers.as_ptr(),
+            );
+            if !enabled {
+                self.gl.delete_textures(1, &target.ownership);
+                target.ownership = 0;
+            }
+            self.gl.check_framebuffer(FRAMEBUFFER) == FRAMEBUFFER_COMPLETE
+        };
+        self.restore_target(previous);
+        self.check()?;
+        if !complete || (enabled && target.ownership == 0) {
+            return Err(RenderError::UnavailableOutput);
+        }
+        Ok(())
+    }
+
+    fn bind_surface_cutout(&self, program: &GlesRenderProgram, target: &GlesSurfaceCacheTarget) {
+        let owner = if target.ownership == 0 {
+            0
+        } else {
+            self.submission.surface_cutout.get()
+        };
+        self.program_float(
+            program,
+            self.surface_location(program, c"u_cutout_owner"),
+            owner as f32,
+        );
+        self.program_int(
+            program,
+            self.surface_location(program, c"u_surface_ownership"),
+            2,
+        );
+        // SAFETY: The sampled texture is live and context-owned; GL keeps a name,
+        // not a Rust borrow. Unit zero is restored for ordinary image sampling.
+        unsafe {
+            self.gl.active_texture(0x84C2);
+            self.gl.bind_sampler(2, 0);
+            self.gl.bind_texture(
+                TEXTURE_2D,
+                if target.ownership == 0 {
+                    target.texture
+                } else {
+                    target.ownership
+                },
+            );
+            self.gl.active_texture(0x84C0);
+        }
+    }
+
     pub(super) fn resize_surface_cache_target(
         &mut self,
         target: &mut GlesSurfaceCacheTarget,
@@ -188,6 +292,10 @@ impl GlesRenderDevice {
         target.width = width;
         target.height = height;
         target.active = [width, height];
+        if target.ownership != 0 {
+            self.set_surface_cache_ownership(target, false)?;
+            self.set_surface_cache_ownership(target, true)?;
+        }
         Ok(())
     }
 
@@ -263,6 +371,36 @@ impl GlesRenderDevice {
         &mut self,
         target: &GlesSurfaceCacheTarget,
     ) -> Result<(), RenderError> {
+        self.begin_surface_cache_region(target, None)
+    }
+
+    pub(super) fn restore_surface_scissor(&self) {
+        // SAFETY: Scalar context state only. The stored rectangle belongs to the
+        // current image pass and never references client memory.
+        unsafe {
+            if let Some(rect) = self
+                .surface_cache_target
+                .as_ref()
+                .and_then(|target| target.damage)
+            {
+                self.gl.enable(0x0C11);
+                self.gl.scissor(
+                    rect[0] as i32,
+                    rect[1] as i32,
+                    rect[2] as i32,
+                    rect[3] as i32,
+                );
+            } else {
+                self.gl.disable(0x0C11);
+            }
+        }
+    }
+
+    pub(super) fn begin_surface_cache_region(
+        &mut self,
+        target: &GlesSurfaceCacheTarget,
+        damage: Option<[u32; 4]>,
+    ) -> Result<(), RenderError> {
         if self.surface_cache_target.is_some() {
             return Err(RenderError::RenderDevice(
                 "Surface cache targets cannot nest".into(),
@@ -281,6 +419,7 @@ impl GlesRenderDevice {
             framebuffer: target.framebuffer,
             host: self.current_target(),
             surface_viewport: self.surface_viewport,
+            damage,
         });
 
         // Box, path and glyph antialiasing now sizes pixels from the target.
@@ -291,10 +430,11 @@ impl GlesRenderDevice {
         self.bind_framebuffers(target.framebuffer, target.framebuffer);
         self.set_viewport([0, 0, target.active[0] as i32, target.active[1] as i32]);
         self.set_depth_mask(false);
+        self.restore_surface_scissor();
         // SAFETY: Scalar context state in the current context only.
         unsafe {
-            self.gl.disable(0x0C11); // SCISSOR_TEST
             self.gl.disable(0x0B90); // STENCIL_TEST
+            self.gl.disable(0x0BD0); // DITHER: ownership IDs must remain exact.
             self.gl.color_mask(1, 1, 1, 1);
             self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
             self.gl.clear(COLOR_BUFFER_BIT);
@@ -329,6 +469,7 @@ impl GlesRenderDevice {
         // Rebinds borrowed host handles and state saved at begin in this same
         // current context; the device takes no ownership of them.
         self.restore_target(binding.host);
+        self.restore_surface_scissor();
     }
 
     pub(super) fn draw_surface_cache(
@@ -379,6 +520,7 @@ impl GlesRenderDevice {
             self.set_depth_mask(false);
         }
         self.use_program(program.id);
+        self.bind_surface_cutout(program, target);
         let location = |name| self.surface_location(program, name);
         self.program_mat4(program, program.mvp, mvp);
         self.program_vec4(program, location(c"u_placement"), &rectangle);
@@ -425,16 +567,19 @@ impl GlesRenderDevice {
         clip: &[f32; 4],
         opacity: f32,
         flip_image: bool,
-        indices: std::ops::Range<u32>,
-    ) -> Result<(), RenderError> {
+        indices: &[[u32; 2]],
+    ) -> Result<u32, RenderError> {
         if self
             .surface_cache_target
             .as_ref()
             .is_some_and(|bound| bound.framebuffer == target.framebuffer)
-            || indices.start > indices.end
-            || indices.end > mesh.indices as u32
-            || !indices.start.is_multiple_of(3)
-            || !indices.end.is_multiple_of(3)
+            || indices.iter().any(|range| {
+                range[0]
+                    .checked_add(range[1])
+                    .is_none_or(|end| end > mesh.indices as u32)
+                    || !range[0].is_multiple_of(3)
+                    || !range[1].is_multiple_of(3)
+            })
         {
             return Err(RenderError::RenderDevice(
                 "invalid Surface image mesh draw".into(),
@@ -450,6 +595,7 @@ impl GlesRenderDevice {
         }
         self.set_depth_mask(false);
         self.use_program(program.id);
+        self.bind_surface_cutout(program, target);
         self.program_mat4(program, program.mvp, mvp);
         self.program_vec4(
             program,
@@ -490,15 +636,18 @@ impl GlesRenderDevice {
             self.gl.active_texture(0x84C0);
             self.gl.bind_sampler(0, 0);
             self.gl.bind_texture(TEXTURE_2D, target.texture);
-            self.gl.draw_elements(
-                0x0004,
-                (indices.end - indices.start) as i32,
-                0x1403,
-                (indices.start as usize * 2) as *const std::ffi::c_void,
-            );
+            for range in indices {
+                self.gl.draw_elements(
+                    0x0004,
+                    range[1] as i32,
+                    0x1403,
+                    (range[0] as usize * 2) as *const std::ffi::c_void,
+                );
+            }
             self.gl.bind_texture(TEXTURE_2D, 0);
         }
-        self.check_draw()
+        self.check_draw()?;
+        Ok(indices.len() as u32)
     }
 
     pub(super) fn delete_surface_cache_target(&mut self, target: GlesSurfaceCacheTarget) {
@@ -524,6 +673,7 @@ impl GlesRenderDevice {
             }
             if target.texture != 0 {
                 self.gl.delete_textures(1, &target.texture);
+                self.gl.delete_textures(1, &target.ownership);
             }
         }
     }

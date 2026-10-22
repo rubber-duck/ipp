@@ -178,6 +178,7 @@ def placement_preview(scene):
 
 
 def build():
+    runpy.run_path(str(ROOT / "lighting_tiles.py"))["prepare"]()
     scene = bpy.data.scenes.new("Cockpit spatial bridge")
     bpy.context.window.scene = scene
     for other in list(bpy.data.scenes):

@@ -1,4 +1,4 @@
-/** Independent bridge cubemap and rotating planetary surfaces, driven by Host clips. */
+/** Fixed bridge panorama shell and rotating planetary surfaces, driven by Host clips. */
 import { useMemo } from "react";
 import {
   Animation,
@@ -13,6 +13,7 @@ import type { AnimationClipSource } from "@ipp/client";
 import type { CockpitOptions } from "./options.js";
 import { textureSource, type CockpitRuntime } from "./runtime.js";
 import FRAGMENT from "./atmosphere.glsl";
+import { CockpitBridge } from "./bridge.js";
 
 const texture = (source: string) =>
   ({
@@ -80,43 +81,44 @@ export function CockpitExterior({
         </FragmentShader>
       </ShaderAsset>
       <AnimationAsset id="cockpit-exterior-motion" clip={clip} />
-      {runtime.exterior.bodies.map((body) => (
-        <Entity key={body.entity} bindTo={body.entity}>
-          <CustomMaterial
-            source={assetRef("cockpit-exterior-shader")}
-            alpha_mode={
-              body.role === "atmosphere" ? 2 : body.role === "bridge" ? 1 : 0
-            }
-            base={texture(body.baseTexture)}
-            cities={texture(runtime.exterior.textures.cities)}
-            role={[
-              "planet",
-              "atmosphere",
-              "stars",
-              "bridge",
-              "trim",
-              "starlight",
-            ].indexOf(body.role)}
-            illumination={state.illumination}
-            phase={0}
-            cloudPhase={0}
-            cityPhase={0}
-            intensity={state.atmosphere}
-            cityGain={state.cities}
-            starGain={state.stars}
-            receives_light
-            receives_shadows={false}
-            casts_shadows={false}
-          />
-          {(body.role === "planet" || body.role === "atmosphere") && (
-            <Animation
-              source={assetRef("cockpit-exterior-motion")}
-              looping
-              playing={state.atmospherePlaying}
+      <CockpitBridge runtime={runtime} component={component} state={state} />
+      {runtime.exterior.bodies
+        .filter((body) => body.role !== "bridge")
+        .map((body) => (
+          <Entity key={body.entity} bindTo={body.entity}>
+            <CustomMaterial
+              source={assetRef("cockpit-exterior-shader")}
+              alpha_mode={body.role === "atmosphere" ? 2 : 0}
+              base={texture(body.baseTexture)}
+              cities={texture(runtime.exterior.textures.cities)}
+              role={[
+                "planet",
+                "atmosphere",
+                "stars",
+                "bridge",
+                "trim",
+                "starlight",
+              ].indexOf(body.role)}
+              illumination={state.illumination}
+              phase={0}
+              cloudPhase={0}
+              cityPhase={0}
+              intensity={state.atmosphere}
+              cityGain={state.cities}
+              starGain={state.stars}
+              receives_light
+              receives_shadows={false}
+              casts_shadows={false}
             />
-          )}
-        </Entity>
-      ))}
+            {(body.role === "planet" || body.role === "atmosphere") && (
+              <Animation
+                source={assetRef("cockpit-exterior-motion")}
+                looping
+                playing={state.atmospherePlaying}
+              />
+            )}
+          </Entity>
+        ))}
     </>
   );
 }

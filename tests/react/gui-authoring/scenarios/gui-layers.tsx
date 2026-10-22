@@ -227,25 +227,39 @@ function expected(
 ): [string, (rgb: Rgb) => boolean] | undefined {
   const margin = 2;
   const [base, raised, badge] = planes(pose, pixel);
+  // Ownership is determined in the flattened content coordinates, before
+  // projection separates the regions. Higher painted regions punch holes below.
+  const clearAt = (point: readonly [number, number] | null) =>
+    (inside(point, BLUE, margin) || outside(point, BLUE, margin)) &&
+    (inRing(point, margin) || outsideRing(point, margin)) &&
+    (pose.raised === false ||
+      inside(point, GREEN, margin) ||
+      outside(point, GREEN, margin));
+  if (![base, raised, badge].every(clearAt)) return undefined;
+  const topClear = (point: readonly [number, number] | null) =>
+    outside(point, BLUE, margin) && outsideRing(point, margin);
+  const baseClear =
+    topClear(base) && (pose.raised === false || outside(base, GREEN, margin));
   const hits = {
-    red: inside(base, RED, margin),
-    green: inside(raised, GREEN, margin),
+    red: baseClear && inside(base, RED, margin),
+    green: topClear(raised) && inside(raised, GREEN, margin),
     blue: inside(badge, BLUE, margin),
     ring: inRing(badge, margin),
-    panel: inside(base, CANVAS, margin),
+    panel: baseClear && inside(base, CANVAS, margin),
   };
   const clear =
-    (hits.red || outside(base, RED, margin)) &&
-    (hits.green || outside(raised, GREEN, margin)) &&
+    (inside(base, RED, margin) || outside(base, RED, margin)) &&
+    (inside(raised, GREEN, margin) || outside(raised, GREEN, margin)) &&
     (hits.blue || outside(badge, BLUE, margin)) &&
     (hits.ring || outsideRing(badge, margin)) &&
-    (hits.panel || outside(base, CANVAS, margin));
+    (inside(base, CANVAS, margin) || outside(base, CANVAS, margin));
   if (!clear) return undefined;
   if (front) {
     if (hits.blue) return ["blue", blue];
     if (hits.ring) return ["yellow", yellow];
     if (hits.green) return ["green", green];
     if (hits.red) return ["red", red];
+    if (!hits.panel && inside(base, CANVAS, margin)) return ["hole", black];
     return undefined;
   }
   // From behind the base plane is nearest: red covers, the panel tints.
@@ -265,8 +279,8 @@ function expected(
 /** Sampled agreement of one capture with the oracle, per expected colour. */
 function judge(frame: PresentedCapture, pose: PanelPose, front: boolean) {
   const counts = new Map<string, { matched: number; missed: number }>();
-  for (let y = 1; y < VIEW[1]; y += 3)
-    for (let x = 1; x < VIEW[0]; x += 3) {
+  for (let y = 1; y < VIEW[1]; y += 2)
+    for (let x = 1; x < VIEW[0]; x += 2) {
       const verdict = expected(pose, [x, y], front);
       if (!verdict) continue;
       const count = counts.get(verdict[0]) ?? { matched: 0, missed: 0 };

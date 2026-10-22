@@ -816,6 +816,16 @@ impl<T> SurfaceTextureCache<T> {
             .map(|image| (&image.target, image.size))
     }
 
+    /// Only a successful paint of the current allocation can be preserved.
+    pub(crate) fn can_preserve(&self, world: WorldId, entity: EntityId) -> bool {
+        self.entries.get(&(world, entity)).is_some_and(|entry| {
+            entry
+                .painted
+                .as_ref()
+                .is_some_and(|paint| paint.complete && paint.unpopulated == 0)
+        })
+    }
+
     pub(crate) fn take_image(
         &mut self,
         world: WorldId,

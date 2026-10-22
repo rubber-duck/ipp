@@ -11,6 +11,7 @@ mod error_checks;
 mod render_device;
 mod retained_records;
 mod surface_instances;
+mod surface_ownership;
 mod uniform_cache;
 
 pub use super::retained::records::{GuiRecord, GuiRecordKind};

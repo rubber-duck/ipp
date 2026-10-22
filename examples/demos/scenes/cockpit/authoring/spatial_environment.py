@@ -1,28 +1,17 @@
-"""Spatial bridge shell, cubemap reprojection and oblate planet authoring.
+"""Fixed inward-facing bridge panorama shell and oblate planet authoring."""
 
-Generated artwork stays unchanged. Cubemap faces are deterministic projections
-of bridge-panorama.png, with matching border directions on adjacent faces.
-"""
-
+import json
 import math
 import runpy
 from pathlib import Path
 
 import bpy
-import numpy as np
 from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parent
-FACE_SIZE = 768
 EARTH_QUALITY = "4k"
-FACES = (
-    ("front", (0, 1, 0), (1, 0, 0), (0, 0, 1)),
-    ("right", (1, 0, 0), (0, -1, 0), (0, 0, 1)),
-    ("back", (0, -1, 0), (-1, 0, 0), (0, 0, 1)),
-    ("left", (-1, 0, 0), (0, 1, 0), (0, 0, 1)),
-    ("top", (0, 0, 1), (1, 0, 0), (0, -1, 0)),
-    ("bottom", (0, 0, -1), (1, 0, 0), (0, 1, 0)),
-)
+BRIDGE_RADIUS = 12
+BRIDGE_FORWARD_OFFSET = 8
 
 
 def image(name):
@@ -32,7 +21,7 @@ def image(name):
     return value
 
 
-def textured(name, source, aperture=False):
+def textured(name, source, aperture=False, lamps=None):
     material = bpy.data.materials.new(name)
     material.use_nodes = True
     material["ipp_unlit"] = True
@@ -43,7 +32,17 @@ def textured(name, source, aperture=False):
         texture.outputs["Color"], nodes.get("Principled BSDF").inputs["Base Color"]
     )
     emission = nodes.new("ShaderNodeEmission")
-    links.new(texture.outputs["Color"], emission.inputs["Color"])
+    color = texture.outputs["Color"]
+    if lamps is not None:
+        lamp_texture = nodes.new("ShaderNodeTexImage")
+        lamp_texture.image = lamps
+        combined = nodes.new("ShaderNodeMixRGB")
+        combined.blend_type = "ADD"
+        combined.inputs[0].default_value = 1
+        links.new(color, combined.inputs[1])
+        links.new(lamp_texture.outputs["Color"], combined.inputs[2])
+        color = combined.outputs[0]
+    links.new(color, emission.inputs["Color"])
     output = emission.outputs[0]
     if aperture:
         transparent = nodes.new("ShaderNodeBsdfTransparent")
@@ -68,67 +67,73 @@ def empty(name, location=(0, 0, 0)):
     return obj
 
 
-def cubemap(camera):
-    source = image("bridge-panorama.png")
-    width, height = source.size
-    data = np.empty(width * height * 4, np.float32)
-    source.pixels.foreach_get(data)
-    data = data.reshape(height, width, 4)
-    # Pixel centers and extended half-texel edge samples share one spherical map.
-    s, t = np.meshgrid(np.linspace(-1, 1, FACE_SIZE), np.linspace(-1, 1, FACE_SIZE))
-    pitch = math.radians(22)
-    faces = []
-    for name, axis, right, up in FACES:
-        direction = np.array(axis) + s[:, :, None] * right + t[:, :, None] * up
-        direction /= np.linalg.norm(direction, axis=2, keepdims=True)
-        x, y, z = direction.transpose(2, 0, 1)
-        y, z = (
-            y * math.cos(pitch) - z * math.sin(pitch),
-            y * math.sin(pitch) + z * math.cos(pitch),
-        )
-        u = (0.5 + np.arctan2(x, y) / math.tau) % 1
-        v = 0.5 + np.arcsin(np.clip(z, -1, 1)) / math.pi
-        px, py = u * width - 0.5, np.clip(v * height - 0.5, 0, height - 1)
-        ix, iy = np.floor(px).astype(int), np.floor(py).astype(int)
-        fx, fy = (px - ix)[:, :, None], (py - iy)[:, :, None]
-        a = data[iy, ix % width] * (1 - fx) + data[iy, (ix + 1) % width] * fx
-        b = (
-            data[np.minimum(iy + 1, height - 1), ix % width] * (1 - fx)
-            + data[np.minimum(iy + 1, height - 1), (ix + 1) % width] * fx
-        )
-        pixels = a * (1 - fy) + b * fy
-        face = bpy.data.images.new(
-            "bridge-cube-" + name, FACE_SIZE, FACE_SIZE, alpha=True
-        )
-        face.pixels.foreach_set(pixels.astype(np.float32).ravel())
-        face.filepath_raw = str(ROOT / (face.name + ".png"))
-        face.file_format = "PNG"
-        face.save()
-        face.pack()
-        face.filepath = "//bridge-cube-" + name + ".png"
-        mesh = bpy.data.meshes.new("Bridge cubemap " + name)
-        corners = [(-1, -1), (1, -1), (1, 1), (-1, 1)]
-        mesh.from_pydata(
-            [
-                camera
-                + Vector((24, 24, 12))
-                * (Vector(axis) + a * Vector(right) + b * Vector(up))
-                for a, b in corners
-            ],
-            [],
-            [(0, 1, 2, 3)],
-        )
-        uv = mesh.uv_layers.new(name="Cubemap face")
+def bridge_interior(camera):
+    # Four independent high-detail textures cover one fixed spherical shell.
+    # Use the original pixel split latitude (the source has an odd height), so
+    # the neighboring mesh boundaries coincide without shifting the artwork.
+    center = camera + Vector((0, BRIDGE_FORWARD_OFFSET, 0))
+    tiles = json.loads((ROOT / "bridge-tiles.json").read_text())["tiles"]
+    parts = []
+    for quadrant, tile in enumerate(tiles):
+        name = tile["name"]
+        left, top, right, bottom = tile["bounds"]
+        segments, rings = 64, 32
+        positions, coordinates, faces = [], [], []
+        for ring in range(rings + 1):
+            v = ring / rings
+            latitude = (0.5 - (bottom + (top - bottom) * v)) * math.pi
+            for segment in range(segments + 1):
+                u = segment / segments
+                longitude = (left + (right - left) * u - 0.5) * math.tau
+                positions.append(
+                    center
+                    + BRIDGE_RADIUS
+                    * Vector(
+                        (
+                            math.cos(latitude) * math.sin(longitude),
+                            math.cos(latitude) * math.cos(longitude),
+                            math.sin(latitude),
+                        )
+                    )
+                )
+                coordinates.append((u, v))
+        for ring in range(rings):
+            for segment in range(segments):
+                a = ring * (segments + 1) + segment
+                b, c, d = a + 1, a + segments + 2, a + segments + 1
+                # Longitude then latitude winds inward. Only the sphere's poles
+                # need triangles; the quadrant boundaries remain ordinary quads.
+                faces.append(
+                    (a, c, d)
+                    if ring == 0 and bottom == 1
+                    else (a, b, c)
+                    if ring == rings - 1 and top == 0
+                    else (a, b, c, d)
+                )
+        mesh = bpy.data.meshes.new("Bridge spherical quadrant " + name)
+        mesh.from_pydata(positions, [], faces)
+        mesh.update()
+        uv = mesh.uv_layers.new(name="Quadrant-local panorama")
         for loop in mesh.loops:
-            a, b = corners[loop.vertex_index]
-            uv.data[loop.index].uv = ((a + 1) / 2, (b + 1) / 2)
-        mesh.materials.append(textured("Bridge " + name, face, aperture=True))
+            uv.data[loop.index].uv = coordinates[loop.vertex_index]
+        contribution_map = "bridge-" + name + "-contribution.png"
+        mesh.materials.append(
+            textured(
+                "Bridge " + name,
+                image("bridge-" + name + "-fixtures-base.png"),
+                aperture=True,
+                lamps=image(contribution_map),
+            )
+        )
         obj = bpy.data.objects.new("cockpit-bridge-" + name, mesh)
         bpy.context.scene.collection.objects.link(obj)
         obj["ipp_id"] = obj.name
         obj["environment_role"] = "bridge"
-        faces.append(obj.name)
-    return faces
+        obj["lighting_key"] = "bridge-" + name
+        obj["panorama_bounds"] = tile["bounds"]
+        obj["panorama_quadrant"] = quadrant
+        parts.append(obj)
+    return parts
 
 
 def sphere(name, location, radius, material, role, scale=(1, 1, 1), inward=False):
@@ -174,9 +179,9 @@ def build(camera):
     mount["pane_width"] = 4.8
     mount["pane_height"] = 4.0
     mount["pane_elevation"] = 0.65
-    faces = cubemap(camera)
-    for name in faces:
-        bpy.data.objects[name].parent = bridge
+    interior = bridge_interior(camera)
+    for part in interior:
+        part.parent = bridge
     # NASA's registered maps replace the generated globe. Keep the prepared 8K
     # master on disk; the demo uses 4K albedo/clouds and 2K night emission.
     base = image(f"earth/surface-{EARTH_QUALITY}.jpg")
@@ -230,7 +235,12 @@ def build(camera):
         "mount": mount.name,
         "paneExtent": [mount["pane_width"], mount["pane_height"]],
         "paneElevation": mount["pane_elevation"],
-        "cubemap": faces,
+        "interior": [part.name for part in interior],
+        "panoramaSplit": json.loads((ROOT / "bridge-tiles.json").read_text())["tiles"][
+            0
+        ]["bounds"][3],
+        "interiorRadius": BRIDGE_RADIUS,
+        "interiorForwardOffset": BRIDGE_FORWARD_OFFSET,
         "planet": planet.name,
         "atmosphere": atmosphere.name,
         "stars": stars.name,

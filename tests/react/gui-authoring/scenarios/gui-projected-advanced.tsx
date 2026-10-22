@@ -181,9 +181,13 @@ export function imageExpectations(pose: Pose, rear: boolean) {
       const lower = projectedSurfaceRay(pose, [x, y], 0);
       const upper = projectedSurfaceRay(pose, [x, y], 1);
       if (!inside(lower, lowerRect, 4)) continue;
-      if (inside(upper, upperRect, 4)) overlap.push([x, y]);
-      // Base chart covered by the upper rectangle, while its separated shell misses it.
-      // A single flattened image/topmost mask would incorrectly suppress these base pixels.
+      if (
+        inside(upper, upperRect, 4) &&
+        (inside(lower, upperRect, 4) || !inside(lower, upperRect, -2))
+      )
+        overlap.push([x, y]);
+      // The upper cutout leaves a hole at its original content coordinates.
+      // Select pixels where the displaced upper shell no longer covers that hole.
       if (inside(lower, upperRect, 1) && !inside(upper, upperRect, -2))
         revealed.push([x, y]);
     }
@@ -195,11 +199,30 @@ export function imageExpectations(pose: Pose, rear: boolean) {
     revealed.length > 3,
     `No independently selected parallax stripe: ${JSON.stringify(pose)}`,
   );
+  const alpha = UPPER[3] + LOWER[3] * (1 - UPPER[3]);
+  const flattened = [0, 1, 2].map(
+    (channel) =>
+      (UPPER[channel]! * UPPER[3] +
+        LOWER[channel]! * LOWER[3] * (1 - UPPER[3])) /
+      alpha,
+  );
+  flattened.push(alpha);
+  const mixedAt = (point: Point) => {
+    const lower = projectedSurfaceRay(pose, point, 0);
+    // Another surviving lower region can lie behind/in front of the displaced
+    // cutout. Its contribution follows view depth, independently of ownership.
+    return inside(lower, upperRect)
+      ? composite(UPPER, LOWER)
+      : rear
+        ? composite(LOWER, flattened)
+        : composite(flattened, LOWER);
+  };
   return {
     overlap,
     revealed,
-    mixed: rear ? composite(LOWER, UPPER) : composite(UPPER, LOWER),
-    base: composite(LOWER, [0, 0, 0, 0]),
+    mixed: mixedAt(overlap[0]!),
+    mixedAt,
+    base: BACKDROP.map((value) => Math.round(value * 255)),
   };
 }
 
@@ -253,6 +276,7 @@ export async function guiProjectedAdvanced(
     pose: Pose,
     delayed?: { bitmap: ClientAssetSource; font: ClientAssetSource },
     empty = false,
+    markX?: number,
   ) => (
     <>
       {camera}
@@ -332,6 +356,20 @@ export async function guiProjectedAdvanced(
                 <Layout width={sliderRect[2]} height={sliderRect[3]} />
                 <Slider min={0} max={1} value={0.35} />
               </Entity>
+              {markX !== undefined && (
+                <Entity id="damage-marker">
+                  <Style
+                    x={markX}
+                    y={40}
+                    layer={900000}
+                    red={0.1}
+                    green={0.9}
+                    blue={0.3}
+                    alpha={0.6}
+                  />
+                  <Box width={12} height={10} />
+                </Entity>
+              )}
             </Children>
           </Entity>
         )}
@@ -468,7 +506,7 @@ export async function guiProjectedAdvanced(
         `advanced-shell-${index}`,
         (frame) => {
           const mixed = expected.overlap.filter((p) =>
-            colour(pixel(frame, p), expected.mixed),
+            colour(pixel(frame, p), expected.mixedAt(p)),
           ).length;
           const base = expected.revealed.filter((p) =>
             colour(pixel(frame, p), expected.base),
@@ -492,7 +530,7 @@ export async function guiProjectedAdvanced(
         [
           ...expected.overlap.map((point) => ({
             point,
-            expected: expected.mixed,
+            expected: expected.mixedAt(point),
           })),
           ...expected.revealed.map((point) => ({
             point,
@@ -517,6 +555,59 @@ export async function guiProjectedAdvanced(
           "Transformed projected drag did not change value",
         );
         await pointInput("pointerUp", pose, [85, 102]);
+      }
+    }
+    if (!recovery) {
+      // Sparse edits must reconstruct the same pixels as a fresh image, including
+      // transparent overlap and the old ownership hole after moving/removing paint.
+      await input?.close();
+      input = undefined;
+      const damagePose: Pose = {
+        shape: "cylinder",
+        curvature: 0.8,
+        spacing: 0.28,
+      };
+      const diagnostics = renderDiagnostics(host);
+      check(diagnostics, "Damage renderer diagnostics missing");
+      await root.render(scene(damagePose));
+      await session.capture({ afterOutputs: [childOutput!] });
+      for (const [index, x] of [28, 48, undefined].entries()) {
+        const before = (await diagnostics.statistics()).surfaces;
+        await root.render(scene(damagePose, undefined, false, x));
+        const partial = await session.capture({ afterOutputs: [childOutput!] });
+        remember(`damage-partial-${index}`, partial);
+        // Removing all painted groups invalidates the image. Restoring the scene
+        // gives a fresh full redraw at the same dimensions, without test controls.
+        const limits = await diagnostics.statistics();
+        const repainted =
+          limits.surfaces.totalSurfaceCacheRepaintPixels -
+          before.totalSurfaceCacheRepaintPixels;
+        const fullPixels =
+          limits.surfaces.totalSurfaceCacheFullPixels -
+          before.totalSurfaceCacheFullPixels;
+        check(
+          limits.surfaces.totalSurfaceCachePartialRepaints >
+            before.totalSurfaceCachePartialRepaints &&
+            repainted * 2 < fullPixels,
+          `Sparse edit must repaint less than half the image: ${JSON.stringify({ repainted, fullPixels, partialRepaints: limits.surfaces.totalSurfaceCachePartialRepaints - before.totalSurfaceCachePartialRepaints })}`,
+        );
+        await root.render(scene(damagePose, undefined, true));
+        await session.capture({ afterOutputs: [childOutput!] });
+        await root.render(scene(damagePose, undefined, false, x));
+        const full = await captureMatched(`damage-full-${index}`, (frame) => {
+          if (frame.failedDrawCalls !== 0) return false;
+          const a = new Uint8Array(partial.pixels),
+            b = new Uint8Array(frame.pixels);
+          return a.every((value, lane) => Math.abs(value - b[lane]!) <= 2);
+        });
+        observations.push({
+          damageEdit: index,
+          identicalImage: true,
+          repainted,
+          fullPixels,
+          sequence: String(full.sequence),
+          surfaces: limits.surfaces,
+        });
       }
     }
     // Stable identity through geometry writes, continuation outside the rectangle,
@@ -921,7 +1012,7 @@ export async function guiProjectedAdvanced(
     observations,
     comparisons,
     assertions: [
-      "independent linear-light transparent shell composition and parallax",
+      "independent flattened transparency, shared-image cutouts and parallax holes",
       "rear/oblique/nonuniform placement and local-normal input",
       "capture miss/continuation and provider lifetime fences",
       recovery

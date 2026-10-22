@@ -120,6 +120,15 @@ fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
         };
         for (kind, first, second, motion) in [
             (
+                3,
+                0.25,
+                -0.5,
+                CameraViewMotion::Turn {
+                    yaw: 0.25,
+                    pitch: -0.5,
+                },
+            ),
+            (
                 0,
                 0.25,
                 -0.5,
@@ -174,7 +183,7 @@ fn navigation_request_fixtures(covered: &mut BTreeSet<&'static str>) {
             );
             let mut malformed = bytes.clone();
             let kind_offset = malformed.len() - 12;
-            malformed[kind_offset..kind_offset + 4].copy_from_slice(&3_u32.to_le_bytes());
+            malformed[kind_offset..kind_offset + 4].copy_from_slice(&4_u32.to_le_bytes());
             assert!(matches!(
                 decode_request(&malformed, 7),
                 Err(ProtocolError::Malformed("camera motion"))

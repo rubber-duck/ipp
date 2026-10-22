@@ -128,6 +128,7 @@ gl_functions! {
     bind_framebuffer: c"glBindFramebuffer"(arg0: u32, arg1: u32) -> () => State;
     framebuffer_texture: c"glFramebufferTexture2D"(arg0: u32, arg1: u32, arg2: u32, arg3: u32, arg4: i32) -> () => State;
     check_framebuffer: c"glCheckFramebufferStatus"(arg0: u32) -> u32 => Other;
+    scissor: c"glScissor"(arg0: i32, arg1: i32, arg2: i32, arg3: i32) -> () => State;
     draw_buffers: c"glDrawBuffers"(arg0: i32, arg1: *const u32) -> () => State;
     read_buffer: c"glReadBuffer"(arg0: u32) -> () => Other;
     uniform_block_index: c"glGetUniformBlockIndex"(arg0: u32, arg1: *const c_char) -> u32 => State;

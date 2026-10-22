@@ -157,10 +157,14 @@ function CockpitWorld({
             width={size[0]}
             height={size[1]}
             curvature={placement!.curvature}
-            layer_spacing={0}
+            layer_spacing={state.exploded ? 0.06 : 0}
           />
         ) : (
-          <FlatSurface width={size[0]} height={size[1]} layer_spacing={0} />
+          <FlatSurface
+            width={size[0]}
+            height={size[1]}
+            layer_spacing={!dashboard && state.exploded ? 0.06 : 0}
+          />
         )}
         <CanvasWorld
           presentation={{ anchor: name }}
@@ -283,7 +287,7 @@ export const cockpitScene: GallerySceneDefinition = {
   shortLabel: "Cockpit",
   description:
     "Adjust the bridge displays, send a pulse and explore sample telemetry.",
-  cameraNavigation: false,
+  cameraNavigation: "yaw",
   controls: CockpitControls,
   defaultOptions: { ...COCKPIT_DEFAULTS },
   actions: [
@@ -739,7 +743,20 @@ export const cockpitScene: GallerySceneDefinition = {
       sceneInput: new CockpitCarouselInput({
         signal: context.signal,
         ready: () => carouselReady,
-        camera: readPose(cameraPose),
+        camera: async () => {
+          const page = await client.inspectPage({
+            collection: "entities",
+            target: camera.id,
+          });
+          const fields = page.entities
+            .find((entity) => entity.id === camera.id)
+            ?.components.find(
+              (component) => component.component === transform.id,
+            )?.fields;
+          if (!fields)
+            throw new Error("Cockpit camera transform is unavailable");
+          return readPose(fields);
+        },
         client: context.presentationClient ?? (client as PickingWorldClient),
         view: () => {
           if (!context.cameraView)

@@ -1117,9 +1117,9 @@ export function encodeRequest(request: Request): Uint8Array<ArrayBuffer> {
       writeViewSource(w, request.publication);
       writeCameraPath(w, request.path ?? []);
       const motion = request.motion;
-      if (motion.kind === "rotate") {
+      if (motion.kind === "rotate" || motion.kind === "turn") {
         exactFields(motion, ["kind", "yaw", "pitch"]);
-        w.u32(0);
+        w.u32(motion.kind === "turn" ? 3 : 0);
         w.f32(motion.yaw);
         w.f32(motion.pitch);
       } else if (motion.kind === "pan") {

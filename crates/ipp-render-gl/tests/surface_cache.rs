@@ -2028,6 +2028,16 @@ fn projected_geometry_and_placement_reuse_content_images_and_retained_work() {
         record(&renderer, world, panel.anchor).presentation,
         SurfaceCachePresentation::Reused
     );
+    for step in 0..20 {
+        move_surface(&mut host, panel, -0.01 - step as f32 * 0.001);
+        let moved = frame(&mut renderer, &mut host, world, 0.0);
+        assert_eq!(moved.surface_cache_repaints, 0);
+        assert_eq!(moved.surface_cache_allocations, 0);
+        assert_eq!(
+            moved.uploaded_bytes, 0,
+            "motion must not rebuild draw meshes"
+        );
+    }
     drop(renderer);
     assert_eq!(state.cache_targets_live.get(), 0);
 }
@@ -2268,7 +2278,7 @@ fn projected_missing_bitmap_preserves_ready_siblings_and_repaints_on_readiness()
 }
 
 #[test]
-fn projected_separated_layers_keep_independent_images_and_cleanup_partial_mesh_failures() {
+fn projected_separated_layers_share_one_image_and_cleanup_partial_mesh_failures() {
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world, panel) = scene(&mut host);
     projected(&mut host, panel, 0.5, 0.1);
@@ -2288,17 +2298,16 @@ fn projected_separated_layers_keep_independent_images_and_cleanup_partial_mesh_f
         ],
     );
     let first = frame(&mut renderer, &mut host, world, 0.0);
-    assert_eq!(first.surface_cache_repaints, 2);
-    assert_eq!(first.surface_cache_entries, 2);
+    assert_eq!(first.surface_cache_repaints, 1);
+    assert_eq!(first.surface_cache_entries, 1);
     let diagnostic = record(&renderer, world, panel.anchor);
     assert_eq!(
         diagnostic.resident_bytes,
         diagnostic.capacity[0] * diagnostic.capacity[1] * 4 * 2
     );
-    assert_eq!(state.cache_targets_live.get(), 2);
+    assert_eq!(state.cache_targets_live.get(), 1);
     let begins = state.cache_begins.get();
-    // A failure on the second mesh upload must clean both a locally transferred
-    // first image and the remaining old image without dropping raw handles.
+    // A failure on the second mesh upload releases the shared image too.
     state.fail_mesh_attempt.set(state.mesh_attempts.get() + 2);
     edit_projected(&mut host, panel, -0.5, 0.1);
     let failed = frame(&mut renderer, &mut host, world, 0.0);
@@ -2312,9 +2321,9 @@ fn projected_separated_layers_keep_independent_images_and_cleanup_partial_mesh_f
     state.fail_mesh_attempt.set(0);
     assert_eq!(
         frame(&mut renderer, &mut host, world, 0.0).surface_cache_repaints,
-        2
+        1
     );
-    // Removing the middle/upper occupied group repacks images from publication.
+    // Collapsing layers keeps one color image and removes ownership storage.
     edit_projected(&mut host, panel, 0.5, 0.0);
     assert_eq!(
         frame(&mut renderer, &mut host, world, 0.0).surface_cache_entries,
@@ -2732,5 +2741,73 @@ fn authored_texture_cap_limits_and_shrinks_flat_and_curved_images() {
         cache_policy(&mut host, panel, Some(ALWAYS));
         frame(&mut renderer, &mut host, world, 0.0);
         assert_eq!(record(&renderer, world, panel.anchor).size, original);
+    }
+}
+
+#[test]
+fn sparse_cached_edits_damage_old_and_new_bounds_across_skipped_publications() {
+    for curved in [false, true] {
+        let mut host = support::task_scheduler::host();
+        let (mut renderer, state, world, panel) = scene(&mut host);
+        if curved {
+            projected(&mut host, panel, 0.5, 0.0);
+        }
+        cache_policy(
+            &mut host,
+            panel,
+            Some(SurfaceCache {
+                force_cache: true,
+                ..ALWAYS
+            }),
+        );
+        let mark = canvas::add_content(
+            &mut host,
+            panel.output,
+            vec![
+                ComponentValue::CanvasBox(ipp_core::components::CanvasBox {
+                    width: 0.05,
+                    height: 0.05,
+                    ..Default::default()
+                }),
+                ComponentValue::CanvasStyle(ipp_core::components::CanvasStyle {
+                    x: 0.2,
+                    y: 0.2,
+                    ..Default::default()
+                }),
+            ],
+        );
+        frame(&mut renderer, &mut host, world, 0.5);
+        frame(&mut renderer, &mut host, world, 0.5);
+        for x in [0.25, 0.3] {
+            canvas::apply(
+                &mut host,
+                panel.output.world().id(),
+                vec![Command::insert_value(
+                    EntityRef::Handle(mark),
+                    ComponentValue::CanvasStyle(ipp_core::components::CanvasStyle {
+                        x,
+                        y: 0.2,
+                        ..Default::default()
+                    }),
+                )],
+            );
+        }
+        state.cache_damage.borrow_mut().clear();
+        let stats = frame(&mut renderer, &mut host, world, 0.5);
+        let regions = state.cache_damage.borrow();
+        let rect = regions
+            .last()
+            .expect("changed image repainted")
+            .expect("small edit is partial");
+        let size = record(&renderer, world, panel.anchor).size;
+        assert_eq!(stats.surface_cache_partial_repaints, 1);
+        assert_eq!(stats.surface_cache_repaint_pixels, rect[2] * rect[3]);
+        assert_eq!(stats.surface_cache_full_pixels, size[0] * size[1]);
+        assert!(
+            rect[2] * rect[3] < size[0] * size[1] / 2,
+            "sparse damage: {rect:?} of {size:?}"
+        );
+        assert!(rect[0] as f32 <= 0.2 * size[0] as f32);
+        assert!((rect[0] + rect[2]) as f32 >= 0.35 * size[0] as f32);
     }
 }

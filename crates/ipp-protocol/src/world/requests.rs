@@ -528,6 +528,10 @@ pub fn decode_world_request(
                     yaw: first,
                     pitch: second,
                 },
+                3 => CameraViewMotion::Turn {
+                    yaw: first,
+                    pitch: second,
+                },
                 1 => CameraViewMotion::Pan {
                     x: first,
                     y: second,

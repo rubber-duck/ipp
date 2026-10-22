@@ -16,6 +16,12 @@ interface Glyph {
   color: Color;
 }
 
+interface TerminalPaintRow<T> {
+  entity: T;
+  glyph: T;
+  boxes: T[];
+}
+
 function linear(value: number): number {
   const v = value / 255;
   return v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
@@ -32,7 +38,7 @@ export class TerminalPaint {
   private root!: bigint;
   private background!: bigint;
   private cursor!: bigint;
-  private readonly rows = new Map<number, bigint>();
+  private readonly rows = new Map<number, TerminalPaintRow<bigint>>();
   private closed = false;
 
   constructor(
@@ -92,52 +98,82 @@ export class TerminalPaint {
   async update(frame: RenderFrame): Promise<void> {
     if (this.closed) return;
     const commands: Command[] = [];
-    const updates: { y: number; alias: number }[] = [];
-    for (const [y, id] of this.rows)
+    const updates = new Map<number, TerminalPaintRow<EntityRef>>();
+    const removed: number[] = [];
+    for (const [y, row] of this.rows)
       if (y >= frame.rows) {
-        commands.push({ kind: "deleteSubtree", root: handle(id) });
-        this.rows.delete(y);
+        commands.push({ kind: "deleteSubtree", root: handle(row.entity) });
+        removed.push(y);
       }
     let nextAlias = 0;
-    const create = (parent: EntityRef, classes: string[] = []) => {
+    const create = (
+      parent: EntityRef,
+      classes: string[] = [],
+      before: EntityRef | null = null,
+    ) => {
       const id = nextAlias++;
       commands.push(
         { kind: "create", alias: id, metadata: { symbolicId: null, classes } },
         {
           kind: "placeEntity",
           entity: alias(id),
-          placement: { parent, before: null },
+          placement: { parent, before },
         },
       );
       return alias(id);
-    };
-    const box = (
-      parent: EntityRef,
-      x: number,
-      y: number,
-      width: number,
-      height: number,
-      value: Color,
-    ) => {
-      if (width <= 0 || height <= 0) return;
-      const entity = create(parent);
-      commands.push(
-        component(this.client, "CanvasStyle", entity, { x, y, ...tint(value) }),
-        component(this.client, "CanvasBox", entity, { width, height }),
-      );
     };
     const layout = this.client.components.CanvasGlyphRun!.fields.glyphs!.rows!;
     const defaultBackground = color(frame.colors.background);
     for (const row of frame.changedRows) {
       const previous = this.rows.get(row.y);
-      if (previous !== undefined)
-        commands.push({ kind: "deleteSubtree", root: handle(previous) });
-      const entity = create(handle(this.root), ["terminal-row"]);
-      updates.push({ y: row.y, alias: nextAlias - 1 });
+      const entity = previous
+        ? handle(previous.entity)
+        : create(handle(this.root), ["terminal-row"]);
+      const glyphEntity = previous ? handle(previous.glyph) : create(entity);
+      const boxes: EntityRef[] = [];
+      updates.set(row.y, { entity, glyph: glyphEntity, boxes });
+      // Keep row and glyph identities stable. Decorations form a bounded pool
+      // before the glyph run, so growing the pool preserves painter order.
+      const box = (
+        parent: EntityRef,
+        x: number,
+        y: number,
+        width: number,
+        height: number,
+        value: Color,
+      ) => {
+        if (width <= 0 || height <= 0) return;
+        const old = previous?.boxes[boxes.length];
+        const decoration =
+          old === undefined ? create(parent, [], glyphEntity) : handle(old);
+        boxes.push(decoration);
+        commands.push(
+          component(
+            this.client,
+            "CanvasStyle",
+            decoration,
+            { x, y, ...tint(value) },
+            old !== undefined,
+          ),
+          component(
+            this.client,
+            "CanvasBox",
+            decoration,
+            { width, height },
+            old !== undefined,
+          ),
+        );
+      };
       commands.push(
-        component(this.client, "CanvasStyle", entity, {
-          y: row.y * this.cellHeight,
-        }),
+        component(
+          this.client,
+          "CanvasStyle",
+          entity,
+          {
+            y: row.y * this.cellHeight,
+          },
+          previous !== undefined,
+        ),
       );
       const glyphs: Glyph[] = [];
       let background: { x: number; end: number; color: Color } | undefined;
@@ -227,16 +263,23 @@ export class TerminalPaint {
         }
       }
       flush();
-      const glyphEntity = create(entity);
+      for (const old of previous?.boxes.slice(boxes.length) ?? [])
+        commands.push({ kind: "deleteSubtree", root: handle(old) });
       commands.push(
-        component(this.client, "CanvasGlyphRun", glyphEntity, {
-          source: this.fontSource,
-          font_size: this.fontSize,
-          glyphs: this.contract.encodeRowsTable(layout, {
-            nextSlot: glyphs.length,
-            rows: new Map(glyphs.map((value, index) => [index, value])),
-          }),
-        }),
+        component(
+          this.client,
+          "CanvasGlyphRun",
+          glyphEntity,
+          {
+            source: this.fontSource,
+            font_size: this.fontSize,
+            glyphs: this.contract.encodeRowsTable(layout, {
+              nextSlot: glyphs.length,
+              rows: new Map(glyphs.map((value, index) => [index, value])),
+            }),
+          },
+          previous !== undefined,
+        ),
       );
     }
     const cursor = frame.cursor;
@@ -296,11 +339,24 @@ export class TerminalPaint {
       },
     );
     const result = await apply(this.client, commands);
-    for (const update of updates)
-      this.rows.set(
-        update.y,
-        result.aliases.find((a) => a.alias === update.alias)!.id,
-      );
+    const aliases = new Map(
+      result.aliases.map((entry) => [entry.alias, entry.id]),
+    );
+    const resolve = (entity: EntityRef): bigint =>
+      entity.kind === "handle"
+        ? entity.id
+        : entity.kind === "alias"
+          ? aliases.get(entity.alias)!
+          : (() => {
+              throw new Error("Unexpected terminal symbol reference");
+            })();
+    for (const y of removed) this.rows.delete(y);
+    for (const [y, row] of updates)
+      this.rows.set(y, {
+        entity: resolve(row.entity),
+        glyph: resolve(row.glyph),
+        boxes: row.boxes.map(resolve),
+      });
   }
 
   async close(): Promise<void> {

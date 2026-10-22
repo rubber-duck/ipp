@@ -45,6 +45,37 @@ export async function exerciseSurfaceAllocation(driver: SurfaceCacheDriver) {
       );
     };
     const left = await capture("allocation-left-wins", 0);
+    const warm = await driver.capture(
+      `allocation-motion-start-${curved}`,
+      true,
+    );
+    const before = driver.pixels(`allocation-motion-start-${curved}`);
+    let moved = warm;
+    // Real camera changes move both curved/affine images without changing
+    // content or their quality band. Check work as well as completed pixels.
+    for (const x of [-0.58, -0.56, -0.54, -0.52]) {
+      await driver.call("allocationCamera", [x]);
+      moved = await driver.capture(`allocation-motion-${curved}`);
+      assert.equal(moved.failedDrawCalls, 0);
+      assert.equal(
+        counters(moved).totalSurfaceCacheAllocations,
+        counters(warm).totalSurfaceCacheAllocations,
+        "small camera changes must reuse image storage",
+      );
+      assert.equal(
+        counters(moved).totalSurfaceCacheRepaints,
+        counters(warm).totalSurfaceCacheRepaints,
+        "small camera changes must reuse context-independent content",
+      );
+    }
+    const after = driver.pixels(`allocation-motion-${curved}`);
+    let changedPixels = 0;
+    for (let i = 0; i < before.pixels.length; i += 4)
+      if (Math.abs(before.pixels[i]! - after.pixels[i]!) > 50) changedPixels++;
+    assert.ok(
+      changedPixels > 100,
+      "completed pixels must follow camera motion",
+    );
     await driver.call("allocationCamera", [0.6]);
     const right = await capture("allocation-camera-moved", 1);
     await driver.call("setSurfaceCache", [

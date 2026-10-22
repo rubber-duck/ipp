@@ -1,0 +1,298 @@
+{
+  "bridge-upper-left": [
+    {
+      "base": "lighting-tiles/bridge-upper-left-0-base.png",
+      "contribution": "lighting-tiles/bridge-upper-left-0-contribution.png",
+      "bounds": [
+        0.0,
+        0,
+        0.5,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.8681640625,
+        0.8681640625
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        0,
+        0,
+        887,
+        887
+      ]
+    },
+    {
+      "base": "lighting-tiles/bridge-upper-left-1-base.png",
+      "contribution": "lighting-tiles/bridge-upper-left-1-contribution.png",
+      "bounds": [
+        0.5,
+        0,
+        1.0,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.8681640625,
+        0.8681640625
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        887,
+        0,
+        1774,
+        887
+      ]
+    }
+  ],
+  "bridge-upper-right": [
+    {
+      "base": "lighting-tiles/bridge-upper-right-0-base.png",
+      "contribution": "lighting-tiles/bridge-upper-right-0-contribution.png",
+      "bounds": [
+        0.0,
+        0,
+        0.5,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.8681640625,
+        0.8681640625
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        0,
+        0,
+        887,
+        887
+      ]
+    },
+    {
+      "base": "lighting-tiles/bridge-upper-right-1-base.png",
+      "contribution": "lighting-tiles/bridge-upper-right-1-contribution.png",
+      "bounds": [
+        0.5,
+        0,
+        1.0,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.8681640625,
+        0.8681640625
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        887,
+        0,
+        1774,
+        887
+      ]
+    }
+  ],
+  "bridge-lower-left": [
+    {
+      "base": "lighting-tiles/bridge-lower-left-0-base.png",
+      "contribution": "lighting-tiles/bridge-lower-left-0-contribution.png",
+      "bounds": [
+        0.0,
+        0,
+        0.5,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.869140625,
+        0.8671875
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        0,
+        0,
+        888,
+        886
+      ]
+    },
+    {
+      "base": "lighting-tiles/bridge-lower-left-1-base.png",
+      "contribution": "lighting-tiles/bridge-lower-left-1-contribution.png",
+      "bounds": [
+        0.5,
+        0,
+        1.0,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.869140625,
+        0.8671875
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        888,
+        0,
+        1776,
+        886
+      ]
+    }
+  ],
+  "bridge-lower-right": [
+    {
+      "base": "lighting-tiles/bridge-lower-right-0-base.png",
+      "contribution": "lighting-tiles/bridge-lower-right-0-contribution.png",
+      "bounds": [
+        0.0,
+        0,
+        0.5,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.869140625,
+        0.8671875
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        0,
+        0,
+        888,
+        886
+      ]
+    },
+    {
+      "base": "lighting-tiles/bridge-lower-right-1-base.png",
+      "contribution": "lighting-tiles/bridge-lower-right-1-contribution.png",
+      "bounds": [
+        0.5,
+        0,
+        1.0,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.869140625,
+        0.8671875
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        888,
+        0,
+        1776,
+        886
+      ]
+    }
+  ],
+  "console": [
+    {
+      "base": "lighting-tiles/console-0-base.png",
+      "contribution": "lighting-tiles/console-0-contribution.png",
+      "bounds": [
+        0.0,
+        0,
+        0.3333333333333333,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.708984375,
+        0.708984375
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        0,
+        0,
+        724,
+        724
+      ]
+    },
+    {
+      "base": "lighting-tiles/console-1-base.png",
+      "contribution": "lighting-tiles/console-1-contribution.png",
+      "bounds": [
+        0.3333333333333333,
+        0,
+        0.6666666666666666,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.708984375,
+        0.708984375
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        724,
+        0,
+        1448,
+        724
+      ]
+    },
+    {
+      "base": "lighting-tiles/console-2-base.png",
+      "contribution": "lighting-tiles/console-2-contribution.png",
+      "bounds": [
+        0.6666666666666666,
+        0,
+        1.0,
+        1
+      ],
+      "textureRect": [
+        0.001953125,
+        0.001953125,
+        0.708984375,
+        0.708984375
+      ],
+      "dimensions": [
+        1024,
+        1024
+      ],
+      "sourcePixels": [
+        1448,
+        0,
+        2172,
+        724
+      ]
+    }
+  ]
+}

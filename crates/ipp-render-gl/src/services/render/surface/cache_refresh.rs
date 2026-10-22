@@ -32,6 +32,8 @@ pub(in crate::services::render) struct CanvasCacheRequest {
 
 pub(in crate::services::render) struct CanvasCacheState {
     root: OutputRef,
+    damage: Option<super::damage::CanvasImageDamage>,
+    damage_resource_revision: u64,
     request: CanvasCacheRequest,
     stamp: OutputContentStamp,
     painted_stamp: Option<OutputContentStamp>,
@@ -185,6 +187,8 @@ impl<D: RenderDevice> RenderService<D> {
                 .entry(*selection)
                 .or_insert_with(|| CanvasCacheState {
                     root,
+                    damage: None,
+                    damage_resource_revision: 0,
                     request: request.clone(),
                     stamp: stamp.clone(),
                     painted_stamp: None,
@@ -282,12 +286,25 @@ impl<D: RenderDevice> RenderService<D> {
             return Ok(());
         }
 
-        let request = self.canvas_caches[&selection].request.clone();
+        let state = &self.canvas_caches[&selection];
+        let request = state.request.clone();
+        let preserve = self.surface_cache.can_preserve(world, anchor)
+            && state.painted_stamp.is_some()
+            && state.stamp.outputs.len() == 1
+            && state.damage_resource_revision == state.resource_revision;
         let Some((mut target, size, capacity)) = self.surface_cache.take_image(world, anchor)
         else {
             return Ok(());
         };
 
+        let next_damage = super::damage::CanvasImageDamage::capture::<D>(
+            &scene,
+            size,
+            request.clip,
+            request.opacity,
+            state.damage.as_ref(),
+        );
+        let region = next_damage.region(state.damage.as_ref().filter(|_| preserve));
         #[cfg(feature = "instrumentation")]
         let _gpu_repaint = self.gpu_scope(
             super::super::gpu_profiling::RenderGpuScope::CacheRepaint,
@@ -302,7 +319,7 @@ impl<D: RenderDevice> RenderService<D> {
             device
                 .set_surface_cache_target_active_size(&mut target, size[0], size[1])
                 .and_then(|()| device.set_surface_double_sided(true))
-                .and_then(|()| device.begin_surface_cache_target(&target))
+                .and_then(|()| device.begin_surface_cache_region(&target, region))
         };
 
         let result = match begun {
@@ -314,7 +331,7 @@ impl<D: RenderDevice> RenderService<D> {
                 );
                 let before = stats.summary.failed_draw_calls;
                 let drawn = mvp.and_then(|mvp| {
-                    self.draw_canvas(
+                    self.draw_canvas_region(
                         &scene,
                         mvp,
                         request.clip,
@@ -326,6 +343,8 @@ impl<D: RenderDevice> RenderService<D> {
                             device_pixel_ratio: 1.0,
                         },
                         stats,
+                        None,
+                        region.map(|rect| next_damage.logical_region(rect)),
                     )
                 });
 
@@ -351,6 +370,11 @@ impl<D: RenderDevice> RenderService<D> {
             .canvas_caches
             .get_mut(&selection)
             .expect("painted cache state");
+        if result.is_ok() {
+            stats.image_repaint(size, region);
+            state.damage = Some(next_damage);
+            state.damage_resource_revision = state.resource_revision;
+        }
         state.painted_stamp = result.is_ok().then(|| state.stamp.clone());
         state.painted_current = current_image;
         state.painted_outputs = painted_outputs;

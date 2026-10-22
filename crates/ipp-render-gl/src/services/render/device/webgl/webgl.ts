@@ -137,6 +137,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     gl.getParameter(gl.MAX_VERTEX_TEXTURE_IMAGE_UNITS) as number,
     gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS) as number,
   );
+  let surfaceDoubleSided: boolean | undefined;
   let boundProgram: WebGLProgram | null | undefined;
   let boundVertexArray: WebGLVertexArrayObject | null | undefined;
   let blendMode: number | undefined;
@@ -230,16 +231,41 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   }
 
   function invalidateSubmission(): void {
+    surfaceDoubleSided = undefined;
     boundProgram = undefined;
     boundVertexArray = undefined;
     blendMode = undefined;
     boundShadowMap = undefined;
   }
 
+  let surfaceMultiDraw = gl.getExtension("WEBGL_multi_draw");
+  let surfaceDrawCounts = new Int32Array(0);
+  let surfaceDrawOffsets = new Int32Array(0);
+  let surfaceOwner = 0;
+  let surfaceCutout = 0;
+  const ownerUniforms = new WeakMap<
+    WebGLProgram,
+    { location: WebGLUniformLocation | null; value: number }
+  >();
+
   function useProgram(program: WebGLProgram | null): void {
     if (boundProgram !== program) {
       gl.useProgram(program);
       boundProgram = program;
+    }
+    if (program) {
+      let owner = ownerUniforms.get(program);
+      if (!owner) {
+        owner = {
+          location: gl.getUniformLocation(program, "u_surface_owner"),
+          value: -1,
+        };
+        ownerUniforms.set(program, owner);
+      }
+      if (owner.value !== surfaceOwner) {
+        gl.uniform1f(owner.location, surfaceOwner);
+        owner.value = surfaceOwner;
+      }
     }
   }
 
@@ -264,6 +290,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       /** Curve texels, including contour terminators. */
       count: number;
       width: number;
+      height: number;
+      curveBits: number;
+      bandBits: number;
+      bandHeight: number;
       /** Power of two converting fixed-point curve texels to path units. */
       scale: number;
       bandCount: number;
@@ -295,6 +325,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     number,
     {
       texture: WebGLTexture;
+      ownership?: WebGLTexture;
       framebuffer: WebGLFramebuffer;
       depth?: WebGLRenderbuffer;
       width: number;
@@ -303,16 +334,102 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       activeHeight: number;
     }
   >();
+  function surfaceOwnership(
+    target: NonNullable<ReturnType<typeof surfaceCacheTargets.get>>,
+    enabled: boolean,
+  ): void {
+    if (enabled === Boolean(target.ownership)) return;
+    const previous = currentTarget();
+    bindFramebuffers(target.framebuffer, target.framebuffer);
+    try {
+      if (enabled) {
+        const ownership = gl.createTexture();
+        if (!ownership) throw new Error("Surface ownership allocation failed");
+        target.ownership = ownership;
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, ownership);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          gl.RGBA8,
+          target.width,
+          target.height,
+          0,
+          gl.RGBA,
+          gl.UNSIGNED_BYTE,
+          null,
+        );
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+      }
+      gl.framebufferTexture2D(
+        gl.FRAMEBUFFER,
+        gl.COLOR_ATTACHMENT1,
+        gl.TEXTURE_2D,
+        enabled ? target.ownership! : null,
+        0,
+      );
+      gl.drawBuffers(
+        enabled
+          ? [gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]
+          : [gl.COLOR_ATTACHMENT0],
+      );
+      if (!enabled) {
+        gl.deleteTexture(target.ownership!);
+        delete target.ownership;
+      }
+      if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE)
+        throw new Error("Surface ownership framebuffer incomplete");
+      check();
+    } finally {
+      bindFramebuffers(previous.framebuffer, previous.readFramebuffer);
+    }
+  }
+
+  function bindSurfaceCutout(
+    program: WebGlRenderProgram,
+    target: NonNullable<ReturnType<typeof surfaceCacheTargets.get>>,
+  ): void {
+    programFloat(
+      program,
+      parameterLocation(program, "u_cutout_owner"),
+      target.ownership ? surfaceCutout : 0,
+    );
+    programInt(program, parameterLocation(program, "u_surface_ownership"), 2);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindSampler(2, null);
+    gl.bindTexture(gl.TEXTURE_2D, target.ownership ?? target.texture);
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
   /** The bound cache target and the host state saved when it was bound. */
   let surfaceCacheTarget:
-    | { handle: number; width: number; height: number; saved: WebGlTarget }
+    | {
+        handle: number;
+        width: number;
+        height: number;
+        saved: WebGlTarget;
+        damage?: number[];
+      }
     | undefined;
+
+  function restoreSurfaceScissor(): void {
+    const rect = surfaceCacheTarget?.damage;
+    if (rect) {
+      gl.enable(gl.SCISSOR_TEST);
+      gl.scissor(rect[0]!, rect[1]!, rect[2]!, rect[3]!);
+    } else gl.disable(gl.SCISSOR_TEST);
+  }
 
   /** Rebind the host state saved when the cache target was bound, if any. */
   function restoreSurfaceCacheTarget(): void {
     const saved = surfaceCacheTarget;
     if (!saved) return;
     surfaceCacheTarget = undefined;
+    restoreSurfaceScissor();
     bindFramebuffers(saved.saved.framebuffer, saved.saved.readFramebuffer);
     setViewport(saved.saved.viewport);
     setDepthMask(saved.saved.depthMask);
@@ -503,6 +620,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     setViewport([0, 0, target.width, target.height]);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
+    surfaceDoubleSided = true;
     gl.disable(gl.BLEND);
     setDepthMask(false);
     // Draws before the next begin_frame, such as Surface cache repaints,
@@ -820,16 +938,29 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     format: number,
     type: number,
     values: Int16Array | Int32Array | Uint16Array | Uint32Array,
+    allocate = true,
   ): void => {
     const { width, rows } = layout;
     const count = values.length / lanes;
     const fullRows = Math.floor(count / width);
     const remainder = count - fullRows * width;
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texStorage2D(gl.TEXTURE_2D, 1, internalFormat, width, rows);
+    if (allocate) {
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        internalFormat,
+        width,
+        rows,
+        0,
+        format,
+        type,
+        null,
+      );
+    }
     if (fullRows > 0)
       gl.texSubImage2D(
         gl.TEXTURE_2D,
@@ -1094,6 +1225,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     );
     invalidateSubmission();
     lossExtension = gl.getExtension("WEBGL_lose_context");
+    surfaceMultiDraw = gl.getExtension("WEBGL_multi_draw");
   }
 
   canvas.addEventListener("webglcontextlost", lost);
@@ -1540,6 +1672,8 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     ...{
       set_surface_double_sided(enabled: number): number {
         return status(() => {
+          if (surfaceDoubleSided === Boolean(enabled)) return 1;
+          surfaceDoubleSided = Boolean(enabled);
           if (enabled !== 0) gl.disable(gl.CULL_FACE);
           else {
             gl.cullFace(gl.BACK);
@@ -1563,15 +1697,48 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         bandPointer: number,
         bandCount: number,
         bandBits: number,
+        reuseHandle: number,
       ): number {
         return status(() => {
           count >>>= 0;
           bandCount >>>= 0;
           curvePointer >>>= 0;
           bandPointer >>>= 0;
-          const curveLayout = surfaceTexelLayout(count);
-          const bandLayout = surfaceTexelLayout(bandCount);
-          if (!curveLayout || !bandLayout || !(scale > 0))
+          const previous = reuseHandle
+            ? surfacePaths.get(reuseHandle >>> 0)
+            : undefined;
+          if (reuseHandle && !previous)
+            throw new Error("Stale derived path handle");
+          const keepCurves =
+            previous &&
+            previous.curveBits === curveBits &&
+            count <= previous.width * previous.height;
+          const keepBands =
+            previous &&
+            previous.bandBits === bandBits &&
+            bandCount <= previous.bandWidth * previous.bandHeight;
+          const reserve = (value: number) =>
+            surfaceTexelLayout(
+              previous
+                ? Math.min(
+                    2 ** Math.ceil(Math.log2(value)),
+                    maxTextureSize ** 2,
+                  )
+                : value,
+            );
+          const curveLayout = keepCurves
+            ? { width: previous.width, rows: previous.height }
+            : reserve(count);
+          const bandLayout = keepBands
+            ? { width: previous.bandWidth, rows: previous.bandHeight }
+            : reserve(bandCount);
+          if (
+            !curveLayout ||
+            !bandLayout ||
+            count > curveLayout.width * curveLayout.rows ||
+            bandCount > bandLayout.width * bandLayout.rows ||
+            !(scale > 0)
+          )
             throw new Error("Surface path exceeds device limits");
           // Fixed-point curve texels hold four signed lanes; see assets/paths.rs.
           const curves =
@@ -1598,9 +1765,9 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
                   bandPointer,
                   bandCount,
                 );
-          const texture = gl.createTexture();
-          const bandTexture = gl.createTexture();
-          const vao = gl.createVertexArray();
+          const texture = previous?.texture ?? gl.createTexture();
+          const bandTexture = previous?.bandTexture ?? gl.createTexture();
+          const vao = previous?.vao ?? gl.createVertexArray();
           if (!texture || !bandTexture || !vao) {
             if (texture) gl.deleteTexture(texture);
             if (bandTexture) gl.deleteTexture(bandTexture);
@@ -1620,6 +1787,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.RGBA_INTEGER,
               curveBits === 16 ? gl.SHORT : gl.INT,
               curves,
+              !keepCurves,
             );
             gl.bindTexture(gl.TEXTURE_2D, bandTexture);
             uploadSurfaceTexels(
@@ -1629,16 +1797,21 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
               gl.RED_INTEGER,
               bandBits === 16 ? gl.UNSIGNED_SHORT : gl.UNSIGNED_INT,
               bands,
+              !keepBands,
             );
             gl.bindTexture(gl.TEXTURE_2D, null);
             check();
-            const handle = id();
+            const handle = reuseHandle || id();
             surfacePaths.set(handle, {
               texture,
               bandTexture,
               vao,
               count,
               width: curveLayout.width,
+              height: curveLayout.rows,
+              curveBits,
+              bandBits,
+              bandHeight: bandLayout.rows,
               scale,
               bandCount,
               bandWidth: bandLayout.width,
@@ -1646,7 +1819,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             retained = true;
             return handle;
           } finally {
-            if (!retained) {
+            if (!retained && !previous) {
               gl.deleteTexture(texture);
               gl.deleteTexture(bandTexture);
               gl.deleteVertexArray(vao);
@@ -1914,6 +2087,21 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           return 1;
         });
       },
+      set_surface_owner(owner: number): void {
+        surfaceOwner = owner >>> 0;
+      },
+      set_surface_cutout(owner: number): void {
+        surfaceCutout = owner >>> 0;
+      },
+      set_surface_cache_ownership(handle: number, enabled: number): number {
+        return status(() => {
+          const target = surfaceCacheTargets.get(handle >>> 0);
+          if (!target || surfaceCacheTarget)
+            throw new Error("Unavailable Surface ownership target");
+          surfaceOwnership(target, Boolean(enabled));
+          return 1;
+        });
+      },
       surface_cache_limit(): number {
         if (disposed || gl.isContextLost()) return 0;
         return Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
@@ -2030,6 +2218,20 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             gl.UNSIGNED_BYTE,
             null,
           );
+          if (target.ownership) {
+            gl.bindTexture(gl.TEXTURE_2D, target.ownership);
+            gl.texImage2D(
+              gl.TEXTURE_2D,
+              0,
+              gl.RGBA8,
+              width,
+              height,
+              0,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              null,
+            );
+          }
           gl.bindTexture(gl.TEXTURE_2D, null);
           if (target.depth) {
             gl.bindRenderbuffer(gl.RENDERBUFFER, target.depth);
@@ -2078,7 +2280,10 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           return 1;
         });
       },
-      begin_surface_cache_target(handle: number): number {
+      begin_surface_cache_target(
+        handle: number,
+        damagePointer: number,
+      ): number {
         return status(() => {
           const target = surfaceCacheTargets.get(handle >>> 0);
           if (!target) throw new Error("Stale Surface cache target handle");
@@ -2092,11 +2297,15 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             width: target.activeWidth,
             height: target.activeHeight,
             saved: currentTarget(),
+            ...(damagePointer
+              ? { damage: Array.from(words(damagePointer >>> 0, 4)) }
+              : {}),
           };
           bindFramebuffers(target.framebuffer, target.framebuffer);
           setViewport([0, 0, target.activeWidth, target.activeHeight]);
-          gl.disable(gl.SCISSOR_TEST);
+          restoreSurfaceScissor();
           gl.disable(gl.STENCIL_TEST);
+          gl.disable(gl.DITHER); // Ownership IDs must remain exact.
           setDepthMask(false);
           // Repaints run outside begin_frame: every draw reapplies its blending.
           blendMode = undefined;
@@ -2251,6 +2460,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             target.height,
           );
           programInt(program, uniform("u_surface_cache"), 0);
+          bindSurfaceCutout(program, target);
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, target.texture);
           bindVertexArray(surfaceQuadVao);
@@ -2271,24 +2481,31 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         clipPointer: number,
         opacity: number,
         flipImage: number,
-        firstIndex: number,
-        indexCount: number,
+        rangesPointer: number,
+        rangeCount: number,
       ): number {
         return status(() => {
           const program = programs.get(programHandle >>> 0);
           const target = surfaceCacheTargets.get(handle >>> 0);
           const mesh = meshes.get(meshHandle >>> 0);
-          firstIndex >>>= 0;
-          indexCount >>>= 0;
+          rangeCount >>>= 0;
           if (!program || !target || !mesh || !mesh.uv)
             throw new Error("Stale Surface image mesh handle");
-          if (
-            surfaceCacheTarget?.handle === handle >>> 0 ||
-            firstIndex + indexCount > mesh.count ||
-            firstIndex % 3 ||
-            indexCount % 3
-          )
-            throw new Error("Invalid Surface image mesh draw");
+          if (surfaceCacheTarget?.handle === handle >>> 0)
+            throw new Error("Surface image feedback loop");
+          const ranges = words(rangesPointer >>> 0, rangeCount * 2);
+          if (surfaceDrawCounts.length < rangeCount) {
+            surfaceDrawCounts = new Int32Array(rangeCount);
+            surfaceDrawOffsets = new Int32Array(rangeCount);
+          }
+          for (let i = 0; i < rangeCount; i++) {
+            const first = ranges[i * 2]!,
+              count = ranges[i * 2 + 1]!;
+            if (first + count > mesh.count || first % 3 || count % 3)
+              throw new Error("Invalid Surface image mesh draw");
+            surfaceDrawCounts[i] = count;
+            surfaceDrawOffsets[i] = first * 2;
+          }
           if (blendMode !== 4) {
             gl.enable(gl.BLEND);
             gl.blendEquation(gl.FUNC_ADD);
@@ -2333,19 +2550,33 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             target.height,
           );
           programInt(program, uniform("u_surface_cache"), 0);
+          bindSurfaceCutout(program, target);
           gl.activeTexture(gl.TEXTURE0);
           gl.bindSampler(0, null);
           gl.bindTexture(gl.TEXTURE_2D, target.texture);
           bindVertexArray(mesh.vao);
-          gl.drawElements(
-            gl.TRIANGLES,
-            indexCount,
-            gl.UNSIGNED_SHORT,
-            firstIndex * 2,
-          );
+          if (surfaceMultiDraw && rangeCount > 1) {
+            surfaceMultiDraw.multiDrawElementsWEBGL(
+              gl.TRIANGLES,
+              surfaceDrawCounts,
+              0,
+              gl.UNSIGNED_SHORT,
+              surfaceDrawOffsets,
+              0,
+              rangeCount,
+            );
+          } else {
+            for (let i = 0; i < rangeCount; i++)
+              gl.drawElements(
+                gl.TRIANGLES,
+                surfaceDrawCounts[i]!,
+                gl.UNSIGNED_SHORT,
+                surfaceDrawOffsets[i]!,
+              );
+          }
           gl.bindTexture(gl.TEXTURE_2D, null);
           checkDraw();
-          return 1;
+          return 1 + (surfaceMultiDraw && rangeCount > 1 ? 1 : rangeCount);
         });
       },
       delete_surface_cache_target(handle: number): void {
@@ -2356,6 +2587,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         if (!disposed && !gl.isContextLost()) {
           gl.deleteFramebuffer(target.framebuffer);
           gl.deleteTexture(target.texture);
+          if (target.ownership) gl.deleteTexture(target.ownership);
           if (target.depth) gl.deleteRenderbuffer(target.depth);
         }
       },
@@ -2582,6 +2814,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
             height: page.height,
             saved: glyphAtlasTarget?.saved ?? currentTarget(),
           };
+          gl.disable(gl.SCISSOR_TEST);
           bindFramebuffers(page.framebuffer, page.framebuffer);
           setViewport([0, 0, page.width, page.height]);
           return 1;
@@ -2597,6 +2830,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           }
           // Atlas draws skip per-draw checks; a failed population must not be
           // kept as populated coverage.
+          restoreSurfaceScissor();
           check();
           return 1;
         });
@@ -3317,6 +3551,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
         for (const target of surfaceCacheTargets.values()) {
           gl.deleteFramebuffer(target.framebuffer);
           gl.deleteTexture(target.texture);
+          if (target.ownership) gl.deleteTexture(target.ownership);
           if (target.depth) gl.deleteRenderbuffer(target.depth);
         }
         surfacePaths.clear();

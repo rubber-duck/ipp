@@ -116,8 +116,8 @@ export interface GallerySceneDefinition {
   readonly defaultOptions: GalleryOptions;
   readonly actions: readonly string[];
   readonly resources?: readonly GalleryResource[];
-  /** Fixed-view scenes do not admit application camera gestures. */
-  readonly cameraNavigation?: boolean;
+  /** False locks the camera; yaw turns in place around its vertical axis. */
+  readonly cameraNavigation?: boolean | "yaw";
   /** Engine GUI contributed to the application scene-controls slot. */
   readonly controls?: ComponentType<GallerySceneControlsProps>;
   /** Primary World owned by the runner, independent of scene-owned children. */

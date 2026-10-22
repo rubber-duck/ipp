@@ -13,6 +13,7 @@ export interface CockpitOptions {
   skin: "glass" | "cybertron";
   projection: number;
   surface: "flat" | "curved";
+  exploded: boolean;
   surfaceCaching: "off" | "auto" | "force";
   surfaceRefreshHz: number;
   surfaceTextureSize: number;
@@ -49,6 +50,7 @@ export const COCKPIT_DEFAULTS: CockpitOptions = {
   skin: "glass",
   projection: 10,
   surface: "curved",
+  exploded: false,
   surfaceCaching: "off",
   surfaceRefreshHz: 5,
   surfaceTextureSize: 2048,
@@ -92,6 +94,7 @@ export function cockpitOptions(
     panelOpacity: number("panelOpacity", 0.55, 1),
     skin: value.skin === "cybertron" ? "cybertron" : "glass",
     surface: value.surface === "flat" ? "flat" : "curved",
+    exploded: Boolean(value.exploded),
     surfaceCaching:
       value.surfaceCaching === "auto" || value.surfaceCaching === "force"
         ? value.surfaceCaching

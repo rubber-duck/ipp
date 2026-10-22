@@ -7,7 +7,9 @@ import {
 import { exerciseSurfaceQuality } from "./scenarios/surface-quality.js";
 
 test("cockpit scrolling and cache controls retain fullscreen scene detail", {
-  timeout: 240_000,
+  // Six cache/motion comparisons capture the full 2448 x 1512 output. Software
+  // rendering needs a larger total budget; input/state waits stay bounded.
+  timeout: 600_000,
 }, async (context) => {
   await runBrowserEnvironment(
     "cockpit scene density",

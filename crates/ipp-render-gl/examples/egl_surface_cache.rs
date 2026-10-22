@@ -1061,10 +1061,12 @@ mod scenario {
             }
 
             // The orthographic view keeps the panel's pixels fixed across distances,
-            // which every cached-versus-direct comparison relies on.
+            // which every cached-versus-direct comparison relies on. Permit one
+            // RGBA8 level of floating-point rasterization rounding across camera
+            // transforms; unchanged cached images below must still match exactly.
             for label in ["band1", "band2"] {
                 let difference = max_difference(&direct["near"], &direct[label]);
-                if difference != 0 {
+                if difference > 1 {
                     return Err(format!("direct {label} differs from near by {difference}").into());
                 }
             }

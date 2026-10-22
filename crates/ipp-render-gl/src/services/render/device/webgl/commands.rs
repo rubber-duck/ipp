@@ -442,10 +442,46 @@ impl RenderDevice for WebGlRenderDevice {
                 bands,
                 texels.bands.len(),
                 band_bits,
+                0,
             )
         };
         self.check(path)?;
         Ok(path)
+    }
+
+    fn update_surface_path(
+        &mut self,
+        target: &mut Self::SurfacePath,
+        texels: &crate::SurfacePathTexels,
+    ) -> Result<bool, RenderError> {
+        use crate::{SurfaceBandTexels, SurfaceCurveTexels};
+
+        let (curves, curve_bits): (*const u8, u32) = match &texels.curves {
+            SurfaceCurveTexels::Int16(values) => (values.as_ptr().cast(), 16),
+            SurfaceCurveTexels::Int32(values) => (values.as_ptr().cast(), 32),
+        };
+        let (bands, band_bits): (*const u8, u32) = match &texels.bands {
+            SurfaceBandTexels::Uint16(values) => (values.as_ptr().cast(), 16),
+            SurfaceBandTexels::Uint32(values) => (values.as_ptr().cast(), 32),
+        };
+
+        // SAFETY: The bridge synchronously copies both complete borrowed texel
+        // slices, whose lengths and widths are passed with them, and retains no
+        // WASM memory views.
+        let path = unsafe {
+            create_surface_path(
+                curves,
+                texels.curves.len(),
+                curve_bits,
+                texels.curve_scale,
+                bands,
+                texels.bands.len(),
+                band_bits,
+                *target,
+            )
+        };
+        self.check(path)?;
+        Ok(true)
     }
 
     fn draw_surface_path(
@@ -573,6 +609,30 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
+    fn set_surface_cache_ownership(
+        &mut self,
+        target: &mut Self::SurfaceCacheTarget,
+        enabled: bool,
+    ) -> Result<(), RenderError> {
+        // SAFETY: Only context-owned scalar handles cross the synchronous boundary.
+        self.check(unsafe { set_surface_cache_ownership(*target, u32::from(enabled)) })
+    }
+
+    fn set_surface_owner(&mut self, owner: u32) -> Result<(), RenderError> {
+        if owner > 0x00ff_ffff {
+            return Err(RenderError::UnavailableOutput);
+        }
+        // SAFETY: Scalar state only; the bridge retains no Rust memory.
+        unsafe { set_surface_owner(owner) };
+        Ok(())
+    }
+
+    fn set_surface_cutout(&mut self, owner: u32) -> Result<(), RenderError> {
+        // SAFETY: Scalar state only; the bridge retains no Rust memory.
+        unsafe { set_surface_cutout(owner) };
+        Ok(())
+    }
+
     fn surface_cache_limit(&self) -> u32 {
         // SAFETY: A scalar capability query; no Rust memory crosses the boundary and
         // the bridge cannot reenter Rust. A lost context reports zero.
@@ -620,7 +680,24 @@ impl RenderDevice for WebGlRenderDevice {
         target: &Self::SurfaceCacheTarget,
     ) -> Result<(), RenderError> {
         // SAFETY: Only the scalar handle crosses the boundary; the bridge validates it.
-        self.check(unsafe { begin_surface_cache_target(*target) })
+        self.check(unsafe { begin_surface_cache_target(*target, std::ptr::null()) })
+    }
+
+    fn begin_surface_cache_region(
+        &mut self,
+        target: &Self::SurfaceCacheTarget,
+        region: Option<[u32; 4]>,
+    ) -> Result<(), RenderError> {
+        // SAFETY: The optional four-lane array lives through this synchronous
+        // call. JS copies its values and retains no WASM memory view.
+        self.check(unsafe {
+            begin_surface_cache_target(
+                *target,
+                region
+                    .as_ref()
+                    .map_or(std::ptr::null(), |rect| rect.as_ptr()),
+            )
+        })
     }
 
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
@@ -681,20 +758,12 @@ impl RenderDevice for WebGlRenderDevice {
         clip: &[f32; 4],
         opacity: f32,
         flip_image: bool,
-        indices: std::ops::Range<u32>,
-    ) -> Result<(), RenderError> {
-        if indices.start > indices.end
-            || !indices.start.is_multiple_of(3)
-            || !indices.end.is_multiple_of(3)
-        {
-            return Err(RenderError::RenderDevice(
-                "invalid Surface image mesh draw".into(),
-            ));
-        }
+        indices: &[[u32; 2]],
+    ) -> Result<u32, RenderError> {
         // SAFETY: Fixed arrays remain live through this synchronous bridge call;
         // JS copies uniforms and validates generational handles and index bounds,
         // retaining neither memory views nor Rust references across growth/reentry.
-        self.check(unsafe {
+        let result = unsafe {
             draw_surface_image_mesh(
                 program.id,
                 *target,
@@ -704,10 +773,12 @@ impl RenderDevice for WebGlRenderDevice {
                 clip.as_ptr(),
                 opacity,
                 u32::from(flip_image),
-                indices.start,
-                indices.end - indices.start,
+                indices.as_ptr().cast::<u32>(),
+                indices.len() as u32,
             )
-        })
+        };
+        self.check(result)?;
+        Ok(result - 1)
     }
 
     fn create_gui_batch(
@@ -869,6 +940,7 @@ impl RenderDevice for WebGlRenderDevice {
         vertex: &str,
         fragment: &str,
     ) -> Result<WebGlRenderProgram, RenderError> {
+        let fragment = super::super::surface_ownership::fragment(fragment);
         // SAFETY: Both source slices live through this synchronous call; the
         // bridge copies their UTF8 bytes and retains no WASM memory view.
         let id = unsafe {

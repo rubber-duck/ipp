@@ -21,7 +21,6 @@ pub(in crate::services::render) struct SurfaceMeshPatch {
 
 pub(super) struct SurfaceMeshData {
     pub asset: ipp_core::MeshAsset,
-    pub cells: usize,
     pub patches: Vec<SurfaceMeshPatch>,
     pub bytes: usize,
 }
@@ -31,6 +30,8 @@ pub(super) fn tessellate(
     offset: f64,
     size: [u32; 2],
 ) -> Result<SurfaceMeshData, RenderError> {
+    #[cfg(feature = "instrumentation")]
+    let _trace = ipp_core::profiling::CpuTraceScope::new("Surface.tessellate");
     let extent = geometry.physical_extent();
     geometry
         .validate_offsets([offset, offset])
@@ -148,7 +149,6 @@ pub(super) fn tessellate(
     let bytes = asset.vertex_bytes() + std::mem::size_of_val(asset.indices());
     Ok(SurfaceMeshData {
         asset,
-        cells,
         patches,
         bytes,
     })

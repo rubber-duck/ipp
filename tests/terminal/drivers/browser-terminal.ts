@@ -134,6 +134,21 @@ export class BrowserTerminalDriver {
       return { red, bright, background, sequence: frame.sequence };
     });
   }
+  async paintIdentities() {
+    return this.page.evaluate(async () => {
+      const client: Client = window.terminal.client;
+      const snapshot = await client.inspect();
+      return snapshot.entities
+        .filter((entity) =>
+          entity.components.some(
+            (component) =>
+              component.component === client.components.CanvasGlyphRun!.id,
+          ),
+        )
+        .map((entity) => String(entity.id))
+        .sort();
+    });
+  }
   async resize(width: number, height: number) {
     await this.page.evaluate(
       ([w, h]) => window.terminal.resize(w!, h!),

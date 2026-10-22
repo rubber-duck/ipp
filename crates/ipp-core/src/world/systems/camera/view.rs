@@ -17,6 +17,13 @@ pub enum CameraViewMotion {
         /// Camera-local right rotation in radians after yaw.
         pitch: f32,
     },
+    /// Turn about the producer camera's own position, retaining projection.
+    Turn {
+        /// Camera-local up rotation in radians.
+        yaw: f32,
+        /// Camera-local right rotation in radians after yaw.
+        pitch: f32,
+    },
     /// Move the scene with normalized view-plane deltas.
     Pan {
         /// Horizontal delta, positive right.
@@ -331,6 +338,13 @@ impl CameraNavigationCommand {
                 yaw,
                 pitch,
             } => CameraMotion::Rotate {
+                yaw,
+                pitch,
+            },
+            CameraViewMotion::Turn {
+                yaw,
+                pitch,
+            } => CameraMotion::Turn {
                 yaw,
                 pitch,
             },

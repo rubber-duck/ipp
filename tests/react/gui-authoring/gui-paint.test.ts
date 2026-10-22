@@ -341,7 +341,7 @@ for (const variant of native || instrumentation
         assert.equal(result.value.advanced.failure, null);
         assert.equal(
           result.value.advanced.images.length,
-          instrumentation ? 6 : 10,
+          instrumentation ? 6 : 16,
         );
         return;
       }

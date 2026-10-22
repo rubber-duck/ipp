@@ -152,8 +152,12 @@ pub struct GlesSurfacePath {
     curve_texels: u32,
     curve_scale: f32,
     texture_width: i32,
+    texture_height: usize,
+    curve_kind: u32,
     band_count: u32,
     band_width: i32,
+    band_height: usize,
+    band_kind: u32,
 }
 
 /// Native vertex array and buffer holding one retained analytic instance stream.

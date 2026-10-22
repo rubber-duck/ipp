@@ -2,28 +2,20 @@
   "scene": "Cockpit spatial bridge",
   "meshes": [
     [
-      "cockpit-bridge-front",
-      1
+      "cockpit-bridge-upper-left",
+      2048
     ],
     [
-      "cockpit-bridge-right",
-      1
+      "cockpit-bridge-upper-right",
+      2048
     ],
     [
-      "cockpit-bridge-back",
-      1
+      "cockpit-bridge-lower-left",
+      2048
     ],
     [
-      "cockpit-bridge-left",
-      1
-    ],
-    [
-      "cockpit-bridge-top",
-      1
-    ],
-    [
-      "cockpit-bridge-bottom",
-      1
+      "cockpit-bridge-lower-right",
+      2048
     ],
     [
       "cockpit-planet",
@@ -245,40 +237,80 @@
         "name": "port-white",
         "group": "dashboard",
         "rect": [
-          0.18,
-          0.47,
-          0.205,
-          0.56
+          0.175,
+          0.475,
+          0.2,
+          0.57
         ]
       },
       {
         "name": "starboard-white",
         "group": "dashboard",
         "rect": [
-          0.795,
-          0.47,
-          0.82,
-          0.56
+          0.8,
+          0.475,
+          0.825,
+          0.57
         ]
       },
       {
         "name": "port-buttons",
         "group": "buttons",
         "rect": [
-          0.185,
+          0.205,
           0.35,
-          0.375,
+          0.3,
           0.47
+        ]
+      },
+      {
+        "name": "port-inner-buttons",
+        "group": "buttons",
+        "rect": [
+          0.3,
+          0.33,
+          0.375,
+          0.44
         ]
       },
       {
         "name": "starboard-buttons",
         "group": "buttons",
         "rect": [
-          0.625,
+          0.7,
           0.35,
-          0.815,
+          0.795,
           0.47
+        ]
+      },
+      {
+        "name": "starboard-inner-buttons",
+        "group": "buttons",
+        "rect": [
+          0.625,
+          0.33,
+          0.7,
+          0.44
+        ]
+      },
+      {
+        "name": "port-tip-button",
+        "group": "buttons",
+        "rect": [
+          0.175,
+          0.39,
+          0.2,
+          0.475
+        ]
+      },
+      {
+        "name": "starboard-tip-button",
+        "group": "buttons",
+        "rect": [
+          0.8,
+          0.39,
+          0.825,
+          0.475
         ]
       },
       {
@@ -332,7 +364,7 @@
         ]
       }
     ],
-    "source": "//console-standalone.png",
+    "source": "//console-matched-base.png",
     "referenceBounds": [
       64,
       587,
@@ -348,14 +380,15 @@
       4.0
     ],
     "paneElevation": 0.65,
-    "cubemap": [
-      "cockpit-bridge-front",
-      "cockpit-bridge-right",
-      "cockpit-bridge-back",
-      "cockpit-bridge-left",
-      "cockpit-bridge-top",
-      "cockpit-bridge-bottom"
+    "interior": [
+      "cockpit-bridge-upper-left",
+      "cockpit-bridge-upper-right",
+      "cockpit-bridge-lower-left",
+      "cockpit-bridge-lower-right"
     ],
+    "panoramaSplit": 0.5005636978579482,
+    "interiorRadius": 12,
+    "interiorForwardOffset": 8,
     "planet": "cockpit-planet",
     "atmosphere": "cockpit-atmosphere",
     "stars": "cockpit-space",

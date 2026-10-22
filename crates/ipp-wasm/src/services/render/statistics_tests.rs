@@ -50,6 +50,24 @@ const NAMED_WORDS: [(&str, usize); RECORD_WORDS] = [
     ("totalGuiTextMeasurements", TOTAL_GUI_TEXT_MEASUREMENTS),
     ("guiHashes", GUI_HASHES),
     ("totalGuiHashes", TOTAL_GUI_HASHES),
+    (
+        "surfaceCachePartialRepaints",
+        SURFACE_CACHE_PARTIAL_REPAINTS,
+    ),
+    ("surfaceCacheRepaintPixels", SURFACE_CACHE_REPAINT_PIXELS),
+    ("surfaceCacheFullPixels", SURFACE_CACHE_FULL_PIXELS),
+    (
+        "totalSurfaceCachePartialRepaints",
+        TOTAL_SURFACE_CACHE_PARTIAL_REPAINTS,
+    ),
+    (
+        "totalSurfaceCacheRepaintPixels",
+        TOTAL_SURFACE_CACHE_REPAINT_PIXELS,
+    ),
+    (
+        "totalSurfaceCacheFullPixels",
+        TOTAL_SURFACE_CACHE_FULL_PIXELS,
+    ),
 ];
 
 #[test]

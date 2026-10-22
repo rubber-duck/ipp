@@ -6,17 +6,13 @@ use crate::{RenderDevice, RenderError, SurfacePathDescriptor};
 use ipp_core::systems::canvas::CanvasPrimitiveId;
 use ipp_core::systems::plot::PlotPath;
 use ipp_core::{HostRuntime, WorldRef};
-use std::{
-    collections::BTreeMap,
-    rc::Rc,
-    sync::{Arc, Weak},
-};
+use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
 /// Plane identity is absent for ordinary Canvas content.
 pub(in crate::services::render) type GeneratedPathKey = (WorldRef, CanvasPrimitiveId, Option<u32>);
 
 pub(in crate::services::render) struct GeneratedPath<D: RenderDevice> {
-    pub source: Weak<PlotPath>,
+    pub source: Arc<PlotPath>,
     pub gpu: Option<D::SurfacePath>,
     pub descriptor: SurfacePathDescriptor,
     device: SharedRenderDevice<D>,
@@ -41,7 +37,7 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
 
     pub fn retain_live_worlds(&mut self, host: &HostRuntime) {
         self.entries.retain(|(world, _, _), entry| {
-            host.world_fault(*world).is_ok() && entry.source.strong_count() != 0
+            host.world_fault(*world).is_ok() && Arc::strong_count(&entry.source) > 1
         });
     }
 
@@ -50,13 +46,16 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
         key: GeneratedPathKey,
         source: &Arc<PlotPath>,
     ) -> Result<(Rc<GeneratedPath<D>>, usize), RenderError> {
-        if let Some(entry) = self.entries.get(&key).filter(|entry| {
-            entry
-                .source
-                .upgrade()
-                .is_some_and(|retained| Arc::ptr_eq(&retained, source))
-        }) {
-            return Ok((entry.clone(), 0));
+        if let Some(entry) = self.entries.get_mut(&key) {
+            if Arc::ptr_eq(&entry.source, source) {
+                return Ok((entry.clone(), 0));
+            }
+            if entry.source.as_ref() == source.as_ref()
+                && let Some(entry) = Rc::get_mut(entry)
+            {
+                entry.source = source.clone();
+                return Ok((self.entries[&key].clone(), 0));
+            }
         }
         // Derived contours already use the Canvas +Y-down coordinates. The shared
         // analytic shader evaluates supplied coordinates directly; no source SVG/font
@@ -68,12 +67,25 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
             self.device.borrow().surface_path_texture_limit(),
         );
         let uploaded = atlas.texels.byte_len();
+        if let Some(mut previous) = self.entries.remove(&key)
+            && let Some(entry) = Rc::get_mut(&mut previous)
+            && let Some(gpu) = entry.gpu.as_mut()
+            && self
+                .device
+                .borrow_mut()
+                .update_surface_path(gpu, &atlas.texels)?
+        {
+            entry.source = source.clone();
+            entry.descriptor = atlas.descriptors[0];
+            self.entries.insert(key, previous.clone());
+            return Ok((previous, uploaded));
+        }
         let gpu = self
             .device
             .borrow_mut()
             .create_surface_path(&atlas.texels)?;
         let entry = Rc::new(GeneratedPath {
-            source: Arc::downgrade(source),
+            source: source.clone(),
             gpu: Some(gpu),
             descriptor: atlas.descriptors[0],
             device: self.device.clone(),

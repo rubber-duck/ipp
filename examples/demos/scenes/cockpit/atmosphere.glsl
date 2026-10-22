@@ -38,7 +38,7 @@ vec4 materialFragment() {
             float shade = 0.18 + 0.22 * max(dot(normalize(v_normal), normalize(vec3(-0.3, 0.8, 0.4))), 0.0);
             cabin.rgb *= shade;
         }
-        return vec4(cabin.rgb * (0.55 + 0.45 * p_illumination), 1.0);
+        return vec4(cabin.rgb, 1.0);
     }
     if (p_role > 1.5) {
         return vec4(0.0, 0.0, 0.0, 1.0);

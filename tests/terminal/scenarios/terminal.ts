@@ -7,6 +7,7 @@ export interface TerminalDriver {
   paste(text: string): Promise<void>;
   compose(text: string): Promise<void>;
   text(): Promise<string>;
+  paintIdentities(): Promise<string[]>;
   capture(): Promise<{
     red: number;
     bright: number;
@@ -31,7 +32,17 @@ export async function terminalScenario(driver: TerminalDriver) {
   assert.ok(paint.red > 100);
   assert.ok(paint.bright > 100);
   assert.ok(paint.background > 720 * 384 * 0.8);
+  const rows = await driver.paintIdentities();
   await driver.type("echo discarded");
+  await eventually(
+    () => driver.text(),
+    (value) => value.includes("echodiscarded"),
+  );
+  assert.deepEqual(
+    await driver.paintIdentities(),
+    rows,
+    "typing retains row and glyph entities",
+  );
   await driver.key("Control+c");
   await driver.type("echo CONTROL_OK");
   await driver.key("Enter");

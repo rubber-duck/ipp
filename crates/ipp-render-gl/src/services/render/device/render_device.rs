@@ -239,6 +239,16 @@ pub trait RenderDevice: 'static {
         ))
     }
 
+    /// Replace a derived path's texels, retaining GPU capacity when it fits.
+    /// Queued draws remain ordered by the device; failed writes invalidate it.
+    fn update_surface_path(
+        &mut self,
+        _path: &mut Self::SurfacePath,
+        _texels: &crate::SurfacePathTexels,
+    ) -> Result<bool, RenderError> {
+        Ok(false)
+    }
+
     /// Draw one path in painter order with scene depth testing and no depth writes.
     #[allow(clippy::too_many_arguments)]
     fn draw_surface_path(
@@ -327,6 +337,26 @@ pub trait RenderDevice: 'static {
         0
     }
 
+    /// Attach or remove derived layer ownership (four bytes per texel).
+    /// Changing this invalidates the target's contents.
+    fn set_surface_cache_ownership(
+        &mut self,
+        _target: &mut Self::SurfaceCacheTarget,
+        _enabled: bool,
+    ) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    /// Zero means no layer; positive IDs encode the compact Canvas layer + 1.
+    fn set_surface_owner(&mut self, _owner: u32) -> Result<(), RenderError> {
+        Ok(())
+    }
+
+    /// Select a cutout for the next image draws, or the complete image with zero.
+    fn set_surface_cutout(&mut self, _owner: u32) -> Result<(), RenderError> {
+        Ok(())
+    }
+
     /// Bind a linear-color target with independent depth for a nested Camera.
     /// Ends through `end_surface_cache_target`, without display conversion.
     fn begin_camera_target(
@@ -396,6 +426,16 @@ pub trait RenderDevice: 'static {
         ))
     }
 
+    /// Preserve existing pixels outside an integer target rectangle, clear the
+    /// rectangle, and keep its scissor independent of logical Canvas clipping.
+    fn begin_surface_cache_region(
+        &mut self,
+        target: &Self::SurfaceCacheTarget,
+        _region: Option<[u32; 4]>,
+    ) -> Result<(), RenderError> {
+        self.begin_surface_cache_target(target)
+    }
+
     /// Restore the state saved by [`Self::begin_surface_cache_target`], also
     /// after failed draws, then check errors so a failed repaint is never kept
     /// as a complete image. Context loss reports [`RenderError::ContextLost`].
@@ -442,8 +482,8 @@ pub trait RenderDevice: 'static {
         _clip: &[f32; 4],
         _opacity: f32,
         _flip_image: bool,
-        _indices: std::ops::Range<u32>,
-    ) -> Result<(), RenderError> {
+        _indices: &[[u32; 2]],
+    ) -> Result<u32, RenderError> {
         Err(RenderError::RenderDevice(
             "sampled Surface images unavailable".into(),
         ))

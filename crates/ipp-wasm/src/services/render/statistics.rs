@@ -60,13 +60,19 @@ pub(crate) const TOTAL_GUI_TEXT_MEASUREMENTS: usize = 39;
 pub(crate) const GUI_HASHES: usize = 40;
 pub(crate) const TOTAL_GUI_HASHES: usize = 41;
 
+pub(crate) const SURFACE_CACHE_PARTIAL_REPAINTS: usize = 42;
+pub(crate) const SURFACE_CACHE_REPAINT_PIXELS: usize = 43;
+pub(crate) const SURFACE_CACHE_FULL_PIXELS: usize = 44;
+pub(crate) const TOTAL_SURFACE_CACHE_PARTIAL_REPAINTS: usize = 45;
+pub(crate) const TOTAL_SURFACE_CACHE_REPAINT_PIXELS: usize = 46;
+pub(crate) const TOTAL_SURFACE_CACHE_FULL_PIXELS: usize = 47;
 /// Words in the record.
-pub(crate) const RECORD_WORDS: usize = 42;
+pub(crate) const RECORD_WORDS: usize = 48;
 
 pub(crate) const FLAG_LAYOUT: u32 = 1;
 
 /// Per-frame counters the record also accumulates.
-const ACCUMULATED: [(usize, usize); 13] = [
+const ACCUMULATED: [(usize, usize); 16] = [
     (UPLOADED_BYTES, TOTAL_UPLOADED_BYTES),
     (GUI_REBUILDS, TOTAL_GUI_REBUILDS),
     (GUI_HASHES, TOTAL_GUI_HASHES),
@@ -80,6 +86,15 @@ const ACCUMULATED: [(usize, usize); 13] = [
     (SURFACE_CACHE_DIRECT, TOTAL_SURFACE_CACHE_DIRECT),
     (SURFACE_CACHE_FALLBACKS, TOTAL_SURFACE_CACHE_FALLBACKS),
     (SURFACE_CACHE_ALLOCATIONS, TOTAL_SURFACE_CACHE_ALLOCATIONS),
+    (
+        SURFACE_CACHE_PARTIAL_REPAINTS,
+        TOTAL_SURFACE_CACHE_PARTIAL_REPAINTS,
+    ),
+    (
+        SURFACE_CACHE_REPAINT_PIXELS,
+        TOTAL_SURFACE_CACHE_REPAINT_PIXELS,
+    ),
+    (SURFACE_CACHE_FULL_PIXELS, TOTAL_SURFACE_CACHE_FULL_PIXELS),
 ];
 
 /// Totals of the presentation service and the record storage it exports.
@@ -178,6 +193,9 @@ fn per_frame(statistics: &RenderStatistics) -> [u32; RECORD_WORDS] {
 
     words[ANALYTIC_GLYPH_RESIDENT_BYTES] = statistics.analytic_glyph_resident_bytes;
     words[SURFACE_CACHE_REPAINTS] = statistics.surface_cache_repaints;
+    words[SURFACE_CACHE_PARTIAL_REPAINTS] = statistics.surface_cache_partial_repaints;
+    words[SURFACE_CACHE_REPAINT_PIXELS] = statistics.surface_cache_repaint_pixels;
+    words[SURFACE_CACHE_FULL_PIXELS] = statistics.surface_cache_full_pixels;
     words[SURFACE_CACHE_REUSES] = statistics.surface_cache_reuses;
     words[SURFACE_CACHE_DIRECT] = statistics.surface_cache_direct;
     words[SURFACE_CACHE_FALLBACKS] = statistics.surface_cache_fallbacks;

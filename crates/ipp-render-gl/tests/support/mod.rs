@@ -15,6 +15,13 @@ use ipp_render_gl::{RenderDevice, RenderError, RenderService};
 use std::cell::RefCell;
 use std::{cell::Cell, rc::Rc};
 
+pub struct SurfaceMeshDraw {
+    pub mvp: [f32; 16],
+    pub center: [f32; 3],
+    pub target: u32,
+    pub cutout: u32,
+}
+
 #[derive(Default)]
 pub struct DeviceState {
     pub completion_fences_ready: Cell<bool>,
@@ -35,6 +42,8 @@ pub struct DeviceState {
     pub mesh_attempts: Cell<u32>,
     pub fail_mesh_attempt: Cell<u32>,
     pub projected_draws: RefCell<Vec<(std::ops::Range<u32>, bool)>>,
+    pub surface_mesh_draws: RefCell<Vec<SurfaceMeshDraw>>,
+    pub surface_cutout: Cell<u32>,
     /// Mesh draw submissions.
     pub mesh_draws: Cell<u32>,
     pub fail_shadow_allocation: Cell<bool>,
@@ -74,6 +83,7 @@ pub struct DeviceState {
     pub cache_deletes: Cell<u32>,
     pub cache_resizes: Cell<u32>,
     pub cache_begins: Cell<u32>,
+    pub cache_damage: RefCell<Vec<Option<[u32; 4]>>>,
     pub cache_composites: Cell<u32>,
     pub cache_target_bound: Cell<bool>,
     pub bound_cache_target: Cell<Option<u32>>,
@@ -149,7 +159,7 @@ impl RenderDevice for TestDevice {
     type SurfaceCacheTarget = u32;
     type SurfaceInstances = ();
     type Program = ();
-    type Mesh = ();
+    type Mesh = [f32; 3];
     type Texture = ();
     type TextureReadback = u32;
 
@@ -285,7 +295,7 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
-    fn create_mesh(&mut self, _asset: &MeshAsset) -> Result<(), RenderError> {
+    fn create_mesh(&mut self, asset: &MeshAsset) -> Result<Self::Mesh, RenderError> {
         self.0.mesh_attempts.set(self.0.mesh_attempts.get() + 1);
         if self.0.fail_mesh_attempt.get() == self.0.mesh_attempts.get() {
             return Err(RenderError::RenderDevice(
@@ -301,7 +311,8 @@ impl RenderDevice for TestDevice {
             ));
         }
         self.0.live_meshes.set(self.0.live_meshes.get() + 1);
-        Ok(())
+        let (min, max) = asset.bounds();
+        Ok(std::array::from_fn(|axis| (min[axis] + max[axis]) * 0.5))
     }
 
     fn create_texture(
@@ -568,6 +579,15 @@ impl RenderDevice for TestDevice {
         Ok(())
     }
 
+    fn begin_surface_cache_region(
+        &mut self,
+        target: &u32,
+        region: Option<[u32; 4]>,
+    ) -> Result<(), RenderError> {
+        self.0.cache_damage.borrow_mut().push(region);
+        self.begin_surface_cache_target(target)
+    }
+
     fn end_surface_cache_target(&mut self) -> Result<(), RenderError> {
         self.0.cache_target_bound.set(false);
         self.0.bound_cache_target.set(None);
@@ -611,21 +631,41 @@ impl RenderDevice for TestDevice {
         }
     }
 
+    fn set_surface_cutout(&mut self, owner: u32) -> Result<(), RenderError> {
+        self.0.surface_cutout.set(owner);
+        Ok(())
+    }
+
     fn draw_surface_image_mesh(
         &mut self,
         program: &(),
         target: &u32,
-        _: &(),
+        mesh: &Self::Mesh,
         mvp: &[f32; 16],
         size: &[f32; 2],
         clip: &[f32; 4],
         opacity: f32,
         flip: bool,
-        indices: std::ops::Range<u32>,
-    ) -> Result<(), RenderError> {
-        assert!(indices.start < indices.end && (indices.end - indices.start).is_multiple_of(3));
-        self.0.projected_draws.borrow_mut().push((indices, flip));
-        self.draw_surface_cache(program, target, mvp, size, clip, opacity)
+        indices: &[[u32; 2]],
+    ) -> Result<u32, RenderError> {
+        for &[first, count] in indices {
+            assert!(count > 0 && count.is_multiple_of(3));
+            self.0
+                .projected_draws
+                .borrow_mut()
+                .push((first..first + count, flip));
+        }
+        self.draw_surface_cache(program, target, mvp, size, clip, opacity)?;
+        self.0
+            .surface_mesh_draws
+            .borrow_mut()
+            .push(SurfaceMeshDraw {
+                mvp: *mvp,
+                center: *mesh,
+                target: *target,
+                cutout: self.0.surface_cutout.get(),
+            });
+        Ok(indices.len() as u32)
     }
 
     fn delete_surface_cache_target(&mut self, target: u32) {
@@ -767,7 +807,7 @@ impl RenderDevice for TestDevice {
     fn draw(
         &mut self,
         _program: &(),
-        _mesh: &(),
+        _mesh: &Self::Mesh,
         _mvp: &[f32; 16],
         _material: &[f32; 3],
         _pose: Option<(&Self::Mesh, f32)>,
@@ -794,7 +834,7 @@ impl RenderDevice for TestDevice {
         }
     }
 
-    fn delete_mesh(&mut self, _mesh: ()) {
+    fn delete_mesh(&mut self, _mesh: Self::Mesh) {
         self.0.live_meshes.set(self.0.live_meshes.get() - 1);
     }
 

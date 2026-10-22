@@ -242,6 +242,11 @@ export {
 } from "./gui-kit/values/range-slider.js";
 export { Knob, type KnobProps } from "./gui-kit/values/knob.js";
 export {
+  Stepper,
+  type StepperProps,
+  type StepperStep,
+} from "./gui-kit/selection/stepper.js";
+export {
   NumericStepper,
   type NumericStepperProps,
 } from "./gui-kit/values/numeric-stepper.js";

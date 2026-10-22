@@ -103,6 +103,8 @@ export interface SpecimenSessionOptions {
   readonly themes: SkinThemes;
   /** Unique World symbolic id on the Host. */
   readonly world: string;
+  /** Physical pixels per canvas unit; defaults to the reference-sheet density. */
+  readonly captureScale?: number;
 }
 
 export interface CapturedState {
@@ -140,9 +142,9 @@ function identity(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-function pixelRect(cell: readonly number[]): PixelRect {
+function pixelRect(cell: readonly number[], scale: number): PixelRect {
   const [x, y, width, height] = cell.map((value) =>
-    Math.round(value * CAPTURE_SCALE),
+    Math.round(value * scale),
   ) as [number, number, number, number];
   return [x, y, width, height];
 }
@@ -170,6 +172,11 @@ export class SpecimenSession {
 
   static async open(options: SpecimenSessionOptions): Promise<SpecimenSession> {
     const { host, specimen } = options;
+    const scale = options.captureScale ?? CAPTURE_SCALE;
+    check(
+      Number.isFinite(scale) && scale > 0,
+      "Capture scale must be positive and finite",
+    );
     const created = await host.createWorld({
       symbolicId: options.world,
       selectedSystems: SPECIMEN_SYSTEMS,
@@ -260,10 +267,11 @@ export class SpecimenSession {
     );
     if (extentChanged) {
       const [width, height] = this.specimen.extent;
+      const scale = this.options.captureScale ?? CAPTURE_SCALE;
       this.binding = await this.options.host.setRootOutput(this.output, {
-        width: Math.round(width * CAPTURE_SCALE),
-        height: Math.round(height * CAPTURE_SCALE),
-        devicePixelRatio: CAPTURE_SCALE,
+        width: Math.round(width * scale),
+        height: Math.round(height * scale),
+        devicePixelRatio: scale,
       });
     }
     return { ...this.batches.commands };
@@ -303,7 +311,10 @@ export class SpecimenSession {
         const captured = state.pin?.length
           ? await this.pinned(view, state)
           : { capture: base, routing: [] };
-        const cell = pixelRect(state.cell);
+        const cell = pixelRect(
+          state.cell,
+          this.options.captureScale ?? CAPTURE_SCALE,
+        );
         const frame =
           captured.capture === base ? whole : image(captured.capture);
         if (captured.capture !== base)

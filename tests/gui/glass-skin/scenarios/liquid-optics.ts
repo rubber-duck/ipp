@@ -187,8 +187,10 @@ export async function exerciseLiquidOptics(
           ),
           "Capsule corners expose the backdrop rather than a square fill",
         );
+      // Probe the face just inside the rounded end, beyond the thin polished
+      // rim and dark shoulder: coverage must not depend on highlight width.
       check(
-        pixel(frame, 626, 266)[1]! > backdrop[1]! + 20,
+        pixel(frame, 628, 266)[1]! > backdrop[1]! + 20,
         "The capsule still covers the midpoint of its rounded end",
       );
     };

@@ -16,6 +16,8 @@ export function selectionKitThemes(
   const result: Partial<Record<KitThemeName, GlassKitTheme>> = {};
   for (const name of [
     "radio",
+    "stepperStep",
+    "stepperComplete",
     "selectTrigger",
     "floating",
     "floatingSmall",

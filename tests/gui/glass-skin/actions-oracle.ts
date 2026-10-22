@@ -153,7 +153,9 @@ export function probeGlassOpticalFinish(
   );
   const reflection = Math.max(...faceSamples);
   const quietFace = Math.min(...faceSamples);
-  const bevel = sample(0.35, 0.005, 0.3, 0.01);
+  // The filtered bevel occupies the first interior pixel row. A proportional
+  // inset can skip that row and measure the darker shoulder instead.
+  const bevel = sample(0.35, 0, 0.3, 1 / height);
   const outside = sample(0.35, -0.1, 0.3, 0.04);
   return [
     probe(

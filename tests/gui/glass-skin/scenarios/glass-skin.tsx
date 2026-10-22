@@ -1,7 +1,9 @@
 import { exerciseProductionOptics } from "./production-optics.js";
 import { exerciseLiquidOptics } from "./liquid-optics.js";
+import { exerciseGlassEdges } from "./edge-quality.js";
 import { exercisePanelOpacity } from "./panel-opacity.js";
 import { exerciseDropdownRowCorners } from "./dropdown-row-corners.js";
+import { exerciseStepper } from "./stepper.js";
 import { exerciseSkinOwnership } from "./skin-ownership.js";
 import { exerciseOpticalContext } from "./optical-context.js";
 import { exerciseOpticalComponents } from "./optical-components.js";
@@ -184,11 +186,13 @@ export async function glassSkin(
   font: Uint8Array<ArrayBuffer>,
   environment: GlassSkinEnvironment,
   region:
+    | "edge-quality"
     | "liquid-optics"
     | "optical-components"
     | "production-optics"
     | "panel-backgrounds"
     | "optical-context"
+    | "stepper"
     | "skin-ownership"
     | "appearance"
     | "editing"
@@ -230,6 +234,10 @@ export async function glassSkin(
     await exerciseLiquidOptics(host, contract, font, present, environment);
     return { region };
   }
+  if (region === "edge-quality") {
+    await exerciseGlassEdges(host, contract, font, present, environment);
+    return { region };
+  }
   if (region === "panel-backgrounds") {
     await exercisePanelOpacity(host, contract, font, present, environment);
     await exerciseDropdownRowCorners(
@@ -239,6 +247,10 @@ export async function glassSkin(
       present,
       environment,
     );
+    return { region };
+  }
+  if (region === "stepper") {
+    await exerciseStepper(host, contract, font, present, environment);
     return { region };
   }
   if (region === "skin-ownership") {

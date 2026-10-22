@@ -23,6 +23,8 @@ import {
   RadioGroup,
   SegmentedControl,
   Tabs,
+  Stepper,
+  type StepperStep,
   TreeView,
   type RadioGroupProps,
   type SegmentedControlProps,
@@ -474,6 +476,120 @@ const navigation = (props: Partial<TabsProps> = {}) =>
     more: h(Entity, { id: "more" }),
     ...props,
   });
+
+test("Stepper keeps completion and keyed content independent of navigation", async () => {
+  const changes: string[] = [];
+  const steps: StepperStep[] = [
+    {
+      value: "details",
+      label: "Details",
+      completed: true,
+      content: h(Entity, { id: "details-content" }),
+    },
+    {
+      value: "review",
+      label: "Review",
+      content: h(Entity, { id: "review-content" }),
+    },
+    { value: "done", label: "Done", disabled: true },
+  ];
+  const props = {
+    id: "wizard",
+    steps,
+    defaultValue: "review",
+    onChange: (value: string) => {
+      changes.push(value);
+    },
+  };
+  const { world, root, draw } = await render(h(Stepper, props));
+  await settle(root);
+  assert.deepEqual(changes, []);
+  assert.equal(world.fields("wizard/steps", "GuiGroup").get("selection"), 1);
+  assert.equal(
+    world.fields("wizard/step/done", "GuiBehavior").get("enabled"),
+    false,
+  );
+  assert.equal(world.skin("wizard/step/details"), "stepperComplete");
+  assert.equal(
+    world.skin("wizard/connector/details"),
+    "stepperConnectorComplete",
+  );
+  assert.ok(world.entities.has("review-content"));
+  assert.ok(!world.entities.has("details-content"));
+  world.value("wizard/step/review", "GuiButton", { selected: false });
+  world.value("wizard/step/details", "GuiButton", { selected: true });
+  await settle(root);
+  assert.deepEqual(changes, ["details"]);
+  assert.ok(world.entities.has("details-content"));
+  assert.ok(!world.entities.has("review-content"));
+  const identity = world.entities.get("wizard/step/details");
+  await draw(
+    h(Stepper, {
+      ...props,
+      steps: [steps[1]!, steps[0]!, steps[2]!],
+      orientation: "vertical",
+    }),
+  );
+  assert.equal(world.entities.get("wizard/step/details"), identity);
+  assert.equal(world.fields("wizard/steps", "GuiGroup").get("axis"), 1);
+  assert.equal(
+    world.fields("wizard/step/details/item", "GuiLayout").get("flex"),
+    0,
+  );
+  assert.equal(
+    world.fields("wizard/connector/details", "GuiLayout").get("margin_top"),
+    world.fields("wizard/connector/details", "GuiLayout").get("margin_bottom"),
+  );
+  assert.equal(
+    world.fields("wizard/step/details", "GuiButton").get("label"),
+    "2",
+  );
+  assert.equal(world.skin("wizard/step/details"), "stepperComplete");
+  assert.ok(world.entities.has("details-content"));
+  await root.unmount();
+});
+
+test("Stepper initializes the first enabled step and converges rejected controlled changes", async () => {
+  const steps = [
+    { value: "locked", label: "Locked", disabled: true },
+    { value: "first", label: "First" },
+    { value: "next", label: "Next" },
+  ];
+  const changes: string[] = [];
+  const free = await render(h(Stepper, { id: "wizard", steps }));
+  assert.equal(
+    free.world.fields("wizard/step/first", "GuiButton").get("selected"),
+    true,
+  );
+  assert.equal(
+    free.world.fields("wizard/step/locked", "GuiButton").get("selected"),
+    false,
+  );
+  await free.root.unmount();
+  const { world, root, draw } = await render(
+    h(Stepper, {
+      id: "wizard",
+      steps,
+      value: "first",
+      onChange: (value) => {
+        changes.push(value);
+      },
+    }),
+  );
+  await settle(root);
+  world.value("wizard/step/first", "GuiButton", { selected: false });
+  world.value("wizard/step/next", "GuiButton", { selected: true });
+  await settle(root);
+  assert.deepEqual(changes, ["next"]);
+  assert.deepEqual(world.compared.at(-1), [
+    "wizard/step/first",
+    "selected",
+    true,
+  ]);
+  await draw(h(Stepper, { id: "wizard", steps: [] }));
+  assert.ok(!world.entities.has("wizard/step/first"));
+  await root.unmount();
+});
 
 /** A ScrollView's runtime-written geometry. */
 const scrollGeometry = (

@@ -364,6 +364,7 @@ export function kitThemes(contract: GuiKitRecipeInputs) {
     },
 
     ...choiceThemes(contract),
+    ...stepperThemes(contract),
 
     ...selectThemes(contract),
   } satisfies Readonly<Record<string, KitTheme>>;
@@ -757,6 +758,48 @@ function selectThemes(contract: GuiKitRecipeInputs) {
 
 /** Names of the kit's themes. */
 export type KitThemeName = keyof ReturnType<typeof kitThemes>;
+
+/** Wizard progress is separate from the native button's selected state. */
+function stepperThemes(contract: GuiKitRecipeInputs) {
+  const t = contract.tokens;
+  const key = (part: string, state?: string, variant?: string) =>
+    contract.guiPaintPartIndex({
+      part,
+      ...(state ? { state } : {}),
+      ...(variant ? { variant } : {}),
+    });
+  const step = (complete: boolean): KitTheme => ({
+    ...contract.looks.secondary,
+    rows: extend(contract.looks.secondary, [
+      {
+        part: key("background"),
+        color: complete ? t.rowTint : t.surface,
+        border_color: complete ? t.accent : t.neutral,
+      },
+      { part: key("label"), color: complete ? t.accent : t.text },
+      ...(["idle", "hovered", "pressed"] as const).flatMap((state) => [
+        {
+          part: key("background", state, "checked"),
+          color: t.accent,
+          border_color: t.accent,
+          fill_mode: 0,
+        },
+        { part: key("label", state, "checked"), color: t.surface },
+      ]),
+    ]),
+    em: contract.looks.secondary.em,
+  });
+  const line = (color: GuiKitColor): KitTheme => ({
+    rows: [{ part: key("background"), color, border_width: 0 }],
+    em: t.em,
+  });
+  return {
+    stepperStep: step(false),
+    stepperComplete: step(true),
+    stepperConnector: line(t.line),
+    stepperConnectorComplete: line(t.accent),
+  };
+}
 
 /** Every kit theme as its encoded `GuiTheme` fields, rows in paint-key order. */
 export function encodeKitThemes(

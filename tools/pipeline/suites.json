@@ -4202,12 +4202,38 @@
         "requirements": ["node", "npm", "browser"]
       },
       {
+        "name": "stepper-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker stepper$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
         "name": "ownership-native",
         "command": [
           "@node",
           "--test",
           "--test-name-pattern",
           "glass GUI skin native skin-ownership$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "stepper-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native stepper$",
           "target/gui-glass-skin/glass-skin.test.js"
         ],
         "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
@@ -4234,6 +4260,32 @@
           "--test",
           "--test-name-pattern",
           "glass GUI skin worker optical-context$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "edge-quality-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native edge-quality$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "edge-quality-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker edge-quality$",
           "target/gui-glass-skin/glass-skin.test.js"
         ],
         "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],

@@ -17,15 +17,18 @@ function base64(bytes: Uint8Array) {
 }
 
 function differences(a: RgbaImage, b: RgbaImage) {
-  let changed = 0;
-  for (let i = 0; i < a.pixels.length; i += 4)
-    if (
-      Math.max(
-        ...[0, 1, 2].map((c) => Math.abs(a.pixels[i + c]! - b.pixels[i + c]!)),
-      ) > 8
-    )
-      changed++;
-  return changed;
+  let changedPixels = 0,
+    responsePixels = 0,
+    integratedChange = 0;
+  for (let i = 0; i < a.pixels.length; i += 4) {
+    const delta = Math.max(
+      ...[0, 1, 2].map((c) => Math.abs(a.pixels[i + c]! - b.pixels[i + c]!)),
+    );
+    if (delta > 8) changedPixels++;
+    if (delta > 2) responsePixels++;
+    integratedChange += Math.max(delta - 2, 0);
+  }
+  return { changedPixels, responsePixels, integratedChange };
 }
 
 /** Real native controls, live appearance replacement and completed frame evidence. */
@@ -111,7 +114,7 @@ export async function exerciseGlassValues(
       ),
     });
     const violet = await session.capture(present, ["values-feedback"]);
-    const changed = differences(first.image, violet.image);
+    const changed = differences(first.image, violet.image).changedPixels;
     let colorFieldChanges = 0;
     for (let y = fieldY + 4; y < fieldY + 212; y++)
       for (let x = fieldX + 4; x < fieldX + 212; x++) {
@@ -142,7 +145,10 @@ export async function exerciseGlassValues(
       ),
     });
     const lightLeft = await session.capture(present, ["values-feedback"]);
-    const lightChanges = differences(violet.image, lightLeft.image);
+    const lightChanges = differences(
+      violet.image,
+      lightLeft.image,
+    ).changedPixels;
     check(
       lightChanges > 200,
       "Composite procedural glass did not respond to isolated light movement",
@@ -172,7 +178,7 @@ export async function exerciseGlassValues(
       }
     check(bodyChanges === 0, "Filled progress glass leaked the backdrop");
     check(
-      differences(violet.image, contrast.image) > 3000,
+      differences(violet.image, contrast.image).changedPixels > 3000,
       "Contrast background did not change",
     );
     await save("composite-values-opacity", contrast.image);
@@ -235,6 +241,7 @@ export async function exerciseGlassValues(
       );
     });
     const stateBase = await session.capture(present, ["values-feedback"]);
+    await save("composite-values-state-base", stateBase.image);
     const states = await session.capture(present, [
       "slider-hover",
       "slider-focus",
@@ -246,11 +253,16 @@ export async function exerciseGlassValues(
       "Value states left native focus/pointers",
     );
     for (const state of states.states) {
-      check(
-        differences(stateBase.image, state.image) > 20,
-        `No rendered response for ${state.name}`,
-      );
       await save(`composite-values-${state.name}`, state.image);
+      const response = differences(stateBase.image, state.image);
+      await environment.record({ state: state.name, ...response });
+      // Filtering spreads a visible response across pixels below the old
+      // per-pixel cutoff. Preserve its aggregate contrast and minimum area,
+      // excluding two code values of quantization noise from each pixel.
+      check(
+        response.responsePixels > 20 && response.integratedChange > 20 * 8,
+        `No rendered response for ${state.name}: ${JSON.stringify(response)}`,
+      );
     }
     await session.update({
       specimen: valuesSpecimen(

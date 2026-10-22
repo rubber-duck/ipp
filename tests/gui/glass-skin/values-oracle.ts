@@ -148,9 +148,18 @@ export function checkGlassSliderThumb(
     edge * 0.2,
   );
   const rim = region(image, cx - edge * 0.35, cy - edge / 2 - 1, edge * 0.7, 3);
+  // Compare the rim with clear glass away from both possible track axes. The
+  // centre includes the bright track transmitted through the translucent thumb.
+  const face = region(
+    image,
+    cx + edge * 0.15,
+    cy + edge * 0.15,
+    edge * 0.15,
+    edge * 0.15,
+  );
   check(
-    rim.max > centre.mean + 18,
-    `${id} thumb at ${fraction} lost its glass rim: rim ${rim.max}, centre ${centre.mean}`,
+    rim.max > face.mean + 18,
+    `${id} thumb at ${fraction} lost its glass rim: rim ${rim.max}, face ${face.mean}`,
   );
   check(
     centre.mean < 175,

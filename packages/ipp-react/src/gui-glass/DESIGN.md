@@ -8,6 +8,8 @@ Treat controls as thin sheets of smoked liquid glass: capsule ends for standalon
 
 Connected controls share a continuous contour and reflection field. An open dropdown extends its trigger’s sheet. Tabs, segments, rows and inset cells divide a parent surface with restrained tints and separators instead of restarting its bevel. Keep popup content readable over the application.
 
+Keep the polished rim narrow and the face soft. The [liquid sheet shader](liquid-material.ts) integrates both silhouette coverage and premultiplied optical color within each physical edge pixel, accounting for the native contour's existing coverage. Sampling the varying normals and highlights together with coverage lets a partially visible rim contribute even when the pixel center misses it. The flat interior needs only one optical evaluation; the rim uses a bounded sample grid within the same paint pass. Higher display density should reveal a sharper contour without thickening the rim or introducing jagged highlights.
+
 ## State and color
 
 Keep idle reflections dim, including selected and checked controls, with no external glow. Hover, focus and press may raise the bounded material highlights. Selection retains a useful tint, focus stays visible, and disabled values remain legible. Native state and geometry own interaction; decoration must not change values or hit targets.

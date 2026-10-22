@@ -18,12 +18,14 @@ const FONT = "target/font-assets/shure-tech-mono.ippf";
 
 for (const mode of ["worker", "native"] as const) {
   for (const region of [
+    "edge-quality",
     "liquid-optics",
     "optical-components",
     "production-optics",
     "panel-backgrounds",
     "optical-context",
     "skin-ownership",
+    "stepper",
     "appearance",
     "editing",
     "values",

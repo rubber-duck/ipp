@@ -1,8 +1,11 @@
 import {
   DemoApplication,
   DEMO_SYSTEMS,
-  DEMO_FONT,
 } from "../../examples/demos/application.js";
+import {
+  DEMO_FONT_RESOURCES,
+  demoFont,
+} from "../../examples/demos/shared/fonts.js";
 /** Shared gallery scenes mounted through the persistent development Host. */
 import { readFile } from "node:fs/promises";
 import { resolve, sep } from "node:path";
@@ -336,7 +339,7 @@ export class NativeGallerySession {
         this.assetRoot,
         client as AssetWorldClient,
       );
-      await assets.prepare([{ kind: 17, path: DEMO_FONT }], lifetime.signal);
+      await assets.prepare(DEMO_FONT_RESOURCES, lifetime.signal);
       const output = (await import("@ipp/client")).canvasOutput(root.reference);
       canvas.bind(await this.context.host.setRootOutput(output, this.viewport));
       const Application = (this.loaded?.module.DemoApplication ??
@@ -369,6 +372,7 @@ export class NativeGallerySession {
         {
           scene: scene.id,
           options: this.options,
+          font: demoFont(this.options.font).key,
           ...(typeof this.options.renderScale === "number"
             ? { renderScale: this.options.renderScale }
             : {}),

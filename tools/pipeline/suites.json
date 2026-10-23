@@ -3433,6 +3433,9 @@
       "tests/gallery/drivers/native-application.ts",
       "tests/gallery/scenarios/application.ts",
       "tests/gallery/scenarios/application-layout.ts",
+      "tests/gallery/scenarios/application-fonts.ts",
+      "tests/gallery/support/application-fonts.ts",
+      "tests/gallery/scenarios/gallery-chart-skins.ts",
       "tests/gallery/fixtures/application-scenes.ts",
       "tests/gallery/gallery-platformer-controls.test.ts",
       "tests/gallery/drivers/native-platformer-controls.ts",
@@ -3570,6 +3573,28 @@
           "@node",
           "--test",
           "--test-name-pattern=routes toolbar input",
+          "dist/tests/gallery/application.native.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gles-host",
+          "font-assets",
+          "gallery-assets",
+          "gallery-platformer-native-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      },
+      {
+        "name": "application-fonts",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=switches fonts",
           "dist/tests/gallery/application.native.test.js"
         ],
         "builds": [
@@ -4441,6 +4466,10 @@
     "sourceRoots": [
       "examples/demos/main.tsx",
       "examples/demos/application.tsx",
+      "examples/demos/shared/fonts.ts",
+      "tests/gallery/scenarios/application-fonts.ts",
+      "tests/gallery/support/application-fonts.ts",
+      "tests/gallery/application-fonts.browser.test.ts",
       "tests/gallery/pages/application.ts",
       "tests/gallery/pages/frame-rate.ts",
       "tests/gallery/scenarios/frame-rate-history.ts",
@@ -4464,6 +4493,30 @@
       "tools/build/verify-browser.mjs",
       "tests/gallery/drivers/browser-chart-programs.ts",
       "tests/gallery/scenarios/gallery-chart-visibility.ts"
+    ],
+    "commands": [
+      {
+        "name": "fonts",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=switches fonts",
+          "dist/tests/gallery/application-fonts.browser.test.js"
+        ],
+        "builds": [
+          "typescript",
+          "gallery-fixtures",
+          "browser:render",
+          "gallery",
+          "font-assets"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "browser",
+          "wasm"
+        ]
+      }
     ],
     "files": [
       "dist/tests/gallery/application.browser.test.js",

@@ -199,7 +199,11 @@ test("native gallery preserves options and current scene across failed reload, t
         visiblePixels(before) > 1500,
         "built-in gallery meshes render through GLES",
       );
-      await driver.call("options", ['{"shape":"cube"}'], signal);
+      await driver.call(
+        "options",
+        ['{"shape":"cube","font":"noto-sans"}'],
+        signal,
+      );
       await driver.call("action", ["resetCamera"], signal);
       await driver.call("reload", [], signal);
       let mounted = await worlds();
@@ -210,6 +214,11 @@ test("native gallery preserves options and current scene across failed reload, t
         "reload recreates the World rather than retaining runtime handles",
       );
       const inspection = await driver.call("inspect", [], signal);
+      assert.equal(
+        (inspection.report.options as Record<string, unknown>).font,
+        "noto-sans",
+        "reload retains the application font",
+      );
       assert.equal(
         (inspection.report.options as Record<string, unknown>).shape,
         "cube",

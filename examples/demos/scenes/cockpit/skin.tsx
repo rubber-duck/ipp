@@ -4,8 +4,7 @@ import { glassSkin } from "@ipp/react/gui-glass";
 import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import type { GalleryAssets } from "../../shared/scene.js";
 import type { CockpitOptions } from "./options.js";
-
-export const COCKPIT_FONT = "/target/font-assets/shure-tech-mono.ippf";
+import { DEMO_ICON_FONT, demoFont } from "../../shared/fonts.js";
 
 export function CockpitSkin({
   contract,
@@ -28,7 +27,8 @@ export function CockpitSkin({
     <GuiKit
       id="cockpit-skin"
       contract={contract}
-      font={assets.url(COCKPIT_FONT)}
+      font={assets.url(demoFont(state.font).path)}
+      iconFont={assets.url(DEMO_ICON_FONT)}
       fontSize={16}
       skin={skins[state.skin]}
     >

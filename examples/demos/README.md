@@ -1,6 +1,6 @@
 # IPP demos
 
-The demos are one engine-rendered application shared by the browser and persistent native GLES sessions. Its Canvas GUI selects the scene, appearance and rendering resolution, with compact controls contributed by each scene. The application prepares a replacement scene before changing the visible Camera Surface and explicitly retires the previous scene and its owned Worlds.
+The demos are one engine-rendered application shared by the browser and persistent native GLES sessions. Its Canvas GUI selects the scene, appearance, text font and rendering resolution, with compact controls contributed by each scene. Display offers Shure Tech Mono and proportional Noto Sans independently of the skin. The font follows scene navigation and native session reload, including scene controls, cockpit panels and chart labels; icons and terminal cells retain their dedicated monospaced font. The application prepares a replacement scene before changing the visible Camera Surface and explicitly retires the previous scene and its owned Worlds.
 
 The browser provides its canvas, physical input, connection and asset reads. Native development uses the same application declarations, assets and controllers through the [shared development Host](../../docs/development/shared-host.md). Hosts own clocks and animation; applications observe acknowledged state and completed output frames.
 

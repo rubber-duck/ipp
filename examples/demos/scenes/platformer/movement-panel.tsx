@@ -41,6 +41,7 @@ export function PlatformerMovementPanel({
   camera,
   contract,
   font,
+  iconFont,
   skin,
   movement,
   onReady,
@@ -48,6 +49,7 @@ export function PlatformerMovementPanel({
   readonly camera: bigint;
   readonly contract: GuiKitContract;
   readonly font: string;
+  readonly iconFont: string;
   readonly skin: GallerySkin;
   readonly movement: PlatformerMovement;
   readonly onReady: (handle: CanvasWorldHandle) => void;
@@ -88,6 +90,7 @@ export function PlatformerMovementPanel({
           id="platformer-movement-skin"
           contract={contract}
           font={font}
+          iconFont={iconFont}
           fontSize={16}
           skin={skins[skin]}
         >

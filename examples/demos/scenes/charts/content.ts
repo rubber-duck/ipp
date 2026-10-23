@@ -1,5 +1,4 @@
 import {
-  clientAssetSource,
   DynamicProperty,
   type AnimationWorldClient,
   type DatasetProducer,
@@ -58,6 +57,11 @@ import {
 import { ChartLegendFacing, ChartSkin, ChartSkinSelection } from "./skin.js";
 import type { GuiKitContract } from "@ipp/react/gui-kit";
 import type { GallerySkin } from "../../shared/skin-preference.js";
+import {
+  DEFAULT_DEMO_FONT,
+  demoFont,
+  type GalleryFont,
+} from "../../shared/fonts.js";
 import { cameraAttachment } from "../../shared/camera.js";
 import { declarePlot } from "./shared/declare-plot.js";
 
@@ -93,7 +97,7 @@ export interface GalleryChart {
   producer: DatasetProducer;
   sourceKind: ChartDataMode;
   windows: readonly DataWindow[];
-  readonly font: ClientAssetSource;
+  font: ClientAssetSource;
   frame: ChartSpec["frame"];
   readonly legend: GalleryChartLegend;
 }
@@ -132,6 +136,14 @@ export class ChartContent {
   }[] = [];
   private readonly roots = new Map<string, ReactWorldRoot>();
   private readonly legendRoots: ReactWorldRoot[] = [];
+  private readonly legendRenders = new Map<
+    string,
+    (font: string) => ReturnType<ReactWorldRoot["render"]>
+  >();
+  private readonly fonts = new Map<
+    GalleryFont,
+    Map<AnimationWorldClient, ClientAssetSource>
+  >();
   private sourceGeneration = 0;
   mode: ChartDataMode = "buffer";
   window: ChartWindow = "count";
@@ -171,11 +183,16 @@ export class ChartContent {
 
   private async font(
     client: AnimationWorldClient,
+    selection: GalleryFont,
     bytes: Uint8Array<ArrayBuffer>,
   ) {
-    const asset = clientAssetSource(client.session, 17, 710001n);
+    let fonts = this.fonts.get(selection);
+    if (!fonts) this.fonts.set(selection, (fonts = new Map()));
+    const existing = fonts.get(client);
+    if (existing) return existing;
+    const asset = await client.createAsset(17, bytes.buffer);
     this.assets.push({ client, asset });
-    await client.registerAsset(asset, bytes.buffer);
+    fonts.set(client, asset);
     return asset;
   }
 
@@ -189,12 +206,12 @@ export class ChartContent {
     return aliasId(outcome, 1);
   }
 
-  async open() {
+  async open(selection: GalleryFont = DEFAULT_DEMO_FONT) {
     const bytes = await this.context.assets.readBytes(
-      "/target/font-assets/shure-tech-mono.ippf",
+      demoFont(selection).path,
       this.context.signal,
     );
-    const rootFont = await this.font(this.client, bytes);
+    const rootFont = await this.font(this.client, selection, bytes);
     for (const spec of CHART_CATALOG) {
       this.context.signal.throwIfAborted();
       const canvas = spec.component.endsWith("2d");
@@ -222,7 +239,7 @@ export class ChartContent {
           created.reference,
         )) as AnimationWorldClient;
         child.client = client;
-        font = await this.font(client, bytes);
+        font = await this.font(client, selection, bytes);
         await this.create(client, [
           createEntity(1, `chart-background-${spec.id}`),
           insertComponent(
@@ -482,18 +499,21 @@ export class ChartContent {
     }
     const root = createRoot(client);
     this.legendRoots.push(root);
-    await root.render(
-      h(
-        ChartSkin,
-        { selection: this.skin, id: `${id}/appearance` },
-        h(PlotLegend, {
-          ...descriptor,
-          font: plotFont.source,
-          x: canvas ? placement.canvasPosition[0] : 0,
-          y: canvas ? placement.canvasPosition[1] : 0,
-        }),
-      ),
-    );
+    const render = (font: string) =>
+      root.render(
+        h(
+          ChartSkin,
+          { selection: this.skin, id: `${id}/appearance` },
+          h(PlotLegend, {
+            ...descriptor,
+            font,
+            x: canvas ? placement.canvasPosition[0] : 0,
+            y: canvas ? placement.canvasPosition[1] : 0,
+          }),
+        ),
+      );
+    this.legendRenders.set(id, render);
+    await render(plotFont.source);
     const world = client.worldReference;
     if (!world) throw new Error(`Legend ${spec.id} has no World`);
     return {
@@ -564,6 +584,49 @@ export class ChartContent {
         }),
     );
     this.roots.set(spec.id, root);
+  }
+
+  async setFont(selection: GalleryFont) {
+    const bytes = await this.context.assets.readBytes(
+      demoFont(selection).path,
+      this.context.signal,
+    );
+    for (const chart of this.charts) {
+      const font = await this.font(chart.client, selection, bytes);
+      const canvas = chart.spec.component.endsWith("2d");
+      successfulBatch(
+        await chart.client.batch([
+          ...componentFields(
+            chart.client,
+            canvas ? "PlotFrame2d" : "PlotFrame3d",
+            { source: font.source },
+          ).map((field) => ({
+            kind: "setField" as const,
+            entity: { kind: "handle" as const, id: chart.entity },
+            component:
+              chart.client.components[canvas ? "PlotFrame2d" : "PlotFrame3d"]!
+                .id,
+            field,
+          })),
+          ...(canvas
+            ? componentFields(chart.client, "CanvasText", {
+                source: font.source,
+              }).map((field) => ({
+                kind: "setField" as const,
+                entity: {
+                  kind: "symbol" as const,
+                  symbol: `chart-title-${chart.spec.id}`,
+                },
+                component: chart.client.components.CanvasText!.id,
+                field,
+              }))
+            : []),
+        ]),
+      );
+      chart.font = font;
+      await this.legendRenders.get(chart.legend.id)!(font.source);
+    }
+    await this.ready();
   }
 
   async setSkin(skin: GallerySkin) {

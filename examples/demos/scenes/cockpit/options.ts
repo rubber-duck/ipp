@@ -1,3 +1,9 @@
+import {
+  DEFAULT_DEMO_FONT,
+  demoFont,
+  type GalleryFont,
+} from "../../shared/fonts.js";
+
 export const COCKPIT_SCREEN_TITLES = [
   "Bridge controls",
   "System monitor",
@@ -11,6 +17,7 @@ export interface CockpitOptions {
   charge: number;
   panelOpacity: number;
   skin: "glass" | "cybertron";
+  font: GalleryFont;
   projection: number;
   surface: "flat" | "curved";
   exploded: boolean;
@@ -48,6 +55,7 @@ export const COCKPIT_DEFAULTS: CockpitOptions = {
   charge: 0.7,
   panelOpacity: 0.98,
   skin: "glass",
+  font: DEFAULT_DEMO_FONT,
   projection: 10,
   surface: "curved",
   exploded: false,
@@ -93,6 +101,7 @@ export function cockpitOptions(
     charge: number("charge", 0, 1),
     panelOpacity: number("panelOpacity", 0.55, 1),
     skin: value.skin === "cybertron" ? "cybertron" : "glass",
+    font: demoFont(value.font).key,
     surface: value.surface === "flat" ? "flat" : "curved",
     exploded: Boolean(value.exploded),
     surfaceCaching:

@@ -1,5 +1,8 @@
 /** Application lifecycle through the maintained native application adapter. */
 import assert from "node:assert/strict";
+import { exerciseApplicationFonts } from "../scenarios/application-fonts.js";
+import { applicationFonts } from "../support/application-fonts.js";
+import { compareImages } from "../../harness/page/images.js";
 import {
   assertFrameRateData,
   assertFrameRatePixels,
@@ -333,7 +336,19 @@ export default defineClient<NativeGallerySession>({
     };
     let failure: string | undefined;
     try {
-      if (args[0] === "layout") await exerciseApplicationLayout(driver);
+      if (args[0] === "fonts")
+        await interact(() =>
+          exerciseApplicationFonts({
+            ...driver,
+            fonts: () => applicationFonts(app),
+            changedPixels: async (before, after) =>
+              compareImages(
+                { ...images[before]!, pixels: images[before]!.pixels.buffer },
+                { ...images[after]!, pixels: images[after]!.pixels.buffer },
+              ).changedPixels,
+          }),
+        );
+      else if (args[0] === "layout") await exerciseApplicationLayout(driver);
       else {
         await interact(async () => {
           await app.action("performance", true);

@@ -70,6 +70,13 @@ import type {
   GalleryApplicationSettings,
 } from "./shared/scene.js";
 import type { GallerySkin } from "./shared/skin-preference.js";
+import {
+  DEFAULT_DEMO_FONT,
+  DEMO_FONTS,
+  DEMO_ICON_FONT,
+  demoFont,
+  type GalleryFont,
+} from "./shared/fonts.js";
 
 export const DEMO_SYSTEMS = [
   "ipp.world-attachment",
@@ -87,7 +94,6 @@ export const DEMO_SYSTEMS = [
   "ipp.data-bindings",
   "ipp.plot",
 ] as const;
-export const DEMO_FONT = "/target/font-assets/shure-tech-mono.ippf";
 const DEMO_FONT_SIZE = 14;
 const DEMO_CHROME_MARGIN = 16;
 
@@ -231,6 +237,7 @@ export class DemoApplication implements GallerySceneMount {
   >();
   private readonly listeners = new Set<() => void>();
   private skin: GallerySkin = "glass";
+  private font: GalleryFont = DEFAULT_DEMO_FONT;
   private readonly skins;
   private scale = 1;
   private controlsOpen = false;
@@ -241,9 +248,14 @@ export class DemoApplication implements GallerySceneMount {
     snapshot: () => {
       if (
         this.settingsSnapshot?.skin !== this.skin ||
+        this.settingsSnapshot?.font !== this.font ||
         this.settingsSnapshot?.renderScale !== this.scale
       )
-        this.settingsSnapshot = { skin: this.skin, renderScale: this.scale };
+        this.settingsSnapshot = {
+          skin: this.skin,
+          font: this.font,
+          renderScale: this.scale,
+        };
       return this.settingsSnapshot;
     },
     subscribe: (listener) => this.subscribe(listener),
@@ -260,6 +272,7 @@ export class DemoApplication implements GallerySceneMount {
       scene?: string;
       options?: GalleryOptions;
       skin?: GallerySkin;
+      font?: GalleryFont;
       renderScale?: number;
     } = {},
   ) {
@@ -276,6 +289,7 @@ export class DemoApplication implements GallerySceneMount {
       devicePixelRatio: 1,
     };
     this.skin = initial.skin ?? "glass";
+    this.font = demoFont(initial.font).key;
     this.scale = initial.renderScale ?? 1;
     this.diagnostics = new DemoDiagnostics(context.canvas, this.report);
     const id = initial.scene ?? "shapes";
@@ -289,6 +303,7 @@ export class DemoApplication implements GallerySceneMount {
       ...this.active?.mount.options,
       scene: this.active?.definition.id,
       skin: this.skin,
+      font: this.font,
       renderScale: this.scale,
       performance: this.frameRate !== undefined,
     };
@@ -442,6 +457,15 @@ export class DemoApplication implements GallerySceneMount {
                 onChange={(value) => run(this.action("skin", value))}
               />
             </Field>
+            <Field id="demo-font-field" label="Font">
+              <Dropdown
+                id="demo-font-picker"
+                label="Font"
+                options={DEMO_FONTS}
+                value={this.font}
+                onChange={(value) => run(this.action("font", value))}
+              />
+            </Field>
             <Field id="demo-scale" label="Render scale">
               <Dropdown
                 id="demo-render-scale"
@@ -526,7 +550,8 @@ export class DemoApplication implements GallerySceneMount {
           id="demo-skin"
           contract={contract}
           skin={skin}
-          font={this.context.assets.url(DEMO_FONT)}
+          font={this.context.assets.url(demoFont(this.font).path)}
+          iconFont={this.context.assets.url(DEMO_ICON_FONT)}
           fontSize={DEMO_FONT_SIZE}
         >
           <Entity id="demo-toolbar">
@@ -718,6 +743,7 @@ export class DemoApplication implements GallerySceneMount {
           ...definition.defaultOptions,
           ...this.retained.get(definition.id),
           skin: this.skin,
+          font: this.font,
         },
       );
       canvas.output = mount.output;
@@ -936,9 +962,10 @@ export class DemoApplication implements GallerySceneMount {
     await this.render();
   }
   async update(patch: GalleryOptions): Promise<void> {
-    const { scene, skin, renderScale, performance, ...fields } = patch;
+    const { scene, skin, font, renderScale, performance, ...fields } = patch;
     if (scene !== undefined) await this.navigate(String(scene));
     if (skin !== undefined) await this.action("skin", skin);
+    if (font !== undefined) await this.action("font", font);
     if (renderScale !== undefined)
       await this.action("renderScale", renderScale);
     if (performance !== undefined)
@@ -992,7 +1019,7 @@ export class DemoApplication implements GallerySceneMount {
       );
     if (name === "retryCleanup") return this.ordered(() => this.retryCleanup());
     if (name === "scene") return this.navigate(String(args));
-    if (name !== "skin" && name !== "renderScale")
+    if (name !== "skin" && name !== "font" && name !== "renderScale")
       return this.sceneOperation((scene) => scene.mount.action(name, args));
     return this.ordered(async () => {
       if (name === "skin") {
@@ -1002,6 +1029,10 @@ export class DemoApplication implements GallerySceneMount {
         await this.active?.mount.update({ skin: args });
         if (this.active?.definition.id === "cockpit")
           await this.active.mount.resize?.(this.sceneViewport("cockpit"));
+      } else if (name === "font") {
+        const font = demoFont(args).key;
+        await this.active?.mount.update({ font });
+        this.font = font;
       } else if (name === "renderScale") {
         const value = Number(args);
         if (!DEMO_RENDER_SCALES.some((scale) => scale === value))

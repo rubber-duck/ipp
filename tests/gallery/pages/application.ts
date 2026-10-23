@@ -1,5 +1,6 @@
 /** Observations of the public application; all input uses the real browser adapter. */
 import type { DemoApplication } from "../../../examples/demos/application.js";
+import { applicationFonts } from "../support/application-fonts.js";
 import type { IppCanvasHandle } from "@ipp/react/web";
 import { capturedImage } from "../../harness/page/presentation.js";
 import {
@@ -53,6 +54,10 @@ export async function state() {
     )?.fields,
     viewport: canvas().viewport,
   };
+}
+export async function fonts() {
+  await settle();
+  return applicationFonts(application());
 }
 export async function point(id: string) {
   await settle();

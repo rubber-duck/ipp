@@ -16,6 +16,55 @@ export async function exerciseChartSkins(driver: GalleryChartsDriver) {
   await focusChart(driver, "grid-bars");
   const before = await driver.inspect();
   const cybertron = await driver.capture("skin-cybertron-grid");
+  await driver.action("font", "noto-sans");
+  const proportional = await driver.inspect();
+  for (const chart of proportional.charts) {
+    const previous = before.charts.find((item) => item.id === chart.id)!;
+    const source = (item: typeof chart) =>
+      item.inspection.entities
+        .find((entity) => entity.id === item.entity)!
+        .components.find((component) => "grid_alpha" in component.fields)!
+        .fields.source;
+    chartCheck(
+      chart.entity === previous.entity && chart.world.id === previous.world.id,
+      `${chart.id}: font switching preserves chart identity`,
+    );
+    chartCheck(
+      source(chart) !== source(previous),
+      `${chart.id}: plot labels receive the selected font`,
+    );
+    chartCheck(
+      chart.binding.evaluatedTick === previous.binding.evaluatedTick,
+      `${chart.id}: font switching preserves evaluated data`,
+    );
+    for (const text of chart.legend.inspection.entities) {
+      const font = text.components.find(
+        (component) =>
+          "text" in component.fields && "source" in component.fields,
+      )?.fields.source;
+      if (!font) continue;
+      const original = previous.legend.inspection.entities.find(
+        (entity) => entity.id === text.id,
+      );
+      chartCheck(
+        original,
+        `${chart.id}: font switching preserves legend identity`,
+      );
+      const oldFont = original.components.find(
+        (component) =>
+          "text" in component.fields && "source" in component.fields,
+      )?.fields.source;
+      chartCheck(
+        font !== oldFont,
+        `${chart.id}: legend text receives the selected font`,
+      );
+    }
+  }
+  assertChartImageChanged(
+    cybertron,
+    await driver.capture("font-noto-grid"),
+    "Proportional chart labels and legends",
+  );
   await driver.action("skin", "glass");
   const glass = await driver.inspect();
   for (const chart of glass.charts) {

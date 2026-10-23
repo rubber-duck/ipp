@@ -325,6 +325,7 @@ function assertForms(state: CockpitState, tab: "scene" | "gui") {
         ]
       : [
           "cockpit-skin",
+          "cockpit-font",
           "cockpit-opacity/slider",
           "cockpit-surface/flat",
           "cockpit-projection/slider",
@@ -405,6 +406,7 @@ async function exerciseForms(driver: CockpitDriver) {
   }[] = [];
   const worlds = (await driver.state()).panelWorlds;
   for (const skin of ["glass", "cybertron"]) {
+    await driver.action("font", "shure-tech-mono");
     const beforeSkin = await driver.state();
     const beforeIds = beforeSkin.panels.map((panel) =>
       panel.entities
@@ -477,6 +479,29 @@ async function exerciseForms(driver: CockpitDriver) {
       "GUI tab owns native selection",
     );
     evidence.push({ skin, tab: "gui", dimensions: assertForms(gui, "gui") });
+    const selectedFont = "noto-sans";
+    const originalFont = fields(
+      gui.panels[0]!,
+      "cockpit-font",
+      gui.componentIds.GuiFont!,
+    ).source;
+    await driver.press(0, "cockpit-font");
+    await driver.press(0, `cockpit-font/options/${selectedFont}`);
+    const fontState = await until(
+      (state) => state.options.font === selectedFont,
+      "cockpit font dropdown updates application settings",
+    );
+    assert.equal(
+      entity(fontState.panels[0]!, "cockpit-control-tab/gui").id,
+      entity(gui.panels[0]!, "cockpit-control-tab/gui").id,
+      "font changes preserve mounted controls",
+    );
+    assert.notEqual(
+      fields(fontState.panels[0]!, "cockpit-font", gui.componentIds.GuiFont!)
+        .source,
+      originalFont,
+      "cockpit controls receive the selected font",
+    );
     await driver.press(0, "cockpit-opacity/slider", 0.75);
     await until(
       (state) =>
@@ -507,8 +532,8 @@ async function exerciseForms(driver: CockpitDriver) {
     assert.doesNotMatch(readouts, /Waiting for presentation diagnostics/);
     const chart = box(system, 1, "cockpit-fps-chart");
     assert.ok(
-      chart.width > 600 && chart.height === 180,
-      "live FPS graph uses the wider screen",
+      chart.width > 600 && Math.abs(chart.height - 180) < 0.1,
+      `live FPS graph uses the wider screen: ${JSON.stringify(chart)}`,
     );
     visible(await driver.capture(`cockpit-forms-${skin}-system`));
     await driver.advance(0.6);

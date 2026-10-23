@@ -12,6 +12,11 @@ import type { PlatformerDemo } from "./playback.js";
 import { PlatformerWorld } from "./world.js";
 import { PlatformerControls, type PlatformerMovement } from "./controls.js";
 import type { GuiKitContract } from "@ipp/react/gui-kit";
+import {
+  DEMO_FONT_RESOURCES,
+  DEMO_ICON_FONT,
+  demoFont,
+} from "../../shared/fonts.js";
 
 const INITIAL_PLAYBACK: PlatformerPlayback = {
   mode: "walk",
@@ -27,7 +32,7 @@ export const platformerScene: GallerySceneDefinition = {
     "Follow a Blender-authored course with blended character motion.",
   defaultOptions: { ...INITIAL_PLAYBACK },
   controls: PlatformerControls,
-  resources: [{ kind: 17, path: "/target/font-assets/shure-tech-mono.ippf" }],
+  resources: DEMO_FONT_RESOURCES,
   actions: ["setMode", "reverse", "playback", "reset", "resetCamera"],
   world: (assets) => ({ load: { url: assets.url(PLATFORMER_WORLD) } }),
   initialize: (client, signal, _host, assets) =>
@@ -157,9 +162,8 @@ export const platformerScene: GallerySceneDefinition = {
           movement={{
             camera: camera.id,
             contract: context.contract as unknown as GuiKitContract,
-            font: context.assets.url(
-              "/target/font-assets/shure-tech-mono.ippf",
-            ),
+            font: context.assets.url(demoFont(current.font).path),
+            iconFont: context.assets.url(DEMO_ICON_FONT),
             skin: current.skin === "cybertron" ? "cybertron" : "glass",
             movement,
             onReady: movementOpened,

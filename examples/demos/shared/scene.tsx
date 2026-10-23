@@ -21,6 +21,7 @@ import type {
 } from "@ipp/react/canvas";
 import type { GallerySystemDiagnostics } from "../frame-rate.js";
 import type { GallerySkin } from "./skin-preference.js";
+import type { GalleryFont } from "./fonts.js";
 
 export type GallerySceneId =
   | "shapes"
@@ -34,6 +35,7 @@ export type GalleryOptions = Readonly<Record<string, unknown>>;
 
 export interface GalleryApplicationSettings {
   readonly skin: GallerySkin;
+  readonly font: GalleryFont;
   readonly renderScale: number;
 }
 

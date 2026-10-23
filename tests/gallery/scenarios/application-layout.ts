@@ -149,6 +149,7 @@ export async function exerciseApplicationLayout(
         "demo-display/content",
         "demo-display-content",
         "demo-skin-picker",
+        "demo-font-picker",
         "demo-render-scale",
         "demo-reset-view",
       ]);
@@ -161,6 +162,7 @@ export async function exerciseApplicationLayout(
       });
       const fields = [
         "demo-skin-picker",
+        "demo-font-picker",
         "demo-render-scale",
         "demo-reset-view",
       ].map((id) => display.rects[id]!);

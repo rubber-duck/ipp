@@ -26,6 +26,7 @@ import type {
 } from "../../shared/scene.js";
 import { COCKPIT_SCREEN_DISTANCE, type CockpitOptions } from "./options.js";
 import { COCKPIT_RENDER_SCALES } from "../../shared/display-settings.js";
+import { DEFAULT_DEMO_FONT, DEMO_FONTS, demoFont } from "../../shared/fonts.js";
 
 export type CockpitUpdate = (patch: GalleryOptions) => void | Promise<void>;
 
@@ -255,7 +256,11 @@ function SceneControls({
 }
 
 const noSubscription = () => () => {};
-const defaultSettings = { skin: "glass" as const, renderScale: 1 };
+const defaultSettings = {
+  skin: "glass" as const,
+  font: DEFAULT_DEMO_FONT,
+  renderScale: 1,
+};
 function GuiControls({
   state,
   update,
@@ -296,6 +301,20 @@ function GuiControls({
                       })
                     : update({ skin })
                 }
+              />
+            </Field>
+            <Field label="Interface font">
+              <Dropdown
+                id="cockpit-font"
+                label="Interface font"
+                value={application ? settings.font : state.font}
+                options={DEMO_FONTS}
+                onChange={(value) => {
+                  const font = demoFont(value).key;
+                  return application
+                    ? application.update({ font })
+                    : update({ font });
+                }}
               />
             </Field>
             <LabelledSlider

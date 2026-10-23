@@ -175,6 +175,20 @@ export async function exercisePlatformerControls(
     "platformer-reset",
   ];
   const initialIds = controls.map((id) => entity(before.panel, id).id);
+  await driver.action("font", "noto-sans");
+  const proportional = await driver.state();
+  assert.deepEqual(
+    controls.map((id) => entity(proportional.panel, id).id),
+    initialIds,
+    "font changes retain the movement controls",
+  );
+  assert.notEqual(
+    fields(proportional.panel, "platformer-reset", before.componentIds.GuiFont!)
+      .source,
+    fields(before.panel, "platformer-reset", before.componentIds.GuiFont!)
+      .source,
+    "movement controls receive the selected font",
+  );
   visible(await driver.capture("robot-root-controls"));
   movementGeometry(await driver.state());
 

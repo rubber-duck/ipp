@@ -24,6 +24,7 @@ import { ChartContent } from "./content.js";
 import { ChartCamera, chartCameraTarget, chartFocusBounds } from "./camera.js";
 import { ChartActionLane } from "./action-lane.js";
 import { componentFields, successfulBatch } from "./shared/commands.js";
+import { demoFont } from "../../shared/fonts.js";
 
 export interface ChartMark {
   readonly chart: string;
@@ -140,6 +141,7 @@ export const chartScene: GallerySceneDefinition = {
   },
   actions: [
     "skin",
+    "font",
     "focus",
     "resetCamera",
     "navigate",
@@ -170,6 +172,7 @@ export const chartScene: GallerySceneDefinition = {
     let options: GalleryOptions = {
       ...chartScene.defaultOptions,
       ...input,
+      font: demoFont(input.font).key,
       skin:
         input.skin === "glass" || input.skin === "cybertron"
           ? input.skin
@@ -553,6 +556,11 @@ export const chartScene: GallerySceneDefinition = {
       return mark(result.hit, sources);
     };
     const actions: Record<string, (args?: unknown) => Promise<unknown>> = {
+      async font(args) {
+        const font = demoFont(args).key;
+        await content.setFont(font);
+        options = { ...options, font };
+      },
       async skin(args) {
         if (args !== "glass" && args !== "cybertron")
           throw new Error("Unknown chart skin");
@@ -768,7 +776,7 @@ export const chartScene: GallerySceneDefinition = {
         ),
       );
       content.skin.select(options.skin === "glass" ? "glass" : "cybertron");
-      await content.open();
+      await content.open(demoFont(options.font).key);
       ready = content
         .ready()
         .then(async () => {
@@ -822,6 +830,7 @@ export const chartScene: GallerySceneDefinition = {
           return enqueue(async () => {
             for (const name of [
               "skin",
+              "font",
               "expandedSamples",
               "automaticRange",
               "adaptiveAxes",

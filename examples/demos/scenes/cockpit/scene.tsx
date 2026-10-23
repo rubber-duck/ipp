@@ -40,7 +40,8 @@ import {
   DashboardInstrument,
   PANEL_DENSITY,
 } from "./panels.js";
-import { CockpitSkin, COCKPIT_FONT } from "./skin.js";
+import { CockpitSkin } from "./skin.js";
+import { DEMO_FONT_RESOURCES, DEMO_ICON_FONT } from "../../shared/fonts.js";
 import {
   INSTRUMENT_RESOURCES,
   type InstrumentContract,
@@ -303,7 +304,7 @@ export const cockpitScene: GallerySceneDefinition = {
     "stars",
     "resetCamera",
   ],
-  resources: [{ kind: 17, path: COCKPIT_FONT }, ...INSTRUMENT_RESOURCES],
+  resources: [...DEMO_FONT_RESOURCES, ...INSTRUMENT_RESOURCES],
   world: (assets) => ({ load: { url: assets.url(COCKPIT_WORLD) } }),
   async initialize(client, signal, _host, assets) {
     const manifest = await assets.readJson<{
@@ -422,7 +423,7 @@ export const cockpitScene: GallerySceneDefinition = {
                   {
                     world,
                     target: target.id,
-                    fontSource: context.assets.url(COCKPIT_FONT),
+                    fontSource: context.assets.url(DEMO_ICON_FONT),
                     fontMetricsUrl: asset("terminal-font.json"),
                     fontSize: 16,
                     lineHeight: 20,

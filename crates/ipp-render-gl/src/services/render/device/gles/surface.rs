@@ -33,12 +33,17 @@ impl GlesRenderDevice {
         program: &GlesRenderProgram,
         name: &'static std::ffi::CStr,
     ) -> i32 {
-        let key = name.to_string_lossy();
-        let mut locations = program.parameter_locations.borrow_mut();
-        *locations.entry(key.into_owned()).or_insert_with(|| {
-            // SAFETY: The program is live and GL borrows this static name only for the call.
-            unsafe { self.gl.uniform_location(program.id, name.as_ptr()) }
-        })
+        let key = name.to_str().expect("static uniform name is UTF-8");
+        if let Some(location) = program.parameter_locations.borrow().get(key) {
+            return *location;
+        }
+        // SAFETY: The program is live and GL borrows this static name only for the call.
+        let location = unsafe { self.gl.uniform_location(program.id, name.as_ptr()) };
+        program
+            .parameter_locations
+            .borrow_mut()
+            .insert(key.to_owned(), location);
+        location
     }
 
     /// Point every attribute of `kind`'s record layout at record `first` of the bound

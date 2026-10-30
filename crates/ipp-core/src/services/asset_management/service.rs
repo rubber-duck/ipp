@@ -60,6 +60,7 @@ pub struct AssetManagementService {
     pub(super) demand_users: BTreeMap<AssetDemandSelection, usize>,
     pub(super) consumers: BTreeMap<crate::WorldId, AssetConsumerState>,
     pub(super) assets: Vec<AssetSlot>,
+    pub(super) evaluation_poll_keys: Vec<AssetKey>,
     pub(super) free: Vec<u32>,
     pub(super) sources: BTreeMap<AssetSource, AssetKey>,
     pub(super) loaders: BTreeMap<AssetTypeId, AssetLoaderConstructor>,
@@ -591,30 +592,35 @@ impl AssetManagementService {
     }
 
     pub(crate) fn poll_evaluation_assets(&mut self, data: &mut IoService) {
-        let keys = self
-            .iter()
-            .filter(|asset| {
-                if self.graphics_loaders.contains(&asset.source().kind) {
-                    return false;
-                }
-                if asset.source().kind == crate::MESH_TYPE {
-                    return self.consumers.values().any(|consumer| {
-                        consumer.evaluation_meshes.iter().any(|selection| {
-                            let source = asset.source();
-                            selection.kind == source.kind
-                                && selection.variant == source.variant
-                                && same_text(&selection.source, &source.uri)
-                        })
-                    });
-                }
-                if asset.source().kind == crate::TEXTURE_TYPE {
-                    return false;
-                }
-                true
-            })
-            .map(|asset| asset.key())
-            .collect();
-        self.progress_selected_loads(data, &keys);
+        let mut keys = std::mem::take(&mut self.evaluation_poll_keys);
+        keys.clear();
+        keys.extend(
+            self.iter()
+                .filter(|asset| {
+                    if self.graphics_loaders.contains(&asset.source().kind) {
+                        return false;
+                    }
+                    if asset.source().kind == crate::MESH_TYPE {
+                        return self.consumers.values().any(|consumer| {
+                            consumer.evaluation_meshes.iter().any(|selection| {
+                                let source = asset.source();
+                                selection.kind == source.kind
+                                    && selection.variant == source.variant
+                                    && same_text(&selection.source, &source.uri)
+                            })
+                        });
+                    }
+                    if asset.source().kind == crate::TEXTURE_TYPE {
+                        return false;
+                    }
+                    true
+                })
+                .map(|asset| asset.key()),
+        );
+        for &key in &keys {
+            self.progress_load_key(data, key);
+        }
+        self.evaluation_poll_keys = keys;
     }
 
     pub(crate) fn snapshots(&self, world: crate::WorldId) -> Vec<AssetResourceSnapshot> {

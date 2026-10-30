@@ -22,6 +22,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 type Key = (WorldRef, CanvasTarget, u32);
+type AxisEndpoints = ((WorldRef, CanvasTarget, u8), [usize; 2]);
 const PADDING: f32 = 4.0;
 const HYSTERESIS: f32 = 6.0;
 const RINGS: usize = 12;
@@ -36,45 +37,84 @@ pub(in crate::services::render) struct PlotLabelLayoutState {
     viewport: [u32; 2],
     previous: BTreeMap<Key, Previous>,
     axes: super::view_placement::PlotViewPlacementState,
+    retained: Vec<bool>,
+    order: Vec<usize>,
+    endpoint_axes: Vec<AxisEndpoints>,
+    endpoints: Vec<usize>,
+    occupied: Occupancy,
+    visited: Vec<Key>,
+    buffers: super::label_storage::PlotPlanePool,
 }
 
 impl PlotLabelLayoutState {
-    pub(in crate::services::render) fn place_axes<'a>(
-        &mut self,
-        planes: &[ScenePlotPlane<'a>],
-        camera: [f32; 16],
-        projection: [f32; 16],
-        viewport: WorldViewport,
-        presentation_time: f64,
-    ) -> Result<Vec<ScenePlotPlane<'a>>, crate::RenderError> {
-        self.axes
-            .place(planes, camera, projection, viewport, presentation_time)
-    }
-
+    #[cfg(test)]
     pub(in crate::services::render) fn arrange<'a>(
         &mut self,
         planes: &[ScenePlotPlane<'a>],
         projection: [f32; 16],
         viewport: WorldViewport,
     ) -> Vec<ScenePlotPlane<'a>> {
+        let mut arranged = Vec::new();
+        self.arrange_into(planes, projection, viewport, &mut arranged);
+        arranged
+    }
+
+    pub(in crate::services::render) fn frame<'a>(
+        &mut self,
+        planes: &[ScenePlotPlane<'a>],
+        camera: [f32; 16],
+        projection: [f32; 16],
+        viewport: WorldViewport,
+        time: f64,
+    ) -> Result<super::label_storage::PlotPlaneFrame<'a>, crate::RenderError> {
+        let mut frame = super::label_storage::PlotPlaneFrame::new(self.buffers.clone());
+        self.axes.place_into(
+            planes,
+            camera,
+            projection,
+            viewport,
+            time,
+            &mut frame.placed,
+        )?;
+        self.arrange_into(&frame.placed, projection, viewport, &mut frame.arranged);
+        Ok(frame)
+    }
+
+    fn arrange_into<'a>(
+        &mut self,
+        planes: &[ScenePlotPlane<'a>],
+        projection: [f32; 16],
+        viewport: WorldViewport,
+        arranged: &mut Vec<ScenePlotPlane<'a>>,
+    ) {
         let size = [viewport.width, viewport.height];
         if self.viewport != size {
             self.previous.clear();
             self.viewport = size;
         }
-        let mut arranged = planes.to_vec();
-        let mut retained = vec![true; planes.len()];
+        arranged.clear();
+        arranged.extend_from_slice(planes);
+        let retained = &mut self.retained;
+        retained.clear();
+        retained.resize(planes.len(), true);
         let policy = self.axes.policy();
-        let endpoints = tick_endpoints(planes, projection, size);
-        let mut order: Vec<_> = (0..planes.len())
-            .filter(|&index| {
-                matches!(
-                    planes[index].plane.layout,
-                    PlotPlaneLayout::Tick(_) | PlotPlaneLayout::Title(_) | PlotPlaneLayout::Callout
-                )
-            })
-            .collect();
-        order.sort_by_key(|&index| {
+        tick_endpoints(
+            planes,
+            projection,
+            size,
+            &mut self.endpoint_axes,
+            &mut self.endpoints,
+        );
+        let endpoints = &self.endpoints;
+        let order = &mut self.order;
+        order.clear();
+        order.extend((0..planes.len()).filter(|&index| {
+            matches!(
+                planes[index].plane.layout,
+                PlotPlaneLayout::Tick(_) | PlotPlaneLayout::Title(_) | PlotPlaneLayout::Callout
+            )
+        }));
+        order.sort_unstable_by_key(|&index| {
             let plane = &planes[index];
             let priority = match plane.plane.layout {
                 PlotPlaneLayout::Tick(_) if endpoints.contains(&index) => 0,
@@ -82,11 +122,18 @@ impl PlotLabelLayoutState {
                 PlotPlaneLayout::Title(_) => 2,
                 _ => 3,
             };
-            (priority, plane.entity.world, plane.target, plane.plane.part)
+            (
+                priority,
+                plane.entity.world,
+                plane.target,
+                plane.plane.part,
+                index,
+            )
         });
-        let mut occupied = Occupancy::default();
-        let mut next = BTreeMap::new();
-        for index in order {
+        let occupied = &mut self.occupied;
+        occupied.reset();
+        self.visited.clear();
+        for &index in order.iter() {
             let mut staged = planes[index].clone();
             let plane = &staged;
             let Some(local_bounds) = plane.plane.bounds else {
@@ -125,7 +172,7 @@ impl PlotLabelLayoutState {
             let offset = if let Some((preferred, direction)) =
                 radial_station(plane, bounds, projection, size)
             {
-                place_radial(bounds, preferred, direction, size, &occupied, old)
+                place_radial(bounds, preferred, direction, size, occupied, old)
             } else {
                 if matches!(plane.plane.placement, PlotPlanePlacement::Axis { .. }) {
                     // Edge-on axes and clipped frame corners have no usable
@@ -133,7 +180,7 @@ impl PlotLabelLayoutState {
                     // titles within the same local reach instead of generic fit.
                     let normal = perimeter.map_or([0.0; 2], |(_, normal)| normal);
                     if matches!(plane.plane.layout, PlotPlaneLayout::Tick(_)) {
-                        if !tick_fits(bounds, &occupied, policy.tick_clearance) {
+                        if !tick_fits(bounds, occupied, policy.tick_clearance) {
                             retained[index] = false;
                             continue;
                         }
@@ -143,19 +190,20 @@ impl PlotLabelLayoutState {
                             bounds,
                             plane.plane.layout,
                             size,
-                            &occupied,
+                            occupied,
                             old,
                             Some(normal),
                         )
                     }
                 } else {
-                    place(bounds, plane.plane.layout, size, &occupied, old)
+                    place(bounds, plane.plane.layout, size, occupied, old)
                 }
             };
             occupied.insert(translated(bounds, offset));
             if let Some(model) = shifted_model(plane.model, offset, projection, size) {
                 arranged[index].model = model;
-                next.insert(
+                self.visited.push(key);
+                self.previous.insert(
                     key,
                     Previous {
                         source: Arc::downgrade(plane.geometry),
@@ -164,7 +212,8 @@ impl PlotLabelLayoutState {
                 );
             }
         }
-        self.previous = next;
+        self.previous.retain(|key, _| self.visited.contains(key));
+        occupied.cells.retain(|_, indices| !indices.is_empty());
         // Panel movement changes just the unit strip's presentation affine. The
         // first endpoint remains the exact data station, regardless of layout.
         for index in 0..arranged.len() {
@@ -203,11 +252,12 @@ impl PlotLabelLayoutState {
                 arranged[index].model = model;
             }
         }
-        arranged
-            .into_iter()
-            .zip(retained)
-            .filter_map(|(plane, retained)| retained.then_some(plane))
-            .collect()
+        let mut index = 0;
+        arranged.retain(|_| {
+            let keep = retained[index];
+            index += 1;
+            keep
+        });
     }
 }
 
@@ -217,8 +267,11 @@ fn tick_endpoints(
     planes: &[ScenePlotPlane<'_>],
     projection: [f32; 16],
     size: [u32; 2],
-) -> std::collections::BTreeSet<usize> {
-    let mut axes: BTreeMap<(WorldRef, CanvasTarget, u8), Vec<usize>> = BTreeMap::new();
+    axes: &mut Vec<AxisEndpoints>,
+    endpoints: &mut Vec<usize>,
+) {
+    axes.clear();
+    endpoints.clear();
     for (index, plane) in planes.iter().enumerate() {
         let PlotPlaneLayout::Tick(axis) = plane.plane.layout else {
             continue;
@@ -238,26 +291,27 @@ fn tick_endpoints(
             && bounds[0] < size[0] as f32
             && bounds[1] < size[1] as f32
         {
-            axes.entry((plane.entity.world, plane.target, axis))
-                .or_default()
-                .push(index);
+            let key = (plane.entity.world, plane.target, axis);
+            if let Some((_, range)) = axes.iter_mut().find(|entry| entry.0 == key) {
+                let compare = |a: usize, b: usize| {
+                    planes[a].plane.model[12 + usize::from(axis)]
+                        .total_cmp(&planes[b].plane.model[12 + usize::from(axis)])
+                        .then_with(|| planes[a].plane.part.cmp(&planes[b].plane.part))
+                };
+                if compare(index, range[0]).is_lt() {
+                    range[0] = index;
+                }
+                if !compare(index, range[1]).is_lt() {
+                    range[1] = index;
+                }
+            } else {
+                axes.push((key, [index, index]));
+            }
         }
     }
-    let mut endpoints = std::collections::BTreeSet::new();
-    for ((_, _, axis), mut indices) in axes {
-        indices.sort_by(|&a, &b| {
-            planes[a].plane.model[12 + usize::from(axis)]
-                .total_cmp(&planes[b].plane.model[12 + usize::from(axis)])
-                .then_with(|| planes[a].plane.part.cmp(&planes[b].plane.part))
-        });
-        if let Some(&first) = indices.first() {
-            endpoints.insert(first);
-        }
-        if let Some(&last) = indices.last() {
-            endpoints.insert(last);
-        }
+    for (_, range) in axes {
+        endpoints.extend_from_slice(range);
     }
-    endpoints
 }
 
 /// Put numeric stations in a parallel projected perimeter lane. Only text moves:
@@ -509,6 +563,15 @@ struct Occupancy {
 }
 
 impl Occupancy {
+    fn reset(&mut self) {
+        self.rectangles.clear();
+        self.wide.clear();
+        self.candidates.get_mut().clear();
+        for indices in self.cells.values_mut() {
+            indices.clear();
+        }
+    }
+
     fn cells(bounds: [f32; 4]) -> Option<([i32; 2], [i32; 2])> {
         const CELL: f32 = 64.0;
         let min = [

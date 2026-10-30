@@ -197,66 +197,8 @@ impl CanvasMapping {
     }
 }
 
-/// All usable descendants, before their consumers, for graphics demand and target lifetime.
-pub(in crate::services::render) fn output_order(
-    host: &HostRuntime,
-    selection: OutputRef,
-    publication: WorldPublicationId,
-) -> Result<Vec<(OutputRef, WorldPublicationId)>, RenderError> {
-    if host.output(publication, selection).is_none() {
-        return Err(RenderError::UnavailableOutput);
-    }
-    let mut order = Vec::new();
-    let mut pending = vec![(selection, publication, false)];
-    while let Some((selection, publication, visited)) = pending.pop() {
-        if visited {
-            order.push((selection, publication));
-            continue;
-        }
-        let children = match selection.kind() {
-            OutputKind::Canvas => CanvasScene::new(host, selection, publication)?
-                .attachments()
-                .filter(|attachment| attachment.slot.opacity > 0.0)
-                .filter_map(|attachment| attachment.output())
-                .collect::<Vec<_>>(),
-            OutputKind::Camera => {
-                let contributions = host
-                    .spatial_contributions_for_output(publication, selection)
-                    .map_err(|_| RenderError::UnavailableOutput)?;
-                contributions
-                    .iter()
-                    .flat_map(|contribution| {
-                        contribution
-                            .publication
-                            .attachments
-                            .iter()
-                            .filter_map(|edge| {
-                                if edge.mode == WorldAttachmentMode::Spatial
-                                    || edge
-                                        .placement_output
-                                        .is_some_and(|owner| owner != selection)
-                                {
-                                    return None;
-                                }
-                                Some((edge.output?, host.attached_publication(edge)?.id))
-                            })
-                    })
-                    .collect()
-            }
-        };
-        pending.push((selection, publication, true));
-        pending.extend(
-            children
-                .into_iter()
-                .rev()
-                .map(|(selection, publication)| (selection, publication, false)),
-        );
-    }
-    Ok(order)
-}
-
 /// Cache dependencies include unavailable slots; retaining parent paint alone is insufficient.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::services::render) struct OutputContentStamp {
     pub outputs: Vec<OutputNodeStamp>,
 }
@@ -373,91 +315,124 @@ impl OutputContentStamp {
             .any(|output| output.worlds.iter().any(|value| value.world.id() == world))
     }
 
+    #[cfg(test)]
     pub fn read(
         host: &HostRuntime,
         selection: OutputRef,
         publication: WorldPublicationId,
+        pool: super::super::outputs::order::OutputOrderPool,
     ) -> Result<Self, RenderError> {
-        let mut outputs = Vec::new();
-        for (selection, publication) in output_order(host, selection, publication)? {
+        let mut result = Self::default();
+        result.update(host, selection, publication, pool, &mut Default::default())?;
+        Ok(result)
+    }
+
+    pub(super) fn update(
+        &mut self,
+        host: &HostRuntime,
+        selection: OutputRef,
+        publication: WorldPublicationId,
+        pool: super::super::outputs::order::OutputOrderPool,
+        traversal: &mut ipp_core::PublishedSceneTraversal,
+    ) -> Result<(), RenderError> {
+        let mut count = 0;
+        for (selection, publication) in
+            super::super::outputs::order::output_order(host, selection, publication, pool)?
+        {
             let chunk = host
                 .output(publication, selection)
                 .ok_or(RenderError::UnavailableOutput)?;
-            let mut stamp = OutputNodeStamp {
-                selection,
-                visual: match selection.kind() {
-                    OutputKind::Canvas => OutputVisualStamp::from(
-                        chunk
-                            .data::<CanvasPublication>()
-                            .ok_or(RenderError::UnavailableOutput)?,
-                    ),
-                    OutputKind::Camera => OutputVisualStamp::Camera {
-                        version: chunk.version(),
-                    },
+            let visual = match selection.kind() {
+                OutputKind::Canvas => OutputVisualStamp::from(
+                    chunk
+                        .data::<CanvasPublication>()
+                        .ok_or(RenderError::UnavailableOutput)?,
+                ),
+                OutputKind::Camera => OutputVisualStamp::Camera {
+                    version: chunk.version(),
                 },
-                worlds: Vec::new(),
-                children: Vec::new(),
             };
+            if count == self.outputs.len() {
+                self.outputs.push(OutputNodeStamp {
+                    selection,
+                    visual: visual.clone(),
+                    worlds: Vec::new(),
+                    children: Vec::new(),
+                });
+            }
+            let stamp = &mut self.outputs[count];
+            stamp.selection = selection;
+            stamp.visual = visual;
+            stamp.children.clear();
+            let mut worlds = 0;
             match selection.kind() {
                 OutputKind::Canvas => {
                     let scene = CanvasScene::new(host, selection, publication)?;
-                    stamp.worlds.push(WorldContentStamp {
-                        world: scene.publication.world,
-                        render_version: None,
-                        geometry_version: None,
-                        web_images: web_image_dependencies(host, scene.publication.id),
-                        resources: scene
-                            .canvas
-                            .resources()
-                            .map(|key| {
-                                let ready = scene
-                                    .resource(key)
-                                    .and_then(|resource| resource.data())
-                                    .is_some_and(|asset| asset.graphics_ready() != Some(false));
-                                (key, ready)
-                            })
-                            .collect(),
-                    });
-                    for attachment in scene.attachments() {
-                        stamp.children.push(OutputChildStamp {
+                    let world = world_slot(&mut stamp.worlds, 0, scene.publication.world);
+                    world.update(host, scene.publication, false, scene.canvas.resources());
+                    worlds = 1;
+                    stamp
+                        .children
+                        .extend(scene.attachments().map(|attachment| OutputChildStamp {
                             token: attachment.slot.token.clone(),
                             placement: attachment.edge.map(PublishedPlacement::from),
                             available: attachment.child.is_some(),
                             opacity: attachment.slot.opacity,
-                        });
-                    }
+                        }));
                 }
                 OutputKind::Camera => {
-                    for contribution in host
-                        .spatial_contributions_for_output(publication, selection)
-                        .map_err(|_| RenderError::UnavailableOutput)?
-                    {
-                        stamp
-                            .worlds
-                            .push(WorldContentStamp::read(host, contribution.publication));
-                        for edge in &contribution.publication.attachments {
-                            if edge
-                                .placement_output
-                                .is_some_and(|owner| owner != selection)
-                            {
-                                continue;
-                            }
-                            stamp.children.push(OutputChildStamp {
-                                token: edge.token.clone(),
-                                placement: Some(PublishedPlacement::from(edge)),
-                                available: host.attached_publication(edge).is_some(),
-                                opacity: 1.0,
-                            });
-                        }
+                    traversal
+                        .reset(host, publication, Some(selection))
+                        .map_err(|_| RenderError::UnavailableOutput)?;
+                    while let Some(contribution) = traversal.next(host) {
+                        let publication = contribution.publication;
+                        world_slot(&mut stamp.worlds, worlds, publication.world).update(
+                            host,
+                            publication,
+                            true,
+                            publication.resources(),
+                        );
+                        worlds += 1;
+                        stamp.children.extend(
+                            publication
+                                .attachments
+                                .iter()
+                                .filter(|edge| {
+                                    edge.placement_output.is_none_or(|owner| owner == selection)
+                                })
+                                .map(|edge| OutputChildStamp {
+                                    token: edge.token.clone(),
+                                    placement: Some(PublishedPlacement::from(edge)),
+                                    available: host.attached_publication(edge).is_some(),
+                                    opacity: 1.0,
+                                }),
+                        );
                     }
                 }
             }
-            outputs.push(stamp);
+            stamp.worlds.truncate(worlds);
+            count += 1;
         }
-        Ok(Self {
-            outputs,
-        })
+        self.outputs.truncate(count);
+        Ok(())
     }
+}
+
+fn world_slot(
+    worlds: &mut Vec<WorldContentStamp>,
+    index: usize,
+    world: ipp_core::WorldRef,
+) -> &mut WorldContentStamp {
+    if index == worlds.len() {
+        worlds.push(WorldContentStamp {
+            world,
+            render_version: None,
+            geometry_version: None,
+            resources: Vec::new(),
+            web_images: Vec::new(),
+        });
+    }
+    &mut worlds[index]
 }
 
 /// Frame versions change ordinary paint dirtiness, while a changed source,
@@ -484,47 +459,49 @@ fn same_web_authorities(left: &WorldContentStamp, right: &WorldContentStamp) -> 
 }
 
 impl WorldContentStamp {
-    fn read(host: &HostRuntime, publication: &WorldPublication) -> Self {
-        Self {
-            world: publication.world,
-            web_images: web_image_dependencies(host, publication.id),
-            render_version: publication
-                .chunk(RenderSystem::ID)
-                .map(|chunk| chunk.version()),
-            geometry_version: publication
-                .chunk(GeometrySystem::ID)
-                .map(|chunk| chunk.version()),
-            resources: publication
-                .resources()
-                .map(|key| {
-                    let ready = host
-                        .publication_resource(publication.id, key)
-                        .and_then(|resource| resource.data())
-                        .is_some_and(|asset| asset.graphics_ready() != Some(false));
-                    (key, ready)
-                })
-                .collect(),
-        }
+    fn update(
+        &mut self,
+        host: &HostRuntime,
+        publication: &WorldPublication,
+        spatial: bool,
+        resources: impl Iterator<Item = AssetKey>,
+    ) {
+        self.world = publication.world;
+        self.render_version = spatial
+            .then(|| {
+                publication
+                    .chunk(RenderSystem::ID)
+                    .map(|chunk| chunk.version())
+            })
+            .flatten();
+        self.geometry_version = spatial
+            .then(|| {
+                publication
+                    .chunk(GeometrySystem::ID)
+                    .map(|chunk| chunk.version())
+            })
+            .flatten();
+        self.web_images.clear();
+        self.web_images.extend(
+            host.publication_web_images(publication.id)
+                .into_iter()
+                .flatten()
+                .map(|image| {
+                    (
+                        *image,
+                        host.publication_web_image_validity(publication.id, *image),
+                    )
+                }),
+        );
+        self.resources.clear();
+        self.resources.extend(resources.map(|key| {
+            let ready = host
+                .publication_resource(publication.id, key)
+                .and_then(|resource| resource.data())
+                .is_some_and(|asset| asset.graphics_ready() != Some(false));
+            (key, ready)
+        }));
     }
-}
-
-fn web_image_dependencies(
-    host: &HostRuntime,
-    publication: WorldPublicationId,
-) -> Vec<(
-    ipp_core::services::web_content::WebContentImageId,
-    Option<ipp_core::services::web_content::WebContentImageValidity>,
-)> {
-    host.publication_web_images(publication)
-        .into_iter()
-        .flatten()
-        .map(|image| {
-            (
-                *image,
-                host.publication_web_image_validity(publication, *image),
-            )
-        })
-        .collect()
 }
 
 #[cfg(test)]

@@ -3,7 +3,9 @@ use super::tests::{TEST_TIMEOUT, socket_pair};
 use super::*;
 use std::net::Shutdown;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, SyncSender};
+use std::sync::mpsc;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc::SyncSender;
 use std::thread::JoinHandle;
 
 /// The Host's ordinary output share: its byte budget minus the reserve kept for one
@@ -38,7 +40,7 @@ fn physical_output_credit_survives_channel_handoff_until_socket_completion() {
     let (replies, receiver) = async_channel::bounded(1);
     let (failures, _failure_receiver) = async_channel::bounded(1);
     let (_sender, ingress) = async_channel::bounded(1);
-    let (notify, _notified) = async_channel::bounded(1);
+    let (notify, _notified) = ConnectionWakeup::new();
     let completed = Arc::new(AtomicU64::new(0));
     host.receive(HostConnectionEvent::Open {
         id: 1,

@@ -807,7 +807,7 @@ impl RenderDevice for GlesRenderDevice {
             self.delete_texture(texture);
             return Err(error);
         }
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.texture_extents.insert(texture, (width, height));
         Ok(texture)
     }
@@ -1105,7 +1105,7 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn delete_texture(&mut self, texture: u32) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         self.texture_extents.remove(&texture);
         // SAFETY: Consumes the owned name once in the current context; GL ignores zero.
         unsafe { self.gl.delete_textures(1, &texture) };

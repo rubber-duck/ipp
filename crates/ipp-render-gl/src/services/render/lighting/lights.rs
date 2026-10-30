@@ -15,7 +15,7 @@ pub const MAX_LIGHTS: usize = 8;
 pub(crate) const SHADOW_TILE_SIZE: u32 = 1024;
 
 /// Context-independent frame uniforms. Four vec4s encode each punctual light.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct RenderLightingFrame {
     /// Perspective eye (w=0), or camera-facing orthographic direction (w=1).
     pub camera: [f32; 4],

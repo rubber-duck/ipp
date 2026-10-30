@@ -1,10 +1,11 @@
 import { HtmlInputBinding } from "./html-input.js";
+import type { HtmlInputSink } from "./native-html.js";
 import type { GuiTarget } from "./gui-types.js";
 
 /** Browser-owned DOM; only the source name enters a World. */
 export interface HtmlSource {
   readonly source: string;
-  bindInput(target: GuiTarget): HtmlInputBinding;
+  bindInput(target: GuiTarget): HtmlInputSink;
   release(): void;
 }
 

@@ -522,3 +522,46 @@ fn live_detach_finishes_and_deletes_without_losing_staging_pressure() {
     fixture.frame();
     fixture.import().unwrap();
 }
+
+#[test]
+fn callback_completion_is_private_until_admission_and_rechecks_source_authority() {
+    let mut fixture = Fixture::new();
+    let request = fixture.request();
+    let ticket = fixture
+        .renderer
+        .reserve_web_image(
+            &mut fixture.host,
+            request,
+            WebContentImageDescription {
+                pixel_size: [64, 64],
+            },
+            64 * 64 * 4,
+        )
+        .unwrap();
+    let completion = fixture
+        .renderer
+        .fill_reserved_web_image(ticket, |_, _| Ok(()))
+        .unwrap();
+    fixture.frame();
+    assert_eq!(
+        fixture.image(),
+        None,
+        "GPU completion alone cannot publish pixels"
+    );
+    fixture.host.web_content_mut().register_source("panel");
+    assert!(
+        fixture
+            .renderer
+            .complete_web_image(&mut fixture.host, completion)
+            .is_err()
+    );
+    fixture.frame();
+    assert_eq!(
+        fixture.image(),
+        None,
+        "late callback cannot retarget a replacement source"
+    );
+    let current = fixture.import().unwrap();
+    fixture.frame();
+    assert_eq!(fixture.image(), Some(current));
+}

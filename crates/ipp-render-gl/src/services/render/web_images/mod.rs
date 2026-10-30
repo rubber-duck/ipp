@@ -6,7 +6,7 @@ mod reservation;
 mod service;
 
 pub(super) use registry::WebImageRegistry;
-pub use reservation::{WebImageReservation, WebImageStaging};
+pub use reservation::{WebImageCompletion, WebImageReservation, WebImageStaging};
 
 /// Charged storage includes images awaiting publication or GPU retirement.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -155,6 +155,17 @@ impl AssetDependencyReadAccess<'_> {
 }
 
 impl crate::WorldContext<'_> {
+    pub(in crate::world) fn component_asset_sources(
+        &self,
+        entity: EntityId,
+        component: u16,
+    ) -> impl Iterator<Item = &AssetDemandSelection> {
+        self.system::<AssetDependencySystem>(AssetDependencySystem::ID)
+            .and_then(|system| system.state.component_sources.get(&(entity, component)))
+            .into_iter()
+            .flatten()
+    }
+
     fn asset_read(&self) -> AssetDependencyReadAccess<'_> {
         AssetDependencyReadAccess {
             world: self.world,

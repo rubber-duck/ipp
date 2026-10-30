@@ -159,12 +159,15 @@ impl<P: HostServices> Host<P> {
             }
         }
         self.services.progress_assets(&mut self.runtime);
-        let frame = self.runtime.frame(dt).map_err(|error| error.to_string())?;
-        self.services.record_frame(&mut self.runtime, &frame);
-        self.complete_view_queries(&frame);
+        self.runtime
+            .frame_into(dt, &mut scratch.report)
+            .map_err(|error| error.to_string())?;
+        let frame = &mut scratch.report;
+        self.services.record_frame(&mut self.runtime, frame);
+        self.complete_view_queries(frame);
         self.presentation_time = presentation_time;
         let mut presentation_failures = std::collections::BTreeMap::new();
-        for failure in self.services.route_input(&mut self.runtime, &frame) {
+        for failure in self.services.route_input(&mut self.runtime, frame) {
             let world = failure.output.world();
             if self.runtime.world_ref(world.id()) == Some(world) {
                 presentation_failures.insert(
@@ -185,30 +188,29 @@ impl<P: HostServices> Host<P> {
             presentation_failures.insert(world, error);
         }
         failures.extend(self.publish_presentation_responses());
-        for (world, result) in frame.worlds {
-            let mut result = result.map(|mut report| {
-                if let Some(mut context) = self.runtime.world_mut(world) {
-                    match context.take_asset_events() {
-                        Ok(events) => report.resource_changes.extend(events),
-                        Err(message) => {
-                            presentation_failures.insert(
-                                world,
-                                HostPresentationFailure {
-                                    scope: ipp_protocol::world::RuntimeFailureScope::Resource,
-                                    message,
-                                },
-                            );
-                        }
+        for (&world, result) in &mut frame.worlds {
+            if let Ok(report) = result
+                && let Some(mut context) = self.runtime.world_mut(world)
+            {
+                match context.take_asset_events() {
+                    Ok(events) => report.resource_changes.extend(events),
+                    Err(message) => {
+                        presentation_failures.insert(
+                            world,
+                            HostPresentationFailure {
+                                scope: ipp_protocol::world::RuntimeFailureScope::Resource,
+                                message,
+                            },
+                        );
                     }
-                    report.assets.extend(context.take_asset_outcomes());
                 }
-                report
-            });
+                report.assets.extend(context.take_asset_outcomes());
+            }
             for &id in &scratch.prepared {
                 if self.sessions[&id].world != world {
                     continue;
                 }
-                let result = match &mut result {
+                let result = match result {
                     Ok(report) => {
                         let mut session = self.session_mut(id).expect("live session");
                         let failure = presentation_failures

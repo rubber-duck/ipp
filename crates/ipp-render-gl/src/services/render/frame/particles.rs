@@ -97,7 +97,7 @@ pub(in crate::services::render) fn visible(
     instances: &[[f32; 20]],
     planes: &[ipp_core::systems::geometry::GeometryPlane; 6],
 ) -> bool {
-    let Some(geometry) = world.geometry.get(&(item.entity.world, item.entity.entity)) else {
+    let Some(geometry) = world.geometry_for(item.entity) else {
         return true;
     };
     let Some(shape) = geometry.value.culling.as_ref() else {

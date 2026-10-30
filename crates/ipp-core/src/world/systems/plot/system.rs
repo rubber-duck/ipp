@@ -1,4 +1,4 @@
-//! Plot capability registration. Retained evaluation is added behind the pure seams.
+//! Plot capability registration and lifecycle-maintained chart membership.
 
 use crate::ComponentValue as C;
 use crate::systems::*;
@@ -103,7 +103,9 @@ impl System for PlotSystem {
     }
 
     fn before_commit(&mut self, context: &mut SystemCommitContext<'_>) {
+        self.state.visibility_dirty |= context.changed_entity_links().next().is_some();
         for (entity, component) in context.changed_components() {
+            self.state.visibility_dirty |= component == C::PRESENTATION_GATE;
             if super::update::is_chart(component)
                 || super::update::is_frame(component)
                 || matches!(
@@ -111,8 +113,14 @@ impl System for PlotSystem {
                     C::BUFFER_DATA_SOURCE_BINDING | C::STREAMING_DATA_SOURCE_BINDING
                 )
             {
-                self.state.dirty.insert(entity);
-                self.state.membership_dirty = true;
+                self.state.dirty(entity);
+                if super::update::is_chart(component) {
+                    let present = context
+                        .world()
+                        .component_incarnation(entity, component)
+                        .is_some();
+                    self.state.membership((entity, component), present);
+                }
                 if super::update::is_chart(component)
                     && !context.retains_component(entity, component)
                 {
@@ -125,7 +133,7 @@ impl System for PlotSystem {
     fn before_numeric_update(&mut self, context: &mut SystemNumericContext<'_>) {
         for &(entity, component) in context.changed_components() {
             if super::update::is_chart(component) || super::update::is_frame(component) {
-                self.state.dirty.insert(entity);
+                self.state.dirty(entity);
             }
         }
     }
@@ -148,9 +156,9 @@ impl System for PlotSystem {
     ) {
         if event.kind != crate::services::asset_management::AssetLifecycleKind::GraphicsInvalidated
         {
-            self.state
-                .dirty
-                .extend(self.state.members.iter().map(|(entity, _)| *entity));
+            for member in &mut self.state.members {
+                member.dirty = true;
+            }
         }
     }
 
@@ -219,7 +227,7 @@ impl PlotSystem {
             .map(|(key, _)| *key)
             .collect();
         for key in affected {
-            self.state.dirty.insert(key.0);
+            self.state.dirty(key.0);
             self.state.remove(key);
         }
     }

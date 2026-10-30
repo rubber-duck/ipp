@@ -217,13 +217,40 @@ fn reusable_parameter_words_match_all_numeric_std140_layouts() {
         definition.parameters.insert(name.clone(), kind);
         properties.set(&name, value.clone()).unwrap();
         assert_eq!(properties.get(&name), Some(value));
-        parameter_words(&definition, &properties, &mut words).unwrap();
+        parameter_words(&definition, |name| properties.get(name), &mut words).unwrap();
         assert_eq!(words, parameter_layout(&definition, &properties).unwrap().1);
         assert_eq!(words.as_ptr(), pointer);
     }
     properties.set("p0", DynamicValue::F32(8.0)).unwrap();
-    parameter_words(&definition, &properties, &mut words).unwrap();
+    parameter_words(&definition, |name| properties.get(name), &mut words).unwrap();
     assert_eq!(words, parameter_layout(&definition, &properties).unwrap().1);
     properties.set("p0", DynamicValue::U32(8)).unwrap();
-    assert!(parameter_words(&definition, &properties, &mut words).is_err());
+    assert!(parameter_words(&definition, |name| properties.get(name), &mut words).is_err());
+}
+
+#[cfg(feature = "instrumentation")]
+#[test]
+fn parameter_packing_allocates_nothing_after_capacity_warmup() {
+    let mut definition = ShaderDefinition::default();
+    definition.parameters.insert("transform".into(), Kind::Mat4);
+    definition.parameters.insert("tint".into(), Kind::Vec4);
+    let mut words = Vec::with_capacity(32);
+    let value = |name: &str| {
+        Some(match name {
+            "transform" => DynamicValue::Mat4(std::array::from_fn(|i| i as f32)),
+            "tint" => DynamicValue::Vec4([0.25, 0.5, 0.75, 1.0]),
+            _ => unreachable!(),
+        })
+    };
+    parameter_words(&definition, value, &mut words).unwrap();
+    assert!(ipp_core::profiling::allocator_available());
+    ipp_core::profiling::reset(true);
+    for _ in 0..100 {
+        parameter_words(&definition, value, &mut words).unwrap();
+        std::hint::black_box(&words);
+    }
+    ipp_core::profiling::pause();
+    let allocations = ipp_core::profiling::allocations();
+    ipp_core::profiling::release_capture();
+    assert_eq!(allocations, (0, 0));
 }

@@ -274,8 +274,8 @@ impl<P: HostServices> Host<P> {
                         bytes.capacity(),
                     );
                     session.outbox.push_back(QueuedResponse {
-                        bytes,
-                        reservation: Rc::new(RefCell::new(reservation)),
+                        bytes: bytes.into(),
+                        reservation: Rc::new(RefCell::new(reservation)).into(),
                     });
                 }
                 Ok::<_, String>(())

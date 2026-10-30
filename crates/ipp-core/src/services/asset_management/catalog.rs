@@ -46,6 +46,7 @@ impl AssetManagementService {
             lifecycle_events: VecDeque::new(),
             renderer_driven: false,
             load_scheduler: None,
+            evaluation_poll_keys: Vec::new(),
         }
     }
 
@@ -445,7 +446,7 @@ impl AssetManagementService {
         }
     }
 
-    fn progress_load_key(&mut self, sources: &mut IoService, key: AssetKey) {
+    pub(super) fn progress_load_key(&mut self, sources: &mut IoService, key: AssetKey) {
         if self.pending_releases.contains_key(&key) || self.get(key).is_none() {
             return;
         }

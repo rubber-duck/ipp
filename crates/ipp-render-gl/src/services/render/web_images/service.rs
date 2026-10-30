@@ -4,7 +4,9 @@ use ipp_core::services::web_content::{
     WebContentError, WebContentImageDescription, WebContentImageId, WebContentRequestId,
 };
 
-use super::{WebImageImportError, WebImageReservation, WebImageStaging, WebImageUsage};
+use super::{
+    WebImageCompletion, WebImageImportError, WebImageReservation, WebImageStaging, WebImageUsage,
+};
 use crate::{RenderDevice, RenderError, RenderService};
 
 impl<D: RenderDevice> RenderService<D> {
@@ -73,18 +75,56 @@ impl<D: RenderDevice> RenderService<D> {
         // nothing about allocations belonging to the renderer's current owner.
         self.validate_catalog(host)
             .map_err(WebImageImportError::Device)?;
+        self.refresh_web_images(host)
+            .map_err(WebImageImportError::Device)?;
+        if !host.web_content().is_image_retained(ticket.image) {
+            return Err(WebImageImportError::Request(WebContentError::StaleRequest));
+        }
+        let image = ticket.image;
+        let result = self
+            .fill_reserved_web_image(ticket, import)
+            .and_then(|completion| self.complete_web_image(host, completion));
+        if result.is_err() {
+            host.web_content_mut().discard_image(image);
+            let _ = self.web_images.collect(host.web_content_mut());
+        }
+        result
+    }
+
+    /// GPU-only callback boundary. The pre-reserved allocation is private and
+    /// fenced to its renderer context. The callback must complete every read of
+    /// borrowed producer storage before returning; it must not retain handles.
+    /// No Host or World is accessed here. Admission happens after the callback.
+    pub fn fill_reserved_web_image(
+        &mut self,
+        ticket: WebImageReservation,
+        import: impl FnOnce(&mut D, &D::Texture) -> Result<(), RenderError>,
+    ) -> Result<WebImageCompletion, WebImageImportError> {
+        let texture = self
+            .web_images
+            .reserved_texture(&ticket)
+            .ok_or(WebImageImportError::ContextUnavailable)?;
+        import(&mut *self.device.borrow_mut(), texture).map_err(WebImageImportError::Device)?;
+        Ok(WebImageCompletion(ticket))
+    }
+
+    /// Admit a filled image at the ordinary Host boundary, rechecking source,
+    /// request, component, World and renderer lifetime after platform callbacks.
+    pub fn complete_web_image(
+        &mut self,
+        host: &mut ipp_core::HostRuntime,
+        completion: WebImageCompletion,
+    ) -> Result<WebContentImageId, WebImageImportError> {
+        self.validate_catalog(host)
+            .map_err(WebImageImportError::Device)?;
+        let ticket = completion.0;
         let image = ticket.image;
         let result = (|| {
             self.refresh_web_images(host)
                 .map_err(WebImageImportError::Device)?;
-            if !host.web_content().is_image_retained(image) {
-                return Err(WebImageImportError::Request(WebContentError::StaleRequest));
+            if self.web_images.reserved_texture(&ticket).is_none() {
+                return Err(WebImageImportError::ContextUnavailable);
             }
-            let texture = self
-                .web_images
-                .reserved_texture(&ticket)
-                .ok_or(WebImageImportError::ContextUnavailable)?;
-            import(&mut *self.device.borrow_mut(), texture).map_err(WebImageImportError::Device)?;
             host.web_content_mut()
                 .complete_image(ticket.request, image)
                 .map_err(WebImageImportError::Request)?;
@@ -94,8 +134,6 @@ impl<D: RenderDevice> RenderService<D> {
         drop(ticket);
         if result.is_err() {
             host.web_content_mut().discard_image(image);
-            // Preserve the primary failure. A retirement failure keeps private
-            // storage charged and is retried on later service work.
             let _ = self.web_images.collect(host.web_content_mut());
         }
         result

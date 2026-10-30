@@ -1,10 +1,10 @@
 //! Real GLES skinning runner with reusable fixture data and host-owned frame capture.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::path::PathBuf;
     let args: Vec<_> = std::env::args_os().skip(1).collect();
@@ -35,8 +35,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL skinning runner requires Linux");
+    eprintln!("The EGL skinning runner requires Linux or macOS");
     std::process::exit(1);
 }

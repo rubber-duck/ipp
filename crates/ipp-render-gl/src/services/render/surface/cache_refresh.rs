@@ -38,8 +38,8 @@ pub(in crate::services::render) struct CanvasCacheState {
     stamp: OutputContentStamp,
     painted_stamp: Option<OutputContentStamp>,
     painted_current: bool,
-    painted_outputs: std::collections::BTreeSet<OutputRef>,
-    represented_images: std::collections::BTreeSet<OutputRef>,
+    painted_outputs: super::super::outputs::selection_set::OutputSelectionSet,
+    represented_images: super::super::outputs::selection_set::OutputSelectionSet,
     /// Raster changes propagate through caches containing independently refreshed images.
     generation: u64,
     raster_dependencies: Vec<(OutputRef, u64)>,
@@ -53,8 +53,21 @@ pub(in crate::services::render) struct CanvasCacheFrame {
     root: Option<OutputRef>,
     bindings: BTreeMap<OutputRef, (WorldId, EntityId)>,
     worlds: Vec<WorldId>,
+    inputs: Vec<(WorldId, SurfaceCacheInput)>,
     repainting: Option<OutputRef>,
     time: f64,
+}
+
+impl CanvasCacheState {
+    pub(super) fn owner(&self) -> (WorldId, EntityId) {
+        (self.request.owner.id(), self.request.anchor)
+    }
+}
+
+impl CanvasCacheFrame {
+    pub(super) fn time(&self) -> f64 {
+        self.time
+    }
 }
 
 /// Adapts a device to the cache store's image operations.
@@ -79,38 +92,25 @@ impl<D: RenderDevice> SurfaceCacheTargets for DeviceCacheTargets<'_, D> {
 }
 
 impl<D: RenderDevice> RenderService<D> {
-    /// A containing image keeps represented child images visible only on composition.
-    pub(super) fn present_canvas_image_dependencies(
-        &mut self,
-        outputs: &std::collections::BTreeSet<OutputRef>,
-    ) {
-        for output in outputs {
-            if let Some(child) = self.canvas_caches.get(output) {
-                self.surface_cache.presented(
-                    child.request.owner.id(),
-                    child.request.anchor,
-                    self.canvas_cache_frame.time,
-                );
-            }
-        }
-    }
-
     /// GPU image changes are independent of their source publication's content.
     pub(super) fn canvas_image_generations(
         &self,
         stamp: &OutputContentStamp,
         root: OutputRef,
-    ) -> Vec<(OutputRef, u64)> {
-        stamp
-            .outputs
-            .iter()
-            .filter(|node| node.selection != root)
-            .filter_map(|node| {
-                self.canvas_caches
-                    .get(&node.selection)
-                    .map(|state| (node.selection, state.generation))
-            })
-            .collect()
+        output: &mut Vec<(OutputRef, u64)>,
+    ) {
+        output.clear();
+        output.extend(
+            stamp
+                .outputs
+                .iter()
+                .filter(|node| node.selection != root)
+                .filter_map(|node| {
+                    self.canvas_caches
+                        .get(&node.selection)
+                        .map(|state| (node.selection, state.generation))
+                }),
+        );
     }
 
     /// Plan all output domains together so budget arbitration cannot evict a planned child.
@@ -122,13 +122,31 @@ impl<D: RenderDevice> RenderService<D> {
         time: f64,
         required_bytes: usize,
     ) -> Result<(), RenderError> {
-        self.canvas_cache_frame = CanvasCacheFrame {
-            root: Some(root),
-            time,
-            ..Default::default()
-        };
+        let mut inputs = std::mem::take(&mut self.canvas_cache_frame.inputs);
+        inputs.clear();
+        let result =
+            self.plan_canvas_cache_inputs(host, root, requests, time, required_bytes, &mut inputs);
+        self.canvas_cache_frame.inputs = inputs;
+        result
+    }
 
-        let mut inputs = Vec::new();
+    #[allow(clippy::too_many_arguments)]
+    fn plan_canvas_cache_inputs(
+        &mut self,
+        host: &ipp_core::HostRuntime,
+        root: OutputRef,
+        requests: &[(OutputRef, ipp_core::WorldPublicationId, CanvasCacheRequest)],
+        time: f64,
+        required_bytes: usize,
+        inputs: &mut Vec<(WorldId, SurfaceCacheInput)>,
+    ) -> Result<(), RenderError> {
+        self.canvas_cache_frame.root = Some(root);
+        self.canvas_cache_frame.time = time;
+        self.canvas_cache_frame.repainting = None;
+        self.canvas_cache_frame
+            .bindings
+            .retain(|output, _| requests.iter().any(|request| request.0 == *output));
+
         for (selection, publication, request) in requests {
             let scene = CanvasScene::new(host, *selection, *publication)?;
             if request.visible
@@ -144,9 +162,21 @@ impl<D: RenderDevice> RenderService<D> {
                 self.populate_glyph_misses(&scene)?;
             }
 
-            let stamp = OutputContentStamp::read(host, *selection, *publication)?;
-            let paint_context = self.paint_context_stamp(&stamp);
-            let raster_dependencies = self.canvas_image_generations(&stamp, *selection);
+            let mut dependencies = super::super::canvas::content_stamp::read(
+                host,
+                *selection,
+                *publication,
+                self.output_order_pool.clone(),
+                self.content_stamp_pool.clone(),
+            )?;
+            let super::super::canvas::content_stamp::ContentStampScratch {
+                stamp,
+                paint_context,
+                raster_dependencies,
+                ..
+            } = &mut *dependencies;
+            self.paint_context_stamp(stamp, paint_context);
+            self.canvas_image_generations(stamp, *selection, raster_dependencies);
             let replaced: Vec<_> = self
                 .canvas_caches
                 .iter()
@@ -202,25 +232,27 @@ impl<D: RenderDevice> RenderService<D> {
                     paint_context: Vec::new(),
                 });
 
-            if state.stamp != stamp || state.raster_dependencies != raster_dependencies {
+            if state.stamp != *stamp || state.raster_dependencies != *raster_dependencies {
                 state.paint_revision += 1;
             }
-            state.raster_dependencies = raster_dependencies;
-            if !state.stamp.same_dependencies(&stamp)
+            state.raster_dependencies.clone_from(raster_dependencies);
+            if !state.stamp.same_dependencies(stamp)
                 || state
                     .painted_stamp
                     .as_ref()
                     .is_some_and(|painted| !painted.web_images_valid())
                 || state.request.clip != request.clip
                 || state.request.opacity != request.opacity
-                || state.paint_context != paint_context
+                || state.paint_context != *paint_context
             {
                 state.resource_revision += 1;
             }
             state.root = root;
-            state.stamp = stamp;
+            if state.stamp != *stamp {
+                state.stamp = stamp.clone();
+            }
             state.request = request.clone();
-            state.paint_context = paint_context;
+            state.paint_context.clone_from(paint_context);
             let world = request.owner.id();
             self.canvas_cache_frame
                 .bindings
@@ -250,12 +282,13 @@ impl<D: RenderDevice> RenderService<D> {
             ));
         }
 
-        self.canvas_cache_frame.worlds = self
-            .canvas_caches
-            .values()
-            .filter(|state| state.root == root)
-            .map(|state| state.request.owner.id())
-            .collect();
+        self.canvas_cache_frame.worlds.clear();
+        self.canvas_cache_frame.worlds.extend(
+            self.canvas_caches
+                .values()
+                .filter(|state| state.root == root)
+                .map(|state| state.request.owner.id()),
+        );
         self.canvas_cache_frame.worlds.sort_unstable();
         self.canvas_cache_frame.worlds.dedup();
         let mut device = self.device.borrow_mut();
@@ -266,7 +299,7 @@ impl<D: RenderDevice> RenderService<D> {
             &self.canvas_cache_frame.worlds,
             time,
             limit,
-            &inputs,
+            inputs,
             &mut DeviceCacheTargets(&mut *device),
         )
     }
@@ -312,7 +345,7 @@ impl<D: RenderDevice> RenderService<D> {
             None,
         );
         self.canvas_cache_frame.repainting = Some(selection);
-        let parent_sources = std::mem::take(&mut self.inclusions.active);
+        let parent_sources = self.inclusions.push();
         self.inclusions.active.collect_image = true;
         let begun = {
             let mut device = self.device.borrow_mut();
@@ -509,10 +542,11 @@ impl<D: RenderDevice> RenderService<D> {
                 self.inclusions.active.stale_image |= !current_image;
                 if current_image && self.inclusions.observing() {
                     let stale_parent = std::mem::take(&mut self.inclusions.active.stale_image);
-                    for (output, publication) in super::super::canvas::scene::output_order(
+                    for (output, publication) in super::super::outputs::order::output_order(
                         scene.host,
                         selection,
                         scene.publication.id,
+                        self.output_order_pool.clone(),
                     )? {
                         if state.painted_outputs.contains(&output) {
                             self.inclusions.record(output, publication);

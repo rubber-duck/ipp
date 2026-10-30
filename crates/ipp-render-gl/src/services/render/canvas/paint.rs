@@ -597,6 +597,8 @@ struct CanvasPaintGroup {
 #[derive(Default)]
 pub(crate) struct CanvasPaintBlocks {
     blocks: BTreeMap<CanvasTarget, CanvasPaintBlock>,
+    inputs: Vec<CanvasPaintInstance>,
+    sources: Vec<(u32, CanvasPaintSource)>,
     values: Vec<[f32; 4]>,
     /// Unique among all blocks of the service while `values` are unchanged.
     revision: u64,
@@ -632,6 +634,21 @@ impl CanvasPaintBlocks {
             -> Result<(u32, &'a CanvasPaintSource), CanvasPaintFallbackReason>,
         mut report: impl FnMut(&CanvasPaintInstance, Option<CanvasPaintFallbackReason>),
     ) {
+        if paints == self.inputs
+            && self.sources.len() == paints.len()
+            && self.blocks.len() == paints.len()
+            && paints.iter().zip(&self.sources).all(|(paint, previous)| {
+                admit(paint).is_ok_and(|(slot, source)| previous.0 == slot && &previous.1 == source)
+            })
+        {
+            self.lanes_changed = false;
+            for paint in paints {
+                report(paint, None);
+            }
+            return;
+        }
+        self.inputs.clear();
+        self.sources.clear();
         let previous = std::mem::take(&mut self.blocks);
         let mut values = vec![[0.0; 4]; self.values.len()];
         let mut taken: Vec<(u32, u32)> = Vec::new();
@@ -648,6 +665,7 @@ impl CanvasPaintBlocks {
         let mut admitted = Vec::with_capacity(paints.len());
         for paint in paints {
             let result = admit(paint).and_then(|(slot, source)| {
+                self.sources.push((slot, source.clone()));
                 let mut packed = Vec::with_capacity(source.parameters.len());
                 for (name, kind) in source.parameters.iter() {
                     let value = paint
@@ -777,6 +795,13 @@ impl CanvasPaintBlocks {
             report(paint, reason);
         }
 
+        if self.sources.len() == paints.len()
+            && self.blocks.values().all(|block| block.lanes.is_some())
+        {
+            self.inputs.extend_from_slice(paints);
+        } else {
+            self.sources.clear();
+        }
         let end = self
             .blocks
             .values()

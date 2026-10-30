@@ -1,0 +1,12 @@
+{
+  "platform": "macosarm64",
+  "archive": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal.tar.bz2",
+  "sha1": "b7081f6609e5edccf07be96b5d7977329fbe1bdf",
+  "required": [
+    "Chromium Embedded Framework.framework/Chromium Embedded Framework",
+    "Chromium Embedded Framework.framework/Resources/icudtl.dat",
+    "include/cef_version.h",
+    "include/cef_api_versions.h",
+    "CMakeLists.txt"
+  ]
+}

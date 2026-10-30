@@ -11,6 +11,7 @@ from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
+import platform
 from pathlib import Path, PurePosixPath
 import shutil
 import sys
@@ -45,8 +46,14 @@ class Receipt(TypedDict):
     archive_layout: NotRequired[int]
 
 
-SOURCE = ROOT / "tests/rendering/cef"
+SOURCE = ROOT / "crates/ipp-server/cef"
 PIN: RuntimePin = json.loads((SOURCE / "runtime.json").read_text())
+if sys.platform == "darwin":
+    if platform.machine() != "arm64":
+        raise RuntimeError(
+            "The maintained macOS CEF installation currently requires Apple Silicon"
+        )
+    PIN.update(json.loads((SOURCE / "runtime-macos-arm64.json").read_text()))
 
 
 def cache_root() -> Path:
@@ -66,7 +73,7 @@ def lock_file(
     handle: BinaryIO, *, shared: bool = False, nonblocking: bool = False
 ) -> None:
     if sys.platform == "win32":
-        raise RuntimeError("CEF DMA-BUF installation manager requires Linux")
+        raise RuntimeError("CEF DMA-BUF installation manager requires a Unix platform")
     else:
         import fcntl
 
@@ -225,8 +232,10 @@ def install_runtime(stage: Path, root: Path, pin: RuntimePin, *, offline: bool) 
     extracted = stage / "extracted" / pin["archive"].removesuffix(".tar.bz2")
     runtime = stage / "runtime"
     (extracted / "Release").rename(runtime)
-    for item in (extracted / "Resources").iterdir():
-        item.rename(runtime / item.name)
+    resources = extracted / "Resources"
+    if resources.exists():
+        for item in resources.iterdir():
+            item.rename(runtime / item.name)
     for name in ("include", "cmake", "libcef_dll", "CMakeLists.txt", "CREDITS.html"):
         (extracted / name).rename(runtime / name)
     (runtime / "archive.json").write_text(
@@ -272,7 +281,8 @@ def installation(
                         adoption_candidates(pin) if candidates is None else candidates
                     )
                     adopted = next(
-                        (p for p in available if (p / "libcef.so").is_file()), None
+                        (p for p in available if (p / pin["required"][0]).is_file()),
+                        None,
                     )
                     if adopted is not None:
                         verify_runtime(adopted, pin)
@@ -328,7 +338,7 @@ def patched_package(
 ) -> Path:
     root = cache_root() if root is None else root
     pin = PIN if pin is None else pin
-    patch = SOURCE / "cef-dll-sys-build.patch"
+    patch = ROOT / "tests/rendering/cef/cef-dll-sys-build.patch"
     key = f"{pin['crate_sha256']}-{digest(patch)}"
     published = root / "packages" / key
     with locked(root, key):

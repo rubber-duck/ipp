@@ -248,7 +248,10 @@ export async function serveSession(options: {
     server.close();
     let failure: unknown;
     try {
-      await closeClient(open);
+      // Once the Host exits its Worlds and resources are already gone. Remote
+      // disposal cannot succeed; closing the client releases local transport state.
+      if (alive(host.pid)) await closeClient(open);
+      else await open.context.host.close();
     } catch (error) {
       failure = error;
       console.error("session cleanup failed:", error);
@@ -261,6 +264,7 @@ export async function serveSession(options: {
   };
   const touch = () => {
     clearTimeout(idle);
+    if (host.window) return;
     idle = setTimeout(
       () => void shutdown("idle timeout"),
       options.idleMinutes * 60_000,

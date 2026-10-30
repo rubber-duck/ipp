@@ -39,3 +39,6 @@ pub type PlatformRenderDevice = GlesRenderDevice;
 /// Compile-time GL device for the current target.
 #[cfg(target_arch = "wasm32")]
 pub type PlatformRenderDevice = WebGlRenderDevice;
+
+#[cfg(target_os = "macos")]
+pub use gles::{GlesIOSurfaceImage, GlesIOSurfaceImport};

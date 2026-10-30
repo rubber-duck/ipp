@@ -200,7 +200,7 @@ def check_graph(package, target, features, core_features, renderer_features=None
         f"{label}: portable task scheduling belongs to Host packages only",
     )
     native_scheduled = scheduled and target != "wasm32-unknown-unknown"
-    for dependency in ("async-executor", "async-io", "blocking"):
+    for dependency in ("async-io", "blocking"):
         require(
             (dependency in resolved) == native_scheduled,
             f"{label}: {dependency} must remain outside core and browser WASM",

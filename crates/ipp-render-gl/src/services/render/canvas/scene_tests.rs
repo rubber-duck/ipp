@@ -1,3 +1,4 @@
+use super::super::super::outputs::order::output_order;
 use super::*;
 use ipp_core::components::{Camera, CanvasBox, CanvasStyle, FlatSurface};
 use ipp_core::{
@@ -186,7 +187,7 @@ fn real_canvas_slots_prepare_nested_cameras_without_leaking_independent_canvases
     let scene = CanvasScene::new(&host, root, publication).unwrap();
     assert_eq!(scene.canvas.logical_extent, [200.0, 100.0]);
     assert_eq!(scene.attachments().count(), 1);
-    let outputs = output_order(&host, root, publication).unwrap();
+    let outputs = output_order(&host, root, publication, Default::default()).unwrap();
     assert_eq!(
         outputs
             .iter()
@@ -196,7 +197,7 @@ fn real_canvas_slots_prepare_nested_cameras_without_leaking_independent_canvases
     );
     let hidden_publication = host.latest_publication(hidden.world().id()).unwrap();
     assert_eq!(
-        output_order(&host, hidden, hidden_publication)
+        output_order(&host, hidden, hidden_publication, Default::default())
             .unwrap()
             .iter()
             .map(|(selection, _)| *selection)
@@ -287,12 +288,12 @@ fn dependency_stamp_changes_for_child_content_with_unchanged_parent_paint() {
         .canvas
         .entries
         .clone();
-    let stamp = OutputContentStamp::read(&host, root, initial).unwrap();
+    let stamp = OutputContentStamp::read(&host, root, initial, Default::default()).unwrap();
     frame(&mut host);
     let unchanged = host.latest_publication(parent).unwrap();
     assert_eq!(
         stamp,
-        OutputContentStamp::read(&host, root, unchanged).unwrap()
+        OutputContentStamp::read(&host, root, unchanged, Default::default()).unwrap()
     );
 
     apply(
@@ -317,7 +318,7 @@ fn dependency_stamp_changes_for_child_content_with_unchanged_parent_paint() {
     ));
     assert_ne!(
         stamp,
-        OutputContentStamp::read(&host, root, changed).unwrap()
+        OutputContentStamp::read(&host, root, changed, Default::default()).unwrap()
     );
 }
 
@@ -356,8 +357,13 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
     let root = canvas(&mut host);
     let world = root.world().id();
     frame(&mut host);
-    let mut before =
-        OutputContentStamp::read(&host, root, host.latest_publication(world).unwrap()).unwrap();
+    let mut before = OutputContentStamp::read(
+        &host,
+        root,
+        host.latest_publication(world).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
     for update in [
         ipp_core::CanvasStateUpdate {
             extent: Some([301.0, 200.0]),
@@ -377,8 +383,13 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
             .enqueue_canvas_state_update(update)
             .unwrap();
         frame(&mut host);
-        let after =
-            OutputContentStamp::read(&host, root, host.latest_publication(world).unwrap()).unwrap();
+        let after = OutputContentStamp::read(
+            &host,
+            root,
+            host.latest_publication(world).unwrap(),
+            Default::default(),
+        )
+        .unwrap();
         assert_ne!(before, after);
         before = after;
     }
@@ -386,8 +397,13 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
     let child = nested.world().id();
     attach(&mut host, root, nested, CanvasStyle::default());
     frame(&mut host);
-    before =
-        OutputContentStamp::read(&host, root, host.latest_publication(world).unwrap()).unwrap();
+    before = OutputContentStamp::read(
+        &host,
+        root,
+        host.latest_publication(world).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
     apply(
         &mut host,
         child,
@@ -401,8 +417,13 @@ fn authored_canvas_mapping_and_camera_versions_invalidate_visual_stamps() {
         }],
     );
     frame(&mut host);
-    let after =
-        OutputContentStamp::read(&host, root, host.latest_publication(world).unwrap()).unwrap();
+    let after = OutputContentStamp::read(
+        &host,
+        root,
+        host.latest_publication(world).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
     assert_ne!(before, after);
     assert_eq!(before.outputs.last(), after.outputs.last());
     assert_ne!(
@@ -484,7 +505,7 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
     .unwrap();
     frame(&mut host);
     let initial = host.latest_publication(world).unwrap();
-    let stamp = OutputContentStamp::read(&host, root, initial).unwrap();
+    let stamp = OutputContentStamp::read(&host, root, initial, Default::default()).unwrap();
     let canvas = CanvasScene::new(&host, root, initial)
         .unwrap()
         .canvas
@@ -512,7 +533,7 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
         assert_eq!(output.paint_revision, canvas.paint_revision);
         assert_eq!(
             stamp,
-            OutputContentStamp::read(&host, root, current).unwrap()
+            OutputContentStamp::read(&host, root, current, Default::default()).unwrap()
         );
     }
     let service = GuiInputService::default();
@@ -563,7 +584,7 @@ fn hit_and_pointer_only_publications_preserve_visual_content_stamp() {
         assert_eq!(output.paint_revision, canvas.paint_revision);
         assert_eq!(
             stamp,
-            OutputContentStamp::read(&host, root, current).unwrap()
+            OutputContentStamp::read(&host, root, current, Default::default()).unwrap()
         );
         assert_eq!(service.pending_count(), 0);
     }
@@ -730,7 +751,7 @@ fn camera_child_render_changes_invalidate_stamp_without_changing_canvas_or_camer
     let publication = host.latest_publication(parent).unwrap();
     let scene = CanvasScene::new(&host, root, publication).unwrap();
     let entries = scene.canvas.entries.clone();
-    let stamp = OutputContentStamp::read(&host, root, publication).unwrap();
+    let stamp = OutputContentStamp::read(&host, root, publication, Default::default()).unwrap();
     let version = host
         .output(host.latest_publication(child).unwrap(), nested)
         .unwrap()
@@ -755,7 +776,7 @@ fn camera_child_render_changes_invalidate_stamp_without_changing_canvas_or_camer
     );
     assert_ne!(
         stamp,
-        OutputContentStamp::read(&host, root, publication).unwrap()
+        OutputContentStamp::read(&host, root, publication, Default::default()).unwrap()
     );
 }
 
@@ -782,7 +803,7 @@ fn camera_domain_discovers_canvas_slots_but_not_unattached_canvases() {
     frame(&mut host);
     let publication = host.latest_publication(parent).unwrap();
     assert_eq!(
-        output_order(&host, root, publication)
+        output_order(&host, root, publication, Default::default())
             .unwrap()
             .iter()
             .map(|(output, _)| *output)
@@ -837,6 +858,7 @@ fn web_cache_dependencies_follow_authority_not_frame_order_or_known_absence() {
         &host,
         output,
         host.latest_publication(output.world().id()).unwrap(),
+        Default::default(),
     )
     .unwrap();
     // Update only the first image. Sorted image IDs now reverse the authorities'
@@ -858,6 +880,7 @@ fn web_cache_dependencies_follow_authority_not_frame_order_or_known_absence() {
         &host,
         output,
         host.latest_publication(output.world().id()).unwrap(),
+        Default::default(),
     )
     .unwrap();
     assert_ne!(first, second);
@@ -868,6 +891,7 @@ fn web_cache_dependencies_follow_authority_not_frame_order_or_known_absence() {
         &host,
         output,
         host.latest_publication(output.world().id()).unwrap(),
+        Default::default(),
     )
     .unwrap();
     assert!(!first.same_dependencies(&unavailable));

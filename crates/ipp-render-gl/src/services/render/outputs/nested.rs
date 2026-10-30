@@ -37,6 +37,20 @@ struct OutputJob {
     interaction_eligible: bool,
 }
 
+#[derive(Default)]
+pub(in crate::services::render) struct NestedOutputScratch {
+    pending: Vec<(OutputJob, bool)>,
+    prepared: Vec<OutputJob>,
+    children: Vec<OutputJob>,
+    interactive: Vec<OutputRef>,
+    requests: Vec<(OutputRef, WorldPublicationId, CanvasCacheRequest)>,
+    required: std::collections::BTreeSet<OutputRef>,
+    visible: std::collections::BTreeSet<OutputRef>,
+    images: Vec<super::super::surface::allocation::ImageRequest>,
+    features: std::collections::BTreeMap<OutputRef, u32>,
+    root: Option<super::super::canvas::presentation::CanvasPresentation>,
+}
+
 fn distance(camera: Option<[f64; 3]>, plane: [f32; 16], extent: [f32; 2]) -> f32 {
     let Some(camera) = camera else {
         return 0.0;
@@ -67,17 +81,55 @@ impl<D: RenderDevice> RenderService<D> {
         viewport: WorldViewport,
         presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
-        let previous_contexts = std::mem::take(&mut self.canvas_presentations);
-        let paint_features =
-            super::super::canvas::presentation::output_features::<D>(host, selection, publication)?;
+        let mut scratch = std::mem::take(&mut self.nested_output_scratch);
+        let result = self.prepare_camera_children_reusing(
+            host,
+            selection,
+            publication,
+            viewport,
+            presentation_time,
+            &mut scratch,
+        );
+        self.nested_output_scratch = scratch;
+        result
+    }
+
+    fn prepare_camera_children_reusing(
+        &mut self,
+        host: &HostRuntime,
+        selection: OutputRef,
+        publication: WorldPublicationId,
+        viewport: WorldViewport,
+        presentation_time: f64,
+        scratch: &mut NestedOutputScratch,
+    ) -> Result<RenderFrameWork, RenderError> {
+        let NestedOutputScratch {
+            pending,
+            prepared,
+            children,
+            interactive,
+            requests,
+            required,
+            visible,
+            images: image_requests,
+            features: paint_features,
+            root,
+        } = scratch;
+        let root = root
+            .get_or_insert_with(|| super::super::canvas::presentation::CanvasPresentation::root(0));
+        super::super::canvas::presentation::output_features::<D>(
+            host,
+            selection,
+            publication,
+            self.output_order_pool.clone(),
+            paint_features,
+        )?;
+        self.canvas_presentations
+            .retain(|output, _| paint_features.contains_key(output));
         if selection.kind() == OutputKind::Canvas {
-            let features = paint_features.get(&selection).copied().unwrap_or(0);
-            self.canvas_presentations.insert(
-                selection,
-                std::sync::Arc::new(
-                    super::super::canvas::presentation::CanvasPresentation::root(features),
-                ),
-            );
+            let mut context = root.clone();
+            context.features = paint_features.get(&selection).copied().unwrap_or(0);
+            self.update_canvas_presentation(selection, context);
         }
         let canvas = if selection.kind() == OutputKind::Canvas {
             let scene = CanvasScene::new(host, selection, publication)?;
@@ -100,7 +152,8 @@ impl<D: RenderDevice> RenderService<D> {
             None
         };
 
-        let mut pending = vec![(
+        pending.clear();
+        pending.push((
             OutputJob {
                 selection,
                 publication,
@@ -117,9 +170,9 @@ impl<D: RenderDevice> RenderService<D> {
                 interaction_eligible: world_interaction_eligible(host, selection.world()),
             },
             false,
-        )];
-        let mut prepared = Vec::new();
-        let mut interactive = std::collections::BTreeSet::new();
+        ));
+        prepared.clear();
+        interactive.clear();
         while let Some((job, visited)) = pending.pop() {
             if visited {
                 if job.selection != selection
@@ -132,10 +185,15 @@ impl<D: RenderDevice> RenderService<D> {
                 continue;
             }
 
-            let mut children = Vec::new();
+            children.clear();
             match job.selection.kind() {
                 OutputKind::Camera => {
-                    let scene = RenderScene::new(host, job.selection, job.publication)?;
+                    let scene = RenderScene::new(
+                        host,
+                        job.selection,
+                        job.publication,
+                        self.scene_pool.clone(),
+                    )?;
                     let camera = Some(scene.camera.pose.point([0.0; 3]));
                     let prepared_camera =
                         scene.camera.prepare_for_extent(job.projection_extent).ok();
@@ -214,15 +272,14 @@ impl<D: RenderDevice> RenderService<D> {
                                     surface,
                                     extent,
                                     features,
-                                    previous_contexts
+                                    self.canvas_presentations
                                         .get(&surface.selection)
                                         .map(|p| p.as_ref()),
                                 )?
                             } else {
-                                super::super::canvas::presentation::CanvasPresentation::root(0)
+                                root.clone()
                             };
-                            self.canvas_presentations
-                                .insert(surface.selection, std::sync::Arc::new(context));
+                            self.update_canvas_presentation(surface.selection, context);
                             let [width, height] = surface.extent.map(f64::from);
                             let content = if surface.geometry.exact_affine(0.0).is_some() {
                                 ipp_core::math::multiply(
@@ -299,7 +356,7 @@ impl<D: RenderDevice> RenderService<D> {
                 OutputKind::Canvas => {
                     let scene = CanvasScene::new(host, job.selection, job.publication)?;
                     if job.interaction_eligible && scene.canvas.interaction.requires_direct() {
-                        interactive.insert(job.selection);
+                        interactive.push(job.selection);
                     }
                     let view = job.canvas.expect("Canvas view");
                     for (index, entry) in scene.canvas.entries.iter().enumerate() {
@@ -412,8 +469,7 @@ impl<D: RenderDevice> RenderService<D> {
                                         .layer_offset(slot.layer)
                                         .ok_or(RenderError::UnavailableOutput)?;
                                     let context = parent.child(&mapping, coordinate, features)?;
-                                    self.canvas_presentations
-                                        .insert(selection, std::sync::Arc::new(context));
+                                    self.update_canvas_presentation(selection, context);
                                 }
                                 let canvas = Some(CanvasView {
                                     plane,
@@ -473,38 +529,53 @@ impl<D: RenderDevice> RenderService<D> {
                 }
             }
             pending.push((job, true));
-            for child in children.into_iter().rev() {
+            for child in children.drain(..).rev() {
                 pending.push((child, false));
             }
         }
 
-        let mut requests = Vec::new();
-        for job in &prepared {
+        requests.clear();
+        for job in prepared.iter() {
             if let Some(mut cache) = job.cache.clone() {
-                cache.interaction = super::super::canvas::scene::output_order(
+                cache.interaction = super::super::outputs::order::output_order(
                     host,
                     job.selection,
                     job.publication,
+                    self.output_order_pool.clone(),
                 )?
                 .iter()
                 .any(|(output, _)| interactive.contains(output));
                 requests.push((job.selection, job.publication, cache));
             }
         }
-        let required = prepared
-            .iter()
-            .filter_map(|job| job.projected.as_ref().map(|s| s.selection))
-            .collect();
-        self.retain_projected_outputs(&required);
-        let visible = prepared
-            .iter()
-            .filter(|job| job.visible)
-            .map(|job| job.selection)
-            .collect();
-        self.begin_projected_frame(presentation_time, &visible);
+        required.retain(|output| {
+            prepared.iter().any(|job| {
+                job.projected
+                    .as_ref()
+                    .is_some_and(|surface| surface.selection == *output)
+            })
+        });
+        required.extend(
+            prepared
+                .iter()
+                .filter_map(|job| job.projected.as_ref().map(|surface| surface.selection)),
+        );
+        self.retain_projected_outputs(required);
+        visible.retain(|output| {
+            prepared
+                .iter()
+                .any(|job| job.visible && job.selection == *output)
+        });
+        visible.extend(
+            prepared
+                .iter()
+                .filter(|job| job.visible)
+                .map(|job| job.selection),
+        );
+        self.begin_projected_frame(presentation_time, visible);
         // Reserve visible required active images before optional admission. Idle
         // optional capacity and padding must not lower required raster quality.
-        let mut image_requests = Vec::new();
+        image_requests.clear();
         for job in prepared.iter().filter(|job| job.visible) {
             let count = if job.selection.kind() == OutputKind::Camera {
                 1
@@ -527,23 +598,20 @@ impl<D: RenderDevice> RenderService<D> {
                 });
             }
         }
-        self.required_image_demand =
-            super::super::surface::allocation::plan(image_requests, self.surface_cache.budget());
+        super::super::surface::allocation::plan_into(
+            image_requests,
+            self.surface_cache.budget(),
+            &mut self.required_image_demand,
+        );
         let required_bytes = self.required_image_demand.values().sum();
         // Release superseded allocations before child-first painting: residency
         // from the previous view must not defeat the current priority ranking.
         self.reclaim_required_allocations();
         self.reclaim_inactive_images();
         self.reclaim_required_padding()?;
-        self.plan_canvas_caches(
-            host,
-            selection,
-            &requests,
-            presentation_time,
-            required_bytes,
-        )?;
+        self.plan_canvas_caches(host, selection, requests, presentation_time, required_bytes)?;
         let mut work = RenderFrameWork::default();
-        for job in prepared {
+        for job in prepared.drain(..) {
             if !job.visible {
                 continue;
             }
@@ -551,10 +619,11 @@ impl<D: RenderDevice> RenderService<D> {
             if selection.kind() == OutputKind::Canvas {
                 let scene = CanvasScene::new(host, selection, job.publication)?;
                 if let Some(surface) = job.projected {
-                    let interaction = super::super::canvas::scene::output_order(
+                    let interaction = super::super::outputs::order::output_order(
                         host,
                         selection,
                         job.publication,
+                        self.output_order_pool.clone(),
                     )?
                     .iter()
                     .any(|(output, _)| interactive.contains(output));
@@ -635,7 +704,7 @@ impl<D: RenderDevice> RenderService<D> {
         presentation_time: f64,
     ) -> Result<RenderFrameWork, RenderError> {
         let (selection, publication) = output;
-        let scene = RenderScene::new(host, selection, publication)?;
+        let scene = RenderScene::new(host, selection, publication, self.scene_pool.clone())?;
         let camera = Some(
             scene
                 .camera
@@ -709,7 +778,7 @@ impl<D: RenderDevice> RenderService<D> {
             return Err(error);
         }
 
-        let parent_sources = std::mem::take(&mut self.inclusions.active);
+        let parent_sources = self.inclusions.push();
         self.inclusions.active.collect_image = true;
         let begun = self
             .device

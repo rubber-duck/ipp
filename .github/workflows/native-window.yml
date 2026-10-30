@@ -1,0 +1,68 @@
+name: Native macOS window and CEF
+on:
+  pull_request:
+    paths:
+      - "crates/ipp-server/**"
+      - "crates/ipp-render-gl/**"
+      - "tools/shared-host/**"
+      - "tools/pipeline/**"
+      - "tests/rendering/native-cef.test.mjs"
+      - "tests/rendering/drivers/native-cef.ts"
+      - "tests/rendering/scenarios/native-cef.mjs"
+      - "tests/rendering/fixtures/native-cef/**"
+      - "packages/ipp-client/**"
+      - "examples/demos/scenes/cockpit/**"
+      - "tests/runtime/native-window.test.mjs"
+      - "tests/runtime/scenarios/native-window.mjs"
+      - ".github/workflows/native-window.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  native-window:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version-file: .python-version
+      - name: Install pinned toolchains
+        run: |
+          brew install cmake ninja
+          python tools/ipp.py setup rust
+          python tools/ipp.py setup node
+          python tools/ipp.py setup python
+      - name: Prepare verified ANGLE Metal libraries
+        run: |
+          ipp_angle="$RUNNER_TEMP/ipp-angle"
+          mkdir -p "$ipp_angle/lib"
+          curl -fL https://github.com/EdgeFirstAI/angle-package/releases/download/v2.1.28252/angle-xcframeworks-v2.1.28252.zip -o "$ipp_angle/angle.zip"
+          echo "59e4b1f68956c92441cde4dca0e9eb1a835bbccd107cefdd1d3d3d60e27410be  $ipp_angle/angle.zip" | shasum -a 256 -c -
+          ditto -x -k "$ipp_angle/angle.zip" "$ipp_angle"
+          for library in EGL GLESv2; do
+            framework="$ipp_angle/dist/$library.xcframework/macos-arm64/lib$library.framework"
+            codesign --verify --deep --strict "$framework"
+            cp "$framework/lib$library" "$ipp_angle/lib/lib$library.dylib"
+            codesign --force --sign - "$ipp_angle/lib/lib$library.dylib"
+          done
+          echo "IPP_EGL_LIBRARY_DIR=$ipp_angle/lib" >> "$GITHUB_ENV"
+      - name: Exercise native window and offscreen clients
+        run: python tools/ipp.py regression --only test:native-window:macos --only test:shared-host:native --only test:native-cef:macos
+      - name: Preserve frame and failure evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-window-evidence
+          path: |
+            target/pipeline/runs/
+            target/integration-artifacts/native-window/
+            target/integration-artifacts/native-cef/
+            target/integration-artifacts/shared-host/
+          if-no-files-found: warn

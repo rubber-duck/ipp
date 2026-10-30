@@ -126,6 +126,15 @@ unsafe extern "system" fn framebuffer(_target: u32, _name: u32) {
     CALLS.with(|calls| calls.borrow_mut().push("framebuffer"));
 }
 
+unsafe extern "system" fn uniform_location(_program: u32, _name: *const std::ffi::c_char) -> i32 {
+    CALLS.with(|calls| calls.borrow_mut().push("uniform-location"));
+    0
+}
+
+unsafe extern "system" fn uniform_float(_location: i32, _value: f32) {
+    CALLS.with(|calls| calls.borrow_mut().push("uniform-float"));
+}
+
 fn device() -> GlesRenderDevice {
     // SAFETY: Every callback has its exact declared GL signature and static lifetime.
     // Constructor storage writes obey the GL output lengths; unused callbacks retain nothing.
@@ -136,6 +145,10 @@ fn device() -> GlesRenderDevice {
             value if value == c"glUseProgram" => program as *const () as *const c_void,
             value if value == c"glBindVertexArray" => vertex_array as *const () as *const c_void,
             value if value == c"glBindFramebuffer" => framebuffer as *const () as *const c_void,
+            value if value == c"glGetUniformLocation" => {
+                uniform_location as *const () as *const c_void
+            }
+            value if value == c"glUniform1f" => uniform_float as *const () as *const c_void,
             _ => Functions::test_pointer(symbol),
         })
         .unwrap()
@@ -161,7 +174,17 @@ fn only_issued_calls_increment_and_captures_reset_independently_of_timers() {
     device.bind_framebuffers(3, 2);
     assert_eq!(
         CALLS.with(|calls| calls.borrow().clone()),
-        ["program", "program", "vao", "framebuffer", "framebuffer"]
+        [
+            "program",
+            "uniform-location",
+            "uniform-float",
+            "program",
+            "uniform-location",
+            "uniform-float",
+            "vao",
+            "framebuffer",
+            "framebuffer"
+        ]
     );
     // SAFETY: Typed static callbacks retain no arguments; null data with zero bytes is valid.
     unsafe {
@@ -178,7 +201,7 @@ fn only_issued_calls_increment_and_captures_reset_independently_of_timers() {
             counts.other,
             counts.profiler
         ),
-        (1, 5, 1, 1, 0)
+        (1, 9, 1, 1, 0)
     );
     device.gl_calls_stop();
     device.use_program(9);
@@ -186,6 +209,7 @@ fn only_issued_calls_increment_and_captures_reset_independently_of_timers() {
     assert!(device.gl_calls_start());
     assert_eq!(device.gl_calls_snapshot(), Some(Default::default()));
     device.use_program(10);
-    assert_eq!(device.gl_calls_snapshot().unwrap().state, 1);
+    // A new program also resolves and uploads the Surface ownership uniform.
+    assert_eq!(device.gl_calls_snapshot().unwrap().state, 3);
     device.gl_calls_stop();
 }

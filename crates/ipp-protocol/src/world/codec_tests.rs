@@ -1171,3 +1171,24 @@ fn inspected_motion_encodes_negative_velocity_without_relaxing_time_checks() {
     assert!(writer.f64(-1.0).is_err());
     assert!(writer.finite_f64(f64::NAN).is_err());
 }
+
+#[test]
+fn inline_frame_encoding_matches_owned_response() {
+    for (session, tick, time) in [(1, 0, 0.0), (u64::MAX, u64::MAX, 12.5), (17, 88, -0.0)] {
+        let response = super::Response {
+            session,
+            request_id: 0,
+            tick,
+            body: super::ResponseBody::Frame {
+                time,
+            },
+        };
+        assert_eq!(
+            super::encode_frame_response(session, tick, time)
+                .unwrap()
+                .as_slice(),
+            super::encode_response(&response).unwrap()
+        );
+    }
+    assert!(super::encode_frame_response(0, 1, 0.0).is_err());
+}

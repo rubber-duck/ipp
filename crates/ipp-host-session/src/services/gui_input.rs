@@ -110,8 +110,8 @@ fn finish(reply: &Rc<RefCell<Reply>>) {
         (
             slot,
             QueuedResponse {
-                bytes,
-                reservation: reply.reservation.clone(),
+                bytes: bytes.into(),
+                reservation: reply.reservation.clone().into(),
             },
         )
     };
@@ -291,8 +291,8 @@ impl GuiHostInputService {
         .expect("bounded physical revocation");
         owner.reservation.borrow_mut().encoded(bytes.capacity());
         owner.revocation.settle(QueuedResponse {
-            bytes,
-            reservation: owner.reservation,
+            bytes: bytes.into(),
+            reservation: owner.reservation.into(),
         });
     }
 
@@ -693,8 +693,8 @@ impl GuiHostInputService {
                 drop(response);
                 reservation.encoded(bytes.capacity());
                 slot.settle(QueuedResponse {
-                    bytes,
-                    reservation: Rc::new(RefCell::new(reservation)),
+                    bytes: bytes.into(),
+                    reservation: Rc::new(RefCell::new(reservation)).into(),
                 });
                 owner.native_presentation = presentation;
                 Ok::<(), ()>(())
@@ -733,8 +733,8 @@ impl GuiHostInputService {
             drop(response);
             reservation.encoded(bytes.capacity());
             slot.settle(QueuedResponse {
-                bytes,
-                reservation: Rc::new(RefCell::new(reservation)),
+                bytes: bytes.into(),
+                reservation: Rc::new(RefCell::new(reservation)).into(),
             });
             Ok::<(), ()>(())
         })();

@@ -1,9 +1,9 @@
-//! Linux EGL pbuffer smoke runner. Context/shim loading is test-host code only.
+//! Linux/macOS EGL pbuffer smoke runner. Context/shim loading is test-host code only.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use smoke::{egl, world};
     use smoke::{shapes, textures};
@@ -112,8 +112,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL smoke runner supports Linux; no graphics test was run.");
+    eprintln!("The EGL smoke runner supports Linux and macOS; no graphics test was run.");
     std::process::exit(1);
 }

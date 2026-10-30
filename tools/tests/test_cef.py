@@ -41,12 +41,14 @@ def interrupt_installation(root, pin, ready):
         pass
 
 
-@unittest.skipUnless(sys.platform == "linux", "CEF DMA-BUF cache is Linux-specific")
+@unittest.skipUnless(
+    sys.platform in ("linux", "darwin"), "CEF cache requires Unix locks"
+)
 class CefCacheTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
-        self.base = Path(self.temp.name)
+        self.base = Path(self.temp.name).resolve()
         self.cache = self.base / "shared"
         self.runtime = self.base / "existing"
         self.runtime.mkdir()
@@ -231,7 +233,7 @@ class CefCacheTests(unittest.TestCase):
 @unittest.skipUnless(sys.platform == "linux", "CEF process groups use Linux procfs")
 class CefRunnerTests(unittest.TestCase):
     def test_failed_launch_retains_primary_error_and_bad_capture_diagnostic(self):
-        path = cef.SOURCE / "run.py"
+        path = cef.ROOT / "tests/rendering/cef/run.py"
         spec = importlib.util.spec_from_file_location("cef_runner", path)
         runner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runner)
@@ -259,7 +261,7 @@ class CefRunnerTests(unittest.TestCase):
 
     def test_browser_timeout_kills_owned_process_and_keeps_logs(self):
         spec = importlib.util.spec_from_file_location(
-            "cef_runner_timeout", cef.SOURCE / "run.py"
+            "cef_runner_timeout", cef.ROOT / "tests/rendering/cef/run.py"
         )
         runner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runner)
@@ -306,7 +308,7 @@ exec sleep 30
 
     def test_cleanup_kills_term_ignoring_descendant_after_leader_exit(self):
         spec = importlib.util.spec_from_file_location(
-            "cef_runner_group", cef.SOURCE / "run.py"
+            "cef_runner_group", cef.ROOT / "tests/rendering/cef/run.py"
         )
         runner = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(runner)

@@ -6,7 +6,7 @@ pub(crate) mod outbox;
 pub(crate) mod progress;
 mod reservation;
 
-pub use reservation::{PreparedOutputCopy, ReliableResponse, ResponseLease};
+pub use reservation::{PreparedOutputCopy, ReliableResponse, ResponseBytes, ResponseLease};
 pub(crate) use reservation::{ReplyReservation, SharedReplyReservation};
 
 /// Bytes charged for every retained record in addition to its payload and encoding.

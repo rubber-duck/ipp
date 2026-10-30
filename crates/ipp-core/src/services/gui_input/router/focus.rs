@@ -24,7 +24,6 @@ use crate::services::gui_input::{GuiDeliveryError, GuiDeliveryPermit, GuiDeliver
 use crate::systems::canvas::CanvasHitKind;
 use crate::systems::gui::local::{GuiLocalAction, GuiLocalEffect, GuiNativeTextState};
 use crate::{HostRuntime, ViewDescriptor, WorldAttachmentToken, WorldRef};
-use std::collections::BTreeSet;
 
 impl GuiInputRouter {
     /// Make logical focus a command set in a presented World this context's
@@ -37,7 +36,9 @@ impl GuiInputRouter {
         view: ViewDescriptor,
     ) -> Result<(), GuiInputError> {
         let mut adopted: Vec<(Target, bool)> = Vec::new();
-        for (world, path) in presented_worlds(host, view) {
+        self.focus_worlds.reset(view);
+        while let Some(world) = self.focus_worlds.next(host) {
+            let path = &self.focus_worlds.path;
             if context.queued_worlds.borrow().contains_key(&world) {
                 continue;
             }
@@ -62,16 +63,16 @@ impl GuiInputRouter {
             if keyboard == Some((target, part)) {
                 continue;
             }
-            let Ok(control) = locate_control(host, view, &path, target) else {
+            let Ok(control) = locate_control(host, view, path, target) else {
                 continue;
             };
             let focus_part = (control.record.focus_parts > 1).then_some(part);
-            let Ok(lifetimes) = surface_lifetimes(host, view.publication, &path) else {
+            let Ok(lifetimes) = surface_lifetimes(host, view.publication, path) else {
                 continue;
             };
             let candidate = Target {
                 control,
-                path,
+                path: path.clone(),
                 surface_lifetimes: lifetimes,
                 source: view.publication,
                 part: CanvasHitKind::Entity,
@@ -109,30 +110,45 @@ impl GuiInputRouter {
 /// Every World `view` presents with its attachment path, root first and in
 /// attachment order. Attachments without an available publication present
 /// nothing.
-fn presented_worlds(
-    host: &HostRuntime,
-    view: ViewDescriptor,
-) -> Vec<(WorldRef, Vec<WorldAttachmentToken>)> {
-    let mut worlds = Vec::new();
-    let mut entered = BTreeSet::new();
-    let mut pending = vec![(view.publication, Vec::new())];
-    while let Some((source, path)) = pending.pop() {
-        let Some(publication) = host.publication(source) else {
-            continue;
-        };
-        if !entered.insert(publication.world) {
-            continue;
-        }
-        for edge in publication.attachments.iter().rev() {
-            if let Some(child) = host.attached_publication(edge) {
-                let mut child_path = path.clone();
-                child_path.push(edge.token.clone());
-                pending.push((child.id, child_path));
-            }
-        }
-        worlds.push((publication.world, path));
+#[derive(Default)]
+pub(super) struct PresentedWorlds {
+    pending: Vec<(crate::WorldPublicationId, usize, bool)>,
+    entered: Vec<WorldRef>,
+    path: Vec<WorldAttachmentToken>,
+}
+
+impl PresentedWorlds {
+    fn reset(&mut self, view: ViewDescriptor) {
+        self.pending.clear();
+        self.entered.clear();
+        self.path.clear();
+        self.pending.push((view.publication, 0, false));
     }
-    worlds
+
+    fn next(&mut self, host: &HostRuntime) -> Option<WorldRef> {
+        loop {
+            let frame = self.pending.last_mut()?;
+            if let Some(publication) = host.publication(frame.0) {
+                if !frame.2 && !self.entered.contains(&publication.world) {
+                    frame.2 = true;
+                    self.entered.push(publication.world);
+                    return Some(publication.world);
+                }
+                if frame.2
+                    && let Some(edge) = publication.attachments.get(frame.1)
+                {
+                    frame.1 += 1;
+                    if let Some(child) = host.attached_publication(edge) {
+                        self.path.push(edge.token.clone());
+                        self.pending.push((child.id, 0, false));
+                    }
+                    continue;
+                }
+            }
+            self.pending.pop();
+            self.path.truncate(self.pending.len().saturating_sub(1));
+        }
+    }
 }
 
 /// Delivery for the commands adopting a keyboard target: no physical request

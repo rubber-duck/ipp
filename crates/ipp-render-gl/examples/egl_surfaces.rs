@@ -1,11 +1,11 @@
 //! Focused native GLES shader, curve coverage, Surface cache target and RGBA
 //! Surface frame oracle.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ipp_render_gl::RenderDevice;
     use std::path::PathBuf;
@@ -178,8 +178,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL Surface runner supports Linux; no graphics test was run.");
+    eprintln!("The EGL Surface runner supports Linux or macOS; no graphics test was run.");
     std::process::exit(1);
 }

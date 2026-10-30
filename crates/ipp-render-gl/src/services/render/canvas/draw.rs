@@ -10,6 +10,7 @@ use crate::{RenderDevice, RenderError, RenderService};
 use ipp_core::systems::canvas::{CanvasClip, CanvasPaintEntry, CanvasPrimitive};
 
 /// One draw of a Canvas frame on the plane of its layer, the last field.
+#[derive(Clone)]
 pub(in crate::services::render) enum SurfaceOp {
     /// Committed GUI batches; a range never spans two layers.
     Gui(std::ops::Range<usize>, u32),
@@ -45,16 +46,29 @@ impl<'a> PrimitiveScene<'a> {
     }
 }
 
-struct CanvasDrawFrame<'a> {
+pub(in crate::services::render) struct CanvasDrawFrame<'a> {
     scene: CanvasScene<'a>,
     mvp: [f32; 16],
     clip: CanvasClip,
     opacity: f32,
     layering: CanvasLayering,
     paint: SurfacePaint,
-    ops: std::vec::IntoIter<SurfaceOp>,
+    ops: Vec<SurfaceOp>,
+    next: usize,
     stale_parent: bool,
     presentation: std::sync::Arc<super::presentation::CanvasPresentation>,
+}
+
+// Empty before changing the element lifetime. No publication reference survives;
+// the equal-layout IntoIter collection retains its allocation.
+fn empty_buffer<T, U>(mut values: Vec<T>) -> Vec<U> {
+    debug_assert_eq!(std::mem::size_of::<T>(), std::mem::size_of::<U>());
+    debug_assert_eq!(std::mem::align_of::<T>(), std::mem::align_of::<U>());
+    values.clear();
+    values
+        .into_iter()
+        .map(|_| unreachable!("cleared draw buffer"))
+        .collect()
 }
 
 impl<D: RenderDevice> RenderService<D> {
@@ -113,23 +127,20 @@ impl<D: RenderDevice> RenderService<D> {
         self.surface_missing_draws = 0;
         self.surface_analytic_text = false;
         self.surface_gui_unretained = false;
-        let mut frames = Vec::new();
-        let mut instances = Vec::new();
+        let mut frames: Vec<CanvasDrawFrame<'_>> =
+            empty_buffer(std::mem::take(&mut self.canvas_draw_frames));
+        let mut instances = std::mem::take(&mut self.canvas_draw_instances);
+        instances.clear();
         let result = (|| {
             frames.push(
                 self.prepare_canvas_frame(*scene, mvp, clip, opacity, layering, viewport, stats)?,
             );
             if let Some(group) = group {
                 let frame = frames.last_mut().expect("root frame");
-                frame.ops = frame
-                    .ops
-                    .by_ref()
-                    .filter(|op| op.layer() == group)
-                    .collect::<Vec<_>>()
-                    .into_iter();
+                frame.ops.retain(|op| op.layer() == group);
             }
             while let Some(frame) = frames.last_mut() {
-                let Some(op) = frame.ops.next() else {
+                let Some(op) = frame.ops.get(frame.next).cloned() else {
                     let frame = frames.pop().expect("completed Canvas frame");
                     self.surface_paint
                         .entry(frame.scene.canvas.selection)
@@ -139,9 +150,10 @@ impl<D: RenderDevice> RenderService<D> {
                     self.inclusions
                         .record(frame.scene.canvas.selection, frame.scene.publication.id);
                     self.inclusions.active.stale_image |= frame.stale_parent;
-                    self.surface_ops = frame.ops.collect();
+                    self.surface_ops.push(frame.ops);
                     continue;
                 };
+                frame.next += 1;
                 self.device.borrow_mut().set_surface_double_sided(true)?;
                 if frame.scene.canvas.selection == scene.canvas.selection {
                     self.device.borrow_mut().set_surface_owner(
@@ -240,6 +252,8 @@ impl<D: RenderDevice> RenderService<D> {
             }
             Ok(())
         })();
+        self.canvas_draw_frames = empty_buffer(frames);
+        self.canvas_draw_instances = instances;
         let restored = self.device.borrow_mut().set_surface_double_sided(false);
         result.and(restored)
     }
@@ -273,7 +287,8 @@ impl<D: RenderDevice> RenderService<D> {
             self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
             self.populate_glyph_misses(&scene)?;
         }
-        let mut ops = std::mem::take(&mut self.surface_ops);
+        let mut ops = self.surface_ops.pop().unwrap_or_default();
+        ops.clear();
         self.prepare_gui_work(&scene, paint, &mut ops, stats, clip)?;
         // The operations already follow logical painter order. Stable sorting
         // moves only separated planes; depth ties retain their interleaving.
@@ -292,7 +307,16 @@ impl<D: RenderDevice> RenderService<D> {
                         .expect("validated current plane"),
                 )
             };
-            ops.sort_by(|left, right| depth(right).total_cmp(&depth(left)));
+            self.surface_sorted.clear();
+            self.surface_sorted.extend(ops.iter().cloned().enumerate());
+            self.surface_sorted
+                .sort_unstable_by(|(left_index, left), (right_index, right)| {
+                    depth(right)
+                        .total_cmp(&depth(left))
+                        .then_with(|| left_index.cmp(right_index))
+                });
+            ops.clear();
+            ops.extend(self.surface_sorted.drain(..).map(|(_, op)| op));
         }
         Ok(CanvasDrawFrame {
             scene,
@@ -301,7 +325,8 @@ impl<D: RenderDevice> RenderService<D> {
             opacity,
             layering,
             paint,
-            ops: ops.into_iter(),
+            ops,
+            next: 0,
             stale_parent: std::mem::take(&mut self.inclusions.active.stale_image),
             presentation: self
                 .canvas_presentations
@@ -775,7 +800,8 @@ impl<D: RenderDevice> RenderService<D> {
             }
         }
 
-        let mut boxes = Vec::new();
+        let mut boxes: Vec<(&CanvasPrimitive, CanvasClip, SurfacePaint)> =
+            empty_buffer(std::mem::take(&mut self.canvas_boxes));
         let mut gui_start = 0;
         let mut layer = 0;
         for (index, entry) in scene.canvas.entries.iter().enumerate() {
@@ -874,6 +900,7 @@ impl<D: RenderDevice> RenderService<D> {
             ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
         }
 
+        self.canvas_boxes = empty_buffer(boxes);
         let glyphs = glyphs.as_deref();
         let committed = cache.commit_surface(
             |identity, batch| {
@@ -1330,10 +1357,10 @@ impl<D: RenderDevice> RenderService<D> {
     }
 
     fn finish_canvas(&mut self, output: ipp_core::OutputRef) {
-        let live = std::collections::BTreeSet::from([CANVAS_SURFACE]);
+        let live = &self.canvas_surface_submission;
         let submitted = super::super::retained::surface_paint::RetainedSurfaceSubmission {
-            live: &live,
-            submitted: &live,
+            live,
+            submitted: live,
         };
         if let Some(cache) = self.gui_batch_cache.get_mut(&output) {
             cache.finish_frame(Some(&submitted));

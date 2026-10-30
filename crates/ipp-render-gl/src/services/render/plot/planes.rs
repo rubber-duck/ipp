@@ -22,6 +22,14 @@ pub(in crate::services::render) struct PlotPlaneCache<D: RenderDevice> {
     pub source: Weak<PlotPreparedGeometry>,
     pub boxes: GuiBatchRenderCache<D>,
     pub glyphs: AnalyticGlyphCache<D>,
+    presentation: Option<super::super::canvas::presentation::CanvasPresentation>,
+}
+
+#[derive(Default)]
+pub(in crate::services::render) struct PlotPlaneDrawScratch {
+    painted: Vec<CanvasPrimitive>,
+    ranges: Vec<std::ops::Range<usize>>,
+    instances: Vec<super::super::device::SurfacePathInstance>,
 }
 
 impl<D: RenderDevice> RenderService<D> {
@@ -32,6 +40,24 @@ impl<D: RenderDevice> RenderService<D> {
         view_projection: [f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
+        let mut scratch = std::mem::take(&mut self.plot_plane_scratch);
+        let result =
+            self.draw_plot_plane_reusing(scene, plane, view_projection, stats, &mut scratch);
+        scratch.painted.clear();
+        scratch.ranges.clear();
+        scratch.instances.clear();
+        self.plot_plane_scratch = scratch;
+        result
+    }
+
+    fn draw_plot_plane_reusing(
+        &mut self,
+        scene: &RenderScene<'_>,
+        plane: &ScenePlotPlane<'_>,
+        view_projection: [f32; 16],
+        stats: &mut RenderFrameWork,
+        scratch: &mut PlotPlaneDrawScratch,
+    ) -> Result<(), RenderError> {
         let key = (plane.entity.world, plane.target, plane.plane.part);
         let device = &self.device;
         let cache = self
@@ -39,6 +65,7 @@ impl<D: RenderDevice> RenderService<D> {
             .entry(key)
             .or_insert_with(|| PlotPlaneCache {
                 source: Weak::new(),
+                presentation: None,
                 boxes: GuiBatchRenderCache::new(device.clone()),
                 glyphs: AnalyticGlyphCache::new(device.clone()),
             });
@@ -76,36 +103,38 @@ impl<D: RenderDevice> RenderService<D> {
             paint.invalidate();
         }
         let clip = plane.plane.clip;
-        let painted = plane.callout_paint.map(|paint| {
-            plane
-                .plane
-                .primitives
-                .iter()
-                .map(|primitive| {
-                    let mut primitive = primitive.clone();
-                    if let CanvasPrimitive::Box {
-                        fill,
-                        ..
-                    } = &mut primitive
-                    {
-                        let color = match fill {
-                            ipp_core::systems::canvas::CanvasShapeFill::Solid(color) => *color,
-                            _ => [1.0; 4],
-                        };
-                        *fill = ipp_core::systems::canvas::CanvasShapeFill::Paint {
-                            color,
-                            paint: paint.target,
-                            data: [0.0; 4],
-                            bounds: None,
-                        };
-                    }
-                    primitive
-                })
-                .collect::<Vec<_>>()
-        });
+        let painted = &mut scratch.painted;
+        painted.clear();
+        if let Some(paint) = plane.callout_paint {
+            painted.extend(plane.plane.primitives.iter().map(|primitive| {
+                let mut primitive = primitive.clone();
+                if let CanvasPrimitive::Box {
+                    fill,
+                    ..
+                } = &mut primitive
+                {
+                    let color = match fill {
+                        ipp_core::systems::canvas::CanvasShapeFill::Solid(color) => *color,
+                        _ => [1.0; 4],
+                    };
+                    *fill = ipp_core::systems::canvas::CanvasShapeFill::Paint {
+                        color,
+                        paint: paint.target,
+                        data: [0.0; 4],
+                        bounds: None,
+                    };
+                }
+                primitive
+            }));
+        }
         // Ordinary axes and labels borrow retained primitives without copies.
-        let primitives = painted.as_deref().unwrap_or(&plane.plane.primitives);
-        let mut ranges = Vec::with_capacity(primitives.len());
+        let primitives = if plane.callout_paint.is_some() {
+            painted.as_slice()
+        } else {
+            &plane.plane.primitives
+        };
+        let ranges = &mut scratch.ranges;
+        ranges.clear();
         for primitive in primitives {
             let start = cache.boxes.piece_count();
             if matches!(primitive, CanvasPrimitive::Box { .. }) {
@@ -134,6 +163,10 @@ impl<D: RenderDevice> RenderService<D> {
             })
             .and_then(|asset| asset.paint.as_ref())
             .map_or(0, |source| source.features);
+        let previous = self
+            .plot_plane_caches
+            .get(&key)
+            .and_then(|cache| cache.presentation.as_ref());
         let presentation = if features & 64 != 0 {
             let (lighting, selected) = super::super::lighting::selection::entity_lighting(
                 scene,
@@ -141,7 +174,7 @@ impl<D: RenderDevice> RenderService<D> {
                 plane.model,
                 false,
                 features & 8 != 0,
-                &[],
+                previous.map_or(&[], |context| context.selected.as_ref()),
             )?;
             let mut model = plane.model;
             // Native plane coordinates are Y-down; the paint's optical basis is Y-up.
@@ -154,13 +187,21 @@ impl<D: RenderDevice> RenderService<D> {
                 content: super::super::canvas::layering::plane_matrix([0.0; 2], [1.0, -1.0])?,
                 mapping: [0.0; 3],
                 spacing: 0.0,
-                lighting: Arc::new(lighting),
-                selected: selected.into(),
+                lighting: previous
+                    .filter(|context| *context.lighting == lighting)
+                    .map_or_else(|| Arc::new(lighting), |context| context.lighting.clone()),
+                selected: previous
+                    .filter(|context| context.selected.as_ref() == selected.as_slice())
+                    .map_or_else(|| selected.into(), |context| context.selected.clone()),
                 features,
             })
         } else {
             None
         };
+        self.plot_plane_caches
+            .get_mut(&key)
+            .expect("prepared plane")
+            .presentation = presentation.clone();
         let primitive_scene = super::super::canvas::draw::PrimitiveScene {
             host: scene.host,
             publication: plane.publication,
@@ -170,9 +211,10 @@ impl<D: RenderDevice> RenderService<D> {
             presentation: presentation.as_ref(),
         };
         self.device.borrow_mut().set_surface_double_sided(true)?;
-        let mut instances = Vec::new();
+        let instances = &mut scratch.instances;
+        instances.clear();
         let result = (|| {
-            for (primitive, range) in primitives.iter().zip(ranges) {
+            for (primitive, range) in primitives.iter().zip(ranges.iter().cloned()) {
                 if matches!(primitive, CanvasPrimitive::Box { .. }) {
                     if !ready {
                         continue;
@@ -208,7 +250,7 @@ impl<D: RenderDevice> RenderService<D> {
                         paint,
                         &mvp,
                         stats,
-                        &mut instances,
+                        instances,
                     )?;
                 }
             }

@@ -24,10 +24,9 @@ ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
 ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
 ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
 ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }
-# Smol components: portable task scheduling is shared; executors, reactors and
-# blocking pools are native-only. Defaults are disabled to keep WASM free of OS IO.
+# Smol components: portable task primitives are shared; reactors and blocking
+# pools are native-only. Defaults are disabled to keep WASM free of OS IO.
 async-task = { version = "=4.7.1", default-features = false, features = ["std"] }
-async-executor = { version = "=1.13.3", default-features = false }
 async-io = { version = "=2.6.0", default-features = false }
 async-channel = { version = "=2.5.0", default-features = false, features = ["std"] }
 blocking = { version = "=1.6.2", default-features = false }

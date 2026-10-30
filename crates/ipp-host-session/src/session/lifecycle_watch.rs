@@ -439,8 +439,8 @@ impl<P: HostServices> Host<P> {
                         watch.delivering_value = Some(Rc::downgrade(&reservation));
                     }
                     session.outbox.push_back(QueuedResponse {
-                        bytes,
-                        reservation,
+                        bytes: bytes.into(),
+                        reservation: reservation.into(),
                     });
                 }
                 Ok::<_, String>(())

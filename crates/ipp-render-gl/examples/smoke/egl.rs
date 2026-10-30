@@ -9,7 +9,7 @@ type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 type Handle = *mut c_void;
 type GetProc = unsafe extern "system" fn(*const c_char) -> *const c_void;
 
-#[link(name = "dl")]
+#[cfg_attr(target_os = "linux", link(name = "dl"))]
 unsafe extern "C" {
     fn dlopen(path: *const c_char, flags: i32) -> Handle;
     fn dlsym(library: Handle, name: *const c_char) -> *const c_void;
@@ -17,10 +17,10 @@ unsafe extern "C" {
     fn dlerror() -> *const c_char;
 }
 
-struct Library(Handle);
+pub(crate) struct Library(Handle);
 
 impl Library {
-    fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         let path = CString::new(path.as_os_str().as_bytes())?;
         // SAFETY: The terminated path lives through dlopen; this runner loads
         // user-selected trusted driver code, retaining it through context drop.
@@ -42,7 +42,7 @@ impl Library {
         Ok(Self(library))
     }
 
-    fn symbol(&self, name: &CStr) -> *const c_void {
+    pub(crate) fn symbol(&self, name: &CStr) -> *const c_void {
         // SAFETY: Library handle and terminated name remain live; returned
         // addresses are only used while this Library is retained by Context.
         unsafe { dlsym(self.0, name.as_ptr()) }
@@ -89,11 +89,37 @@ pub struct Context {
 
 impl Context {
     pub fn new(directory: &Path, width: u32, height: u32) -> Result<Self> {
+        Self::create(directory, width, height, ptr::null_mut())
+    }
+
+    /// Create an EGL surface borrowing a platform window.
+    ///
+    /// # Safety
+    /// The caller keeps the native window alive until this Context is dropped.
+    /// The window and context must be used exclusively on the owning thread.
+    #[allow(dead_code)] // Only the windowed Host uses this shared loader entry.
+    pub unsafe fn window(
+        directory: &Path,
+        width: u32,
+        height: u32,
+        native: Handle,
+    ) -> Result<Self> {
+        Self::create(directory, width, height, native)
+    }
+
+    fn create(directory: &Path, width: u32, height: u32, native: Handle) -> Result<Self> {
+        #[cfg(target_os = "macos")]
+        let (egl_path, gles_path) = (
+            directory.join("libEGL.dylib"),
+            directory.join("libGLESv2.dylib"),
+        );
+        #[cfg(target_os = "linux")]
         let egl_path = if directory.join("libEGL.so").exists() {
             directory.join("libEGL.so")
         } else {
             directory.join("libEGL.so.1")
         };
+        #[cfg(target_os = "linux")]
         let gles_path = if directory.join("libGLESv2.so").exists() {
             directory.join("libGLESv2.so")
         } else {
@@ -159,6 +185,10 @@ impl Context {
             host.egl.symbol(c"eglCreatePbufferSurface"),
             unsafe extern "system" fn(Handle, Handle, *const i32) -> Handle
         );
+        let window_surface = entry!(
+            host.egl.symbol(c"eglCreateWindowSurface"),
+            unsafe extern "system" fn(Handle, Handle, Handle, *const i32) -> Handle
+        );
         let context = entry!(
             host.egl.symbol(c"eglCreateContext"),
             unsafe extern "system" fn(Handle, Handle, Handle, *const i32) -> Handle
@@ -181,7 +211,22 @@ impl Context {
             .split_whitespace()
             .any(|name| name == "EGL_ANGLE_platform_angle")
         {
-            (0x3202, vec![0x3203, 0x3450, 0x3209, 0x3487, 0x3038])
+            #[cfg(target_os = "macos")]
+            let attributes = {
+                if !extensions
+                    .split_whitespace()
+                    .any(|name| name == "EGL_ANGLE_platform_angle_metal")
+                {
+                    return Err("the macOS EGL test host requires ANGLE's Metal backend".into());
+                }
+
+                // EGL_PLATFORM_ANGLE_TYPE_ANGLE = EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE.
+                vec![0x3203, 0x3489, 0x3038]
+            };
+            #[cfg(target_os = "linux")]
+            let attributes = vec![0x3203, 0x3450, 0x3209, 0x3487, 0x3038];
+
+            (0x3202, attributes)
         } else if extensions
             .split_whitespace()
             .any(|name| name == "EGL_MESA_platform_surfaceless")
@@ -191,10 +236,24 @@ impl Context {
             return Err(format!("no ANGLE or Mesa surfaceless EGL platform: {extensions}").into());
         };
         let config_attributes = [
-            0x3033, 1, // EGL_SURFACE_TYPE = EGL_PBUFFER_BIT
-            0x3040, 0x0040, // EGL_RENDERABLE_TYPE = EGL_OPENGL_ES3_BIT
-            0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8, // RGBA8
-            0x3025, 24, // EGL_DEPTH_SIZE
+            0x3033,
+            if native.is_null() {
+                1
+            } else {
+                4
+            }, // EGL_SURFACE_TYPE: pbuffer or window
+            0x3040,
+            0x0040, // EGL_RENDERABLE_TYPE = EGL_OPENGL_ES3_BIT
+            0x3024,
+            8,
+            0x3023,
+            8,
+            0x3022,
+            8,
+            0x3021,
+            8, // RGBA8
+            0x3025,
+            24, // EGL_DEPTH_SIZE
             0x3038,
         ];
         let surface_attributes = [0x3057, width as i32, 0x3056, height as i32, 0x3038];
@@ -231,7 +290,11 @@ impl Context {
                 return Err(host.failure("eglChooseConfig RGBA8/depth24/GLES3 pbuffer"));
             }
 
-            host.surface = surface(host.display, config, surface_attributes.as_ptr());
+            host.surface = if native.is_null() {
+                surface(host.display, config, surface_attributes.as_ptr())
+            } else {
+                window_surface(host.display, config, native, [0x3038].as_ptr())
+            };
             if host.surface.is_null() {
                 return Err(host.failure("eglCreatePbufferSurface"));
             }
@@ -330,6 +393,13 @@ impl Context {
         Ok(values.join("\n"))
     }
 
+    /// Update readback bounds after the Host resizes its native drawable.
+    #[allow(dead_code)] // Offscreen smoke runners have a fixed drawable.
+    pub fn resize_bounds(&mut self, width: u32, height: u32) {
+        self.width = width;
+        self.height = height;
+    }
+
     pub fn capture(&self) -> Result<Vec<u8>> {
         self.capture_region(self.width, self.height)
     }
@@ -377,6 +447,20 @@ impl Context {
             top[y * stride..(y + 1) * stride].swap_with_slice(&mut bottom[..stride]);
         }
         Ok(pixels)
+    }
+
+    /// Present the completed native drawable. Readback occurs before this swap.
+    #[allow(dead_code)] // Offscreen smoke runners never present to a window.
+    pub fn swap(&self) -> Result<()> {
+        let swap = entry!(
+            self.egl.symbol(c"eglSwapBuffers"),
+            unsafe extern "system" fn(Handle, Handle) -> u32
+        );
+        // SAFETY: The owning thread retains the display, surface and native window.
+        if unsafe { swap(self.display, self.surface) } == 0 {
+            return Err(self.failure("eglSwapBuffers"));
+        }
+        Ok(())
     }
 
     /// Complete submitted GPU work without allocating a framebuffer capture.

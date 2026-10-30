@@ -226,7 +226,50 @@ export async function exercisePlot2d(
     await place(54, 178);
     await capture("placement-restored", binding);
 
+    // Hide a real retained chart, change its source and authored labels, and
+    // require both hidden pixels and an unacknowledged presentation consumer.
+    const gate = scene.client.components.PresentationGate!;
+    const visibility = async (open: boolean) => {
+      const outcome = await scene.client.batch([
+        {
+          kind: "insertComponent",
+          entity: { kind: "handle", id: lineEntity },
+          component: gate.id,
+          fields: [
+            {
+              offset: gate.fields.open!.offset,
+              value: { kind: "bool", value: open },
+            },
+          ],
+        },
+      ]);
+      check(outcome.ok, "Plot presentation gate mutation failed");
+    };
+    await visibility(false);
     await changePlot2d(scene);
+    const hidden = await capture("hidden-after-edit", binding);
+    check(
+      cyanCount(hidden, [105, 215, 642, 450]) === 0,
+      "Closed Plot gate still paints marks",
+    );
+    const hiddenPicks = await pickPlot2d(scene, binding, true);
+    check(
+      hiddenPicks.line.ok && !hiddenPicks.line.hit,
+      "Closed Plot gate is still pickable",
+    );
+    const pending = await host.datasets.bindingView(
+      scene.client.session,
+      lineEntity,
+    );
+    check(
+      pending.availability.reason === "Ready" && pending.dirty,
+      "Hidden Plot acknowledged unseen data",
+    );
+    await record("hidden-plot", {
+      dirty: pending.dirty,
+      pick: hiddenPicks.line,
+    });
+    await visibility(true);
     await readyPlot2d(scene);
     // Dataset updates and World commands have separate admission. Await the
     // expected prepared cut before treating a dirty=false observation as current.

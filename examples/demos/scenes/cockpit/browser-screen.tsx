@@ -2,9 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   htmlCanvasAvailable,
   registerHtml,
+  nativeHtmlAvailable,
+  registerNativeHtml,
   type HtmlSource,
 } from "@ipp/client";
 import { BrowserNavigation } from "./browser-navigation.js";
+import { installPageBehavior } from "./browser-pages/behavior.js";
 import { BrowserPage } from "./browser-page.js";
 import {
   Button,
@@ -74,7 +77,8 @@ export function BrowserScreen({
   const [error, setError] = useState("");
   const [copied, setCopied] = useState("");
   const chrome = chromeBrowser();
-  const available = chrome && htmlCanvasAvailable();
+  const native = nativeHtmlAvailable(host);
+  const available = native || (chrome && htmlCanvasAvailable());
   const current = history.entries[history.index]!;
   // A navigation commit must stop presenting its previous source before the
   // effect releases it. A later Back creates a new history snapshot as well.
@@ -88,22 +92,25 @@ export function BrowserScreen({
   );
   const pageHeight = Math.max(1, height - toolbarHeight - kit.spacing.label);
 
+  const pageBase =
+    typeof location === "undefined" ? "https://ipp.invalid/" : location.href;
+  const pageOrigin = new URL(pageBase).origin;
   const navigate = (value: string) => {
     try {
       const input = value.trim();
       const url = new URL(
         PAGES.some((page) => page.file === input) ? ROOT + input : input,
         PAGES.some((page) => page.file === input)
-          ? location.href
-          : new URL(current, location.href),
+          ? pageBase
+          : new URL(current, pageBase),
       );
       if (
-        url.origin !== location.origin ||
+        url.origin !== pageOrigin ||
         url.search ||
         url.hash ||
         !PAGES.some(
           (page) =>
-            url.pathname === new URL(ROOT + page.file, location.href).pathname,
+            url.pathname === new URL(ROOT + page.file, pageBase).pathname,
         )
       )
         throw new Error(
@@ -138,6 +145,25 @@ export function BrowserScreen({
     const abort = new AbortController();
     let registration: HtmlSource | undefined;
     void (async () => {
+      if (native) {
+        registration = await registerNativeHtml(
+          host,
+          current.slice(ROOT.length),
+          report,
+          (url) => {
+            if (abort.signal.aborted) return;
+            const parsed = new URL(url);
+            navigateRef.current(
+              parsed.protocol === "file:"
+                ? decodeURIComponent(parsed.pathname.split("/").at(-1)!)
+                : url,
+            );
+          },
+        );
+        if (abort.signal.aborted) registration.release();
+        else setLoaded({ navigation: history, host, source: registration });
+        return;
+      }
       const response = await fetch(current, { signal: abort.signal });
       if (!response.ok)
         throw new Error(`Page unavailable (${response.status})`);
@@ -165,31 +191,7 @@ export function BrowserScreen({
         },
         { signal: abort.signal },
       );
-      const status = shadow.querySelector("output");
-      content.addEventListener(
-        "input",
-        (event) => {
-          const element = event.composedPath()[0];
-          if (
-            status &&
-            element instanceof HTMLInputElement &&
-            element.type === "range"
-          )
-            status.textContent = `Power: ${element.value}%`;
-        },
-        { signal: abort.signal },
-      );
-      shadow.addEventListener("submit", (event) => {
-        event.preventDefault();
-        if (status && event.target instanceof HTMLFormElement) {
-          const data = new FormData(event.target);
-          status.style.background = "#16804b";
-          status.textContent = `Saved: ${[...data.values()].join(" · ") || "ready"}`;
-        }
-      });
-      shadow.addEventListener("reset", () => {
-        if (status) status.textContent = "Form reset. Ready to try again.";
-      });
+      installPageBehavior(shadow, abort.signal);
       await window.document.fonts.ready;
       abort.signal.throwIfAborted();
       registration = await registerHtml(host, content, (failure) => {
@@ -204,7 +206,7 @@ export function BrowserScreen({
       abort.abort();
       registration?.release();
     };
-  }, [available, current, history, host]);
+  }, [available, current, history, host, native, report]);
 
   return (
     <Column width={width} height={height} fitHeight={false} gap="label">
@@ -226,7 +228,7 @@ export function BrowserScreen({
           flex={1}
         />
       </Toolbar>
-      {!chrome ? (
+      {!chrome && !native ? (
         <TextLine
           id="cockpit-browser-status"
           text="Not supported outside of Chrome."

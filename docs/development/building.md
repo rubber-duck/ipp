@@ -100,6 +100,27 @@ Gallery, Surface and GUI builds prepare [shared fonts](../../assets/fonts/README
 
 The [catalog](../../tools/pipeline/catalog.py) owns products/checks, [profiles](../../tools/pipeline/profiles.json) own target selections, [suite groups](../../tools/pipeline/suites.json) select tests, and [test inputs](../../tools/pipeline/test-inputs.json) own each test's prerequisites. A test shared by multiple suites keeps the same declared inputs. The catalog check rejects a test whose source, or a module it imports by relative path, literally names a build product directory it does not depend on; a suite command that runs only part of a shared test file lists the products that part never reaches under `partitionExcludes`. The [check](../../tools/pipeline/product_reads.py) sees only literal `target/` paths. Browser profiles build independently. Overlapping selections run each prerequisite and test once.
 
+### macOS setup
+
+Install Apple's [command-line tools](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools) and [Homebrew](https://docs.brew.sh/Installation) first. Use Homebrew for Python and Rustup, and its `fnm` package to select the exact Node version rather than the current `node@22` patch:
+
+```sh
+brew install python@3.14 rustup fnm
+export PATH="$(brew --prefix python@3.14)/libexec/bin:$(brew --prefix rustup)/bin:$PATH"
+eval "$(fnm env --use-on-cd --shell zsh)"
+fnm install
+fnm use
+python tools/ipp.py setup python
+python tools/ipp.py setup node
+python tools/ipp.py setup rust
+```
+
+Keep the PATH and `fnm env` lines in your shell startup file. Native rendering uses standalone ANGLE EGL/GLES libraries with Metal; follow the [macOS library setup](../../crates/ipp-render-gl/examples/smoke/README.md#macos-libraries) and keep `IPP_EGL_LIBRARY_DIR` set. The native demo supports an AppKit window with `host start --gallery --window` on macOS, as well as background operation with completed-frame PNG capture. Linux window support is currently a stub. See [native gallery sessions](../../tools/shared-host/README.md) for scene actions and capture.
+
+Shapes, lighting, particles and charts need no Blender installation. The complete gallery, including saved Platformer and Cockpit Worlds, requires Blender 5.2: `brew install --cask blender` currently supplies that minor version on Apple Silicon. Verify `blender --version` before building, because the Homebrew cask can advance. For another installation, set `BLENDER_BIN` to its `Blender.app/Contents/MacOS/Blender` executable; `setup blender` currently installs only the pinned Linux archive.
+
+The cockpit browser pane can use the optional native CEF engine on Apple Silicon. Install its build tools with `brew install cmake ninja`, then start with `node tools/shared-host/shared-host.mjs host start --gallery --window --cef`. The build pipeline installs the pinned, checksum-verified CEF archive in the shared cache and packages its helper applications. Runtime startup loads that installation; it never downloads. See the [native engine guide](../../crates/ipp-server/cef/README.md) for lifecycle, supported input and validation.
+
 ### Optional compiler cache
 
 Every worktree has its own `target/`, because Cargo locks that directory for the length of a build. [sccache](https://github.com/mozilla/sccache) lets worktrees reuse each other's compiled third-party crates instead. It is a choice for each machine: the repository does not configure it, and every build and pipeline step works without it.

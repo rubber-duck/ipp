@@ -170,20 +170,21 @@ mod tests;
 /// Update numeric std140 words without rebuilding the immutable GLSL declarations.
 pub(super) fn parameter_words(
     definition: &ShaderDefinition,
-    properties: &DynamicProperties,
+    mut property: impl FnMut(&str) -> Option<ipp_core::DynamicValue>,
     words: &mut Vec<u32>,
 ) -> Result<(), RenderError> {
-    if !definition.accepts(properties) {
-        return Err(RenderError::RenderDevice(
-            "custom material parameter requirements do not match".into(),
-        ));
-    }
     words.clear();
     for (name, kind) in &definition.parameters {
+        let value = property(name)
+            .filter(|value| Kind::from_value(value).ok() == Some(*kind) && value.validate().is_ok())
+            .ok_or_else(|| {
+                RenderError::RenderDevice(
+                    "custom material parameter requirements do not match".into(),
+                )
+            })?;
         if *kind == Kind::Texture2D {
             continue;
         }
-        let value = properties.get(name).expect("validated parameter");
         let dimension = match kind {
             Kind::Mat2 => 2,
             Kind::Mat3 => 3,

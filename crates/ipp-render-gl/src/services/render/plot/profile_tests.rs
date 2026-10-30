@@ -72,7 +72,7 @@ fn measure(name: &str, scale: usize, mut work: impl FnMut()) {
     );
 }
 
-fn layout(count: usize, radial: bool) {
+fn layout(count: usize, radial: bool, validate_reuse: bool) {
     let mut host = ipp_core::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
@@ -145,13 +145,41 @@ fn layout(count: usize, radial: bool) {
         device_pixel_ratio: 1.0,
     };
     let mut state = PlotLabelLayoutState::default();
+    if validate_reuse {
+        #[cfg(feature = "instrumentation")]
+        {
+            for _ in 0..4 {
+                let frame = state
+                    .frame(&planes, IDENTITY, IDENTITY, viewport, 0.0)
+                    .unwrap();
+                assert_eq!(frame.len(), count * 2);
+            }
+            ipp_core::profiling::reset(true);
+            for _ in 0..20 {
+                let frame = state
+                    .frame(&planes, IDENTITY, IDENTITY, viewport, 0.0)
+                    .unwrap();
+                assert_eq!(frame.len(), count * 2);
+                black_box(frame);
+            }
+            ipp_core::profiling::pause();
+            assert_eq!(
+                ipp_core::profiling::allocations(),
+                (0, 0),
+                "unchanged Plot labels reuse placement storage"
+            );
+        }
+        return;
+    }
     let case = if radial {
         "layout_radial_idle"
     } else {
         "layout_callout_idle"
     };
     measure(case, count, || {
-        let arranged = state.arrange(&planes, IDENTITY, viewport);
+        let arranged = state
+            .frame(&planes, IDENTITY, IDENTITY, viewport, 0.0)
+            .unwrap();
         assert_eq!(arranged.len(), count * 2);
         black_box(arranged);
     });
@@ -167,7 +195,11 @@ fn layout(count: usize, radial: bool) {
             phase += 0.0001;
             let mut projection = IDENTITY;
             projection[12] = phase.sin() * 0.01;
-            black_box(state.arrange(&planes, projection, viewport));
+            black_box(
+                state
+                    .frame(&planes, IDENTITY, projection, viewport, f64::from(phase))
+                    .unwrap(),
+            );
         },
     );
 }
@@ -289,8 +321,8 @@ fn surface(count: usize, irregular: bool) {
 #[ignore = "opt-in diagnostic; serialize release timing and allocation runs"]
 fn chart_profile() {
     for count in [4, 32, 128, 512] {
-        layout(count, false);
-        layout(count, true);
+        layout(count, false, false);
+        layout(count, true, false);
     }
     for count in [1000, 10000] {
         preparation(count);
@@ -387,4 +419,11 @@ fn chart_path_scaling() {
             atlas.texels.byte_len()
         );
     }
+}
+
+#[cfg(feature = "instrumentation")]
+#[test]
+fn unchanged_plot_label_frames_do_not_allocate() {
+    layout(16, false, true);
+    layout(16, true, true);
 }

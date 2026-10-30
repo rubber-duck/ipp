@@ -26,7 +26,9 @@ pub use requests::{
     RejectedBatchPage, RequestDecodeError, decode_request, decode_request_with_buffer,
     decode_world_request, is_batch_page,
 };
-pub use responses::{encode_response, encode_response_into, encoded_response_size};
+pub use responses::{
+    encode_frame_response, encode_response, encode_response_into, encoded_response_size,
+};
 
 use ipp_core::EntitySnapshot;
 

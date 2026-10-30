@@ -6,7 +6,7 @@ use super::math::point;
 use crate::RenderError;
 use ipp_core::systems::plot::{PlotPlanePlacement, PlotPreparedGeometry};
 use ipp_core::{WorldRef, WorldViewport, systems::canvas::CanvasTarget};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
 // Composed f32 rotations can put the same edge-on view on either side of zero.
@@ -198,6 +198,8 @@ struct ChartPlacement {
 #[derive(Default)]
 pub(super) struct PlotViewPlacementState {
     charts: BTreeMap<(WorldRef, CanvasTarget), ChartPlacement>,
+    active: Vec<(WorldRef, CanvasTarget)>,
+    stations: Vec<((WorldRef, CanvasTarget, u8), [f32; 3])>,
     time: Option<f64>,
     policy: AxisPlacementPolicy,
 }
@@ -207,6 +209,7 @@ impl PlotViewPlacementState {
         self.policy
     }
 
+    #[cfg(test)]
     pub(super) fn place<'a>(
         &mut self,
         planes: &[ScenePlotPlane<'a>],
@@ -215,14 +218,30 @@ impl PlotViewPlacementState {
         viewport: WorldViewport,
         time: f64,
     ) -> Result<Vec<ScenePlotPlane<'a>>, RenderError> {
+        let mut arranged = Vec::new();
+        self.place_into(planes, camera, projection, viewport, time, &mut arranged)?;
+        Ok(arranged)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn place_into<'a>(
+        &mut self,
+        planes: &[ScenePlotPlane<'a>],
+        camera: [f32; 16],
+        projection: [f32; 16],
+        viewport: WorldViewport,
+        time: f64,
+        arranged: &mut Vec<ScenePlotPlane<'a>>,
+    ) -> Result<(), RenderError> {
         if self.time.is_some_and(|previous| time < previous) {
             self.charts.clear();
         }
         self.time = Some(time);
-        let mut active = BTreeSet::new();
-        let mut stations = BTreeMap::new();
-        let mut arranged = planes.to_vec();
-        for plane in &mut arranged {
+        self.active.clear();
+        self.stations.clear();
+        arranged.clear();
+        arranged.extend_from_slice(planes);
+        for plane in arranged {
             let PlotPlanePlacement::Axis {
                 extent,
                 axis,
@@ -232,55 +251,64 @@ impl PlotViewPlacementState {
                 continue;
             };
             let key = (plane.entity.world, plane.target);
-            active.insert(key);
-            let station = stations.entry((key, axis)).or_insert_with(|| {
-                let chart = self.charts.entry(key).or_insert_with(|| ChartPlacement {
-                    source: Weak::new(),
-                    content: None,
-                    axes: [None; 3],
-                });
-                let standard = self.policy.preferred[usize::from(axis)];
-                if !adaptive {
-                    let driver = chart.axes[usize::from(axis)]
-                        .get_or_insert_with(|| AxisTransition::new(standard, time));
-                    driver.freeze(time);
-                    return perimeter_point(driver.displayed, extent, axis);
-                }
-                if !chart
-                    .source
-                    .upgrade()
-                    .is_some_and(|source| Arc::ptr_eq(&source, plane.geometry))
-                {
-                    chart.source = Arc::downgrade(plane.geometry);
-                    chart.content = content_bounds(plane.geometry);
-                }
-                let scores = visibility_scores(
-                    plane.chart_model,
-                    camera,
-                    projection,
-                    viewport,
-                    extent,
-                    axis,
-                    chart.content,
-                );
-                let driver = &mut chart.axes[usize::from(axis)];
-                let target = choose_edge(
-                    scores,
-                    standard,
-                    driver.map(|driver| driver.target),
-                    self.policy,
-                );
-                let driver = driver.get_or_insert_with(|| AxisTransition::new(target, time));
-                let lengths = other_axes(axis).map(|other| {
-                    let column = other * 4;
-                    f64::from(plane.chart_model[column])
-                        .hypot(f64::from(plane.chart_model[column + 1]))
-                        .hypot(f64::from(plane.chart_model[column + 2]))
-                        * f64::from(extent[other])
-                });
-                driver.update(target, scores, time, self.policy, lengths);
-                perimeter_point(driver.display(time, self.policy.duration), extent, axis)
-            });
+            self.active.push(key);
+            let station_key = (key.0, key.1, axis);
+            let station = if let Some((_, station)) =
+                self.stations.iter().find(|entry| entry.0 == station_key)
+            {
+                *station
+            } else {
+                let station = (|| {
+                    let chart = self.charts.entry(key).or_insert_with(|| ChartPlacement {
+                        source: Weak::new(),
+                        content: None,
+                        axes: [None; 3],
+                    });
+                    let standard = self.policy.preferred[usize::from(axis)];
+                    if !adaptive {
+                        let driver = chart.axes[usize::from(axis)]
+                            .get_or_insert_with(|| AxisTransition::new(standard, time));
+                        driver.freeze(time);
+                        return perimeter_point(driver.displayed, extent, axis);
+                    }
+                    if !chart
+                        .source
+                        .upgrade()
+                        .is_some_and(|source| Arc::ptr_eq(&source, plane.geometry))
+                    {
+                        chart.source = Arc::downgrade(plane.geometry);
+                        chart.content = content_bounds(plane.geometry);
+                    }
+                    let scores = visibility_scores(
+                        plane.chart_model,
+                        camera,
+                        projection,
+                        viewport,
+                        extent,
+                        axis,
+                        chart.content,
+                    );
+                    let driver = &mut chart.axes[usize::from(axis)];
+                    let target = choose_edge(
+                        scores,
+                        standard,
+                        driver.map(|driver| driver.target),
+                        self.policy,
+                    );
+                    let driver = driver.get_or_insert_with(|| AxisTransition::new(target, time));
+                    let lengths = other_axes(axis).map(|other| {
+                        let column = other * 4;
+                        f64::from(plane.chart_model[column])
+                            .hypot(f64::from(plane.chart_model[column + 1]))
+                            .hypot(f64::from(plane.chart_model[column + 2]))
+                            * f64::from(extent[other])
+                    });
+                    driver.update(target, scores, time, self.policy, lengths);
+                    perimeter_point(driver.display(time, self.policy.duration), extent, axis)
+                })();
+                self.stations.push((station_key, station));
+                station
+            };
             let mut model = ipp_core::math::multiply(plane.chart_model, plane.plane.model);
             for row in 0..3 {
                 model[12 + row] += (0..3)
@@ -289,8 +317,8 @@ impl PlotViewPlacementState {
             }
             plane.model = super::plane_facing::model(model, plane.plane.facing, camera)?;
         }
-        self.charts.retain(|key, _| active.contains(key));
-        Ok(arranged)
+        self.charts.retain(|key, _| self.active.contains(key));
+        Ok(())
     }
 }
 

@@ -13,14 +13,14 @@
 //! through its `SurfaceCache` component; the Worlds' own prepared policy,
 //! revisions and interaction priority drive every decision.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod scenario {
     use super::{Result, smoke};
     use ipp_core::components::rows::Rows;
@@ -98,7 +98,14 @@ mod scenario {
     /// Pixels per region allowed beyond `MATCHED_MAX`: clip corners in the cache
     /// image round coverage differently from the screen by up to 36 levels on a
     /// few pixels (observed three), which bilinear sampling keeps.
-    const MATCHED_OUTLIERS: u32 = 8;
+    // ANGLE/Metal disagrees at a few analytic contour boundary samples (up to
+    // ten pixels in one rear-view region). Keep the same regional mean and
+    // outside-panel bounds, with a small explicit backend allowance.
+    const MATCHED_OUTLIERS: u32 = if cfg!(target_os = "macos") {
+        12
+    } else {
+        8
+    };
 
     /// Band 2 keeps orthographic density: a loose bound on resampled edges only.
     const REDUCED_MEAN: f64 = 16.0;
@@ -1604,7 +1611,7 @@ mod scenario {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<()> {
     use std::path::PathBuf;
 
@@ -1632,8 +1639,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL Surface cache runner supports Linux; no graphics test was run.");
+    eprintln!("The EGL Surface cache runner supports Linux and macOS; no graphics test was run.");
     std::process::exit(1);
 }

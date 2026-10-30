@@ -13,7 +13,6 @@ ipp-core.workspace = true
 ipp-protocol.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-async-executor.workspace = true
 async-io.workspace = true
 blocking.workspace = true
 

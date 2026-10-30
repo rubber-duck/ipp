@@ -2,7 +2,6 @@
 
 use super::{CompoundGeometryShape, GeometryBounds, GeometryRay, GeometryRayHit, GeometrySystem};
 use crate::{ComponentValue, EntityId, ErrorReason, WorldContext};
-use std::collections::BTreeSet;
 
 #[derive(Clone, Debug, PartialEq)]
 /// Independent final visual, culling and picking data for one entity.
@@ -21,7 +20,7 @@ pub struct PublishedGeometry {
     pub picking: Option<Result<CompoundGeometryShape, ErrorReason>>,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 /// Immutable geometry candidate domain, preserving explicit unknown bounds.
 pub struct GeometryPublication {
     /// Stable entity-ordered owned geometry results.
@@ -79,70 +78,82 @@ impl GeometrySystem {
         world: &WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
-        let mut entities = Vec::new();
-        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
-        for (&entity, record) in &world.world.state.entities {
-            if !presentation.open(world.world, entity) {
-                continue;
-            }
-            let bounding_incarnation = record
-                .input(ComponentValue::BOUNDING_GEOMETRY)
-                .map(|input| input.incarnation);
-            let picking_incarnation = record
-                .input(ComponentValue::PICKING_GEOMETRY)
-                .map(|input| input.incarnation);
-            if bounding_incarnation.is_none() && picking_incarnation.is_none() {
-                continue;
-            }
-            let geometry = world.render_geometry(entity);
-            entities.push(PublishedGeometry {
-                entity,
-                bounding_incarnation,
-                picking_incarnation,
-                visual_bounds: geometry.mesh_bounds,
-                culling: geometry.culling.cloned(),
-                picking: world
+        output.update_chunk::<GeometryPublication>(Self::ID, |publication, output| {
+            let entities = &mut publication.entities;
+            let mut count = 0;
+            let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
+            for (&entity, record) in &world.world.state.entities {
+                let bounding_incarnation = record
+                    .input(ComponentValue::BOUNDING_GEOMETRY)
+                    .map(|input| input.incarnation);
+                let picking_incarnation = record
+                    .input(ComponentValue::PICKING_GEOMETRY)
+                    .map(|input| input.incarnation);
+                if bounding_incarnation.is_none() && picking_incarnation.is_none() {
+                    continue;
+                }
+                if !presentation.open(world.world, entity) {
+                    continue;
+                }
+                let geometry = world.render_geometry(entity);
+                let picking = world
                     .world
                     .components
                     .picking_geometry(entity.index() as usize)
                     .and_then(|value| value.runtime.evaluation.as_ref())
-                    .map(|evaluation| evaluation.evaluated().cloned()),
-            });
-            let mut demand = BTreeSet::new();
-            for component in [
-                ComponentValue::BOUNDING_GEOMETRY,
-                ComponentValue::PICKING_GEOMETRY,
-                ComponentValue::MESH_INSTANCE,
-                ComponentValue::SKELETON,
-                ComponentValue::SKIN,
-                ComponentValue::MESH_POSE,
-            ] {
-                if let Some(value) = world
-                    .world
-                    .components
-                    .get(component, entity.index() as usize)
+                    .map(|evaluation| evaluation.evaluated());
+                if entities.len() == count {
+                    entities.push(PublishedGeometry {
+                        entity,
+                        bounding_incarnation,
+                        picking_incarnation,
+                        visual_bounds: geometry.mesh_bounds,
+                        culling: None,
+                        picking: None,
+                    });
+                }
+                let entry = &mut entities[count];
+                entry.entity = entity;
+                entry.bounding_incarnation = bounding_incarnation;
+                entry.picking_incarnation = picking_incarnation;
+                entry.visual_bounds = geometry.mesh_bounds;
+                if entry.culling.as_ref() != geometry.culling {
+                    entry.culling = geometry.culling.cloned();
+                }
+                if entry
+                    .picking
+                    .as_ref()
+                    .map(|value| value.as_ref().map_err(|error| *error))
+                    != picking
                 {
-                    value.resource_demand(&mut demand);
+                    entry.picking = picking.map(|value| value.cloned());
+                }
+                count += 1;
+                for component in [
+                    ComponentValue::BOUNDING_GEOMETRY,
+                    ComponentValue::PICKING_GEOMETRY,
+                    ComponentValue::MESH_INSTANCE,
+                    ComponentValue::SKELETON,
+                    ComponentValue::SKIN,
+                    ComponentValue::MESH_POSE,
+                ] {
+                    for selection in world.component_asset_sources(entity, component) {
+                        if let Some(key) = world.asset_source_key(
+                            selection.kind,
+                            &selection.source,
+                            selection.variant,
+                        ) && world
+                            .asset_resources()
+                            .get(key)
+                            .is_some_and(|provider| provider.data().is_some())
+                        {
+                            output.retain(key);
+                        }
+                    }
                 }
             }
-            for selection in demand {
-                if let Some(key) =
-                    world.asset_source_key(selection.kind, &selection.source, selection.variant)
-                    && world
-                        .asset_resources()
-                        .get(key)
-                        .is_some_and(|provider| provider.data().is_some())
-                {
-                    output.retain(key);
-                }
-            }
-        }
-        output.chunk(
-            Self::ID,
-            GeometryPublication {
-                entities,
-            },
-        );
-        Ok(())
+            entities.truncate(count);
+            Ok(())
+        })
     }
 }

@@ -58,8 +58,8 @@ impl HostConnectionState {
                 .map_err(|error| error.to_string())?;
             reservation.borrow_mut().encoded(bytes.capacity());
             self.outbox.push_back(ReliableResponse {
-                bytes,
-                reservation,
+                bytes: bytes.into(),
+                reservation: reservation.into(),
             });
             Ok(())
         })();

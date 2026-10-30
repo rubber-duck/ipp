@@ -137,6 +137,11 @@ impl WebContentService {
         self.requests.values()
     }
 
+    /// Read one exact current request without copying producer metadata.
+    pub fn request(&self, id: WebContentRequestId) -> Option<&WebContentRequest> {
+        self.requests.get(&id)
+    }
+
     /// Reserve authority before private GPU allocation/import. At most one import
     /// reservation exists per request; a failed import must discard it.
     pub fn reserve_image(

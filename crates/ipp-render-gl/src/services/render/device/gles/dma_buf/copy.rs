@@ -1,12 +1,8 @@
 use super::super::GlesRenderDevice;
-use super::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufImport, state::State};
+use super::super::external_image::State;
+use super::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufImport};
 use crate::RenderError;
 use std::{os::fd::AsRawFd, ptr};
-
-pub(in super::super) struct GlesDmaBufCopy {
-    program: u32,
-    vao: u32,
-}
 
 impl GlesRenderDevice {
     /// Copy a callback-borrowed full BGRA, single-plane, linear frame into fresh
@@ -82,7 +78,7 @@ impl GlesRenderDevice {
         let mut framebuffer = 0;
         let mut egl_image = ptr::null_mut();
         let result = (|| {
-            self.prepare_dma_buf_copy()?;
+            self.prepare_external_image_copy()?;
             // SAFETY: The caller borrows a stable producer allocation for this
             // entire operation. EGL reads the attributes synchronously and keeps
             // its own image reference; we do not close or retain the borrowed FD.
@@ -100,7 +96,7 @@ impl GlesRenderDevice {
                     "EGL DMA-BUF import unavailable".into(),
                 ));
             }
-            let copy = self.dma_buf_copy.as_ref().ok_or_else(|| {
+            let copy = self.external_image_copy.as_ref().ok_or_else(|| {
                 RenderError::RenderDevice("DMA-BUF copy program unavailable".into())
             })?;
             state.prepare(&self.gl);
@@ -162,67 +158,5 @@ impl GlesRenderDevice {
         }
         let restored = self.check();
         result.and(finished).and(restored)
-    }
-
-    fn prepare_dma_buf_copy(&mut self) -> Result<(), RenderError> {
-        if self.dma_buf_copy.is_some() {
-            return Ok(());
-        }
-        let vertex = self.shader(0x8B31, include_str!("copy.vert"))?;
-        let fragment = match self.shader(0x8B30, include_str!("copy.frag")) {
-            Ok(shader) => shader,
-            Err(error) => {
-                // SAFETY: This unpublished shader is owned by this context.
-                unsafe { self.gl.delete_shader(vertex) };
-                return Err(error);
-            }
-        };
-        let mut vao = 0;
-        // SAFETY: Exact GL calls on the owning current context; shader/program
-        // names are private here, and all outputs are exclusive stack storage.
-        let (program, linked) = unsafe {
-            let program = self.gl.create_program();
-            self.gl.attach_shader(program, vertex);
-            self.gl.attach_shader(program, fragment);
-            self.gl.link_program(program);
-            self.gl.delete_shader(vertex);
-            self.gl.delete_shader(fragment);
-            let mut linked = 0;
-            self.gl.program_iv(program, 0x8B82, &mut linked);
-            self.gl.gen_vertex_arrays(1, &mut vao);
-            (program, linked)
-        };
-        let result = if linked == 0 || vao == 0 {
-            Err(RenderError::RenderDevice(format!(
-                "DMA-BUF copy program: {}",
-                self.log(program, false)
-            )))
-        } else {
-            self.check()
-        };
-        if let Err(error) = result {
-            // SAFETY: Failed unpublished allocations remain exclusively owned.
-            unsafe {
-                self.gl.delete_program(program);
-                self.gl.delete_vertex_arrays(1, &vao);
-            }
-            return Err(error);
-        }
-        self.dma_buf_copy = Some(GlesDmaBufCopy {
-            program,
-            vao,
-        });
-        Ok(())
-    }
-
-    pub(in super::super) fn release_dma_buf_copy(&mut self) {
-        if let Some(copy) = self.dma_buf_copy.take() {
-            // SAFETY: Device drop keeps its context current; these private names
-            // have no borrowed external storage and are invalidated before delete.
-            unsafe {
-                self.gl.delete_program(copy.program);
-                self.gl.delete_vertex_arrays(1, &copy.vao);
-            }
-        }
     }
 }

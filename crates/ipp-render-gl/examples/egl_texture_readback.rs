@@ -1,11 +1,11 @@
 //! Real GLES staging/fence/copy evidence independent of World/frame submission.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 #[path = "smoke/egl.rs"]
 mod egl;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ipp_render_gl::RenderDevice;
     use std::{
@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    panic!("GLES readback evidence requires the maintained Linux EGL environment");
+    panic!("GLES readback evidence requires the maintained Linux/macOS EGL environment");
 }

@@ -10,6 +10,20 @@ node tools/shared-host/shared-host.mjs host start --gallery --egl-dir /lib64
 
 `--gallery` builds the matching native Host, shared fonts and drawings, and target-correct saved Platformer and Cockpit Worlds. It authorizes read-only access to the generated `target/` assets and both scenes' immutable source namespaces. Other sessions join that Host using `--host CHECKOUT` or `IPP_SHARED_HOST`; the Host owner restarts it after Rust or generated-contract changes.
 
+On macOS, follow the [toolchain setup](../../docs/development/building.md#macos-setup) and select the ANGLE library directory through `IPP_EGL_LIBRARY_DIR` or `--egl-dir` instead of `/lib64`. For shapes, lighting, particles or charts without the Blender-dependent scenes, prepare only their shared assets:
+
+```sh
+python tools/ipp.py build gles-host font-assets gallery-assets demos-drawings
+node tools/shared-host/shared-host.mjs host list
+node tools/shared-host/shared-host.mjs host start --window --no-build --io-read ipp-gallery://assets/ target
+node tools/shared-host/shared-host.mjs gallery charts --name demos
+node tools/shared-host/shared-host.mjs session capture demos
+```
+
+`--window` opens an AppKit window on macOS. Start a gallery session below to fill it with live GPU-rendered content. Mouse buttons, dragging, wheel, keyboard navigation and committed text reach the existing GUI input API. Resizing updates the physical viewport and logical layout using the display scale. Closing the window stops its Host; the session watchdog then cleans up. The visible session holds the presentation lock and does not expire for inactivity. Stop it before presenting another session. Without `--window`, the Host keeps its offscreen behavior.
+
+Linux accepts the option but returns an explicit not-implemented error; its [platform stub and interface](../../crates/ipp-server/examples/window/README.md) are ready for a separate implementation. macOS IME marked-text composition and clipboard shortcuts are not implemented yet.
+
 Start a selected scene, then inspect and capture it:
 
 ```sh
@@ -34,3 +48,18 @@ The adapter reuses the shared Host's matching generated client and [presentation
 For a Host configuration outside the gallery convenience command, repeat `host start --io-read PREFIX DIRECTORY` for each required read-only namespace. Asset reads use the Host checkout's generated assets by default; `gallery ... --asset-root DIRECTORY` selects a different local build product directory. Saved Platformer and Cockpit assets need their configured `https://platformer.ipp.invalid/` and `https://cockpit.ipp.invalid/` namespaces and Worlds generated for the running native contract.
 
 The maintained [native gallery harness](../../tests/gallery/native-gallery.test.ts) exercises session options, actions, reload and cleanup against its own real GLES Host. The [cockpit scenario](../../tests/gallery/scenarios/cockpit.ts) adds projected control input, mask animation and completed-frame assertions at wide and narrow viewports. Run these through `python tools/ipp.py test native-gallery gallery-cockpit`. Shared development screenshots support iteration; maintained scenario reports provide integration evidence.
+
+The [native window scenario](../../tests/runtime/native-window.test.mjs) uses actual AppKit events, image assertions, resize, reload and window-close shutdown. Run `python tools/ipp.py regression --only test:native-window:macos` on an interactive macOS desktop with ANGLE configured. Other platforms skip this scenario; that skip is not window-support evidence.
+
+### Native CEF pages
+
+On Apple Silicon, add `--cef` when starting the Host to enable the cockpit's Browser pane:
+
+```sh
+brew install cmake ninja
+node tools/shared-host/shared-host.mjs host start --gallery --window --cef
+node tools/shared-host/shared-host.mjs gallery cockpit --name demos
+node tools/shared-host/shared-host.mjs session action demos carousel 3
+```
+
+The engine shares the verified CEF installation and keeps its shim/helpers in the Host's private snapshot. Local page registration and input use the same exclusive development channel as the window; page pixels travel directly through the GPU into ordinary CanvasHtml. The default page root is the cockpit's bundled pages. See the [native engine guide](../../crates/ipp-server/cef/README.md) for the supported platform and tests.

@@ -31,34 +31,33 @@ pub(super) fn is_frame(component: u16) -> bool {
 
 impl PlotSystem {
     pub(super) fn evaluate(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
-        if self.state.membership_dirty || self.state.members.is_empty() {
-            self.state.members.clear();
-            for (&entity, record) in &context.world.world.state.entities {
-                for component in CHARTS {
-                    if record.input(component).is_some() {
-                        self.state.members.insert((entity, component));
-                    }
-                }
-            }
-            let stale: Vec<_> = self
-                .state
-                .charts
-                .keys()
-                .filter(|key| !self.state.members.contains(key))
-                .copied()
-                .collect();
-            for key in stale {
-                self.state.remove(key);
-            }
-            self.state.membership_dirty = false;
+        if self.state.visibility_dirty {
+            let mut eligibility = crate::systems::hierarchy::PresentationEligibility::default();
+            self.state.visible_members.clear();
+            self.state
+                .visible_members
+                .extend(
+                    self.state
+                        .members
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, member)| {
+                            eligibility
+                                .open(context.world.world, member.key.0)
+                                .then_some(index)
+                        }),
+                );
+            self.state.visibility_dirty = false;
         }
-
-        let members: Vec<_> = self.state.members.iter().copied().collect();
-        for (entity, component) in members {
-            let dirty = context.world.data_binding_dirty(entity).unwrap_or(true);
-            if !dirty
-                && !self.state.dirty.contains(&entity)
-                && self.state.charts.contains_key(&(entity, component))
+        // Hidden branches retain dirty inputs without polling bindings or preparing
+        // charts. Membership, gate and effective-link edits rebuild this selection.
+        for visible in 0..self.state.visible_members.len() {
+            let index = self.state.visible_members[visible];
+            let member = self.state.members[index];
+            let (entity, component) = member.key;
+            if !member.dirty
+                && !context.world.data_binding_dirty(entity).unwrap_or(true)
+                && self.state.charts.contains_key(&member.key)
             {
                 continue;
             }
@@ -73,6 +72,7 @@ impl PlotSystem {
                     {
                         self.state.charts.insert((entity, component), chart);
                         self.state.changed();
+                        self.state.members[index].dirty = false;
                     } else {
                         self.state.remove((entity, component));
                     }
@@ -84,7 +84,6 @@ impl PlotSystem {
                 }
             }
         }
-        self.state.dirty.clear();
     }
 
     fn prepare_chart(

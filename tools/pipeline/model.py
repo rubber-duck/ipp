@@ -21,6 +21,8 @@ class Task:
     mutates_source: bool = False
     # Empty means all tracked/unignored source. Used only for build-artifact reuse.
     source_roots: tuple[str, ...] = ()
+    # Empty supports every platform; automatic regression skips other platforms.
+    platforms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"[a-zA-Z0-9:._/+-]+", self.id):

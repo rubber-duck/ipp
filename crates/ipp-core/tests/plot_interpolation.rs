@@ -697,3 +697,174 @@ fn callout_paint_updates_and_lifetimes_do_not_rebuild_chart_geometry() {
         &fixture.geometry().charts[0].geometry
     ));
 }
+
+#[cfg(feature = "instrumentation")]
+#[global_allocator]
+static ALLOCATOR: ipp_core::profiling::CountingAllocator = ipp_core::profiling::CountingAllocator;
+
+fn plot_revision(fixture: &mut Fixture) -> u64 {
+    fixture
+        .host
+        .world_mut(fixture.world)
+        .unwrap()
+        .system::<PlotSystem>(PlotSystem::ID)
+        .unwrap()
+        .presentation_revision()
+}
+
+fn gate(fixture: &mut Fixture, open: bool) {
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PresentationGate(ipp_core::components::PresentationGate {
+            open,
+        }),
+    ));
+}
+
+#[test]
+fn hidden_plot_defers_geometry_and_preserves_data_and_component_changes_until_reveal() {
+    let mut fixture = Fixture::new([10.0, 20.0], 50.0);
+    let original = fixture.geometry().charts[0].geometry.clone();
+    gate(&mut fixture, false);
+    fixture.targets([50.0, 60.0]);
+    fixture.ambiguous_series();
+    let revision = plot_revision(&mut fixture);
+    for _ in 0..4 {
+        fixture.step(0.5);
+    }
+    assert!(fixture.geometry().charts.is_empty());
+    assert_eq!(plot_revision(&mut fixture), revision);
+    // Projection and interpolation keep advancing while presentation is closed.
+    assert!(fixture.value("temperature", 0) > 10.0);
+    assert!(
+        fixture
+            .host
+            .world_mut(fixture.world)
+            .unwrap()
+            .data_binding_view(fixture.entity, Default::default())
+            .unwrap()
+            .dirty
+    );
+    gate(&mut fixture, true);
+    assert!(plot_revision(&mut fixture) > revision);
+    assert_eq!(fixture.geometry().charts.len(), 1);
+    assert!(!std::sync::Arc::ptr_eq(
+        &original,
+        &fixture.geometry().charts[0].geometry
+    ));
+    assert!(
+        !fixture
+            .host
+            .world_mut(fixture.world)
+            .unwrap()
+            .data_binding_view(fixture.entity, Default::default())
+            .unwrap()
+            .dirty
+    );
+
+    // A chart replaced while hidden must not publish the old incarnation.
+    gate(&mut fixture, false);
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_BARS2D,
+    });
+    fixture.ambiguous_series();
+    let revision = plot_revision(&mut fixture);
+    fixture.step(0.5);
+    assert_eq!(plot_revision(&mut fixture), revision);
+    assert!(fixture.geometry().charts.is_empty());
+    gate(&mut fixture, true);
+    assert_eq!(fixture.geometry().charts.len(), 1);
+}
+
+#[cfg(feature = "instrumentation")]
+#[test]
+fn plot_evaluation_allocates_nothing_when_unchanged_hidden_or_empty_after_removal() {
+    use ipp_core::profiling::{self, ProfilePhase};
+    let mut fixture = Fixture::new([10.0, 20.0], 50.0);
+    for state in ["unchanged", "hidden", "removed"] {
+        if state == "hidden" {
+            gate(&mut fixture, false);
+            fixture.targets([50.0, 60.0]);
+            fixture.ambiguous_series();
+        } else if state == "removed" {
+            fixture.command(Command::RemoveComponent {
+                entity: EntityRef::Handle(fixture.entity),
+                component: C::PLOT_BARS2D,
+            });
+        }
+        fixture.step(0.0);
+        profiling::reset_for_host(true, fixture.host.identity());
+        for _ in 0..20 {
+            fixture.step(1.0 / 60.0);
+        }
+        profiling::pause();
+        let mut measured = false;
+        profiling::visit_capture(
+            |stage| {
+                if stage.context.host == fixture.host.identity()
+                    && stage.name == "ipp.plot"
+                    && stage.context.phase == Some(ProfilePhase::Evaluate)
+                {
+                    assert_eq!(stage.values[0], 20, "{state}");
+                    assert_eq!(
+                        &stage.values[2..],
+                        &[0, 0],
+                        "{state}: Plot allocated during steady evaluation"
+                    );
+                    measured = true;
+                }
+                true
+            },
+            |_, _, _| true,
+        );
+        assert!(measured);
+        profiling::release_capture();
+    }
+}
+
+#[test]
+fn inherited_gate_defers_plot_until_reparenting_to_an_open_branch() {
+    let mut fixture = Fixture::new([10.0, 20.0], 50.0);
+    fixture.command(Command::Create {
+        alias: 9,
+        metadata: EntityMetadata {
+            symbolic_id: Some("closed-parent".into()),
+            ..Default::default()
+        },
+        adopt: false,
+    });
+    let parent = fixture
+        .host
+        .world_mut(fixture.world)
+        .unwrap()
+        .lookup_id("closed-parent")
+        .unwrap();
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(parent),
+        C::PresentationGate(ipp_core::components::PresentationGate {
+            open: false,
+        }),
+    ));
+    fixture.command(Command::PlaceEntity {
+        entity: EntityRef::Handle(fixture.entity),
+        placement: ipp_core::EntityPlacementRef {
+            parent: Some(EntityRef::Handle(parent)),
+            before: None,
+        },
+    });
+    let revision = plot_revision(&mut fixture);
+    fixture.targets([50.0, 60.0]);
+    fixture.step(0.5);
+    assert!(fixture.geometry().charts.is_empty());
+    assert_eq!(plot_revision(&mut fixture), revision);
+    fixture.command(Command::PlaceEntity {
+        entity: EntityRef::Handle(fixture.entity),
+        placement: ipp_core::EntityPlacementRef {
+            parent: None,
+            before: None,
+        },
+    });
+    assert_eq!(fixture.geometry().charts.len(), 1);
+    assert!(plot_revision(&mut fixture) > revision);
+}

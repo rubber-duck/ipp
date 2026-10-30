@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 from typing import Iterator
 
@@ -205,6 +206,29 @@ def gles_host(directory: Path, instrumentation: bool, *, release: bool = False) 
         / f"examples/gles_host{suffix}",
         directory / f"gles_host{suffix}",
     )
+    if sys.platform == "darwin":
+        run(
+            [
+                "xcrun",
+                "clang",
+                "-dynamiclib",
+                "-install_name",
+                "@rpath/libipp-window.dylib",
+                "-fobjc-arc",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-Wno-unused-parameter",
+                "-framework",
+                "AppKit",
+                "-framework",
+                "QuartzCore",
+                *(["-DIPP_INSTRUMENTATION"] if instrumentation else []),
+                "crates/ipp-server/examples/window/macos.m",
+                "-o",
+                str(directory / "libipp-window.dylib"),
+            ]
+        )
     native_contract(directory / "contract.bin", release=release)
     compile_client(directory, directory / "contract.bin")
 
@@ -396,6 +420,11 @@ def build(name: str) -> None:
         script_product(PRODUCT_SCRIPTS[name])
     elif name.startswith("browser:"):
         browser(name.removeprefix("browser:"))
+    elif name == "cef-engine":
+        from .cef_engine import build as cef_engine
+
+        with product(ROOT / "target/cef-engine") as directory:
+            cef_engine(directory)
     elif name == "native":
         baseline_native()
     elif name in ("gles-host", "gles-host-instrumentation"):

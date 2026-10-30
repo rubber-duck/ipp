@@ -82,14 +82,35 @@ pub trait Surface: Any + Debug + Send + Sync {
 #[derive(Clone, Debug)]
 pub struct SurfaceGeometry {
     component: u16,
-    geometry: Arc<dyn Surface>,
+    geometry: SurfaceGeometryValue,
+}
+
+// Built-in providers are small immutable values; sampling and publication must
+// not allocate a fresh trait object on each frame. Other implementations retain
+// shared ownership through the same Surface boundary.
+#[derive(Clone, Debug)]
+enum SurfaceGeometryValue {
+    Flat(super::FlatSurface),
+    Cylinder(super::CylinderSurface),
+    Sphere(super::SphereSurface),
+    Shared(Arc<dyn Surface>),
 }
 
 impl SurfaceGeometry {
     pub(crate) fn new<S: Surface>(component: u16, geometry: S) -> Self {
+        let value = &geometry as &dyn Any;
+        let geometry = if let Some(value) = value.downcast_ref::<super::FlatSurface>() {
+            SurfaceGeometryValue::Flat(value.clone())
+        } else if let Some(value) = value.downcast_ref::<super::CylinderSurface>() {
+            SurfaceGeometryValue::Cylinder(value.clone())
+        } else if let Some(value) = value.downcast_ref::<super::SphereSurface>() {
+            SurfaceGeometryValue::Sphere(value.clone())
+        } else {
+            SurfaceGeometryValue::Shared(Arc::new(geometry))
+        };
         Self {
             component,
-            geometry: Arc::new(geometry),
+            geometry,
         }
     }
 
@@ -103,15 +124,18 @@ impl Deref for SurfaceGeometry {
     type Target = dyn Surface;
 
     fn deref(&self) -> &Self::Target {
-        self.geometry.as_ref()
+        match &self.geometry {
+            SurfaceGeometryValue::Flat(value) => value,
+            SurfaceGeometryValue::Cylinder(value) => value,
+            SurfaceGeometryValue::Sphere(value) => value,
+            SurfaceGeometryValue::Shared(value) => value.as_ref(),
+        }
     }
 }
 
 impl PartialEq for SurfaceGeometry {
     fn eq(&self, other: &Self) -> bool {
-        self.component == other.component
-            && (Arc::ptr_eq(&self.geometry, &other.geometry)
-                || self.geometry.equivalent(other.geometry.as_ref()))
+        self.component == other.component && self.equivalent(&**other)
     }
 }
 

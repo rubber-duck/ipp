@@ -49,6 +49,7 @@ fn ordered(items: &[RenderItem], customs: &BTreeMap<EntityId, PreparedCustomMate
         .iter()
         .map(
             |published| crate::services::render::outputs::scene::SceneItem {
+                source_order: 0,
                 entity: crate::services::render::test_support::test_entity(
                     published.item.entity.to_bits(),
                 ),
@@ -136,12 +137,14 @@ fn same_entity_material_candidates_keep_geometry_and_component_lifetimes_separat
         incarnation: 1,
     };
     let mesh_item = SceneItem {
+        source_order: 0,
         entity,
         value: ordinary.item,
         published: &ordinary,
         derived: None,
     };
     let plot_item = SceneItem {
+        source_order: 0,
         entity,
         value: plot.render.item,
         published: &plot.render,

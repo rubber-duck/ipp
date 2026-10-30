@@ -32,6 +32,9 @@ export interface ClientContext {
   readonly assetRoot: string;
   /** Read-only source namespaces configured by the Host owner. */
   readonly assetPrefixes?: readonly string[];
+  /** Exclusive desktop input stream, present only for a windowed Host. */
+  readonly windowUrl?: string;
+  readonly cefUrl?: string;
   /** Run or session name, unique on the Host; use it in World symbolic ids. */
   readonly name: string;
   /** The shared GUI font (`.ippf`) built with the Host. */

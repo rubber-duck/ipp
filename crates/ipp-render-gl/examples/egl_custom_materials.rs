@@ -1,9 +1,9 @@
 //! Maintained GLES driver for reusable custom-material frame assertions.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     if args.len() != 3 {
@@ -43,8 +43,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("This EGL environment driver requires Linux");
+    eprintln!("This EGL environment driver requires Linux or macOS");
     std::process::exit(1);
 }

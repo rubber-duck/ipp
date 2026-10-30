@@ -34,6 +34,10 @@ impl WebImageReservation {
     }
 }
 
+/// A filled immutable allocation awaiting admission at the Host boundary.
+/// Dropping a completion cancels it; no platform pointer is retained.
+pub struct WebImageCompletion(pub(super) WebImageReservation);
+
 /// Charged producer-owned GPU working storage, independent of any one frame.
 ///
 /// Reserve before allocating capture surfaces and keep the permit until those

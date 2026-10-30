@@ -109,8 +109,12 @@ impl CanvasPresentation {
             content,
             mapping,
             spacing: surface.layer_spacing,
-            lighting: Arc::new(lighting),
-            selected: selected.into(),
+            lighting: previous
+                .filter(|p| *p.lighting == lighting)
+                .map_or_else(|| Arc::new(lighting), |p| p.lighting.clone()),
+            selected: previous
+                .filter(|p| p.selected.as_ref() == selected.as_slice())
+                .map_or_else(|| selected.into(), |p| p.selected.clone()),
             features,
         })
     }
@@ -156,20 +160,32 @@ impl CanvasPresentation {
 pub(in crate::services::render) type PaintContextStamp = Vec<(OutputRef, Arc<CanvasPresentation>)>;
 
 impl<D: RenderDevice> RenderService<D> {
+    pub(in crate::services::render) fn update_canvas_presentation(
+        &mut self,
+        output: OutputRef,
+        context: CanvasPresentation,
+    ) {
+        if self
+            .canvas_presentations
+            .get(&output)
+            .is_none_or(|previous| **previous != context || previous.selected != context.selected)
+        {
+            self.canvas_presentations.insert(output, Arc::new(context));
+        }
+    }
+
     pub(in crate::services::render) fn paint_context_stamp(
         &self,
         stamp: &OutputContentStamp,
-    ) -> PaintContextStamp {
-        stamp
-            .outputs
-            .iter()
-            .filter_map(|node| {
-                self.canvas_presentations
-                    .get(&node.selection)
-                    .filter(|context| context.features & 64 != 0)
-                    .map(|context| (node.selection, context.clone()))
-            })
-            .collect()
+        output: &mut PaintContextStamp,
+    ) {
+        output.clear();
+        output.extend(stamp.outputs.iter().filter_map(|node| {
+            self.canvas_presentations
+                .get(&node.selection)
+                .filter(|context| context.features & 64 != 0)
+                .map(|context| (node.selection, context.clone()))
+        }));
     }
 }
 
@@ -179,9 +195,16 @@ pub(in crate::services::render) fn output_features<D: RenderDevice>(
     host: &HostRuntime,
     selection: OutputRef,
     publication: WorldPublicationId,
-) -> Result<std::collections::BTreeMap<OutputRef, u32>, RenderError> {
-    let mut outputs = std::collections::BTreeMap::new();
-    for (output, publication) in super::scene::output_order(host, selection, publication)? {
+    pool: super::super::outputs::order::OutputOrderPool,
+    outputs: &mut std::collections::BTreeMap<OutputRef, u32>,
+) -> Result<(), RenderError> {
+    let order = super::super::outputs::order::output_order(host, selection, publication, pool)?;
+    outputs.retain(|output, _| {
+        order
+            .iter()
+            .any(|entry| entry.0 == *output && output.kind() == ipp_core::OutputKind::Canvas)
+    });
+    for (output, publication) in order {
         if output.kind() != ipp_core::OutputKind::Canvas {
             continue;
         }
@@ -210,5 +233,5 @@ pub(in crate::services::render) fn output_features<D: RenderDevice>(
         }
         outputs.insert(output, features);
     }
-    Ok(outputs)
+    Ok(())
 }

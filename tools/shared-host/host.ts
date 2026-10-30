@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import {
   copyFile,
+  cp,
   mkdir,
   readFile,
   readdir,
@@ -44,6 +45,8 @@ export interface HostState {
   readonly eglDirectory: string;
   readonly log: string;
   readonly startedAt: string;
+  readonly window?: boolean;
+  readonly cef?: boolean;
   readonly ioRead?: readonly {
     readonly prefix: string;
     readonly directory: string;
@@ -169,6 +172,8 @@ export async function startHost(
     eglDirectory: string;
     build: boolean;
     gallery?: boolean;
+    window?: boolean;
+    cef?: boolean;
     ioRead?: readonly { readonly prefix: string; readonly directory: string }[];
   },
 ): Promise<HostState> {
@@ -186,6 +191,7 @@ export async function startHost(
         "build",
         "gles-host",
         "font-assets",
+        ...(options.cef ? ["cef-engine", "cef-demo-pages"] : []),
         ...(options.gallery
           ? [
               "gallery-assets",
@@ -207,12 +213,43 @@ export async function startHost(
   await rm(client, { recursive: true, force: true });
   await mkdir(client, { recursive: true });
   for (const name of await readdir(product))
-    if (name.endsWith(".js") || name === "contract.bin" || name === "gles_host")
+    if (
+      name.endsWith(".js") ||
+      name === "contract.bin" ||
+      name === "gles_host" ||
+      name === "libipp-window.dylib"
+    )
       await copyFile(
         join(product, name),
         join(client, name),
         constants.COPYFILE_FICLONE,
       );
+  if (options.cef) {
+    const verified = spawnSync(
+      process.env.PYTHON ?? "python",
+      [
+        "-c",
+        "import sys; sys.path.insert(0, 'tools'); from pipeline.cef import installation; lease = installation(offline=True); print(lease.__enter__()); lease.__exit__(None, None, None)",
+      ],
+      { cwd: workspace, encoding: "utf8" },
+    );
+    if (verified.status !== 0)
+      throw new Error(
+        `CEF installation verification failed: ${verified.stderr}`,
+      );
+    const engineRuntime = (
+      await readFile(join(workspace, "target/cef-engine/runtime-path"), "utf8")
+    ).trim();
+    if (engineRuntime !== verified.stdout.trim())
+      throw new Error(
+        "CEF engine does not match the verified runtime; rebuild cef-engine",
+      );
+    await cp(join(workspace, "target/cef-engine"), join(client, "cef"), {
+      recursive: true,
+      dereference: false,
+      verbatimSymlinks: true,
+    });
+  }
   const font = join(client, "shure-tech-mono.ippf");
   await copyFile(
     join(workspace, "target/font-assets/shure-tech-mono.ippf"),
@@ -220,7 +257,22 @@ export async function startHost(
     constants.COPYFILE_FICLONE,
   );
   const snapshot: Record<string, string> = {};
-  for (const name of ["gles_host", "contract.bin", "shure-tech-mono.ippf"]) {
+  for (const name of [
+    "gles_host",
+    ...(options.cef
+      ? [
+          "cef/libipp-cef.dylib",
+          "cef/runtime-path",
+          "cef/runtime-lease",
+          "cef/IppCEF.app/Contents/Frameworks/IppCEF Helper.app/Contents/MacOS/IppCEF Helper",
+        ]
+      : []),
+    "contract.bin",
+    "shure-tech-mono.ippf",
+    ...(existsSync(join(client, "libipp-window.dylib"))
+      ? ["libipp-window.dylib"]
+      : []),
+  ]) {
     const hash = createHash("sha256");
     for await (const bytes of createReadStream(join(client, name)))
       hash.update(bytes);
@@ -232,6 +284,14 @@ export async function startHost(
   const child = spawn(
     join(client, "gles_host"),
     [
+      ...(options.window ? ["--window"] : []),
+      ...(options.cef
+        ? [
+            "--cef",
+            join(client, "cef"),
+            join(workspace, "target/cef-demo-pages"),
+          ]
+        : []),
       "--egl-dir",
       options.eglDirectory,
       ...[
@@ -278,6 +338,8 @@ export async function startHost(
       const ready = JSON.parse(line) as { url: string; presentation: string };
       const state: HostState = {
         pid,
+        window: options.window === true,
+        cef: options.cef === true,
         url: ready.url,
         presentationUrl: ready.presentation,
         worktree: workspace,

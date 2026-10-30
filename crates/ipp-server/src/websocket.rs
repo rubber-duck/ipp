@@ -3,8 +3,9 @@
 
 use std::io::{self, Read, Write};
 use std::net::{TcpListener, TcpStream};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use tungstenite::protocol::{CloseFrame, WebSocketConfig, frame::coding::CloseCode};
@@ -14,7 +15,7 @@ use crate::services::NativeHostServices;
 use async_channel::{Receiver, Sender, TryRecvError, TrySendError};
 use ipp_host_session::services::task_scheduler::TaskHandle;
 use ipp_host_session::{
-    Host, HostConnectionMessage, HostServices, ReliableResponse, ResponseLease,
+    Host, HostConnectionMessage, HostServices, ReliableResponse, ResponseBytes, ResponseLease,
 };
 use std::collections::{BTreeMap, VecDeque};
 
@@ -55,6 +56,85 @@ const OUTPUT_MESSAGES: usize = INGRESS_MESSAGES;
 /// Connection lifecycle events waiting for the Host thread: each connection task sends
 /// at most one `Open` and one `Closed`, and tasks beyond this wait for the Host to drain.
 const CONNECTION_EVENTS: usize = 2 * MAX_CONNECTIONS;
+
+/// One coalesced Host notification and one reusable waiter per connection. The
+/// transport always rechecks its bounded queues after waking; notification count
+/// carries no information. Keeping the waker avoids allocating a channel event
+/// listener whenever an otherwise unchanged frame delivers progress.
+#[derive(Default)]
+struct ConnectionWakeState {
+    pending: bool,
+    closed: bool,
+    waker: Option<Waker>,
+}
+
+struct ConnectionWakeup(Arc<Mutex<ConnectionWakeState>>);
+
+struct ConnectionWaiter(Arc<Mutex<ConnectionWakeState>>);
+
+impl ConnectionWakeup {
+    fn new() -> (Self, ConnectionWaiter) {
+        let state = Arc::new(Mutex::new(ConnectionWakeState::default()));
+        (Self(state.clone()), ConnectionWaiter(state))
+    }
+
+    fn notify(&self) {
+        let waker = {
+            let mut state = self.0.lock().unwrap();
+            if state.pending || state.closed {
+                return;
+            }
+            state.pending = true;
+            state.waker.clone()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl Drop for ConnectionWakeup {
+    fn drop(&mut self) {
+        let waker = {
+            let mut state = self.0.lock().unwrap();
+            state.closed = true;
+            state.waker.take()
+        };
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+}
+
+impl ConnectionWaiter {
+    fn poll(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), &'static str>> {
+        let mut state = self.0.lock().unwrap();
+        if state.pending {
+            state.pending = false;
+            return Poll::Ready(Ok(()));
+        }
+        if state.closed {
+            return Poll::Ready(Err("Host closed"));
+        }
+        if !state
+            .waker
+            .as_ref()
+            .is_some_and(|waker| waker.will_wake(cx.waker()))
+        {
+            state.waker = Some(cx.waker().clone());
+        }
+        Poll::Pending
+    }
+}
+
+impl Drop for ConnectionWaiter {
+    fn drop(&mut self) {
+        let mut state = self.0.lock().unwrap();
+        state.closed = true;
+        // Release the task reference even if the Host still owns its sender.
+        state.waker = None;
+    }
+}
 
 #[derive(Debug)]
 struct BudgetedStream {
@@ -125,8 +205,8 @@ impl Drop for ConnectionGuard {
 enum HostConnectionEvent {
     Open {
         id: u64,
-        replies: Sender<Vec<u8>>,
-        notify: Sender<()>,
+        replies: Sender<ResponseBytes>,
+        notify: ConnectionWakeup,
         failures: Sender<String>,
         ingress: Receiver<HostConnectionMessage>,
         queued: Arc<AtomicUsize>,
@@ -140,8 +220,8 @@ enum HostConnectionEvent {
 }
 
 struct HostConnectionOutput {
-    sender: Sender<Vec<u8>>,
-    notify: Sender<()>,
+    sender: Sender<ResponseBytes>,
+    notify: ConnectionWakeup,
     failures: Sender<String>,
     pending: Option<ReliableResponse>,
     inflight: VecDeque<ResponseLease>,
@@ -233,17 +313,15 @@ impl<P: HostServices> NativeConnectionHost<P> {
         self.host.maintain_connections(self.started.elapsed());
         // Each sender owns a bounded ingress queue. Visit every connection with
         // the same service allowance, independent of a noisy peer's readiness.
-        let ids: Vec<_> = self.outputs.keys().copied().collect();
-        for id in ids {
-            if self.outputs[&id].failed {
+        for (&id, output) in &mut self.outputs {
+            if output.failed {
                 continue;
             }
             let mut failure = None;
             for _ in 0..INGRESS_MESSAGES {
                 let admit = self.host.connection_accepts_input(id);
-                let output = self.outputs.get(&id).expect("live connection");
                 if output.throttled.swap(!admit, Ordering::AcqRel) != !admit {
-                    let _ = output.notify.try_send(());
+                    output.notify.notify();
                 }
                 if !admit {
                     break;
@@ -253,19 +331,17 @@ impl<P: HostServices> NativeConnectionHost<P> {
                     Err(_) => break,
                 };
                 output.queued.fetch_sub(1, Ordering::AcqRel);
-                let _ = output.notify.try_send(());
+                output.notify.notify();
                 if let Err(error) = self.host.receive_connection_message(id, message) {
                     failure = Some(error);
                     break;
                 }
             }
             if let Some(error) = failure {
-                if let Some(output) = self.outputs.get_mut(&id) {
-                    output.failed = true;
-                    output.pending = None;
-                    report_connection_failure(&output.failures, &error);
-                    let _ = output.notify.try_send(());
-                }
+                output.failed = true;
+                output.pending = None;
+                report_connection_failure(&output.failures, &error);
+                output.notify.notify();
                 self.host.close_connection(id);
             }
         }
@@ -274,7 +350,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 output.failed = true;
                 output.pending = None;
                 report_connection_failure(&output.failures, &error);
-                let _ = output.notify.try_send(());
+                output.notify.notify();
             }
             self.host.close_connection(id);
         }
@@ -307,7 +383,7 @@ impl<P: HostServices> NativeConnectionHost<P> {
                 match output.sender.try_send(bytes) {
                     Ok(()) => {
                         output.inflight.push_back(lease);
-                        let _ = output.notify.try_send(());
+                        output.notify.notify();
                     }
                     Err(TrySendError::Full(bytes)) => {
                         output.pending = Some(ReliableResponse::from_parts(bytes, lease));
@@ -337,7 +413,7 @@ impl<P: HostServices> Drop for NativeConnectionHost<P> {
             self.host.close_connection(id);
         }
         for output in self.outputs.values() {
-            let _ = output.notify.try_send(());
+            output.notify.notify();
         }
         self.host.shutdown_tasks();
         // Every cancelled transport drops its encoded output before Host leases.
@@ -384,6 +460,8 @@ pub struct ServeOptions {
     /// Soft target in bytes for completed assets kept after their last consumer;
     /// `None` keeps the Host default and 0 evicts on release.
     pub asset_cache_bytes: Option<usize>,
+    /// Embedder-owned stop signal, observed on the Host thread between turns.
+    pub shutdown: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 /// Serve world-scoped connections with one owner for all worlds and services.
@@ -486,6 +564,14 @@ pub fn serve_with<P: HostServices>(
     let mut last_frame = Instant::now();
     let mut next_frame = last_frame + frame_interval;
     loop {
+        if options
+            .shutdown
+            .as_ref()
+            .is_some_and(|signal| signal.load(Ordering::Acquire))
+        {
+            return Ok(());
+        }
+
         for _ in 0..MAX_CONNECTIONS {
             let mut stream = match accepted_connections.try_recv() {
                 Ok(stream) => stream,
@@ -602,8 +688,9 @@ async fn connection(
         }
     };
 
-    let (replies, responses): (_, Receiver<Vec<u8>>) = async_channel::bounded(OUTPUT_MESSAGES);
-    let (notify, notified) = async_channel::bounded(1);
+    let (replies, responses): (_, Receiver<ResponseBytes>) =
+        async_channel::bounded(OUTPUT_MESSAGES);
+    let (notify, mut notified) = ConnectionWakeup::new();
     let (failures, failure) = async_channel::bounded(1);
     let (input, ingress) = async_channel::bounded(INGRESS_MESSAGES);
     let queued = Arc::new(AtomicUsize::new(0));
@@ -625,6 +712,11 @@ async fn connection(
         .await
         .map_err(|_| "Host is closed")?;
     host_thread.unpark();
+    // Keep the shared backing allocation while each inline progress payload is sent.
+    let mut progress_bytes = tungstenite::Bytes::from(Vec::with_capacity(128))
+        .try_into_mut()
+        .expect("unique progress storage");
+    progress_bytes.reserve(128);
     let mut ready = false;
     let connected_at = Instant::now();
     let mut blocked_since = None;
@@ -716,7 +808,17 @@ async fn connection(
                 submitted = submitted
                     .checked_add(1)
                     .ok_or("socket delivery identity exhausted")?;
-                match socket.send(Message::Binary(reply.into())) {
+                let bytes = match reply {
+                    ResponseBytes::Owned(bytes) => bytes.into(),
+                    ResponseBytes::Frame(bytes) => {
+                        // Only one physical-connection progress lease may be outstanding.
+                        // A preceding send has released its Bytes before another is admitted.
+                        progress_bytes.reserve(bytes.len());
+                        progress_bytes.extend_from_slice(&bytes);
+                        progress_bytes.split().freeze()
+                    }
+                };
+                match socket.send(Message::Binary(bytes)) {
                     Ok(()) => {
                         completed.store(submitted, Ordering::Release);
                         host_thread.unpark();
@@ -752,27 +854,23 @@ async fn connection(
             continue;
         }
         let timeout = if !ready {
-            connected_at + Duration::from_secs(10)
-        } else if let Some(since) = blocked_since {
-            since + Duration::from_secs(30)
+            Some(connected_at + Duration::from_secs(10))
         } else {
             // No periodic connection polling: only readiness and Host notifications.
-            now + Duration::from_secs(24 * 60 * 60)
+            blocked_since.map(|since| since + Duration::from_secs(30))
         };
         futures_lite::future::or(
             async {
+                // A connection has exactly one I/O task. Use the reactor's
+                // persistent single-task slot, retaining read interest when a
+                // Host notification wins this race without any socket input.
+                let stream = &socket.get_ref().stream;
                 if readable {
-                    socket
-                        .get_ref()
-                        .stream
-                        .readable()
+                    std::future::poll_fn(|cx| stream.poll_readable(cx))
                         .await
                         .map_err(|error| error.to_string())
                 } else if blocked_since.is_some() {
-                    socket
-                        .get_ref()
-                        .stream
-                        .writable()
+                    std::future::poll_fn(|cx| stream.poll_writable(cx))
                         .await
                         .map_err(|error| error.to_string())
                 } else {
@@ -781,14 +879,16 @@ async fn connection(
             },
             futures_lite::future::or(
                 async {
-                    notified
-                        .recv()
+                    std::future::poll_fn(|cx| notified.poll(cx))
                         .await
-                        .map(|_| ())
-                        .map_err(|_| "Host closed".to_string())
+                        .map_err(str::to_string)
                 },
                 async {
-                    async_io::Timer::at(timeout).await;
+                    if let Some(timeout) = timeout {
+                        async_io::Timer::at(timeout).await;
+                    } else {
+                        std::future::pending::<()>().await;
+                    }
                     Ok(())
                 },
             ),

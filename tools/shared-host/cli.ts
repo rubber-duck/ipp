@@ -36,7 +36,7 @@ import {
 
 const USAGE = `Usage: node tools/shared-host/shared-host.mjs <command>
 
-  host start [--egl-dir DIR] [--no-build] [--gallery]
+  host start [--egl-dir DIR] [--no-build] [--gallery] [--window] [--cef]
   host start --io-read PREFIX DIRECTORY   authorize a read-only asset root (repeatable)
   host status                              Host, Worlds, sessions, lock holder
   host list                                discover Hosts in linked worktrees
@@ -73,6 +73,8 @@ const COMMON = {
   help: "boolean",
   watch: "boolean",
   gallery: "boolean",
+  window: "boolean",
+  cef: "boolean",
 } as const;
 
 type Common = { -readonly [Key in keyof typeof COMMON]?: string | boolean } & {
@@ -161,6 +163,8 @@ async function hostCommand(
         text(common["egl-dir"]) ?? process.env.IPP_EGL_LIBRARY_DIR ?? "/lib64",
       build: common["no-build"] !== true,
       gallery: common.gallery === true,
+      window: common.window === true,
+      cef: common.cef === true,
       ...(common.ioRead ? { ioRead: common.ioRead } : {}),
     });
     print(

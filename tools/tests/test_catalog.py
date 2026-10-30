@@ -61,7 +61,12 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(full), len({task.id for task in full}))
         ids = [task.id for task in full]
         for name in SUITES:
-            self.assertTrue(set(suite_ids([name])).issubset(ids))
+            applicable = {
+                id_
+                for id_ in suite_ids([name])
+                if not tasks[id_].platforms or sys.platform in tasks[id_].platforms
+            }
+            self.assertTrue(applicable.issubset(ids))
         self.assertIn("check:gles-particles", ids)
         self.assertIn("check:browser-identities", ids)
         self.assertIn("check:contracts", ids)
@@ -142,7 +147,7 @@ class CatalogTests(unittest.TestCase):
         for path in (
             "tests/rendering/cef/driver.rs",
             "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/copy.rs",
-            "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/copy.frag",
+            "crates/ipp-render-gl/src/services/render/device/gles/external_image/copy.frag",
             "crates/ipp-render-gl/src/services/render/device/gles/completion_fences.rs",
             "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.vert",
             "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.frag",
@@ -159,8 +164,26 @@ class CatalogTests(unittest.TestCase):
             "check:cef-clippy",
             "check:cef-cache",
         }
-        self.assertTrue(expected.issubset(regression_group_ids(["cef"])))
-        self.assertTrue(expected.issubset(regression_ids(catalog(), full=True)))
+        group_expected = (
+            {"test:native-cef:macos", "check:cef-cache"}
+            if sys.platform == "darwin"
+            else expected
+        )
+        self.assertTrue(group_expected.issubset(regression_group_ids(["cef"])))
+        self.assertTrue(group_expected.issubset(regression_ids(catalog(), full=True)))
+
+    def test_native_cef_and_linux_prototype_select_their_own_platform(self):
+        for platform, included, excluded in (
+            ("darwin", "test:native-cef:macos", "test:cef-surface:native"),
+            ("linux", "test:cef-surface:native", "test:native-cef:macos"),
+        ):
+            with self.subTest(platform=platform), patch("sys.platform", platform):
+                full = regression_ids(catalog(), full=True)
+                group = regression_group_ids(["cef"])
+                self.assertIn(included, full)
+                self.assertIn(included, group)
+                self.assertNotIn(excluded, full)
+                self.assertNotIn(excluded, group)
 
     def test_catalog_rejects_invalid_gles_source_roots(self):
         for root in ("../outside.rs", "crates/ipp-render-gl/examples/missing.rs"):

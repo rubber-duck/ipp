@@ -103,10 +103,10 @@ impl GlesRenderDevice {
         let device = Self {
             readbacks: Vec::new(),
             completion_fences: Default::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             texture_extents: Default::default(),
-            #[cfg(target_os = "linux")]
-            dma_buf_copy: None,
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            external_image_copy: None,
             gl,
             #[cfg(feature = "instrumentation")]
             gpu_queries,

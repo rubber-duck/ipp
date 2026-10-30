@@ -1,5 +1,6 @@
 //! Presentation-local composition of leased, completed World outputs.
 
+use super::scene_storage::{SceneStorage, SceneStoragePool};
 use crate::RenderError;
 use ipp_core::services::asset_management::{AssetKey, AssetProvider};
 use ipp_core::systems::{
@@ -12,7 +13,6 @@ use ipp_core::systems::{
     render::{PublishedRenderItem, RenderPublication, RenderSystem},
 };
 use ipp_core::{EntityId, HostRuntime, OutputRef, WorldPublicationId, WorldRef};
-use std::collections::BTreeMap;
 
 /// World-qualified presentation lifetime; never a mutable ECS lookup token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -79,6 +79,7 @@ pub(in crate::services::render) struct ScenePlotPlane<'a> {
 }
 
 pub(in crate::services::render) struct SceneItem<'a> {
+    pub source_order: usize,
     pub entity: RenderEntity,
     pub value: ipp_core::RenderItem,
     pub published: &'a PublishedRenderItem,
@@ -144,13 +145,30 @@ pub(in crate::services::render) struct RenderScene<'a> {
     pub selection: OutputRef,
     pub camera: &'a CameraPublication,
     pub state: ipp_core::RenderState,
-    pub items: Vec<SceneItem<'a>>,
-    pub debug: Vec<SceneDebug>,
-    pub lights: Vec<(RenderEntity, [f32; 16], ipp_core::components::Light)>,
-    pub geometry: BTreeMap<(WorldRef, EntityId), SceneGeometry<'a>>,
-    pub surfaces: Vec<SceneOutputSurface>,
-    pub plot_planes: Vec<ScenePlotPlane<'a>>,
-    resources: BTreeMap<AssetKey, WorldPublicationId>,
+    storage: SceneStorage<'a>,
+    pool: SceneStoragePool,
+}
+
+impl<'a> std::ops::Deref for RenderScene<'a> {
+    type Target = SceneStorage<'a>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.storage
+    }
+}
+
+impl std::ops::DerefMut for RenderScene<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.storage
+    }
+}
+
+impl Drop for RenderScene<'_> {
+    fn drop(&mut self) {
+        self.pool
+            .borrow_mut()
+            .push(std::mem::take(&mut self.storage).empty());
+    }
 }
 
 impl<'a> RenderScene<'a> {
@@ -158,6 +176,7 @@ impl<'a> RenderScene<'a> {
         host: &'a HostRuntime,
         selection: OutputRef,
         publication: WorldPublicationId,
+        pool: SceneStoragePool,
     ) -> Result<Self, RenderError> {
         let camera = host
             .output(publication, selection)
@@ -176,18 +195,14 @@ impl<'a> RenderScene<'a> {
             selection,
             camera,
             state,
-            items: Vec::new(),
-            debug: Vec::new(),
-            lights: Vec::new(),
-            geometry: BTreeMap::new(),
-            surfaces: Vec::new(),
-            plot_planes: Vec::new(),
-            resources: BTreeMap::new(),
+            storage: pool.borrow_mut().pop().unwrap_or_default().empty(),
+            pool: pool.clone(),
         };
-        for contribution in host
-            .spatial_contributions_for_output(publication, selection)
-            .map_err(|_| RenderError::UnavailableOutput)?
-        {
+        let mut traversal = std::mem::take(&mut scene.traversal);
+        traversal
+            .reset(host, publication, Some(selection))
+            .map_err(|_| RenderError::UnavailableOutput)?;
+        while let Some(contribution) = traversal.next(host) {
             let publication = contribution.publication;
             let interaction_eligible = world_interaction_eligible(host, publication.world)
                 && contribution
@@ -257,8 +272,7 @@ impl<'a> RenderScene<'a> {
                     extent: extent.map(|value| value as f32),
                     token: edge.token.clone(),
                     cache_policy: edge.surface_cache_policy,
-                    cache_distance: scene
-                        .camera
+                    cache_distance: camera
                         .pose
                         .point([0.0; 3])
                         .iter()
@@ -274,20 +288,20 @@ impl<'a> RenderScene<'a> {
                 });
             }
             for key in publication.resources() {
-                scene.resources.insert(key, publication.id);
+                scene.resources.push((key, publication.id));
             }
             if let Some(geometry) = publication
                 .chunk(GeometrySystem::ID)
                 .and_then(|chunk| chunk.data::<GeometryPublication>())
             {
                 for value in &geometry.entities {
-                    scene.geometry.insert(
+                    scene.geometry.push((
                         (publication.world, value.entity),
                         SceneGeometry {
                             value,
                             placement: contribution.placement,
                         },
-                    );
+                    ));
                 }
             }
             if let Some(plot) = publication
@@ -304,7 +318,9 @@ impl<'a> RenderScene<'a> {
                         let mut value = mesh.render.item;
                         value.model = compose_model(value.model, contribution.placement)?;
                         value.normal = compose_normal(value.normal, contribution.placement);
+                        let source_order = scene.items.len();
                         scene.items.push(SceneItem {
+                            source_order,
                             entity,
                             value,
                             published: &mesh.render,
@@ -362,7 +378,9 @@ impl<'a> RenderScene<'a> {
                         .vector(particle.velocity.map(f64::from))
                         .map(|value| value as f32);
                 }
+                let source_order = scene.items.len();
                 scene.items.push(SceneItem {
+                    source_order,
                     entity: RenderEntity {
                         world: publication.world,
                         entity: value.entity,
@@ -386,9 +404,7 @@ impl<'a> RenderScene<'a> {
                         incarnation: 0,
                     },
                     value,
-                    color: item
-                        .color_override
-                        .unwrap_or(scene.state.debug_geometry_color),
+                    color: item.color_override.unwrap_or(state.debug_geometry_color),
                 });
             }
             for light in &render.lights {
@@ -403,14 +419,28 @@ impl<'a> RenderScene<'a> {
                 ));
             }
         }
-        scene.items.sort_by_key(|item| item.entity);
-        scene.lights.sort_by_key(|light| light.0);
+        scene.traversal = traversal;
+        scene
+            .items
+            .sort_unstable_by_key(|item| (item.entity, item.source_order));
+        scene.lights.sort_unstable_by_key(|light| light.0);
+        scene.geometry.sort_unstable_by_key(|(key, _)| *key);
+        scene.resources.sort_unstable();
+        scene.resources.dedup_by_key(|(key, _)| *key);
         Ok(scene)
     }
 
     pub fn resource(&self, key: AssetKey) -> Option<&'a AssetProvider> {
-        self.host
-            .publication_resource(*self.resources.get(&key)?, key)
+        self.host.publication_resource(
+            self.resources
+                .get(
+                    self.resources
+                        .binary_search_by_key(&key, |(key, _)| *key)
+                        .ok()?,
+                )?
+                .1,
+            key,
+        )
     }
 
     pub fn mesh_metadata(
@@ -424,15 +454,21 @@ impl<'a> RenderScene<'a> {
             .downcast_ref()
     }
 
+    pub fn geometry_for(&self, entity: RenderEntity) -> Option<&SceneGeometry<'_>> {
+        let index = self
+            .geometry
+            .binary_search_by_key(&(entity.world, entity.entity), |(key, _)| *key)
+            .ok()?;
+        Some(&self.geometry[index].1)
+    }
+
     pub fn visible(&self, entity: RenderEntity, planes: &[GeometryPlane; 6]) -> bool {
-        self.geometry
-            .get(&(entity.world, entity.entity))
-            .is_none_or(|geometry| {
-                geometry.value.culling.as_ref().is_none_or(|shape| {
-                    let local = planes.map(|plane| geometry.placement.local_plane(&plane));
-                    shape.intersects_frustum(&local)
-                })
+        self.geometry_for(entity).is_none_or(|geometry| {
+            geometry.value.culling.as_ref().is_none_or(|shape| {
+                let local = planes.map(|plane| geometry.placement.local_plane(&plane));
+                shape.intersects_frustum(&local)
             })
+        })
     }
 
     /// Whether a Surface may be visible: its published culling geometry, grown
@@ -463,7 +499,7 @@ impl<'a> RenderScene<'a> {
     }
 
     pub fn visual_bounds(&self, entity: RenderEntity) -> Option<[[f64; 3]; 2]> {
-        let geometry = self.geometry.get(&(entity.world, entity.entity))?;
+        let geometry = self.geometry_for(entity)?;
         let bounds = geometry.value.visual_bounds?;
         let matrix = geometry.placement.matrix();
         Some(std::array::from_fn(|end| {
@@ -507,7 +543,7 @@ fn compose_model(
 
 #[derive(Default)]
 pub(in crate::services::render) struct SceneVisibility {
-    matches: std::collections::BTreeSet<(RenderEntity, usize)>,
+    matches: Vec<(RenderEntity, usize)>,
 }
 
 impl SceneVisibility {
@@ -521,14 +557,16 @@ impl SceneVisibility {
         for item in items {
             for (index, frustum) in frustums.iter().enumerate() {
                 if scene.visible(item.entity, frustum) {
-                    self.matches.insert((item.entity, index));
+                    self.matches.push((item.entity, index));
                 }
             }
         }
+        self.matches.sort_unstable();
+        self.matches.dedup();
     }
 
     pub fn matches(&self, entity: RenderEntity, index: usize) -> bool {
-        self.matches.contains(&(entity, index))
+        self.matches.binary_search(&(entity, index)).is_ok()
     }
 }
 

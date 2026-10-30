@@ -573,8 +573,8 @@ fn emit(
     let bytes = bulk_read::response(reference, id, response).expect("bounded bulk response");
     reservation.borrow_mut().encoded(bytes.capacity());
     outbox.push_back(ReliableResponse {
-        bytes,
-        reservation,
+        bytes: bytes.into(),
+        reservation: reservation.into(),
     });
 }
 
@@ -738,8 +738,8 @@ async fn run(
                         if outbox.is_live() {
                             reservation.borrow_mut().encoded(bytes.capacity());
                             outbox.push_back(ReliableResponse {
-                                bytes,
-                                reservation,
+                                bytes: bytes.into(),
+                                reservation: reservation.into(),
                             });
                         }
                     }

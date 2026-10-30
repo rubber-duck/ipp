@@ -84,6 +84,7 @@ impl HostIngressView<'_> {
         self.world(entry.data.world)?;
         entry
             .data
+            .content
             .resources
             .iter()
             .all(|key| {

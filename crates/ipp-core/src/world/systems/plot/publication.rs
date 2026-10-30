@@ -423,7 +423,7 @@ pub struct PlotPublishedPlane {
 }
 
 /// Completed immutable Plot output retained with its World publication.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PlotPublication {
     /// Entity/component ordered derived chart inputs.
     pub charts: Vec<PlotPublishedChart>,
@@ -438,69 +438,87 @@ impl PlotSystem {
         #[cfg(feature = "instrumentation")]
         let _trace = crate::profiling::CpuTraceScope::new("PlotSystem.publish");
         use crate::systems::render::{PbrMaterial, PublishedRenderItem, RenderItem, UnlitMaterial};
-        let mut charts = Vec::with_capacity(self.state.charts.len());
-        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
-        for chart in self.state.charts.values() {
-            if !presentation.open(world.world, chart.target.entity) {
-                continue;
-            }
-            for resource in chart
-                .canvas
+        output.update_chunk::<PlotPublication>(Self::ID, |publication, output| {
+            let charts = &mut publication.charts;
+            let mut count = 0;
+            let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
+            for chart in self
+                .state
+                .visible_members
                 .iter()
-                .chain(
-                    chart
-                        .planes
-                        .iter()
-                        .flat_map(|plane| plane.primitives.iter()),
-                )
-                .filter_map(|primitive| primitive.resource())
+                .filter_map(|&index| self.state.charts.get(&self.state.members[index].key))
             {
-                output.retain(resource);
-            }
-            let model = if chart.geometry.meshes.is_empty() && chart.planes.is_empty() {
-                [
-                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-                ]
-            } else {
-                match world.world_matrix(chart.target.entity) {
-                    Ok(model) => model,
-                    Err(_) => continue,
+                if !presentation.open(world.world, chart.target.entity) {
+                    continue;
                 }
-            };
-            let normal = crate::systems::geometry::GeometryShapeTransform::from_matrix(model)?
-                .render_normal_matrix();
-            let transform = world
-                .world
-                .components
-                .transform(chart.target.entity.index() as usize)
-                .copied()
-                .unwrap_or_default();
-            let custom =
-                crate::systems::render::publish_custom_material(world, chart.target.entity, output);
-            let meshes = chart
-                .geometry
-                .meshes
-                .iter()
-                .enumerate()
-                .flat_map(|(mesh_index, mesh)| {
-                    let custom = &custom;
-                    let variants = if custom.is_some() && mesh.material.is_some() {
-                        vec![PlotMeshVariant::Data, PlotMeshVariant::Decoration]
+                for resource in chart
+                    .canvas
+                    .iter()
+                    .chain(
+                        chart
+                            .planes
+                            .iter()
+                            .flat_map(|plane| plane.primitives.iter()),
+                    )
+                    .filter_map(|primitive| primitive.resource())
+                {
+                    output.retain(resource);
+                }
+                let model = if chart.geometry.meshes.is_empty() && chart.planes.is_empty() {
+                    [
+                        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0,
+                        1.0,
+                    ]
+                } else {
+                    match world.world_matrix(chart.target.entity) {
+                        Ok(model) => model,
+                        Err(_) => continue,
+                    }
+                };
+                let normal = crate::systems::geometry::GeometryShapeTransform::from_matrix(model)?
+                    .render_normal_matrix();
+                let transform = world
+                    .world
+                    .components
+                    .transform(chart.target.entity.index() as usize)
+                    .copied()
+                    .unwrap_or_default();
+                let has_custom = world.custom_material(chart.target.entity).is_some();
+                if charts.len() == count {
+                    charts.push(PlotPublishedChart {
+                        target: chart.target,
+                        geometry: chart.geometry.clone(),
+                        model,
+                        meshes: Vec::new(),
+                        planes: chart.planes.clone(),
+                        callout_paint: None,
+                    });
+                }
+                let published = &mut charts[count];
+                published.target = chart.target;
+                published.geometry = chart.geometry.clone();
+                published.model = model;
+                published.planes = chart.planes.clone();
+                let mut mesh_count = 0;
+                for (mesh_index, mesh) in chart.geometry.meshes.iter().enumerate() {
+                    let variants: &[PlotMeshVariant] = if has_custom && mesh.material.is_some() {
+                        &[PlotMeshVariant::Data, PlotMeshVariant::Decoration]
                     } else {
-                        vec![PlotMeshVariant::Default]
+                        &[PlotMeshVariant::Default]
                     };
-                    variants
-                        .into_iter()
-                        .filter(move |variant| match (variant, &mesh.material) {
+                    for &variant in variants {
+                        if match (variant, &mesh.material) {
                             (PlotMeshVariant::Data, Some(material)) => {
-                                !material.data_indices.is_empty()
+                                material.data_indices.is_empty()
                             }
                             (PlotMeshVariant::Decoration, Some(material)) => {
-                                !material.decoration_indices.is_empty()
+                                material.decoration_indices.is_empty()
                             }
-                            _ => true,
-                        })
-                        .map(move |variant| PlotPublishedMesh {
+                            _ => false,
+                        } {
+                            continue;
+                        }
+                        let mut prepared = PlotPublishedMesh {
                             render: PublishedRenderItem {
                                 item: RenderItem {
                                     particle: None,
@@ -536,39 +554,54 @@ impl PlotSystem {
                                     texture: None,
                                 },
                                 incarnation: chart.target.incarnation,
-                                custom: (variant == PlotMeshVariant::Data)
-                                    .then(|| custom.clone())
-                                    .flatten(),
+                                custom: None,
                                 palette: None,
                             },
                             geometry: chart.geometry.clone(),
                             mesh_index,
                             variant,
-                        })
-                })
-                .collect();
-            let callout_paint = super::callout::paint_target(world.world, chart.target.entity)
-                .and_then(|target| {
-                    super::callout::paint_instance(world.world, world.asset_resources(), target)
-                });
-            if let Some(shader) = callout_paint.as_ref().and_then(|paint| paint.shader) {
-                output.retain(shader);
+                        };
+                        if mesh_count < published.meshes.len() {
+                            prepared.render.custom =
+                                published.meshes[mesh_count].render.custom.take();
+                        }
+                        if variant == PlotMeshVariant::Data {
+                            crate::systems::render::publish_custom_material(
+                                world,
+                                chart.target.entity,
+                                output,
+                                &mut prepared.render.custom,
+                            );
+                        } else {
+                            prepared.render.custom = None;
+                        }
+                        if mesh_count == published.meshes.len() {
+                            published.meshes.push(prepared);
+                        } else {
+                            published.meshes[mesh_count] = prepared;
+                        }
+                        mesh_count += 1;
+                    }
+                }
+                published.meshes.truncate(mesh_count);
+
+                let callout_paint = super::callout::paint_target(world.world, chart.target.entity)
+                    .and_then(|target| {
+                        super::callout::paint_instance(
+                            world.world,
+                            world.asset_resources(),
+                            target,
+                            published.callout_paint.as_ref(),
+                        )
+                    });
+                if let Some(shader) = callout_paint.as_ref().and_then(|paint| paint.shader) {
+                    output.retain(shader);
+                }
+                published.callout_paint = callout_paint;
+                count += 1;
             }
-            charts.push(PlotPublishedChart {
-                target: chart.target,
-                geometry: chart.geometry.clone(),
-                model,
-                meshes,
-                planes: chart.planes.clone(),
-                callout_paint,
-            });
-        }
-        output.chunk(
-            Self::ID,
-            PlotPublication {
-                charts,
-            },
-        );
-        Ok(())
+            charts.truncate(count);
+            Ok(())
+        })
     }
 }

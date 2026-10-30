@@ -32,6 +32,9 @@ import {
   type ClientContext,
   type LoadedModule,
 } from "./client.js";
+import { NativeHtmlSources } from "./html.js";
+import { NativeWindowChannel, dispatchWindowInput } from "./window.js";
+import { sleep } from "./host.js";
 import { image } from "./presentation.js";
 
 export const GALLERY_ASSET_PREFIX = "ipp-gallery://assets/";
@@ -144,6 +147,24 @@ class NativeCanvasSession extends CanvasWorldSession {
     this.resolveBinding(binding);
   }
 
+  get selection() {
+    return this.selected;
+  }
+
+  async resizeOutput(
+    output: import("@ipp/client").OutputReference,
+    viewport: PresentationViewport,
+  ) {
+    if (this.selected) {
+      this.selected = await this.host.presentation.resize(
+        this.selected,
+        viewport,
+      );
+      this.presented = this.selected;
+      this.bind(this.selected.binding);
+    } else this.bind(await this.host.setRootOutput(output, viewport));
+  }
+
   override get view() {
     return this.presented;
   }
@@ -164,6 +185,8 @@ class NativeCanvasSession extends CanvasWorldSession {
       try {
         return await operation(view);
       } finally {
+        if (this.selected)
+          await this.host.presentation.clear(this.selected).catch(() => {});
         this.selected = null;
       }
     });
@@ -281,6 +304,11 @@ export class NativeGallerySession {
   private identity = "";
   private generation = 0;
   private tail: Promise<unknown> = Promise.resolve();
+  private htmlSources: NativeHtmlSources | undefined;
+  private windowChannel: NativeWindowChannel | undefined;
+  private windowLoop: Promise<void> | undefined;
+  private windowStopped = false;
+  private windowFailure: Error | undefined;
 
   constructor(
     private readonly context: ClientContext,
@@ -309,9 +337,17 @@ export class NativeGallerySession {
     this.loaded = loaded;
     this.mounted = await this.mount(definition(loaded, this.id));
     this.identity = loaded.identity;
+    await this.startWindow();
   }
 
   private async mount(scene: GallerySceneDefinition): Promise<MountedScene> {
+    if (this.context.cefUrl && !this.windowChannel) {
+      this.windowChannel = await NativeWindowChannel.open(this.context.cefUrl);
+      this.htmlSources = new NativeHtmlSources(
+        this.context.host,
+        this.windowChannel,
+      );
+    }
     const lifetime = new AbortController();
     const worlds: WorldReference[] = [];
     let client: Client | undefined,
@@ -358,14 +394,12 @@ export class NativeGallerySession {
             | readonly GallerySceneDefinition[]
             | undefined) ?? [scene],
           renderScaleChanged: async (scale) => {
-            canvas!.bind(
-              await this.context.host.setRootOutput(output, {
-                ...this.viewport,
-                width: Math.round(this.viewport.width * scale),
-                height: Math.round(this.viewport.height * scale),
-                devicePixelRatio: this.viewport.devicePixelRatio * scale,
-              }),
-            );
+            await canvas!.resizeOutput(output, {
+              ...this.viewport,
+              width: Math.round(this.viewport.width * scale),
+              height: Math.round(this.viewport.height * scale),
+              devicePixelRatio: this.viewport.devicePixelRatio * scale,
+            });
             await application!.resize(canvas!.viewport!);
           },
         },
@@ -421,6 +455,97 @@ export class NativeGallerySession {
     }
   }
 
+  private async startWindow() {
+    if (!this.context.windowUrl) return;
+    this.windowStopped = false;
+    this.windowFailure = undefined;
+    const channel =
+      this.windowChannel ??
+      (await NativeWindowChannel.open(this.context.windowUrl));
+    this.windowChannel = channel;
+    let ready!: () => void;
+    let reject!: (error: Error) => void;
+    const started = new Promise<void>((resolve, failure) => {
+      ready = resolve;
+      reject = failure;
+    });
+    const mounted = this.requireMounted();
+    this.windowLoop = mounted.canvas
+      .withPresentation(async () => {
+        let input: import("@ipp/client").GuiPhysicalContext | undefined;
+        ready();
+        try {
+          while (!this.windowStopped) {
+            const events = await channel.poll();
+            if (this.windowStopped) break;
+            await this.ordered(async () => {
+              for (const event of events) {
+                if (event.kind === 8) {
+                  if (input) {
+                    await input.close();
+                    input = undefined;
+                  }
+                  const viewport = {
+                    width: event.x,
+                    height: event.y,
+                    devicePixelRatio: event.dx,
+                  };
+                  const scale = Number(mounted.scene.options.renderScale ?? 1);
+                  const rendered = {
+                    width: Math.round(viewport.width * scale),
+                    height: Math.round(viewport.height * scale),
+                    devicePixelRatio: viewport.devicePixelRatio * scale,
+                  };
+                  await mounted.canvas.resizeOutput(
+                    mounted.scene.output,
+                    rendered,
+                  );
+                  this.viewport = viewport;
+                  await mounted.scene.resize(rendered);
+                  await mounted.canvas.flush();
+                } else {
+                  const view = mounted.canvas.selection!;
+                  if (!input || input.isClosed || input.view !== view) {
+                    if (input) await input.close();
+                    await this.context.host.presentation.frame(view, {
+                      afterOutputs: mounted.scene.frameOutputs,
+                    });
+                    input = await this.context.host.input.open(view);
+                  }
+                  await dispatchWindowInput(event, input, async (command) => {
+                    const outcome = await input!.send(command);
+                    await mounted.scene.handlePhysicalInput(command, outcome);
+                  });
+                }
+              }
+            });
+            await sleep(8);
+          }
+        } finally {
+          await input?.close().catch(() => {});
+        }
+      })
+      .catch((error: Error) => {
+        reject(error);
+        if (!this.windowStopped) {
+          this.windowFailure = error;
+          console.error("Native window input stopped:", error);
+        }
+      })
+      .finally(() => channel.close());
+    await started;
+  }
+
+  private async stopWindow() {
+    this.windowStopped = true;
+    this.htmlSources?.close();
+    this.htmlSources = undefined;
+    await this.windowLoop;
+    this.windowChannel?.close();
+    this.windowChannel = undefined;
+    this.windowLoop = undefined;
+  }
+
   present<T>(
     operation: (view: import("@ipp/client").PresentationView) => Promise<T>,
   ) {
@@ -431,11 +556,7 @@ export class NativeGallerySession {
   resize(viewport: PresentationViewport) {
     return this.ordered(async () => {
       const mounted = this.requireMounted();
-      const binding = await this.context.host.setRootOutput(
-        mounted.scene.output,
-        viewport,
-      );
-      mounted.canvas.bind(binding);
+      await mounted.canvas.resizeOutput(mounted.scene.output, viewport);
       this.viewport = viewport;
       await mounted.scene.resize(viewport);
       await mounted.canvas.flush();
@@ -455,82 +576,96 @@ export class NativeGallerySession {
           scene: mounted.scene.sceneId,
           generation: this.generation,
           sequence: captured.sequence,
-          viewport: this.viewport,
+          viewport: mounted.canvas.viewport,
         },
       };
     });
   }
 
-  command(command: string, args: readonly string[]) {
-    return this.ordered(async () => {
-      if (command === "reload") {
-        // Bundle and validate before releasing the current scene or any handles.
-        const next = await this.context.load(
-          this.module,
-          args.includes("--if-changed") ? this.identity : undefined,
-        );
-        if (!next)
-          return { report: { reloaded: false, generation: this.generation } };
-        const previous = this.mounted;
-        const selected = definition(next, previous?.scene.sceneId ?? this.id);
-        if (previous) {
-          this.options = previous.scene.options;
-          await cleanup(previous);
-        }
-        this.mounted = undefined;
-        this.loaded = next;
-        this.mounted = await this.mount(selected);
-        this.identity = next.identity;
-        return {
-          report: {
-            reloaded: true,
-            generation: this.generation,
-            options: this.options,
-          },
-        };
-      }
-      const mounted = this.requireMounted();
-      if (command === "options") {
-        const patch: unknown = JSON.parse(args.join(" "));
-        if (!patch || typeof patch !== "object" || Array.isArray(patch))
-          throw new Error("Options must be a JSON object");
-        await mounted.scene.update(patch as GalleryOptions);
-        this.options = mounted.scene.options;
-        return { report: { scene: this.id, options: this.options } };
-      }
-      if (command === "action") {
-        const [name, ...payload] = args;
-        if (!name) throw new Error("Action needs its scene action name");
-        if (name === "physicalInput") {
-          const inputs = JSON.parse(payload.join(" ")) as GuiPhysicalInput[];
-          for (const input of inputs)
-            if ("pointer" in input) input.pointer = BigInt(input.pointer);
+  async command(command: string, args: readonly string[]) {
+    if (command === "reload") await this.stopWindow();
+    try {
+      return await this.ordered(async () => {
+        if (command === "reload") {
+          // Bundle and validate before releasing the current scene or any handles.
+          const next = await this.context.load(
+            this.module,
+            args.includes("--if-changed") ? this.identity : undefined,
+          );
+          if (!next)
+            return { report: { reloaded: false, generation: this.generation } };
+          const previous = this.mounted;
+          const selected = definition(next, previous?.scene.sceneId ?? this.id);
+          if (previous) {
+            this.options = previous.scene.options;
+            await cleanup(previous);
+          }
+          this.mounted = undefined;
+          this.loaded = next;
+          this.mounted = await this.mount(selected);
+          this.identity = next.identity;
           return {
             report: {
-              outcomes: await mounted.canvas.input(inputs, mounted.scene),
+              reloaded: true,
+              generation: this.generation,
+              options: this.options,
             },
           };
         }
-        return {
-          report: await mounted.scene.action(
-            name,
-            payload.length ? JSON.parse(payload.join(" ")) : undefined,
-          ),
-        };
-      }
-      if (command === "inspect")
-        return {
-          report: {
-            scene: this.id,
-            generation: this.generation,
-            options: mounted.scene.options,
-            actions: mounted.definition.actions,
-            state: await mounted.scene.inspect(),
-            application: await mounted.scene.inspectApplication(),
-          },
-        };
-      throw new Error(`Unknown gallery command ${command}`);
-    });
+        const mounted = this.requireMounted();
+        if (command === "action" && args[0] === "windowTest") {
+          if (!this.windowChannel) throw new Error("No native window session");
+          const [kind, x = 0, y = 0] = JSON.parse(
+            args.slice(1).join(" "),
+          ) as number[];
+          this.windowChannel.testEvent(kind!, x, y);
+          return { report: { posted: true } };
+        }
+        if (this.windowFailure) throw this.windowFailure;
+        if (command === "options") {
+          const patch: unknown = JSON.parse(args.join(" "));
+          if (!patch || typeof patch !== "object" || Array.isArray(patch))
+            throw new Error("Options must be a JSON object");
+          await mounted.scene.update(patch as GalleryOptions);
+          this.options = mounted.scene.options;
+          return { report: { scene: this.id, options: this.options } };
+        }
+        if (command === "action") {
+          const [name, ...payload] = args;
+          if (!name) throw new Error("Action needs its scene action name");
+          if (name === "physicalInput") {
+            const inputs = JSON.parse(payload.join(" ")) as GuiPhysicalInput[];
+            for (const input of inputs)
+              if ("pointer" in input) input.pointer = BigInt(input.pointer);
+            return {
+              report: {
+                outcomes: await mounted.canvas.input(inputs, mounted.scene),
+              },
+            };
+          }
+          return {
+            report: await mounted.scene.action(
+              name,
+              payload.length ? JSON.parse(payload.join(" ")) : undefined,
+            ),
+          };
+        }
+        if (command === "inspect")
+          return {
+            report: {
+              scene: this.id,
+              generation: this.generation,
+              options: mounted.scene.options,
+              actions: mounted.definition.actions,
+              state: await mounted.scene.inspect(),
+              application: await mounted.scene.inspectApplication(),
+            },
+          };
+        throw new Error(`Unknown gallery command ${command}`);
+      });
+    } finally {
+      if (command === "reload" && this.mounted) await this.startWindow();
+    }
   }
 
   get application(): DemoApplication {
@@ -543,7 +678,8 @@ export class NativeGallerySession {
     return this.mounted;
   }
 
-  close() {
+  async close() {
+    await this.stopWindow();
     return this.ordered(async () => {
       if (this.mounted) {
         await cleanup(this.mounted);

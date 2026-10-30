@@ -542,7 +542,7 @@ impl PresentationCoordinator {
             failed_draw_calls: summary.failed_draw_calls,
             sources: Vec::new(),
         };
-        let pixels = Arc::new(pixels);
+        let pixels = (capture_bytes != 0).then(|| Arc::new(pixels));
         let ready: Vec<_> = self
             .pending
             .iter()
@@ -592,15 +592,18 @@ impl PresentationCoordinator {
                 })
                 .collect();
             let reply = if pending.capture_bytes != 0 {
-                self.completed_captures
-                    .insert((connection, request), pixels.clone());
+                self.completed_captures.insert(
+                    (connection, request),
+                    pixels.as_ref().expect("requested capture").clone(),
+                );
                 PresentationResponse::Capture {
                     frame,
                     read: ipp_protocol::bulk_read::BulkReadReference {
                         connection,
                         read: 0,
                     },
-                    bytes: u64::try_from(pixels.len()).expect("bounded capture length"),
+                    bytes: u64::try_from(pixels.as_ref().expect("requested capture").len())
+                        .expect("bounded capture length"),
                 }
             } else {
                 PresentationResponse::Frame(frame)

@@ -226,6 +226,23 @@ impl Writer {
     }
 }
 
+/// Fixed-size unsolicited frame progress, encoded without heap storage.
+pub fn encode_frame_response(
+    session: u64,
+    tick: u64,
+    time: f64,
+) -> Result<[u8; 33], ProtocolError> {
+    if session == 0 {
+        return Err(ProtocolError::SessionMismatch);
+    }
+    let mut bytes = [0; 33];
+    bytes[..8].copy_from_slice(&session.to_le_bytes());
+    bytes[16..24].copy_from_slice(&tick.to_le_bytes());
+    bytes[24] = RESPONSE_FRAME;
+    bytes[25..].copy_from_slice(&time.to_le_bytes());
+    Ok(bytes)
+}
+
 /// Encode owned results, rejecting oversized or unsupported response data.
 pub fn encode_response(response: &Response) -> Result<Vec<u8>, ProtocolError> {
     let mut bytes = Vec::with_capacity(encoded_response_size(response)?);

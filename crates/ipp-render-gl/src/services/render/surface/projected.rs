@@ -32,6 +32,12 @@ use ipp_core::{HostRuntime, OutputKind, OutputRef, WorldViewport};
 
 const MESH_BUDGET: usize = 16 << 20;
 
+#[derive(Default)]
+pub(in crate::services::render) struct ProjectedPreparationScratch {
+    planes: Vec<(Option<u32>, f64, usize)>,
+    offsets: Vec<f64>,
+}
+
 struct ProjectedGroup<D: RenderDevice> {
     plane: Option<u32>,
     offset: f64,
@@ -57,8 +63,8 @@ pub(in crate::services::render) struct ProjectedSurface<D: RenderDevice> {
     capacity: [u32; 2],
     band: u8,
     stamp: Option<OutputContentStamp>,
-    painted_outputs: BTreeSet<OutputRef>,
-    represented_images: BTreeSet<OutputRef>,
+    painted_outputs: super::super::outputs::selection_set::OutputSelectionSet,
+    represented_images: super::super::outputs::selection_set::OutputSelectionSet,
     current_image: bool,
     /// Whether the usable image included current child publications when painted.
     painted_current: bool,
@@ -145,7 +151,9 @@ impl<D: RenderDevice> RenderService<D> {
         time: f64,
         visible: &BTreeSet<OutputRef>,
     ) {
-        self.projected_visible.clone_from(visible);
+        self.projected_visible
+            .retain(|output| visible.contains(output));
+        self.projected_visible.extend(visible.iter().copied());
         self.camera_used
             .retain(|output, _| self.camera_targets.contains_key(output));
         let idle: Vec<_> = self
@@ -208,8 +216,7 @@ impl<D: RenderDevice> RenderService<D> {
     /// released halfway through child-first composition. Retain mesh/publication
     /// identity; image contents will be reconstructed at the newly admitted tier.
     pub(in crate::services::render) fn reclaim_required_allocations(&mut self) {
-        let outputs: Vec<_> = self.required_image_demand.keys().copied().collect();
-        for output in outputs {
+        for &output in self.required_image_demand.keys() {
             let limit = self.required_image_limit(output);
             if output.kind() == OutputKind::Camera {
                 if self
@@ -383,19 +390,18 @@ impl<D: RenderDevice> RenderService<D> {
         mvp: [f32; 16],
         viewport: WorldViewport,
     ) -> Result<[u32; 2], RenderError> {
-        let mut offsets = Vec::new();
+        let mut offsets = self.projection_offsets.borrow_mut();
+        offsets.clear();
         if surface.selection.kind() == OutputKind::Canvas && surface.layer_spacing != 0.0 {
             let scene = CanvasScene::new(host, surface.selection, surface.publication)?;
-            let mut layers = BTreeSet::new();
             for entry in scene.canvas.entries.iter() {
-                if layers.insert(entry.layer()) {
-                    offsets.push(
-                        scene
-                            .canvas
-                            .layer_offset(entry.layer())
-                            .ok_or(RenderError::UnavailableOutput)?
-                            * f64::from(surface.layer_spacing),
-                    );
+                let offset = scene
+                    .canvas
+                    .layer_offset(entry.layer())
+                    .ok_or(RenderError::UnavailableOutput)?
+                    * f64::from(surface.layer_spacing);
+                if !offsets.contains(&offset) {
+                    offsets.push(offset);
                 }
             }
         }
@@ -455,6 +461,37 @@ impl<D: RenderDevice> RenderService<D> {
         interaction: bool,
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
+        let mut scratch = std::mem::take(&mut self.projected_scratch);
+        let result = self.prepare_projected_surface_reusing(
+            host,
+            surface,
+            mvp,
+            viewport,
+            time,
+            interaction,
+            stats,
+            &mut scratch,
+        );
+        self.projected_scratch = scratch;
+        result
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_projected_surface_reusing(
+        &mut self,
+        host: &HostRuntime,
+        surface: SceneOutputSurface,
+        mvp: [f32; 16],
+        viewport: WorldViewport,
+        time: f64,
+        interaction: bool,
+        stats: &mut RenderFrameWork,
+        scratch: &mut ProjectedPreparationScratch,
+    ) -> Result<(), RenderError> {
+        let ProjectedPreparationScratch {
+            planes,
+            offsets,
+        } = scratch;
         let selection = surface.selection;
         let mut previous = self.projected_surfaces.remove(&selection);
         if previous.as_ref().is_some_and(|s| {
@@ -488,13 +525,12 @@ impl<D: RenderDevice> RenderService<D> {
             }
             return Err(RenderError::UnavailableOutput);
         }
-        let mut planes = Vec::new();
+        planes.clear();
         if selection.kind() == OutputKind::Canvas && surface.layer_spacing != 0.0 {
             let scene = CanvasScene::new(host, selection, surface.publication)?;
-            let mut used = BTreeSet::new();
             for (order, entry) in scene.canvas.entries.iter().enumerate() {
                 let id = entry.layer();
-                if used.insert(id) {
+                if !planes.iter().any(|entry| entry.0 == Some(id)) {
                     let coordinate = scene
                         .canvas
                         .layer_offset(id)
@@ -522,7 +558,8 @@ impl<D: RenderDevice> RenderService<D> {
         } else {
             0
         };
-        let offsets: Vec<_> = planes.iter().map(|p| p.1).collect();
+        offsets.clear();
+        offsets.extend(planes.iter().map(|p| p.1));
         let view = (mvp, viewport);
         let demand = if let Some(state) = previous.as_ref().filter(|state| {
             state.surface.geometry == surface.geometry
@@ -536,10 +573,10 @@ impl<D: RenderDevice> RenderService<D> {
             if state.quality_view == view {
                 state.quality_demand
             } else {
-                super::quality::surface_demand(&*surface.geometry, &offsets, mvp, viewport)?
+                super::quality::surface_demand(&*surface.geometry, offsets, mvp, viewport)?
             }
         } else {
-            super::quality::surface_demand(&*surface.geometry, &offsets, mvp, viewport)?
+            super::quality::surface_demand(&*surface.geometry, offsets, mvp, viewport)?
         };
         let requested = super::quality::image_size(
             demand,
@@ -548,9 +585,21 @@ impl<D: RenderDevice> RenderService<D> {
             previous.as_ref().map(|state| state.requested),
         )
         .ok_or(RenderError::UnavailableOutput)?;
-        let stamp = OutputContentStamp::read(host, selection, surface.publication)?;
-        let paint_context = self.paint_context_stamp(&stamp);
-        let raster_dependencies = self.canvas_image_generations(&stamp, selection);
+        let mut dependencies = super::super::canvas::content_stamp::read(
+            host,
+            selection,
+            surface.publication,
+            self.output_order_pool.clone(),
+            self.content_stamp_pool.clone(),
+        )?;
+        let super::super::canvas::content_stamp::ContentStampScratch {
+            stamp,
+            paint_context,
+            raster_dependencies,
+            ..
+        } = &mut *dependencies;
+        self.paint_context_stamp(stamp, paint_context);
+        self.canvas_image_generations(stamp, selection, raster_dependencies);
         let mut state = previous.unwrap_or_else(|| ProjectedSurface {
             device: self.device.clone(),
             target: None,
@@ -566,8 +615,8 @@ impl<D: RenderDevice> RenderService<D> {
             capacity: [0; 2],
             band,
             stamp: None,
-            painted_outputs: BTreeSet::new(),
-            represented_images: BTreeSet::new(),
+            painted_outputs: Default::default(),
+            represented_images: Default::default(),
             current_image: false,
             painted_current: false,
             missing_draws: 0,
@@ -720,7 +769,7 @@ impl<D: RenderDevice> RenderService<D> {
                 state.size = size;
                 state.capacity = capacity;
             }
-            for (group, (_, _, order)) in state.groups.iter_mut().zip(&planes) {
+            for (group, (_, _, order)) in state.groups.iter_mut().zip(planes.iter()) {
                 group.painter_order = *order;
             }
             state.requested = requested;
@@ -736,9 +785,9 @@ impl<D: RenderDevice> RenderService<D> {
             let dependencies_changed = state
                 .stamp
                 .as_ref()
-                .is_none_or(|old| !old.same_dependencies(&stamp));
-            let dirty = state.stamp.as_ref() != Some(&stamp)
-                || state.raster_dependencies != raster_dependencies;
+                .is_none_or(|old| !old.same_dependencies(stamp));
+            let dirty = state.stamp.as_ref() != Some(&*stamp)
+                || state.raster_dependencies != *raster_dependencies;
             let ownership_changed = if dirty && surface.layer_spacing != 0.0 {
                 let scene = CanvasScene::new(host, selection, surface.publication)?;
                 state
@@ -755,7 +804,7 @@ impl<D: RenderDevice> RenderService<D> {
                 || !state.current_image
                 || dependencies_changed
                 || ownership_changed
-                || state.paint_context != paint_context
+                || state.paint_context != *paint_context
                 || (dirty && (interaction || time - state.painted_at >= interval));
             if repaint {
                 let scene = CanvasScene::new(host, selection, surface.publication)?;
@@ -768,12 +817,12 @@ impl<D: RenderDevice> RenderService<D> {
                 );
                 let partial = state.current_image
                     && !dependencies_changed
-                    && state.paint_context == paint_context
-                    && state.raster_dependencies == raster_dependencies
+                    && state.paint_context == *paint_context
+                    && state.raster_dependencies == *raster_dependencies
                     && stamp.outputs.len() == 1
                     && state.missing_draws == 0;
                 let region = next_damage.region(state.damage.as_ref().filter(|_| partial));
-                let parent = std::mem::take(&mut self.inclusions.active);
+                let parent = self.inclusions.push();
                 self.inclusions.active.collect_image = true;
                 self.projected_repainting = Some(selection);
                 #[cfg(feature = "instrumentation")]
@@ -877,9 +926,9 @@ impl<D: RenderDevice> RenderService<D> {
             }
             state.current_publication = state.current_image
                 && state.painted_current
-                && state.stamp.as_ref() == Some(&stamp)
-                && state.raster_dependencies == raster_dependencies
-                && state.paint_context == paint_context;
+                && state.stamp.as_ref() == Some(&*stamp)
+                && state.raster_dependencies == *raster_dependencies
+                && state.paint_context == *paint_context;
             Ok(())
         })();
         if result.is_err() {
@@ -951,12 +1000,14 @@ impl<D: RenderDevice> RenderService<D> {
         draws.sort_unstable_by(RenderDraw::compare);
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(in crate::services::render) fn draw_projected_patches(
         &mut self,
         host: &HostRuntime,
         surface: &SceneOutputSurface,
         rank: Option<u32>,
         patches: &[usize],
+        ranges: &mut Vec<[u32; 2]>,
         vp: [f32; 16],
         stats: &mut RenderFrameWork,
     ) -> Result<(), RenderError> {
@@ -978,7 +1029,7 @@ impl<D: RenderDevice> RenderService<D> {
         let Some(group) = state.groups.iter().find(|g| g.plane == rank) else {
             return Ok(());
         };
-        let mut ranges: Vec<[u32; 2]> = Vec::with_capacity(patches.len());
+        ranges.clear();
         for &patch in patches {
             let shape = group
                 .patches
@@ -1027,7 +1078,7 @@ impl<D: RenderDevice> RenderService<D> {
             &[0.0, 0.0, surface.extent[0], surface.extent[1]],
             1.0,
             camera,
-            &ranges,
+            ranges,
         );
         let reset = self.device.borrow_mut().set_surface_cutout(0);
         let restored = self.device.borrow_mut().set_surface_double_sided(false);
@@ -1042,10 +1093,11 @@ impl<D: RenderDevice> RenderService<D> {
             self.inclusions.active.stale_image |= !state.current_publication;
             if state.current_publication && self.inclusions.observing() {
                 let stale_parent = std::mem::take(&mut self.inclusions.active.stale_image);
-                for (output, publication) in super::super::canvas::scene::output_order(
+                for (output, publication) in super::super::outputs::order::output_order(
                     host,
                     surface.selection,
                     surface.publication,
+                    self.output_order_pool.clone(),
                 )? {
                     if state.painted_outputs.contains(&output) {
                         self.inclusions.record(output, publication);
@@ -1053,8 +1105,15 @@ impl<D: RenderDevice> RenderService<D> {
                 }
                 self.inclusions.active.stale_image = stale_parent;
             }
-            let represented_images = state.represented_images.clone();
-            self.present_canvas_image_dependencies(&represented_images);
+            for output in &state.represented_images {
+                if let Some(child) = self.canvas_caches.get(output) {
+                    self.surface_cache.presented(
+                        child.owner().0,
+                        child.owner().1,
+                        self.canvas_cache_frame.time(),
+                    );
+                }
+            }
         }
         Ok(())
     }

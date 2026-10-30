@@ -92,6 +92,8 @@ pub(in crate::services::render) struct RenderFrameScratch {
     pub shadow_visibility: Vec<bool>,
     pub shadow_queries: Vec<usize>,
     pub instances: Vec<[f32; 20]>,
+    pub patches: Vec<usize>,
+    pub patch_ranges: Vec<[u32; 2]>,
     pub surface_instances: Vec<super::super::device::SurfacePathInstance>,
 }
 
@@ -103,6 +105,7 @@ impl RenderFrameScratch {
         self.shadow_visibility.clear();
         self.instances.clear();
         self.surface_instances.clear();
+        self.patches.clear();
     }
 }
 

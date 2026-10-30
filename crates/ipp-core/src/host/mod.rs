@@ -13,6 +13,7 @@ mod frame;
 pub(crate) mod ingress;
 mod persistence;
 pub(crate) mod publication;
+mod publication_storage;
 mod queries;
 mod reference_fields;
 pub(crate) mod reference_resolution;
@@ -35,7 +36,8 @@ pub use publication::{
     WorldPublication, WorldPublicationId,
 };
 pub use queries::{
-    PublishedSceneContribution, PublishedSceneHit, ViewDescriptor, ViewPickHit, ViewQueryTarget,
+    PublishedSceneContribution, PublishedSceneHit, PublishedSceneTraversal, PublishedSceneVisit,
+    ViewDescriptor, ViewPickHit, ViewQueryTarget,
 };
 pub use reference_resolution::{OutputReferenceToken, WorldReferenceToken};
 pub use references::{
@@ -63,4 +65,5 @@ pub struct HostRuntime {
     topology: attachments::topology::HostTopology,
     publications: publication::HostPublications,
     frame: u64,
+    frame_scratch: frame::HostFrameScratch,
 }

@@ -30,8 +30,8 @@ impl<'a, P: HostServices> WorldSessionContext<'a, P> {
             })?;
             reservation.encoded(reply.capacity());
             self.session.outbox.push_back(QueuedResponse {
-                bytes: reply,
-                reservation: std::rc::Rc::new(std::cell::RefCell::new(reservation)),
+                bytes: reply.into(),
+                reservation: std::rc::Rc::new(std::cell::RefCell::new(reservation)).into(),
             });
             self.session.ready = true;
             ipp_core::diagnostic!(

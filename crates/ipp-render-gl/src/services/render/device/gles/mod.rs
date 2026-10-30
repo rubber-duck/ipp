@@ -15,9 +15,15 @@ mod gpu_queries;
 
 mod completion_fences;
 mod dma_buf;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod external_image;
+#[cfg(target_os = "macos")]
+mod io_surface;
 pub use dma_buf::GlesDmaBufImport;
 #[cfg(target_os = "linux")]
 pub use dma_buf::{GlesDmaBufFormat, GlesDmaBufImage, GlesDmaBufPlane};
+#[cfg(target_os = "macos")]
+pub use io_surface::{GlesIOSurfaceImage, GlesIOSurfaceImport};
 
 mod custom;
 mod lighting;
@@ -55,10 +61,10 @@ use loader::Functions;
 pub struct GlesRenderDevice {
     gl: Functions,
     completion_fences: std::collections::BTreeMap<u64, *mut c_void>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     texture_extents: std::collections::BTreeMap<u32, (u32, u32)>,
-    #[cfg(target_os = "linux")]
-    dma_buf_copy: Option<dma_buf::GlesDmaBufCopy>,
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    external_image_copy: Option<external_image::GlesExternalImageCopy>,
     readbacks: Vec<std::rc::Weak<std::cell::RefCell<Option<texture_readback::ReadbackStorage>>>>,
     #[cfg(feature = "instrumentation")]
     gpu_queries: super::gpu_queries::GpuQueryPool<gpu_queries::GlesGpuQueries>,

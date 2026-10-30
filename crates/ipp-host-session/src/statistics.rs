@@ -1,6 +1,6 @@
 //! Ordinary layout work at the whole-Host evaluation boundary, independent of presentation.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fmt::Write;
 
 use ipp_core::systems::gui::layout::{GuiEntityLayoutStatistics, GuiEntityLayoutWork};
@@ -19,6 +19,7 @@ pub struct HostGuiLayoutStatistics {
     frame: Option<u64>,
     worlds: Vec<WorldLayoutSample>,
     identities: Vec<WorldId>,
+    current: Vec<WorldRef>,
     previous: BTreeMap<WorldRef, GuiEntityLayoutWork>,
     retired: GuiEntityLayoutWork,
     retired_worlds: u64,
@@ -66,7 +67,7 @@ impl HostGuiLayoutStatistics {
         self.identities.extend(host.world_ids());
         self.latest = GuiEntityLayoutWork::default();
         self.unavailable = false;
-        let mut current = BTreeSet::new();
+        self.current.clear();
 
         for &identity in &self.identities {
             let context = host
@@ -83,7 +84,7 @@ impl HostGuiLayoutStatistics {
 
             if let Some(statistics) = statistics {
                 self.unavailable |= status == "unavailable";
-                current.insert(world);
+                self.current.push(world);
                 if let Some(previous) = self.previous.get(&world) {
                     self.discontinuous |= statistics.total.reflows < previous.reflows
                         || statistics.total.visited_entities < previous.visited_entities
@@ -105,7 +106,7 @@ impl HostGuiLayoutStatistics {
         }
 
         self.previous.retain(|world, total| {
-            if current.contains(world) {
+            if self.current.contains(world) {
                 true
             } else {
                 add(&mut self.retired, *total);

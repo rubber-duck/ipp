@@ -1,6 +1,6 @@
 //! Completed-publication scenarios using the maintained EGL capture driver.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod smoke {
     pub mod canvas_assets;
     pub mod canvas_publications;
@@ -16,7 +16,7 @@ mod smoke {
     pub(crate) mod task_scheduler;
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use std::path::PathBuf;
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    panic!("EGL publication capture requires Linux");
+    panic!("EGL publication capture requires Linux or macOS");
 }

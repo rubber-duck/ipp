@@ -186,17 +186,19 @@ impl WorldContext<'_> {
         Ok(selected)
     }
 
-    pub(crate) fn completed_attachments(&self) -> Vec<crate::host::PublishedWorldAttachment> {
-        let mut output = Vec::new();
+    pub(crate) fn completed_attachments(
+        &self,
+        output: &mut Vec<crate::host::PublishedWorldAttachment>,
+    ) {
+        output.clear();
         for instance in self
             .instances
             .before
             .iter()
             .chain(self.instances.after.iter())
         {
-            instance.system.completed_attachments(self, &mut output);
+            instance.system.completed_attachments(self, output);
         }
-        output
     }
 
     pub(crate) fn publish_output(

@@ -30,11 +30,9 @@ pub(super) fn retained_images(entries: &[Arc<CanvasPaintEntry>]) -> Arc<[WebCont
 
 impl CanvasSystem {
     pub(super) fn prepare_web_content(&mut self, context: &mut SystemRuntimeAccess<'_>) {
-        let layout = self
-            .layout
-            .and_then(|binding| context.dependency(binding))
-            .and_then(|layout| layout.entity_view())
-            .cloned();
+        if self.state.html_entities.is_empty() {
+            return;
+        }
         let world = &*context.world;
         let world_ref = WorldRef {
             id: world.id,
@@ -54,8 +52,10 @@ impl CanvasSystem {
                 component: ComponentValue::CANVAS_HTML,
                 incarnation,
             };
-            let size = layout
-                .as_ref()
+            let size = self
+                .layout
+                .and_then(|binding| context.dependency(binding))
+                .and_then(|layout| layout.entity_view())
                 .and_then(|view| view.placements.get(&entity))
                 .map_or([html.width, html.height], |placement| placement.size);
             let status = context.web_content.reconcile(

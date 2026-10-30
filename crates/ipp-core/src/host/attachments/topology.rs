@@ -39,7 +39,7 @@ impl HostTopology {
         if graph.worlds.keys().any(|id| self.worlds.contains_key(id)) || !graph.roots.is_empty() {
             return Err(ErrorReason::InvalidValue);
         }
-        graph.retire_detaches(&BTreeSet::new());
+        graph.retire_detaches(&[]);
         self.worlds.extend(graph.worlds);
         self.incoming.extend(graph.incoming);
         self.desired.extend(graph.desired);
@@ -128,11 +128,18 @@ impl HostTopology {
         }
     }
 
-    pub fn retain_published_tokens(
-        &mut self,
-        published: BTreeMap<(u64, u64), WorldAttachmentToken>,
-    ) {
-        let previous = std::mem::replace(&mut self.published_tokens, published);
+    pub fn retain_published_tokens(&mut self, published: &[((u64, u64), WorldAttachmentToken)]) {
+        if self
+            .published_tokens
+            .iter()
+            .eq(published.iter().map(|(id, token)| (id, token)))
+        {
+            return;
+        }
+        let previous = std::mem::replace(
+            &mut self.published_tokens,
+            published.iter().cloned().collect(),
+        );
         for (identity, token) in previous {
             if !self.published_tokens.contains_key(&identity) {
                 self.retire_unreferenced_token(&token);
@@ -199,12 +206,12 @@ impl HostTopology {
         self.revision += 1;
     }
 
-    pub fn retire_detaches(&mut self, published: &BTreeSet<(AttachmentAnchor, WorldId)>) {
+    pub fn retire_detaches(&mut self, published: &[(AttachmentAnchor, WorldId)]) {
         let mut changed = false;
         let mut released = Vec::new();
         self.retiring.retain(|anchor, children| {
             children.retain(|child| {
-                if published.contains(&(*anchor, *child)) {
+                if published.binary_search(&(*anchor, *child)).is_ok() {
                     return true;
                 }
                 if self.incoming.get(child) == Some(anchor) {

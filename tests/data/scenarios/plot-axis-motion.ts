@@ -181,9 +181,13 @@ export async function exercisePlotAxisMotion(
         () => fields(chart.camera, "Transform", item.target.fields),
         0.5,
       );
+      // Publication inclusion fences the intermediate sample before detached
+      // pixel transfer completes. Keep draw brackets for pixel-motion bounds.
+      const middle = samples.middle.included;
+      check(middle, "Axis motion capture must include its World clock");
       const elapsed = {
-        middleLeast: samples.middle.before.time - samples.origin.after.time,
-        middleMost: samples.middle.after.time - samples.origin.before.time,
+        middleLeast: middle.before.time - samples.origin.after.time,
+        middleMost: middle.after.time - samples.origin.before.time,
         endLeast: samples.end.before.time - samples.origin.after.time,
       };
       check(

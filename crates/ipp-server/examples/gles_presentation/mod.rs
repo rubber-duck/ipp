@@ -20,6 +20,9 @@ const PBUFFER_SIZE: u32 = 2048;
 
 /// Inputs [`GlesHostServices`] takes when the Host initializes it.
 struct PresentationSetup {
+    window: bool,
+    cef: Option<crate::cef::CefSetup>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     egl_directory: PathBuf,
     read_sources: Vec<(String, PathBuf)>,
     control: Receiver<PresentationControl>,
@@ -35,6 +38,9 @@ pub(crate) fn prepare(
     egl_directory: PathBuf,
     listener: TcpListener,
     read_sources: Vec<(String, PathBuf)>,
+    window: bool,
+    cef: Option<crate::cef::CefSetup>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (control, control_receiver) = mpsc::channel();
     let (output, output_receiver) = mpsc::channel();
@@ -42,6 +48,9 @@ pub(crate) fn prepare(
     *SETUP
         .lock()
         .map_err(|_| "presentation setup lock poisoned")? = Some(PresentationSetup {
+        window,
+        cef,
+        shutdown,
         egl_directory,
         read_sources,
         control: control_receiver,

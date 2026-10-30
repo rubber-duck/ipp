@@ -13,11 +13,11 @@
 //! and local; assertions compare completed-frame pixels against values derived
 //! independently from the scene layout and projection below.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 use ipp_core::systems::canvas::{
     CanvasBoxEdge, CanvasBoxSection, CanvasBoxShape, CanvasPart, CanvasPrimitiveId,
     CanvasPrimitiveStyle, CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
@@ -25,17 +25,17 @@ use ipp_core::systems::canvas::{
 
 /// Surface content space: 4 x 3 metres at 80 pixels per metre on 320 x 240.
 /// Content (x, y) in top-left/Y-down metres lands on pixel (80x, 80y).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const ROOT: [f32; 4] = [0.0, 0.0, 4.0, 3.0];
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MVP: [f32; 16] = [
     0.5, 0.0, 0.0, 0.0, 0.0, -0.6666667, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, -1.0, 1.0, 0.0, 1.0,
 ];
 
 /// Close range: content (x, y) lands on pixel (2000x, 2000y), so the projected
 /// antialias footprint is narrower than the generated geometry margin.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const CLOSE_MVP: [f32; 16] = [
     12.5,
     0.0,
@@ -57,7 +57,7 @@ const CLOSE_MVP: [f32; 16] = [
 
 /// Paints every rasterized fragment opaque magenta, exposing the production box
 /// vertex shader's padded geometry independently of coverage.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const FOOTPRINT_FRAGMENT: &str = "#version 300 es
 precision highp float;
 out vec4 o_color;
@@ -68,7 +68,7 @@ void main() {
 
 /// One authored box: placement in Surface metres, straight linear colours and
 /// explicit corner and border dimensions.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[derive(Clone, Copy)]
 struct ProbeBox {
     placement: [f32; 4],
@@ -78,7 +78,7 @@ struct ProbeBox {
     border: f32,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 impl ProbeBox {
     /// Production retained shape records for this box with any fill and glow.
     fn records_with(
@@ -131,7 +131,7 @@ impl ProbeBox {
 }
 
 /// Upload `records` into new retained GUI storage of their kind.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn upload_records<D: ipp_render_gl::RenderDevice, R: ipp_render_gl::GuiRecord>(
     device: &mut D,
     records: &[R],
@@ -145,7 +145,7 @@ fn upload_records<D: ipp_render_gl::RenderDevice, R: ipp_render_gl::GuiRecord>(
 }
 
 /// Upload shape `records`, each clipped by `clip`, into new retained GUI storage.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn upload<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     records: &[ipp_render_gl::GuiShapeRecord],
@@ -162,7 +162,7 @@ fn upload<D: ipp_render_gl::RenderDevice>(
 }
 
 /// Draw shape `records` as one retained batch: allocate, draw once and release.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn draw_batch<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     program: &D::Program,
@@ -178,7 +178,7 @@ fn draw_batch<D: ipp_render_gl::RenderDevice>(
 
 /// Atlas glyph quad from `rect`'s first corner to its second, sampling `uv`'s
 /// corners, clipped by `ROOT`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn glyph_record(rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> ipp_render_gl::GuiGlyphRecord {
     ipp_render_gl::GuiGlyphRecord {
         rect,
@@ -190,7 +190,7 @@ fn glyph_record(rect: [f32; 4], uv: [f32; 4], color: [f32; 4]) -> ipp_render_gl:
 
 /// The filled/rounded/bordered reference boxes, shared by the initial capture
 /// and the device-replacement recovery check.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const REFERENCE_BOXES: [ProbeBox; 4] = [
     ProbeBox {
         placement: [0.5, 0.5, 1.0, 1.0],
@@ -222,7 +222,7 @@ const REFERENCE_BOXES: [ProbeBox; 4] = [
     },
 ];
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn draw_boxes<D: ipp_render_gl::RenderDevice>(
     device: &mut D,
     box_program: &D::Program,
@@ -239,7 +239,7 @@ fn draw_boxes<D: ipp_render_gl::RenderDevice>(
 }
 
 /// Display encoding applied once by the present pass, as 8-bit sRGB.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn srgb(linear: f32) -> u8 {
     let linear = linear.clamp(0.0, 1.0);
     let encoded = if linear <= 0.003_130_8 {
@@ -252,13 +252,13 @@ fn srgb(linear: f32) -> u8 {
 
 /// Coverage of a pixel whose centre lies `distance` pixels outside a straight
 /// contour (negative inside): a one-pixel linear ramp centred on the contour.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn ramp(distance: f32) -> f32 {
     (0.5 - distance).clamp(0.0, 1.0)
 }
 
 /// Column-major Surface-to-clip transforms and an independent projection oracle.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod view {
     use super::smoke::world::{HEIGHT, WIDTH};
 
@@ -377,7 +377,7 @@ mod view {
 }
 
 /// Upload the unit-square contour through the production path packer.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn unit_square(
     device: &mut ipp_render_gl::GlesRenderDevice,
 ) -> Result<
@@ -411,7 +411,7 @@ fn unit_square(
     ))
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     use ipp_render_gl::RenderDevice;
     use std::path::PathBuf;
@@ -2766,8 +2766,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL GUI clip runner supports Linux; no graphics test was run.");
+    eprintln!("The EGL GUI clip runner supports Linux or macOS; no graphics test was run.");
     std::process::exit(1);
 }

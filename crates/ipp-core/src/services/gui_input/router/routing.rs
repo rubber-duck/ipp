@@ -131,6 +131,7 @@ impl GuiRoutingContext {
 /// Host-owned router shared by physical adapters, not a World evaluator.
 #[derive(Default)]
 pub struct GuiInputRouter {
+    pub(super) focus_worlds: super::focus::PresentedWorlds,
     pub(super) service: GuiInputService,
     next_request: u64,
 }
@@ -1967,15 +1968,24 @@ pub(super) fn surface_lifetimes(
     source: WorldPublicationId,
     path: &[WorldAttachmentToken],
 ) -> Result<Vec<Option<(u16, u64)>>, GuiInputError> {
+    surface_lifetime_iter(host, source, path)?.collect()
+}
+
+type SurfaceLifetime = Option<(u16, u64)>;
+
+fn surface_lifetime_iter<'a>(
+    host: &'a HostRuntime,
+    source: WorldPublicationId,
+    path: &'a [WorldAttachmentToken],
+) -> Result<impl Iterator<Item = Result<SurfaceLifetime, GuiInputError>> + 'a, GuiInputError> {
     let mut publication = host.publication(source).ok_or(GuiInputError::StalePath)?;
-    let mut lifetimes = Vec::with_capacity(path.len());
-    for token in path {
+    Ok(path.iter().map(move |token| {
         let edge = publication
             .attachments
             .iter()
             .find(|edge| edge.token == *token)
             .ok_or(GuiInputError::StalePath)?;
-        lifetimes.push(match edge.mode {
+        let lifetime = match edge.mode {
             crate::WorldAttachmentMode::Spatial => None,
             _ => Some((
                 edge.surface_geometry
@@ -1984,12 +1994,35 @@ pub(super) fn surface_lifetimes(
                     .component(),
                 edge.surface_incarnation.ok_or(GuiInputError::StalePath)?,
             )),
-        });
+        };
         publication = host
             .attached_publication(edge)
             .ok_or(GuiInputError::StalePath)?;
+        Ok(lifetime)
+    }))
+}
+
+/// Validate idle focus/pointer ownership without constructing another owned target.
+fn current_control(
+    host: &HostRuntime,
+    view: ViewDescriptor,
+    target: &Target,
+) -> Result<Arc<GuiControlObservation>, GuiInputError> {
+    if target.path.len() != target.surface_lifetimes.len() {
+        return Err(GuiInputError::StalePath);
     }
-    Ok(lifetimes)
+    for (current, expected) in
+        surface_lifetime_iter(host, view.publication, &target.path)?.zip(&target.surface_lifetimes)
+    {
+        if current? != *expected {
+            return Err(GuiInputError::StalePath);
+        }
+    }
+    let control = locate_control(host, view, &target.path, target.control.record.target)?;
+    if control.input_binding != target.control.input_binding {
+        return Err(GuiInputError::StalePath);
+    }
+    Ok(control)
 }
 
 pub(super) fn refresh(
@@ -1997,13 +2030,7 @@ pub(super) fn refresh(
     view: ViewDescriptor,
     target: &Target,
 ) -> Result<Target, GuiInputError> {
-    if surface_lifetimes(host, view.publication, &target.path)? != target.surface_lifetimes {
-        return Err(GuiInputError::StalePath);
-    }
-    let control = locate_control(host, view, &target.path, target.control.record.target)?;
-    if control.input_binding != target.control.input_binding {
-        return Err(GuiInputError::StalePath);
-    }
+    let control = current_control(host, view, target)?;
     // A control that lost the named part, as a range made a single slider,
     // keeps its last part, or names none.
     let parts = control.record.focus_parts;
@@ -2086,11 +2113,11 @@ pub(super) fn current_target(
     for token in &target.path {
         live(host, token.parent())?;
     }
-    let current = refresh(host, view, target)?;
-    if !current.control.available
-        || !current.control.hit.eligible
+    let current = current_control(host, view, target)?;
+    if !current.available
+        || !current.hit.eligible
         || host
-            .world_fault(current.control.record.target.world)
+            .world_fault(current.record.target.world)
             .ok()
             .flatten()
             .is_some()

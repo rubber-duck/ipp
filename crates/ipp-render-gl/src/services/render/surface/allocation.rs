@@ -23,18 +23,29 @@ impl ImageRequest {
     }
 }
 
+#[cfg(test)]
 pub(in crate::services::render) fn plan(
     mut requests: Vec<ImageRequest>,
     budget: usize,
 ) -> BTreeMap<OutputRef, usize> {
-    requests.sort_by(|a, b| {
+    let mut allocations = BTreeMap::new();
+    plan_into(&mut requests, budget, &mut allocations);
+    allocations
+}
+
+pub(in crate::services::render) fn plan_into(
+    requests: &mut [ImageRequest],
+    budget: usize,
+    allocations: &mut BTreeMap<OutputRef, usize>,
+) {
+    allocations.retain(|output, _| requests.iter().any(|request| request.output == *output));
+    requests.sort_unstable_by(|a, b| {
         b.score
             .total_cmp(&a.score)
             .then_with(|| a.output.cmp(&b.output))
     });
     let mut floors = requests.iter().map(|r| r.bytes([1, 1])).sum::<usize>();
     let mut remaining = budget;
-    let mut allocations = BTreeMap::new();
     for request in requests {
         floors = floors.saturating_sub(request.bytes([1, 1]));
         let available = remaining.saturating_sub(floors);
@@ -50,7 +61,6 @@ pub(in crate::services::render) fn plan(
         allocations.insert(request.output, bytes);
         remaining -= bytes;
     }
-    allocations
 }
 
 #[cfg(test)]

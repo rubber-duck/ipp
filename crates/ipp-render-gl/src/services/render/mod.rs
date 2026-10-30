@@ -70,7 +70,9 @@ pub use surface::texture_cache::{
     SURFACE_CACHE_ANIMATED_FRAMES, SURFACE_CACHE_BUDGET_BYTES, SURFACE_CACHE_SETTLE_FRAMES,
     SurfaceCacheDiagnostic, SurfaceCachePresentation,
 };
-pub use web_images::{WebImageImportError, WebImageReservation, WebImageStaging, WebImageUsage};
+pub use web_images::{
+    WebImageCompletion, WebImageImportError, WebImageReservation, WebImageStaging, WebImageUsage,
+};
 
 #[cfg(feature = "instrumentation")]
 pub use device::RenderGlCallCounts;
@@ -82,3 +84,6 @@ pub use gpu_profiling::{
     RenderGlCallWindow, RenderGlStopReason, RenderGpuIdentity, RenderGpuSample, RenderGpuSampling,
     RenderGpuScope,
 };
+
+#[cfg(target_os = "macos")]
+pub use device::{GlesIOSurfaceImage, GlesIOSurfaceImport};

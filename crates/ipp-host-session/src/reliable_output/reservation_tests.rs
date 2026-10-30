@@ -4,8 +4,8 @@ use ipp_core::services::reliable_output::OutputLimits;
 fn response(budget: &SharedReplyBudget, length: usize) -> ReliableResponse {
     let reservation = ReplyReservation::new(budget.clone(), OutputClass::Reply, length).unwrap();
     ReliableResponse {
-        bytes: vec![7; length],
-        reservation: Rc::new(RefCell::new(reservation)),
+        bytes: vec![7; length].into(),
+        reservation: Rc::new(RefCell::new(reservation)).into(),
     }
 }
 
@@ -72,9 +72,11 @@ fn record_overhead_covers_retained_bookkeeping() {
         2 * (size_of::<(u64, (u64, Option<u64>))>() + size_of::<(u64, SharedReplyReservation)>());
     // A WASM delivery node holding the prepared copy, or a native in-flight lease and channel slot.
     let transport = (2 * pointer + 2 * size_of::<u64>() + size_of::<PreparedOutputCopy>())
-        .max(size_of::<ResponseLease>() + size_of::<Vec<u8>>() + 2 * pointer)
+        .max(size_of::<ResponseLease>() + size_of::<ResponseBytes>() + 2 * pointer)
         + allocation;
-    let measured = outbox_node + reservation + payload + correlation + transport;
+    // Handoff consumes the outbox record before the transport owns its payload/lease.
+    // These storage arrangements are exclusive, including the inline progress variant.
+    let measured = outbox_node.max(transport) + reservation + payload + correlation;
     println!("record-bookkeeping measured={measured} charged={RESPONSE_METADATA_BYTES}");
     assert!(2 * measured <= RESPONSE_METADATA_BYTES, "{measured}");
 }

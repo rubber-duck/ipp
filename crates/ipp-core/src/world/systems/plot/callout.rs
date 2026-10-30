@@ -255,6 +255,7 @@ pub(in crate::world::systems) fn paint_instance(
     world: &crate::world::WorldSimulationState,
     assets: &crate::services::asset_management::AssetManagementService,
     target: crate::systems::canvas::CanvasTarget,
+    previous: Option<&crate::systems::canvas::CanvasPaintInstance>,
 ) -> Option<crate::systems::canvas::CanvasPaintInstance> {
     if paint_target(world, target.entity)? != target {
         return None;
@@ -270,16 +271,21 @@ pub(in crate::world::systems) fn paint_instance(
             value.variant,
         )
         .filter(|&key| assets.get(key).and_then(|entry| entry.data()).is_some());
-    let properties = value
-        .properties
-        .descriptors()
-        .keys()
-        .filter_map(|name| {
+    let properties = || {
+        value.properties.descriptors().keys().filter_map(|name| {
             let value = value.properties.get(name)?;
             (value.kind() != crate::DynamicPropertyKind::Asset).then(|| (name.clone(), value))
         })
-        .collect::<Vec<_>>()
-        .into();
+    };
+    if let Some(previous) = previous.filter(|previous| {
+        previous.target == target
+            && previous.source == value.source
+            && previous.shader == shader
+            && properties().eq(previous.properties.iter().cloned())
+    }) {
+        return Some(previous.clone());
+    }
+    let properties = properties().collect::<Vec<_>>().into();
     Some(crate::systems::canvas::CanvasPaintInstance {
         target,
         source: value.source.clone(),

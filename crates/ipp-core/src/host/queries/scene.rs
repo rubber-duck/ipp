@@ -68,30 +68,15 @@ impl HostRuntime {
         selection: Option<OutputRef>,
     ) -> Vec<PublishedSceneContribution<'_>> {
         let mut output = Vec::new();
-        let mut pending = vec![(publication, references::IDENTITY, Vec::new())];
-        while let Some((id, placement, path)) = pending.pop() {
-            let Some(publication) = self.publication(id) else {
-                continue;
-            };
-            let Ok(affine) = GeometryShapeTransform::new(placement) else {
-                continue;
-            };
-            for edge in publication.attachments.iter().rev().filter(|edge| {
-                edge.mode == WorldAttachmentMode::Spatial
-                    && edge
-                        .placement_output
-                        .is_none_or(|owner| Some(owner) == selection)
-            }) {
-                if let Some(child) = self.attached_publication(edge) {
-                    let mut path = path.clone();
-                    path.push((publication.world, edge.anchor));
-                    pending.push((child.id, frame::multiply(placement, edge.placement), path));
-                }
-            }
+        let mut traversal = super::PublishedSceneTraversal::default();
+        if traversal.reset(self, publication, selection).is_err() {
+            return output;
+        }
+        while let Some(visit) = traversal.next(self) {
             output.push(PublishedSceneContribution {
-                publication,
-                placement: affine,
-                path,
+                publication: visit.publication,
+                placement: visit.placement,
+                path: visit.path.to_vec(),
             });
         }
         output

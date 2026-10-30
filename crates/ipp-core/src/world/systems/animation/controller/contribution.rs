@@ -177,7 +177,7 @@ impl AnimationApplied {
     /// A contribution the field is known to hold, such as a saved one.
     pub(in crate::world) fn new(total: AnimationValue) -> Self {
         let lanes = float_lanes(&total)
-            .map(|lanes| lanes.map(f64::from).collect())
+            .map(|lanes| lanes.iter().copied().map(f64::from).collect())
             .unwrap_or_default();
         Self {
             total,
@@ -215,13 +215,11 @@ impl AnimationApplied {
         else {
             return Err(ErrorReason::InvalidField);
         };
-        let current_lanes: Vec<f64> = current_lanes.map(f64::from).collect();
-        let total_lanes: Vec<f64> = total_lanes.map(f64::from).collect();
         if current_lanes.len() != self.lanes.len() || total_lanes.len() != self.lanes.len() {
             return Err(ErrorReason::InvalidField);
         }
         with_lanes(current, |index| {
-            current_lanes[index] + total_lanes[index] - self.lanes[index]
+            f64::from(current_lanes[index]) + f64::from(total_lanes[index]) - self.lanes[index]
         })
     }
 
@@ -246,7 +244,7 @@ impl AnimationApplied {
             float_lanes(after),
         ) {
             for ((lane, before), after) in self.lanes.iter_mut().zip(before).zip(after) {
-                *lane += f64::from(after) - f64::from(before);
+                *lane += f64::from(*after) - f64::from(*before);
             }
         }
         self.total.clone_from(total);
@@ -260,13 +258,13 @@ impl AnimationApplied {
 }
 
 /// The f32 lanes of a float value: a float, or a float vector or matrix.
-fn float_lanes(value: &AnimationValue) -> Option<impl Iterator<Item = f32> + '_> {
+fn float_lanes(value: &AnimationValue) -> Option<&[f32]> {
     let lanes: &[f32] = match value {
         AnimationValue::Field(FieldValue::F32(value)) => std::slice::from_ref(value),
         AnimationValue::Field(FieldValue::Dynamic(value)) => value.floats()?,
         _ => return None,
     };
-    Some(lanes.iter().copied())
+    Some(lanes)
 }
 
 /// A float value of `template`'s type with each lane rounded from `lane`.

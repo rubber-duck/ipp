@@ -33,6 +33,7 @@ export const CLIENT_SUPPORT_MODULES = [
   "types.ts",
   "worker.ts",
   "html-content.ts",
+  "native-html.ts",
   "html-input.ts",
   "world-persistence-client.ts",
 ];

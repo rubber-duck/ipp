@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use tungstenite::{Error, Message, WebSocket};
 
-/// Longest diagnostic request: kind and two u32 testing parameters.
-const MAX_REQUEST_BYTES: usize = 9;
+/// Bound variable-length native source registration and input requests.
+const MAX_REQUEST_BYTES: usize = 8192;
 
 /// Idle wait between socket reads, which bounds output latency.
 const POLL_INTERVAL: Duration = Duration::from_millis(1);
@@ -20,6 +20,21 @@ const INSTRUMENTATION: bool = cfg!(feature = "instrumentation");
 /// A decoded client request, applied by the Host at its next frame.
 #[derive(Debug, PartialEq)]
 pub(super) enum PresentationControl {
+    Cef {
+        connection: u64,
+        id: u32,
+        bytes: Vec<u8>,
+    },
+    CefDisconnect,
+    Shutdown,
+    WindowEvents {
+        id: u32,
+    },
+    WindowTest {
+        kind: u8,
+        x: f32,
+        y: f32,
+    },
     Statistics {
         id: u32,
     },
@@ -46,6 +61,15 @@ pub(super) enum PresentationTesting {
 
 /// A Host message for the connected client.
 pub(super) enum PresentationOutput {
+    Cef {
+        connection: u64,
+        id: u32,
+        result: Result<Vec<u8>, String>,
+    },
+    WindowEvents {
+        id: u32,
+        events: Vec<crate::window::WindowEvent>,
+    },
     ViewportLimits {
         max_width: u32,
         max_height: u32,
@@ -72,6 +96,43 @@ pub(super) fn decode(bytes: &[u8]) -> Result<PresentationControl, String> {
     };
 
     let (control, length) = match bytes.first() {
+        Some(13) => (PresentationControl::Shutdown, 1),
+        Some(12) if (10..=MAX_REQUEST_BYTES).contains(&bytes.len()) => (
+            PresentationControl::Cef {
+                connection: 0,
+                id: u32_at(1)?,
+                bytes: bytes[5..].to_vec(),
+            },
+            bytes.len(),
+        ),
+        Some(10) => (
+            PresentationControl::WindowEvents {
+                id: u32_at(1)?,
+            },
+            5,
+        ),
+        Some(11) => {
+            let kind = *bytes.get(1).ok_or("truncated window test")?;
+            let x = f32::from_bits(u32_at(2)?);
+            let y = f32::from_bits(u32_at(6)?);
+            if !x.is_finite()
+                || !y.is_finite()
+                || !matches!(kind, 1 | 2 | 3 | 8 | 9)
+                || (kind == 8 && (!(400.0..=1024.0).contains(&x) || !(300.0..=1024.0).contains(&y)))
+                || (matches!(kind, 1..=3)
+                    && (!(0.0..=1.0).contains(&x) || !(0.0..=1.0).contains(&y)))
+            {
+                return Err("invalid window test event".into());
+            }
+            (
+                PresentationControl::WindowTest {
+                    kind,
+                    x,
+                    y,
+                },
+                10,
+            )
+        }
         Some(9) => (
             PresentationControl::Statistics {
                 id: u32_at(1)?,
@@ -116,6 +177,29 @@ pub(super) fn decode(bytes: &[u8]) -> Result<PresentationControl, String> {
 
 pub(super) fn encode(output: PresentationOutput) -> Vec<u8> {
     match output {
+        PresentationOutput::Cef {
+            id,
+            result,
+            ..
+        } => {
+            let mut bytes = vec![7];
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.push(u8::from(result.is_err()));
+            bytes.extend(result.unwrap_or_else(String::into_bytes));
+            bytes
+        }
+        PresentationOutput::WindowEvents {
+            id,
+            events,
+        } => {
+            let mut bytes = vec![6];
+            bytes.extend_from_slice(&id.to_le_bytes());
+            bytes.extend_from_slice(&(events.len() as u32).to_le_bytes());
+            for event in events {
+                event.encode(&mut bytes);
+            }
+            bytes
+        }
         PresentationOutput::ViewportLimits {
             max_width,
             max_height,
@@ -153,12 +237,18 @@ fn serve(
 ) {
     // Limits are reported when they change; a later client receives the latest.
     let mut limits = None;
+    let mut connection = 0u64;
     loop {
         match listener.accept() {
             Ok((stream, _)) => {
-                if let Err(error) = client(stream, control, output, &mut limits) {
+                let Some(next) = connection.checked_add(1) else {
+                    return;
+                };
+                connection = next;
+                if let Err(error) = client(stream, control, output, &mut limits, connection) {
                     eprintln!("gles_host: presentation client failed: {error}");
                 }
+                let _ = control.send(PresentationControl::CefDisconnect);
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 // Without a client, keep only the latest limits.
@@ -189,6 +279,7 @@ fn client(
     control: &Sender<PresentationControl>,
     output: &Receiver<PresentationOutput>,
     limits: &mut Option<Vec<u8>>,
+    connection: u64,
 ) -> Result<(), String> {
     stream
         .set_nonblocking(false)
@@ -214,7 +305,14 @@ fn client(
                 if bytes.len() > MAX_REQUEST_BYTES {
                     return Err("oversized presentation request".into());
                 }
-                let request = decode(&bytes)?;
+                let mut request = decode(&bytes)?;
+                if let PresentationControl::Cef {
+                    connection: owner,
+                    ..
+                } = &mut request
+                {
+                    *owner = connection;
+                }
                 control
                     .send(request)
                     .map_err(|_| "the Host stopped".to_owned())?;
@@ -237,6 +335,10 @@ fn client(
         loop {
             match output.try_recv() {
                 Ok(message) => {
+                    if matches!(&message, PresentationOutput::Cef { connection: owner, .. } if *owner != connection)
+                    {
+                        continue;
+                    }
                     let limit = matches!(message, PresentationOutput::ViewportLimits { .. });
                     let bytes = encode(message);
                     if limit {

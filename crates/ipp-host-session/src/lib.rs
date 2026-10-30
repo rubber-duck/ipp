@@ -17,7 +17,7 @@ mod test_support;
 pub use host_services::{
     HostInputFailure, HostPresentationFailure, HostServices, builtin_resource, deliver_resource,
 };
-pub use reliable_output::{PreparedOutputCopy, ReliableResponse, ResponseLease};
+pub use reliable_output::{PreparedOutputCopy, ReliableResponse, ResponseBytes, ResponseLease};
 pub use services::connection::HostConnectionMessage;
 pub use services::presentation::{PresentationCompletion, PresentationDrawSummary};
 
@@ -116,6 +116,7 @@ pub struct Host<P: HostServices> {
 
 #[derive(Default)]
 struct HostFrameScratch {
+    report: ipp_core::HostFrameReport,
     sessions: Vec<u64>,
     prepared: Vec<u64>,
 }

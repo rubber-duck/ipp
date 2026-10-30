@@ -56,8 +56,8 @@ impl<P: HostServices> Host<P> {
         self.connections.states[&connection]
             .outbox
             .push_back(ReliableResponse {
-                bytes: response,
-                reservation,
+                bytes: response.into(),
+                reservation: reservation.into(),
             });
         Ok(())
     }

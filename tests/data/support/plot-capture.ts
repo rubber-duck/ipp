@@ -2,6 +2,7 @@
 import type {
   Client,
   HostClientBase,
+  PresentedCapture,
   PresentationSurface,
   PresentationView,
   RootBinding,
@@ -20,6 +21,8 @@ export interface TimedPlotFrame {
   before: Clock;
   after: Clock;
   sequence: bigint;
+  /** Included publication clock, distinct from the surrounding draw/transfer interval. */
+  included?: { before: Clock; after: Clock };
 }
 
 export interface PlotMotionFrames {
@@ -101,13 +104,55 @@ export function createPlotCapture(
   ): Promise<TimedPlotFrame> => {
     const beforeInspection = await client.inspect(),
       before = { tick: beforeInspection.tick, time: beforeInspection.time };
-    const capture = await host.presentation.capture(view, {
-      afterOutputs: [view.binding.output],
-      ...(afterSequence === undefined ? {} : { afterSequence }),
+    // A native capture's detached pixel transfer can outlast the motion's
+    // sampling window. Bracket its included World tick with ordinary Host
+    // progress, rather than treating transfer completion as draw completion.
+    const clocks: Clock[] = [before];
+    let observing = true;
+    let progressError: unknown;
+    const progress = (async () => {
+      let tick = before.tick;
+      while (observing) {
+        const clock = await client.waitForFrame(tick);
+        clocks.push(clock);
+        tick = clock.tick;
+      }
+    })().catch((error: unknown) => {
+      progressError = error;
     });
-    const afterInspection = await client.inspect(),
-      after = { tick: afterInspection.tick, time: afterInspection.time };
-    return { frame: image(capture), before, after, sequence: capture.sequence };
+    let capture: PresentedCapture;
+    let after: Clock;
+    try {
+      capture = await host.presentation.capture(view, {
+        afterOutputs: [view.binding.output],
+        ...(afterSequence === undefined ? {} : { afterSequence }),
+      });
+      const inspection = await client.inspect();
+      after = { tick: inspection.tick, time: inspection.time };
+      clocks.push(after);
+    } finally {
+      observing = false;
+      await progress;
+    }
+    if (progressError) throw progressError;
+    const included = capture.sources[0];
+    if (capture.sources.length !== 1 || !included)
+      throw new Error("Plot capture must include its requested output tick");
+    let lower = before,
+      upper = after;
+    for (const clock of clocks) {
+      if (clock.tick <= included.tick && clock.tick > lower.tick) lower = clock;
+      if (clock.tick >= included.tick && clock.tick < upper.tick) upper = clock;
+    }
+    if (lower.tick > included.tick || upper.tick < included.tick)
+      throw new Error("Plot capture tick is outside its observed Host clock");
+    return {
+      frame: image(capture),
+      before,
+      after,
+      included: { before: lower, after: upper },
+      sequence: capture.sequence,
+    };
   };
   const inView = (view: PresentationView): PlotViewCapture => {
     const capture = (async (label: string) => {
@@ -144,9 +189,15 @@ export function createPlotCapture(
         .inspect()
         .then(({ tick, time }) => ({ tick, time }));
       const origin = { before: originBefore, after: originAfter };
-      const start = await sample(client, view);
-      await wait(client, origin.after.time + middleAt);
-      const middle = await sample(client, view, start.sequence);
+      // Detached pixel delivery must not delay the intermediate draw. Both
+      // captures keep their own immutable snapshots while transfers overlap.
+      const [start, middle] = await Promise.all([
+        sample(client, view),
+        (async () => {
+          await wait(client, origin.after.time + middleAt);
+          return sample(client, view);
+        })(),
+      ]);
       let interrupted: TimedPlotFrame | undefined;
       if (interrupt) {
         await interrupt();
@@ -179,11 +230,13 @@ export function createPlotCapture(
           before: start.before,
           after: start.after,
           sequence: start.sequence,
+          included: start.included,
         },
         middle: {
           before: middle.before,
           after: middle.after,
           sequence: middle.sequence,
+          included: middle.included,
         },
         ...(interrupted
           ? {
@@ -191,6 +244,7 @@ export function createPlotCapture(
                 before: interrupted.before,
                 after: interrupted.after,
                 sequence: interrupted.sequence,
+                included: interrupted.included,
               },
             }
           : {}),

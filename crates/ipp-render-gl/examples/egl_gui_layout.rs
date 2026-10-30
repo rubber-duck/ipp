@@ -7,23 +7,23 @@
 //! font/drawing/bitmap assets, control part overrides above a shared theme, and
 //! RenderService device replacement.
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 #[allow(dead_code)]
 mod smoke;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const BACKGROUND: [u8; 4] = [10, 14, 20, 255];
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn pixel(frame: &[u8], x: u32, y: u32) -> [u8; 4] {
     let offset = ((y * smoke::world::WIDTH + x) * 4) as usize;
     frame[offset..offset + 4].try_into().unwrap()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn check(frame: &[u8], x: u32, y: u32, expected: [u8; 4], label: &str) -> Result<()> {
     let actual = pixel(frame, x, y);
     if actual
@@ -38,7 +38,7 @@ fn check(frame: &[u8], x: u32, y: u32, expected: [u8; 4], label: &str) -> Result
 }
 
 /// Queue one ordered batch and apply it in a Host frame.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn apply(
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
@@ -69,7 +69,7 @@ fn apply(
 }
 
 /// Create one entity with `values`, optionally as the last child of `parent`.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn create(
     host: &mut ipp_core::HostRuntime,
     world: ipp_core::WorldId,
@@ -101,7 +101,7 @@ fn create(
     Ok(apply(host, world, operations)?[0].1)
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn render(
     renderer: &mut ipp_render_gl::RenderService<ipp_render_gl::GlesRenderDevice>,
     host: &mut ipp_core::HostRuntime,
@@ -118,7 +118,7 @@ fn render(
 }
 
 /// The latest completed publication of the attached Canvas output.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn canvas_publication(
     host: &ipp_core::HostRuntime,
     output: ipp_core::OutputRef,
@@ -128,7 +128,7 @@ fn canvas_publication(
         .cloned()
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn gui_assets_are_prepared(
     host: &ipp_core::HostRuntime,
     canvas: ipp_core::OutputRef,
@@ -154,7 +154,7 @@ fn gui_assets_are_prepared(
     })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn settle_assets(
     renderer: &mut ipp_render_gl::RenderService<ipp_render_gl::GlesRenderDevice>,
     host: &mut ipp_core::HostRuntime,
@@ -191,7 +191,7 @@ fn settle_assets(
 }
 
 /// The published paint target of `entity`'s first primitive in painter order.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn paint_target(
     publication: &ipp_core::systems::canvas::CanvasPublication,
     entity: ipp_core::EntityId,
@@ -213,7 +213,7 @@ fn paint_target(
         })
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn main() -> Result<()> {
     use ipp_core::components::rows::Rows;
     use ipp_core::components::{
@@ -872,8 +872,8 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn main() {
-    eprintln!("The EGL GUI layout runner supports Linux; no graphics test was run.");
+    eprintln!("The EGL GUI layout runner supports Linux or macOS; no graphics test was run.");
     std::process::exit(1);
 }

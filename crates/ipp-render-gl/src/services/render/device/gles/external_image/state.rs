@@ -2,7 +2,7 @@ use super::super::loader::Functions;
 
 // No device cache is changed by the copy. Restoring exact physical state keeps
 // retained renderer submission and target caches truthful on every return path.
-pub(super) struct State {
+pub(in super::super) struct State {
     draw: i32,
     read: i32,
     program: i32,
@@ -21,7 +21,7 @@ const CAPS: [u32; 8] = [
 ];
 
 impl State {
-    pub(super) fn save(gl: &Functions, srgb_write_control: bool) -> Self {
+    pub(in super::super) fn save(gl: &Functions, srgb_write_control: bool) -> Self {
         let mut state = Self {
             draw: 0,
             read: 0,
@@ -56,7 +56,7 @@ impl State {
         state
     }
 
-    pub(super) fn prepare(&self, gl: &Functions) {
+    pub(in super::super) fn prepare(&self, gl: &Functions) {
         // SAFETY: All capabilities are core GLES3, except the extension flag
         // whose availability was established during importer construction.
         unsafe {
@@ -71,7 +71,7 @@ impl State {
         }
     }
 
-    pub(super) fn restore(&self, gl: &Functions) {
+    pub(in super::super) fn restore(&self, gl: &Functions) {
         // SAFETY: Saved objects remain owned by the caller/device for the whole
         // operation. No deletion occurs until these bindings have been restored.
         unsafe {

@@ -187,8 +187,12 @@ impl<D: RenderDevice> RenderService<D> {
                 )?;
                 let mut work = prepass;
                 if let Some(fullscreen) = self.fullscreen_camera {
-                    let camera_scene =
-                        RenderScene::new(host, fullscreen.selection, fullscreen.publication)?;
+                    let camera_scene = RenderScene::new(
+                        host,
+                        fullscreen.selection,
+                        fullscreen.publication,
+                        self.scene_pool.clone(),
+                    )?;
                     self.debug.retain(&camera_scene.debug);
                     if let Ok(camera) = camera_scene.camera.prepare_for_extent(fullscreen.extent) {
                         work = self.draw_items(
@@ -220,7 +224,7 @@ impl<D: RenderDevice> RenderService<D> {
             let scene = {
                 #[cfg(feature = "instrumentation")]
                 let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.scene");
-                RenderScene::new(host, selection, publication)?
+                RenderScene::new(host, selection, publication, self.scene_pool.clone())?
             };
             self.debug.retain(&scene.debug);
             let camera = Some(
@@ -334,14 +338,13 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "instrumentation")]
             let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.plot-labels");
             let layout = self.plot_label_layouts.entry(world.selection).or_default();
-            let placed_planes = layout.place_axes(
+            layout.frame(
                 &world.plot_planes,
                 camera_model,
                 view_projection,
                 viewport,
                 presentation_time,
-            )?;
-            layout.arrange(&placed_planes, view_projection, viewport)
+            )?
         };
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.
@@ -420,7 +423,9 @@ impl<D: RenderDevice> RenderService<D> {
                             continue;
                         }
                         self.device.borrow_mut().set_instances(&[])?;
-                        let mut patches = vec![patch];
+                        let patches = &mut scratch.patches;
+                        patches.clear();
+                        patches.push(patch);
                         // Consume only consecutive draws of the same image and shell:
                         // transparent entries from other surfaces retain their exact order.
                         while let Some(Item::SurfacePatch(next, next_group, next_patch)) =
@@ -436,7 +441,8 @@ impl<D: RenderDevice> RenderService<D> {
                             world.host,
                             surface,
                             group,
-                            &patches,
+                            patches,
+                            &mut scratch.patch_ranges,
                             view_projection,
                             &mut stats,
                         )?;

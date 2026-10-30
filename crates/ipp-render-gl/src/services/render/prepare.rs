@@ -13,6 +13,7 @@ pub(super) struct ProgramDemand {
     host: u64,
     world: Option<WorldRef>,
     programs: Vec<(AssetKey, AssetSource)>,
+    recipes: Vec<(RenderShaderConfig, bool)>,
 }
 
 impl ProgramDemand {
@@ -61,6 +62,8 @@ impl<D: RenderDevice> RenderService<D> {
         let _profile_context = host.profile_scope();
         #[cfg(feature = "instrumentation")]
         let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.prepare");
+        #[cfg(feature = "instrumentation")]
+        let _allocations = ipp_core::profiling::AllocationScope::new(230, "gl.prepare");
         self.validate_catalog(host)?;
         self.refresh_web_images(host)?;
         let result = self.prepare_selected(host, selected);
@@ -104,16 +107,26 @@ impl<D: RenderDevice> RenderService<D> {
         {
             return Err(RenderError::UnavailableOutput);
         }
-        let presentations = super::canvas::scene::output_order(host, selection, publication)?;
+        let presentations = super::outputs::order::output_order(
+            host,
+            selection,
+            publication,
+            self.output_order_pool.clone(),
+        )?;
         let mut recipes = std::mem::take(&mut self.recipe_scratch);
         recipes.clear();
-        let mut outputs = std::collections::BTreeSet::new();
+        let mut outputs = std::mem::take(&mut self.prepared_outputs_scratch);
+        outputs.retain(|output| presentations.iter().any(|entry| entry.0 == *output));
         let collected = (|| {
             for (selection, publication) in presentations {
                 outputs.insert(selection);
                 if selection.kind() == OutputKind::Camera {
-                    let scene =
-                        super::outputs::scene::RenderScene::new(host, selection, publication)?;
+                    let scene = super::outputs::scene::RenderScene::new(
+                        host,
+                        selection,
+                        publication,
+                        self.scene_pool.clone(),
+                    )?;
                     let shadows = scene.lights.iter().any(|light| light.2.cast_shadows);
                     for item in &scene.items {
                         let config = super::frame::draw_order::builtin_config(item, shadows);
@@ -141,15 +154,30 @@ impl<D: RenderDevice> RenderService<D> {
         })();
         if let Err(error) = collected {
             self.recipe_scratch = recipes;
+            self.prepared_outputs_scratch = outputs;
             return Err(error);
         }
         recipes.sort_unstable();
         recipes.dedup();
+        if self.program_demand.as_ref().is_some_and(|demand| {
+            demand.world == Some(selection.world())
+                && demand.recipes == recipes
+                && demand
+                    .programs
+                    .iter()
+                    .all(|(key, source)| host.asset_resources().find(source) == Some(*key))
+        }) {
+            self.recipe_scratch = recipes;
+            self.retain_prepared_outputs(Some(selection), &outputs);
+            self.prepared_outputs_scratch = outputs;
+            return Ok(());
+        }
         self.program_lookup.fill(None);
         let mut demand = ProgramDemand {
             host: host.identity(),
             world: Some(selection.world()),
             programs: Vec::with_capacity(recipes.len()),
+            recipes: recipes.clone(),
         };
         let prepared = (|| {
             for &(config, shadow) in &recipes {
@@ -171,6 +199,7 @@ impl<D: RenderDevice> RenderService<D> {
         self.recipe_scratch = recipes;
         if let Err(error) = prepared {
             demand.release(host, None);
+            self.prepared_outputs_scratch = outputs;
             return Err(error);
         }
         if let Some(mut previous) = self.program_demand.take() {
@@ -178,6 +207,7 @@ impl<D: RenderDevice> RenderService<D> {
         }
         self.program_demand = Some(demand);
         self.retain_prepared_outputs(Some(selection), &outputs);
+        self.prepared_outputs_scratch = outputs;
         Ok(())
     }
 

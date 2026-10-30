@@ -161,3 +161,10 @@ export type { HtmlSource } from "./html-content.js";
 
 export { htmlInputFor } from "./html-input.js";
 export type { HtmlInputBinding } from "./html-input.js";
+
+export {
+  bindNativeHtmlSources,
+  nativeHtmlAvailable,
+  registerNativeHtml,
+} from "./native-html.js";
+export type { HtmlInputSink, NativeHtmlRegistration } from "./native-html.js";

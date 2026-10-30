@@ -5,7 +5,6 @@
 use super::ReplyReservation;
 use crate::*;
 use ipp_core::services::reliable_output::OutputClass;
-use std::{cell::RefCell, rc::Rc};
 
 #[derive(Clone, Copy)]
 pub(crate) struct WorldProgress {
@@ -33,28 +32,20 @@ impl WorldSession {
             self.progress = None;
             return None;
         }
-        let response = Response {
-            session: self.id,
-            request_id: 0,
-            tick: progress.tick,
-            body: ResponseBody::Frame {
-                time: progress.time,
-            },
-        };
-        let size = ipp_protocol::world::encoded_response_size(&response)
-            .expect("fixed-size World progress encoding");
+        let bytes =
+            ipp_protocol::world::encode_frame_response(self.id, progress.tick, progress.time)
+                .expect("fixed-size World progress encoding");
+        let size = bytes.len();
         // Progress is supersedable: without ordinary capacity it waits for a later drain.
         let mut reservation =
             ReplyReservation::new(self.reply_budget.clone(), OutputClass::Ordinary, size).ok()?;
-        let bytes = ipp_protocol::world::encode_response(&response)
-            .expect("fixed-size World progress encoding");
-        reservation.encoded(bytes.capacity());
+        reservation.encoded(size);
         reservation.mark_progress(&self.progress_leases, &self.connection_progress_leases);
         self.progress = None;
         self.outbox.observe_tick(progress.tick);
         Some(ReliableResponse {
-            bytes,
-            reservation: Rc::new(RefCell::new(reservation)),
+            bytes: super::ResponseBytes::Frame(bytes),
+            reservation: super::reservation::ResponseReservation::Frame(reservation),
         })
     }
 }

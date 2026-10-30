@@ -107,8 +107,8 @@ impl HostConnectionState {
         let bytes = host::encode_host_response(&response).map_err(|error| error.to_string())?;
         reservation.borrow_mut().encoded(bytes.capacity());
         self.outbox.push_back(ReliableResponse {
-            bytes,
-            reservation,
+            bytes: bytes.into(),
+            reservation: reservation.into(),
         });
         Ok(())
     }
@@ -216,8 +216,8 @@ impl<P: HostServices> Host<P> {
                 .map_err(|error| error.to_string())?;
             reservation.borrow_mut().encoded(reply.capacity());
             connection.outbox.push_back(ReliableResponse {
-                bytes: reply,
-                reservation,
+                bytes: reply.into(),
+                reservation: reservation.into(),
             });
             connection.ready = true;
             return Ok(());
@@ -265,8 +265,8 @@ impl<P: HostServices> Host<P> {
                 .expect("live connection")
                 .outbox
                 .push_back(ReliableResponse {
-                    bytes: reply,
-                    reservation,
+                    bytes: reply.into(),
+                    reservation: reservation.into(),
                 });
             return Ok(());
         }

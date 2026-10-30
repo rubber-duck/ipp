@@ -149,14 +149,15 @@ REGRESSION_GROUPS = {
         ("blender", "blender-headless", "blender-disk-headless", "particles-blender"),
     ),
     "cef": RegressionGroup(
-        "Native CEF accelerated HTML/canvas prototype; requires Weston and a hardware GLES driver",
-        ("cef-surface",),
+        "Native CEF accelerated HTML/canvas integration on the platform GLES driver",
+        ("cef-surface", "native-cef"),
         steps=("check:cef-format", "check:cef-clippy", "check:cef-cache"),
     ),
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
         steps=(
             "test:shared-host:native",
+            "test:native-window:macos",
             "test:asset-exports:gpu-native",
             *tuple(record["id"] for record in GLES_CHECKS),
             "test:canvas:controller-gles",
@@ -222,6 +223,9 @@ class ProductScript:
 # `build:<name>` steps that only stage and run one script; `builds.build` runs the
 # remaining steps' code.
 PRODUCT_SCRIPTS = {
+    "cef-demo-pages": ProductScript(
+        "tools/products/cef-demo-pages.mjs", "target/cef-demo-pages"
+    ),
     "html-canvas-fixtures": ProductScript(
         "tools/products/html-canvas-fixtures.mjs", "target/html-canvas"
     ),
@@ -371,6 +375,27 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             )
         )
 
+    build(
+        "cef-engine",
+        (),
+        ("target/cef-engine",),
+        (),
+        (
+            "crates/ipp-server/cef/",
+            "tools/pipeline/cef.py",
+            "tools/pipeline/cef_engine.py",
+        ),
+    )
+    build(
+        "cef-demo-pages",
+        (),
+        ("target/cef-demo-pages",),
+        ("node", "npm"),
+        (
+            "examples/demos/scenes/cockpit/browser-pages/",
+            "tools/products/cef-demo-pages.mjs",
+        ),
+    )
     build("client", (), ("packages/ipp-client/dist",), ("node", "npm"))
     add(
         Task(
@@ -684,8 +709,18 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         command: tuple[str, ...],
         requirements: tuple[str, ...] = (),
         dependencies: tuple[str, ...] = (),
+        platforms: tuple[str, ...] = (),
     ) -> None:
-        add(Task(f"check:{name}", f"Check {name}", command, dependencies, requirements))
+        add(
+            Task(
+                f"check:{name}",
+                f"Check {name}",
+                command,
+                dependencies,
+                requirements,
+                platforms=platforms,
+            )
+        )
 
     add(
         Task(
@@ -742,11 +777,13 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
             "--check",
         ),
         ("rust",),
+        platforms=("linux",),
     )
     check(
         "cef-clippy",
         (sys.executable, "tests/rendering/cef/run.py", "--clippy"),
         ("rust",),
+        platforms=("linux",),
     )
     check(
         "cef-cache",
@@ -829,6 +866,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
                     command,
                     tuple(f"build:{b}" for b in entry["builds"]),
                     tuple(entry["requirements"]),
+                    platforms=tuple(entry.get("platforms", ())),
                 )
             )
         for file in suite.get("files", []):
@@ -887,7 +925,12 @@ def suite_ids(names: list[str]) -> list[str]:
 
 def regression_ids(tasks: dict[str, Task], *, full: bool = False) -> list[str]:
     if full:
-        return [name for name in tasks if name.startswith(("check:", "test:"))]
+        return [
+            name
+            for name, task in tasks.items()
+            if name.startswith(("check:", "test:"))
+            and (not task.platforms or sys.platform in task.platforms)
+        ]
     return [
         "check:repository",
         "check:catalog",
@@ -913,4 +956,9 @@ def regression_group_ids(names: list[str]) -> list[str]:
         group = REGRESSION_GROUPS[name]
         result.extend(suite_ids(list(group.suites)))
         result.extend(group.steps)
-    return list(dict.fromkeys(result))
+    tasks = catalog()
+    return [
+        name
+        for name in dict.fromkeys(result)
+        if not tasks[name].platforms or sys.platform in tasks[name].platforms
+    ]

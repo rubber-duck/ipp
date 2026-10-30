@@ -4,8 +4,7 @@ use super::super::outputs::scene::{RenderEntity as EntityId, RenderScene, SceneI
 use super::{custom_shader, shader::RenderShaderConfig, shader_asset::GlShaderData};
 use crate::{RenderDevice, RenderError, RenderService};
 use ipp_core::{
-    DynamicProperties, DynamicValue, services::asset_management::AssetKey,
-    systems::render::PublishedMaterialProperty,
+    DynamicValue, services::asset_management::AssetKey, systems::render::PublishedMaterialProperty,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -142,26 +141,19 @@ impl<D: RenderDevice> RenderService<D> {
                         "required custom vertex attribute missing".into(),
                     ));
                 }
-                let mut properties = DynamicProperties::default();
-                for name in definition.parameters.keys() {
-                    let property = material.properties.get(name.as_str()).ok_or_else(|| {
-                        RenderError::RenderDevice("missing published material property".into())
-                    })?;
-                    let value = match property {
-                        PublishedMaterialProperty::Value(value) => value.clone(),
-                        PublishedMaterialProperty::Resource(key) => DynamicValue::Asset(
-                            world
-                                .resource(key.ok_or(RenderError::MissingTexture)?)
-                                .ok_or(RenderError::MissingTexture)?
-                                .source()
-                                .clone(),
-                        ),
-                    };
-                    properties.set(name, value).map_err(|_| {
-                        RenderError::RenderDevice("invalid published material property".into())
-                    })?;
-                }
-                custom_shader::parameter_words(definition, &properties, &mut prepared.words)?;
+                // Pack directly from immutable publication inputs. Rebuilding a
+                // DynamicProperties store here allocated names, maps and buffers
+                // for every material on every draw, despite retained word storage.
+                custom_shader::parameter_words(
+                    definition,
+                    |name| match material.properties.get(name)? {
+                        PublishedMaterialProperty::Value(value) => Some(value.clone()),
+                        PublishedMaterialProperty::Resource(key) => Some(DynamicValue::Asset(
+                            world.resource((*key)?)?.source().clone(),
+                        )),
+                    },
+                    &mut prepared.words,
+                )?;
                 let mut texture_index = 0;
                 for (name, kind) in &definition.parameters {
                     if *kind != ipp_core::services::asset_management::formats::shader::ShaderParameterKind::Texture2D {

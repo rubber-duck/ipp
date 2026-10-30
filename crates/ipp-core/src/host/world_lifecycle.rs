@@ -36,6 +36,7 @@ impl HostRuntime {
             topology: Default::default(),
             publications: Default::default(),
             frame: 0,
+            frame_scratch: Default::default(),
         };
         let mut host = host;
         host.topology.identity = host.publications.identity;

@@ -14,7 +14,7 @@ pub enum PublishedMaterialProperty {
     Resource(Option<AssetKey>),
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 /// Final material policy and resolved inputs for a completed draw.
 pub struct PublishedCustomMaterial {
     /// Exact available immutable shader definition.
@@ -61,7 +61,7 @@ pub struct PublishedLight {
     pub light: Light,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 /// Immutable mesh/debug/light inputs; Surface and GUI producers remain separate.
 pub struct RenderPublication {
     /// Complete entity-ordered mesh and particle draws.
@@ -81,7 +81,8 @@ pub(crate) fn publish_custom_material(
     world: &WorldContext<'_>,
     entity: EntityId,
     output: &mut crate::host::WorldOutputBuilder<'_>,
-) -> Option<PublishedCustomMaterial> {
+    published: &mut Option<PublishedCustomMaterial>,
+) {
     let available = |key: AssetKey| {
         world
             .asset_resources()
@@ -89,44 +90,46 @@ pub(crate) fn publish_custom_material(
             .is_some_and(|provider| provider.data().is_some())
     };
 
-    world.custom_material(entity).map(|value| {
+    let Some(value) = world.custom_material(entity) else {
+        *published = None;
+        return;
+    };
+    let published = published.get_or_insert_with(Default::default);
+    {
         let shader = world
             .asset_source_key(SHADER_TYPE, &value.source, value.variant)
             .filter(|key| available(*key));
         if let Some(key) = shader {
             output.retain(key);
         }
-        let properties = value
+        published
             .properties
-            .descriptors()
-            .keys()
-            .filter_map(|name| {
-                let value = value.properties.get(name)?;
-                let property = if let DynamicValue::Asset(source) = value {
-                    let key = world
-                        .asset_source_key(source.kind, &source.uri, source.variant)
-                        .filter(|key| available(*key));
-                    if let Some(key) = key {
-                        output.retain(key);
-                    }
-                    PublishedMaterialProperty::Resource(key)
-                } else {
-                    PublishedMaterialProperty::Value(value)
-                };
-                Some((name.clone(), property))
-            })
-            .collect();
-        PublishedCustomMaterial {
-            shader,
-            alpha_mode: value.alpha_mode,
-            alpha_cutoff: value.alpha_cutoff,
-            receives_light: value.receives_light,
-            receives_shadows: value.receives_shadows,
-            casts_shadows: value.casts_shadows,
-            conservative_bounds: value.conservative_bounds,
-            properties,
+            .retain(|name, _| value.properties.descriptors().contains_key(name));
+        for name in value.properties.descriptors().keys() {
+            let Some(property) = value.properties.get(name) else {
+                continue;
+            };
+            let property = if let DynamicValue::Asset(source) = property {
+                let key = world
+                    .asset_source_key(source.kind, &source.uri, source.variant)
+                    .filter(|key| available(*key));
+                if let Some(key) = key {
+                    output.retain(key);
+                }
+                PublishedMaterialProperty::Resource(key)
+            } else {
+                PublishedMaterialProperty::Value(property)
+            };
+            published.properties.insert(name.clone(), property);
         }
-    })
+        published.shader = shader;
+        published.alpha_mode = value.alpha_mode;
+        published.alpha_cutoff = value.alpha_cutoff;
+        published.receives_light = value.receives_light;
+        published.receives_shadows = value.receives_shadows;
+        published.casts_shadows = value.casts_shadows;
+        published.conservative_bounds = value.conservative_bounds;
+    }
 }
 
 impl RenderSystem {
@@ -135,79 +138,91 @@ impl RenderSystem {
         world: &WorldContext<'_>,
         output: &mut crate::host::WorldOutputBuilder<'_>,
     ) -> Result<(), ErrorReason> {
-        let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
-        let mut items = Vec::new();
-        for item in &self.state.items {
-            if !presentation.open(world.world, item.entity) {
-                continue;
-            }
-            let record = &world.world.state.entities[&item.entity];
-            let component = ComponentValue::MESH_INSTANCE;
-            let component = if let Some(particle) = item.particle {
-                if particle.sprite {
-                    ComponentValue::PARTICLE_SPRITE
+        output.update_chunk::<RenderPublication>(Self::ID, |publication, output| {
+            let mut presentation = crate::systems::hierarchy::PresentationEligibility::default();
+            let items = &mut publication.items;
+            let mut count = 0;
+            for item in &self.state.items {
+                if !presentation.open(world.world, item.entity) {
+                    continue;
+                }
+                let record = &world.world.state.entities[&item.entity];
+                let component = ComponentValue::MESH_INSTANCE;
+                let component = if let Some(particle) = item.particle {
+                    if particle.sprite {
+                        ComponentValue::PARTICLE_SPRITE
+                    } else {
+                        ComponentValue::PARTICLE_MESH
+                    }
                 } else {
-                    ComponentValue::PARTICLE_MESH
+                    component
+                };
+                let incarnation = record
+                    .input(component)
+                    .ok_or(ErrorReason::MissingComponent)?
+                    .incarnation;
+                if item.mesh.asset != 0 {
+                    output.retain(AssetKey::from_u64(item.mesh.asset));
                 }
-            } else {
-                component
-            };
-            let incarnation = record
-                .input(component)
-                .ok_or(ErrorReason::MissingComponent)?
-                .incarnation;
-            if item.mesh.asset != 0 {
-                output.retain(AssetKey::from_u64(item.mesh.asset));
-            }
-            if let Some(texture) = item.texture {
-                output.retain(AssetKey::from_u64(texture.asset));
-            }
-            if let Some((pose, _)) = item.pose {
-                output.retain(AssetKey::from_u64(pose.asset));
-            }
-            let custom = publish_custom_material(world, item.entity, output);
-            items.push(PublishedRenderItem {
-                item: *item,
-                incarnation,
-                custom,
-                palette: world.skin_palette(item.entity).map(<[_]>::to_vec),
-            });
-        }
-        let lights = world
-            .light_items()
-            .filter_map(|(entity, model, light)| {
-                if !presentation.open(world.world, entity) {
-                    return None;
+                if let Some(texture) = item.texture {
+                    output.retain(AssetKey::from_u64(texture.asset));
                 }
-                Some(PublishedLight {
-                    entity,
-                    incarnation: world
-                        .world
-                        .state
-                        .entities
-                        .get(&entity)?
-                        .input(ComponentValue::LIGHT)?
-                        .incarnation,
-                    model,
-                    light,
-                })
-            })
-            .collect();
-        output.chunk(
-            Self::ID,
-            RenderPublication {
-                items,
-                debug: self
-                    .state
+                if let Some((pose, _)) = item.pose {
+                    output.retain(AssetKey::from_u64(pose.asset));
+                }
+                if items.len() == count {
+                    items.push(PublishedRenderItem {
+                        item: *item,
+                        incarnation,
+                        custom: None,
+                        palette: None,
+                    });
+                }
+                let published = &mut items[count];
+                published.item = *item;
+                published.incarnation = incarnation;
+                publish_custom_material(world, item.entity, output, &mut published.custom);
+                match world.skin_palette(item.entity) {
+                    Some(palette) => {
+                        let stored = published.palette.get_or_insert_with(Vec::new);
+                        stored.clear();
+                        stored.extend_from_slice(palette);
+                    }
+                    None => published.palette = None,
+                }
+                count += 1;
+            }
+            items.truncate(count);
+            publication.lights.clear();
+            publication
+                .lights
+                .extend(world.light_items().filter_map(|(entity, model, light)| {
+                    if !presentation.open(world.world, entity) {
+                        return None;
+                    }
+                    Some(PublishedLight {
+                        entity,
+                        incarnation: world
+                            .world
+                            .state
+                            .entities
+                            .get(&entity)?
+                            .input(ComponentValue::LIGHT)?
+                            .incarnation,
+                        model,
+                        light,
+                    })
+                }));
+            publication.debug.clear();
+            publication.debug.extend(
+                self.state
                     .debug_items
                     .iter()
                     .filter(|item| presentation.open(world.world, item.entity))
-                    .cloned()
-                    .collect(),
-                lights,
-                state: self.state.render_state,
-            },
-        );
-        Ok(())
+                    .cloned(),
+            );
+            publication.state = self.state.render_state;
+            Ok(())
+        })
     }
 }

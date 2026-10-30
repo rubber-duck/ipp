@@ -71,6 +71,11 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) asset_export_delay: Option<RenderAssetExportDelay>,
     #[cfg(feature = "instrumentation")]
     pub(super) asset_export_staging_gate: bool,
+    pub(super) output_order_pool: super::outputs::order::OutputOrderPool,
+    pub(super) scene_pool: super::outputs::scene_storage::SceneStoragePool,
+    pub(super) content_stamp_pool: super::canvas::content_stamp::ContentStampPool,
+    pub(super) nested_output_scratch: super::outputs::nested::NestedOutputScratch,
+    pub(super) prepared_outputs_scratch: std::collections::BTreeSet<ipp_core::OutputRef>,
     pub(super) recipe_scratch: Vec<(RenderShaderConfig, bool)>,
     pub(super) program_demand: Option<super::prepare::ProgramDemand>,
     pub(super) prepared_output: Option<ipp_core::OutputRef>,
@@ -98,12 +103,13 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) shadow_map_size: u32,
     pub(super) fullscreen_camera: Option<super::outputs::fullscreen::FullscreenCamera>,
     pub(super) camera_targets: BTreeMap<ipp_core::OutputRef, CameraTarget<D::SurfaceCacheTarget>>,
-    pub(super) camera_completed: std::collections::BTreeSet<ipp_core::OutputRef>,
+    pub(super) camera_completed: super::outputs::selection_set::OutputSelectionSet,
     pub(super) debug: crate::services::render::frame::debug_geometry::DebugGeometryRenderCache<D>,
     pub(super) generated_paths: super::assets::generated_paths::GeneratedPathCache<D>,
     pub(super) generated_meshes: super::assets::generated_meshes::GeneratedMeshCache<D>,
     pub(super) plot_label_layouts:
         BTreeMap<ipp_core::OutputRef, super::plot::label_layout::PlotLabelLayoutState>,
+    pub(super) plot_plane_scratch: super::plot::planes::PlotPlaneDrawScratch,
     pub(super) plot_plane_caches:
         BTreeMap<super::plot::planes::PlotPlaneKey, super::plot::planes::PlotPlaneCache<D>>,
     pub(super) analytic_surface: Option<super::surface::analytic::AnalyticSurface>,
@@ -156,7 +162,18 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) glyph_batch_cache:
         BTreeMap<ipp_core::OutputRef, super::retained::glyph_atlas::GlyphBatchRenderCache>,
     /// Painter-order work of the Surface being submitted.
-    pub(super) surface_ops: Vec<super::canvas::draw::SurfaceOp>,
+    pub(super) canvas_surface_submission: std::collections::BTreeSet<ipp_core::EntityId>,
+    pub(super) surface_sorted: Vec<(usize, super::canvas::draw::SurfaceOp)>,
+    pub(super) surface_ops: Vec<Vec<super::canvas::draw::SurfaceOp>>,
+    pub(super) canvas_draw_frames: Vec<super::canvas::draw::CanvasDrawFrame<'static>>,
+    pub(super) canvas_draw_instances: Vec<super::device::SurfacePathInstance>,
+    pub(super) canvas_boxes: Vec<(
+        &'static ipp_core::systems::canvas::CanvasPrimitive,
+        ipp_core::systems::canvas::CanvasClip,
+        super::retained::surface_paint::SurfacePaint,
+    )>,
+    pub(super) projection_offsets: std::cell::RefCell<Vec<f64>>,
+    pub(super) projected_scratch: super::surface::projected::ProjectedPreparationScratch,
     /// Glyph misses, population queue and outcomes of the current World frame.
     pub(super) glyph_frame: super::retained::glyph_atlas::GlyphFrameWork,
     /// Per-frame population allowance, shared by every World on this context.

@@ -92,6 +92,7 @@ pub use host::{
 pub use host::{HostIngressView, RootBindingGeneration, RootOutputBinding};
 pub use host::{OutputReferenceToken, WorldReferenceToken};
 pub use host::{PublishedSceneContribution, PublishedSceneHit};
+pub use host::{PublishedSceneTraversal, PublishedSceneVisit};
 pub use host::{ViewDescriptor, ViewPickHit, ViewQueryTarget};
 pub use host::{WorldAttachmentEffect, WorldAttachmentRetirement, WorldAttachmentToken};
 

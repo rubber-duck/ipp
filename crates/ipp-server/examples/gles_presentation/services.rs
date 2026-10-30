@@ -16,11 +16,18 @@ use crate::egl::Context;
 /// Native Host services plus one GLES presentation of the attached World.
 pub(crate) struct GlesHostServices {
     native: NativeHostServices,
+    #[cfg(target_os = "macos")]
+    cef: Option<crate::cef::CefProvider>,
     // Declared before `context`: the renderer releases GPU state first.
     renderer: RenderService<GlesRenderDevice>,
     #[cfg(feature = "instrumentation")]
     profile: Option<super::profiling::RenderProfileCapture>,
     context: Context,
+    // EGL drops before its borrowed native layer and the AppKit shim.
+    window: Option<crate::window::Window>,
+    window_events: Vec<crate::window::WindowEvent>,
+    window_metrics: Option<crate::window::WindowEvent>,
+    shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
     control: Receiver<PresentationControl>,
     output: Sender<PresentationOutput>,
     rendered_output: Option<OutputRef>,
@@ -124,11 +131,25 @@ impl HostServices for GlesHostServices {
             host.io_mut().register(&prefix, source)?;
         }
 
-        let context = Context::new(
-            &setup.egl_directory,
-            super::PBUFFER_SIZE,
-            super::PBUFFER_SIZE,
-        )
+        let window = setup.window.then(crate::window::Window::open).transpose()?;
+        let context = if let Some(window) = &window {
+            // SAFETY: Window outlives the Context (including on initialization failure).
+            // Both are exclusively used on the Host main thread.
+            unsafe {
+                Context::window(
+                    &setup.egl_directory,
+                    super::PBUFFER_SIZE,
+                    super::PBUFFER_SIZE,
+                    window.layer(),
+                )
+            }
+        } else {
+            Context::new(
+                &setup.egl_directory,
+                super::PBUFFER_SIZE,
+                super::PBUFFER_SIZE,
+            )
+        }
         .map_err(|error| error.to_string())?;
         let device = context
             .info()
@@ -148,12 +169,30 @@ impl HostServices for GlesHostServices {
         renderer.install(host).map_err(|error| error.to_string())?;
         renderer.set_asset_context_active(true);
 
+        #[cfg(target_os = "macos")]
+        let cef = setup
+            .cef
+            .map(|setup| crate::cef::CefProvider::new(setup, &context))
+            .transpose()?;
+        #[cfg(not(target_os = "macos"))]
+        if setup.cef.is_some() {
+            return Err("Native CEF provider is not implemented on this platform".into());
+        }
+        context
+            .ensure_current()
+            .map_err(|error| error.to_string())?;
         let mut services = Self {
             native,
+            #[cfg(target_os = "macos")]
+            cef,
             renderer,
             #[cfg(feature = "instrumentation")]
             profile: None,
             context,
+            window,
+            window_events: Vec::new(),
+            window_metrics: None,
+            shutdown: setup.shutdown,
             control: setup.control,
             output: setup.output,
             rendered_output: None,
@@ -195,6 +234,10 @@ impl HostServices for GlesHostServices {
             || viewport.device_pixel_ratio <= 0.0
         {
             return Err(PresentationError::InvalidViewport);
+        }
+        if let Some(window) = &mut self.window {
+            window.resize_surface(viewport.width, viewport.height);
+            self.context.resize_bounds(viewport.width, viewport.height);
         }
         self.viewport = (viewport.width, viewport.height);
         Ok(())
@@ -263,6 +306,14 @@ impl HostServices for GlesHostServices {
             capture.copy_from_slice(&pixels);
             self.readback_ms = started.elapsed().as_secs_f64() * 1000.0;
         }
+        if self.window.is_some() {
+            self.context
+                .swap()
+                .map_err(|error| HostPresentationFailure {
+                    scope: ipp_protocol::world::RuntimeFailureScope::Context,
+                    message: error.to_string(),
+                })?;
+        }
         Ok(PresentationDrawSummary {
             draw_calls: summary.draw_calls,
             triangles: summary.triangles,
@@ -296,7 +347,41 @@ impl HostServices for GlesHostServices {
             return Ok(());
         }
 
+        if let Some(window) = &mut self.window {
+            for &event in window.pump()? {
+                if event.kind == 8 {
+                    self.window_metrics = Some(event);
+                }
+                if event.kind == 9 {
+                    self.shutdown
+                        .store(true, std::sync::atomic::Ordering::Release);
+                }
+                if self.window_events.len() == 256 {
+                    // Release input capture on overflow; retain current metrics.
+                    let metrics = self
+                        .window_events
+                        .iter()
+                        .rev()
+                        .find(|event| event.kind == 8)
+                        .copied();
+                    self.window_events.clear();
+                    self.window_events.push(crate::window::WindowEvent {
+                        kind: 7,
+                        ..Default::default()
+                    });
+                    self.window_events.extend(metrics);
+                }
+                if event.kind == 1 && self.window_events.last().is_some_and(|last| last.kind == 1) {
+                    self.window_events.pop();
+                }
+                self.window_events.push(event);
+            }
+        }
         self.receive_controls(host);
+        #[cfg(target_os = "macos")]
+        if let Some(cef) = &mut self.cef {
+            cef.tick(host, &mut self.renderer, &self.context)?;
+        }
         Ok(())
     }
 
@@ -338,6 +423,86 @@ impl GlesHostServices {
         host: &mut HostRuntime,
     ) -> Result<(), String> {
         match control {
+            PresentationControl::Cef {
+                connection,
+                id,
+                bytes,
+            } => {
+                #[cfg(target_os = "macos")]
+                let result = self
+                    .cef
+                    .as_mut()
+                    .ok_or_else(|| "CEF is unavailable; start the Host with --cef".to_owned())
+                    .and_then(|cef| cef.command(host, &bytes));
+                #[cfg(not(target_os = "macos"))]
+                let result = {
+                    let _ = bytes;
+                    Err("Native CEF provider is not implemented on this platform".into())
+                };
+                let _ = self.output.send(PresentationOutput::Cef {
+                    connection,
+                    id,
+                    result,
+                });
+                Ok(())
+            }
+            PresentationControl::Shutdown => {
+                if !cfg!(feature = "instrumentation") {
+                    return Err("Shutdown testing requires instrumentation".into());
+                }
+                self.shutdown
+                    .store(true, std::sync::atomic::Ordering::Release);
+                Ok(())
+            }
+            PresentationControl::CefDisconnect => {
+                #[cfg(target_os = "macos")]
+                if let Some(cef) = &mut self.cef {
+                    cef.disconnect(host);
+                }
+                Ok(())
+            }
+            PresentationControl::WindowEvents {
+                id,
+            } => {
+                if self.window.is_none() {
+                    return Err("Host has no native window".into());
+                }
+                // Transfer only actual events, retaining the input queue's
+                // capacity across client polls and later bursts.
+                let mut events = self.window_events.clone();
+                self.window_events.clear();
+                if id == 1 && !events.iter().any(|event| event.kind == 8) {
+                    if events.len() == 256 {
+                        events.remove(0);
+                    }
+                    if let Some(metrics) = self.window_metrics {
+                        events.insert(0, metrics);
+                    }
+                }
+                let _ = self.output.send(PresentationOutput::WindowEvents {
+                    id,
+                    events,
+                });
+                Ok(())
+            }
+            PresentationControl::WindowTest {
+                kind,
+                x,
+                y,
+            } => {
+                #[cfg(feature = "instrumentation")]
+                {
+                    self.window
+                        .as_mut()
+                        .ok_or("Host has no native window")?
+                        .test_event(kind, x, y)
+                }
+                #[cfg(not(feature = "instrumentation"))]
+                {
+                    let _ = (kind, x, y);
+                    Err("window testing requires instrumentation".into())
+                }
+            }
             PresentationControl::Statistics {
                 id,
             } => {
@@ -435,13 +600,14 @@ impl GlesHostServices {
     /// Report the device limits, bounded by the pbuffer, and re-bound the viewport.
     fn refresh_limits(&mut self) {
         let device = self.renderer.viewport_limits();
+        let bound = if self.window.is_some() {
+            u32::MAX
+        } else {
+            super::PBUFFER_SIZE
+        };
         let limits = (
-            device.map_or(super::PBUFFER_SIZE, |limits| {
-                limits.max_width.min(super::PBUFFER_SIZE)
-            }),
-            device.map_or(super::PBUFFER_SIZE, |limits| {
-                limits.max_height.min(super::PBUFFER_SIZE)
-            }),
+            device.map_or(super::PBUFFER_SIZE, |limits| limits.max_width.min(bound)),
+            device.map_or(super::PBUFFER_SIZE, |limits| limits.max_height.min(bound)),
         );
         if limits != self.limits {
             self.limits = limits;
@@ -463,5 +629,15 @@ fn presentation_failure(error: RenderError) -> HostPresentationFailure {
             _ => ipp_protocol::world::RuntimeFailureScope::Draw,
         },
         message: error.to_string(),
+    }
+}
+
+impl Drop for GlesHostServices {
+    fn drop(&mut self) {
+        #[cfg(target_os = "macos")]
+        drop(self.cef.take());
+        // CEF may change thread-local graphics state during shutdown. Renderer
+        // resources must drop while their own retained context is current.
+        let _ = self.context.ensure_current();
     }
 }

@@ -4,11 +4,7 @@
 mod copy;
 #[cfg(target_os = "linux")]
 mod entrypoints;
-#[cfg(target_os = "linux")]
-mod state;
 
-#[cfg(target_os = "linux")]
-pub(super) use copy::GlesDmaBufCopy;
 #[cfg(target_os = "linux")]
 pub use entrypoints::GlesDmaBufImport;
 

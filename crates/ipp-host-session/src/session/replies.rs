@@ -352,8 +352,8 @@ impl<P: HostServices> WorldSessionContext<'_, P> {
         drop(response);
         reservation.borrow_mut().encoded(bytes.capacity());
         self.session.outbox.push_back(QueuedResponse {
-            bytes,
-            reservation,
+            bytes: bytes.into(),
+            reservation: reservation.into(),
         });
         Ok(())
     }

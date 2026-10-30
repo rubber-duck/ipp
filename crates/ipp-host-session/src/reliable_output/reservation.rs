@@ -171,10 +171,114 @@ impl ReplyReservation {
     }
 }
 
+/// Wire storage. Routine frame progress fits inline; variable output owns its allocation.
+#[derive(Debug)]
+pub enum ResponseBytes {
+    /// Variable-length reliable output.
+    Owned(Vec<u8>),
+    /// Fixed-size World progress.
+    Frame([u8; 33]),
+}
+
+impl ResponseBytes {
+    /// Capacity retained until the transport finishes the message.
+    pub fn capacity(&self) -> usize {
+        match self {
+            Self::Owned(bytes) => bytes.capacity(),
+            Self::Frame(bytes) => bytes.len(),
+        }
+    }
+}
+
+impl From<Vec<u8>> for ResponseBytes {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self::Owned(bytes)
+    }
+}
+
+impl std::ops::Deref for ResponseBytes {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Owned(bytes) => bytes,
+            Self::Frame(bytes) => bytes,
+        }
+    }
+}
+
+pub(crate) enum ResponseReservation {
+    Shared(SharedReplyReservation),
+    Frame(ReplyReservation),
+}
+
+impl From<SharedReplyReservation> for ResponseReservation {
+    fn from(value: SharedReplyReservation) -> Self {
+        Self::Shared(value)
+    }
+}
+
+pub(crate) enum ReservationRead<'a> {
+    Shared(std::cell::Ref<'a, ReplyReservation>),
+    Frame(&'a ReplyReservation),
+}
+
+impl std::ops::Deref for ReservationRead<'_> {
+    type Target = ReplyReservation;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(value) => value,
+            Self::Frame(value) => value,
+        }
+    }
+}
+
+pub(crate) enum ReservationWrite<'a> {
+    Shared(std::cell::RefMut<'a, ReplyReservation>),
+    Frame(&'a mut ReplyReservation),
+}
+
+impl std::ops::Deref for ReservationWrite<'_> {
+    type Target = ReplyReservation;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Shared(value) => value,
+            Self::Frame(value) => value,
+        }
+    }
+}
+
+impl std::ops::DerefMut for ReservationWrite<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            Self::Shared(value) => value,
+            Self::Frame(value) => value,
+        }
+    }
+}
+
+impl ResponseReservation {
+    pub(crate) fn borrow(&self) -> ReservationRead<'_> {
+        match self {
+            Self::Shared(value) => ReservationRead::Shared(value.borrow()),
+            Self::Frame(value) => ReservationRead::Frame(value),
+        }
+    }
+
+    fn borrow_mut(&mut self) -> ReservationWrite<'_> {
+        match self {
+            Self::Shared(value) => ReservationWrite::Shared(value.borrow_mut()),
+            Self::Frame(value) => ReservationWrite::Frame(value),
+        }
+    }
+}
+
 /// Owned wire bytes and their still-charged transport allocation. Not Clone or Send.
 pub struct ReliableResponse {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) reservation: SharedReplyReservation,
+    pub(crate) bytes: ResponseBytes,
+    pub(crate) reservation: ResponseReservation,
 }
 
 impl ReliableResponse {
@@ -204,7 +308,7 @@ impl ReliableResponse {
     }
 
     /// Restore an unsent bounded handoff without relinquishing its original credit.
-    pub fn from_parts(bytes: Vec<u8>, lease: ResponseLease) -> Self {
+    pub fn from_parts(bytes: ResponseBytes, lease: ResponseLease) -> Self {
         assert!(bytes.capacity() <= lease.capacity());
         Self {
             bytes,
@@ -214,7 +318,7 @@ impl ReliableResponse {
 
     /// Separate wire bytes for a bounded socket handoff. Keep the lease on the Host
     /// thread until the socket confirms flush completion or destroys the payload.
-    pub fn into_parts(self) -> (Vec<u8>, ResponseLease) {
+    pub fn into_parts(self) -> (ResponseBytes, ResponseLease) {
         (self.bytes, ResponseLease(self.reservation))
     }
 }
@@ -222,7 +326,7 @@ impl ReliableResponse {
 /// Source bytes and independent copy credit, retained until transport completion.
 /// Not Clone or Send; the owning adapter keeps this on the Host thread.
 pub struct PreparedOutputCopy {
-    bytes: Vec<u8>,
+    bytes: ResponseBytes,
     source: ResponseLease,
     _copy: ReliableOutputLease,
 }
@@ -235,7 +339,7 @@ impl PreparedOutputCopy {
 
     /// Destroy the source allocation without completing the external delivery.
     pub fn release_source(&mut self) {
-        self.bytes = Vec::new();
+        self.bytes = Vec::new().into();
         self.source.0.borrow_mut().encoded(0);
     }
 }
@@ -249,7 +353,7 @@ impl std::ops::Deref for ReliableResponse {
 }
 
 /// Host-thread completion credit; dropping it acknowledges final payload release.
-pub struct ResponseLease(SharedReplyReservation);
+pub struct ResponseLease(ResponseReservation);
 
 impl ResponseLease {
     /// Retained encoded capacity, excluding bounded adapter metadata.

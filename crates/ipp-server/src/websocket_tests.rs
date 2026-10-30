@@ -9,6 +9,77 @@ use tungstenite::protocol::Role;
 
 pub(super) const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[derive(Default)]
+struct WakeCounter(AtomicUsize);
+
+impl std::task::Wake for WakeCounter {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[test]
+fn connection_notifications_coalesce_and_reuse_the_waiter() {
+    let (notify, mut notified) = ConnectionWakeup::new();
+    let wakes = Arc::new(WakeCounter::default());
+    let waker = Waker::from(wakes.clone());
+    let mut cx = Context::from_waker(&waker);
+
+    // Notifications before registration are retained, with no lost wake.
+    notify.notify();
+    notify.notify();
+    assert_eq!(notified.poll(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(notified.poll(&mut cx), Poll::Pending);
+    for expected in 1..=4096 {
+        notify.notify();
+        notify.notify();
+        assert_eq!(wakes.0.load(Ordering::Relaxed), expected);
+        assert_eq!(notified.poll(&mut cx), Poll::Ready(Ok(())));
+        assert_eq!(notified.poll(&mut cx), Poll::Pending);
+    }
+    drop(notify);
+    assert_eq!(wakes.0.load(Ordering::Relaxed), 4097);
+    assert_eq!(notified.poll(&mut cx), Poll::Ready(Err("Host closed")));
+}
+
+#[test]
+fn connection_waiter_replaces_a_cancelled_wait_and_releases_its_task() {
+    let (notify, mut notified) = ConnectionWakeup::new();
+    let first = Arc::new(WakeCounter::default());
+    let first_waker = Waker::from(first.clone());
+    assert_eq!(
+        notified.poll(&mut Context::from_waker(&first_waker)),
+        Poll::Pending
+    );
+
+    let second = Arc::new(WakeCounter::default());
+    let second_waker = Waker::from(second.clone());
+    assert_eq!(
+        notified.poll(&mut Context::from_waker(&second_waker)),
+        Poll::Pending
+    );
+    assert_eq!(Arc::strong_count(&first), 2);
+    notify.notify();
+    assert_eq!(first.0.load(Ordering::Relaxed), 0);
+    assert_eq!(second.0.load(Ordering::Relaxed), 1);
+
+    drop(notified);
+    assert_eq!(Arc::strong_count(&second), 2);
+    notify.notify();
+    drop(notify);
+    assert_eq!(second.0.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+fn connection_closure_preserves_a_pending_notification() {
+    let (notify, mut notified) = ConnectionWakeup::new();
+    notify.notify();
+    drop(notify);
+    let mut cx = Context::from_waker(Waker::noop());
+    assert_eq!(notified.poll(&mut cx), Poll::Ready(Ok(())));
+    assert_eq!(notified.poll(&mut cx), Poll::Ready(Err("Host closed")));
+}
+
 #[test]
 fn frame_deadline_subtracts_work_and_wakeup_jitter_without_accumulating_drift() {
     let origin = Instant::now();

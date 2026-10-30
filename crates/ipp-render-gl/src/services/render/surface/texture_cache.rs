@@ -81,7 +81,7 @@
 
 use crate::RenderError;
 use ipp_core::{EntityId, SurfaceCachePolicy, WorldId, services::asset_management::AssetKey};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 /// Context-wide byte budget for required and optional Surface images: 128 MiB.
 /// Asset textures and output/depth buffers have separate ownership and accounting.
@@ -365,7 +365,7 @@ pub(crate) struct SurfaceTextureCache<T> {
     /// Incremented by every plan; orders least-recent use across Worlds.
     stamp: u64,
     /// Worlds participating in the current output-graph plan.
-    planned: BTreeSet<WorldId>,
+    planned: Vec<WorldId>,
     counts: SurfaceCacheFrameCounts,
     /// Reused budget ordering scratch.
     order: Vec<(bool, u64, (WorldId, EntityId))>,
@@ -380,7 +380,7 @@ impl<T> Default for SurfaceTextureCache<T> {
             resident_images: 0,
             entries: BTreeMap::new(),
             stamp: 0,
-            planned: BTreeSet::new(),
+            planned: Vec::new(),
             counts: SurfaceCacheFrameCounts::default(),
             order: Vec::new(),
         }
@@ -430,7 +430,8 @@ impl<T> SurfaceTextureCache<T> {
         targets: &mut A,
     ) -> Result<(), RenderError> {
         self.stamp += 1;
-        self.planned = worlds.iter().copied().collect();
+        self.planned.clear();
+        self.planned.extend_from_slice(worlds);
         self.counts = SurfaceCacheFrameCounts::default();
         let limit = limit.min(SURFACE_CACHE_MAX_DIMENSION);
         for (world, input) in inputs {
@@ -983,7 +984,8 @@ impl<T> SurfaceTextureCache<T> {
         completed: bool,
         targets: &mut A,
     ) -> bool {
-        let planned = self.planned.remove(&world);
+        let planned = self.planned.contains(&world);
+        self.planned.retain(|entry| *entry != world);
         if !(planned && completed) {
             // Nothing planned was necessarily presented.
             for (_, entry) in self.entries.range_mut(world_range(world)) {
@@ -1051,7 +1053,7 @@ impl<T> SurfaceTextureCache<T> {
         });
         self.resident_bytes -= released;
         self.resident_images -= images;
-        self.planned.remove(&world);
+        self.planned.retain(|entry| *entry != world);
     }
 
     /// Release every entry after unload or context loss.

@@ -4,6 +4,8 @@
     "sourceRoots": [
       "tests/rendering/cef/",
       "tools/pipeline/cef.py",
+      "crates/ipp-server/cef/",
+      "crates/ipp-render-gl/src/services/render/device/gles/external_image/",
       "crates/ipp-render-gl/src/services/render/device/gles/dma_buf/",
       "crates/ipp-render-gl/src/services/render/device/gles/completion_fences.rs",
       "crates/ipp-render-gl/src/services/render/device/gles/completion_fences_tests.rs",
@@ -13,12 +15,28 @@
       "crates/ipp-render-gl/src/services/render/shaders/surface-intersection-fragment.glsl",
       "crates/ipp-render-gl/examples/smoke/egl.rs"
     ],
-    "commands": [{
-      "name": "native",
-      "command": ["@python", "tests/rendering/cef/run.py", "--egl-dir", "@egl"],
-      "builds": ["cef-surface-prototype"],
-      "requirements": ["rust", "gles", "cef-display"]
-    }]
+    "commands": [
+      {
+        "name": "native",
+        "platforms": [
+          "linux"
+        ],
+        "command": [
+          "@python",
+          "tests/rendering/cef/run.py",
+          "--egl-dir",
+          "@egl"
+        ],
+        "builds": [
+          "cef-surface-prototype"
+        ],
+        "requirements": [
+          "rust",
+          "gles",
+          "cef-display"
+        ]
+      }
+    ]
   },
   "headless-client": {
     "description": "Maintained headless example CLI against a real native Host with explicit World cleanup",
@@ -112,7 +130,10 @@
       "crates/ipp-core/src/world/systems/canvas/web_content_tests.rs",
       "crates/ipp-core/tests/debug_geometry.rs",
       "crates/ipp-core/src/host/queries/scene.rs",
-      "crates/ipp-core/tests/attachment_placement.rs"
+      "crates/ipp-core/tests/attachment_placement.rs",
+      "crates/ipp-host-session/tests/frame_allocations.rs",
+      "crates/ipp-core/src/host/publication_storage.rs",
+      "crates/ipp-core/src/host/queries/scene_traversal.rs"
     ],
     "commands": [
       {
@@ -339,6 +360,24 @@
           "ipp-render-gl",
           "--lib",
           "canvas::scene::tests",
+          "--locked"
+        ],
+        "builds": [],
+        "requirements": [
+          "rust"
+        ]
+      },
+      {
+        "name": "frame-allocations",
+        "command": [
+          "cargo",
+          "test",
+          "-p",
+          "ipp-host-session",
+          "--features",
+          "instrumentation",
+          "--test",
+          "frame_allocations",
           "--locked"
         ],
         "builds": [],
@@ -827,6 +866,7 @@
       "tests/runtime/pages/task-scheduler.ts",
       "tests/runtime/task-scheduler.test.ts",
       "crates/ipp-host-session/src/services/task_scheduler/",
+      "crates/ipp-host-session/tests/io_allocations.rs",
       "tools/products/transport-fixtures.mjs",
       "crates/ipp-host-session/src/services/bulk_read.rs",
       "crates/ipp-host-session/src/services/connection/bulk_reads.rs",
@@ -859,6 +899,12 @@
         "requirements": [
           "rust"
         ]
+      },
+      {
+        "name": "io-allocations",
+        "command": ["cargo", "test", "-p", "ipp-host-session", "--test", "io_allocations", "--locked"],
+        "builds": [],
+        "requirements": ["rust"]
       },
       {
         "name": "task-scheduler",
@@ -3204,10 +3250,14 @@
           "ipp-core",
           "--test",
           "plot_interpolation",
+          "--features",
+          "instrumentation",
           "--locked"
         ],
         "builds": [],
-        "requirements": ["rust"]
+        "requirements": [
+          "rust"
+        ]
       },
       {
         "name": "authoring",
@@ -3955,6 +4005,87 @@
       }
     ]
   },
+  "native-cef": {
+    "description": "macOS CEF accelerated frames, input and CanvasHtml lifetime through the native Host",
+    "sourceRoots": [
+      "crates/ipp-server/cef/",
+      "crates/ipp-server/examples/",
+      "crates/ipp-render-gl/",
+      "tools/pipeline/cef.py",
+      "tools/pipeline/cef_engine.py",
+      "tools/shared-host/",
+      "packages/ipp-client/",
+      "tests/rendering/native-cef.test.mjs",
+      "tests/rendering/drivers/native-cef.ts",
+      "tests/rendering/scenarios/native-cef.mjs",
+      "tests/rendering/fixtures/native-cef/"
+    ],
+    "commands": [
+      {
+        "name": "macos",
+        "platforms": [
+          "darwin"
+        ],
+        "command": [
+          "@node",
+          "--test",
+          "tests/rendering/native-cef.test.mjs"
+        ],
+        "builds": [
+          "gles-host-instrumentation",
+          "cef-engine",
+          "client"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      }
+    ]
+  },
+  "native-window": {
+    "description": "Native macOS window rendering, physical input, resize, reload and close through the real gallery client",
+    "sourceRoots": [
+      "tools/shared-host/",
+      "crates/ipp-server/examples/",
+      "crates/ipp-render-gl/examples/smoke/",
+      "tests/runtime/native-window.test.mjs",
+      "tests/runtime/scenarios/native-window.mjs"
+    ],
+    "commands": [
+      {
+        "name": "macos",
+        "platforms": [
+          "darwin"
+        ],
+        "command": [
+          "@node",
+          "--experimental-strip-types",
+          "--test",
+          "tests/runtime/native-window.test.mjs"
+        ],
+        "partitionExcludes": [
+          "target/cef-demo-pages",
+          "target/cef-engine",
+          "target/demos-cockpit-native-assets",
+          "target/gallery-platformer-native-assets",
+          "target/gles-host"
+        ],
+        "builds": [
+          "gles-host-instrumentation",
+          "font-assets",
+          "gallery-assets",
+          "shared-host"
+        ],
+        "requirements": [
+          "node",
+          "npm",
+          "gles"
+        ]
+      }
+    ]
+  },
   "shared-host": {
     "description": "Shared GLES Host discovery, private font snapshots and isolated React sessions",
     "sourceRoots": [
@@ -3964,7 +4095,12 @@
     "commands": [
       {
         "name": "native",
-        "partitionExcludes": ["target/gallery-platformer-native-assets", "target/demos-cockpit-native-assets"],
+        "partitionExcludes": [
+          "target/gallery-platformer-native-assets",
+          "target/demos-cockpit-native-assets",
+          "target/cef-engine",
+          "target/cef-demo-pages"
+        ],
         "command": [
           "@node",
           "--experimental-strip-types",

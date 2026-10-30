@@ -28,6 +28,7 @@ impl<D: RenderDevice> RenderService<D> {
             debug: crate::services::render::frame::debug_geometry::DebugGeometryRenderCache::new(
                 device.clone(),
             ),
+            analytic_surface: None,
             surface_program: None,
             surface_instance_program: None,
             surface_bitmap_program: None,

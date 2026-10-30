@@ -144,6 +144,11 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
 
+    if args.scene == "cockpit-surfaces":
+        from .cockpit_benchmark import plan as plan_cockpit
+
+        return plan_cockpit(args, tasks)
+
     if args.device == "software" and not (
         args.scene == "gui-stress" and args.backend == "native" and args.instrumented
     ):

@@ -33,6 +33,9 @@ const float TAU = 6.28318531;
 const float FAR = 1.0e6;
 
 in vec2 v_surface_position;
+vec2 surface_position;
+// SURFACE_INTERSECTION_FRAGMENT
+flat in vec4 v_intersection_rect;
 flat in vec4 v_placement; // position.xy, size.xy; a stroke's own bounds
 flat in vec4 v_shape; // box: corner_rx, corner_ry, border_width (stroke thickness), accent_width; arc: radius, half sweep, thickness, duty
 flat in vec4 v_corner_cut; // box: cut per corner [tl, tr, br, bl]; stroke: first segment [center.xy, half.xy]; arc: [center.xy, middle.xy]
@@ -209,7 +212,7 @@ void box_coverage(bool checker, out float outer, out float shape_cov, out float 
     vec2 half_size = abs(v_placement.zw) * 0.5;
     vec2 center = v_placement.xy + v_placement.zw * 0.5;
     // Corners follow the box's own orientation: mirroring a box mirrors its corners.
-    vec2 p = (v_surface_position - center)
+    vec2 p = (surface_position - center)
         * vec2(v_placement.z < 0.0 ? -1.0 : 1.0, v_placement.w < 0.0 ? -1.0 : 1.0);
     vec4 cut = v_corner_cut;
     float border_width = max(v_shape.z, 0.0);
@@ -330,7 +333,7 @@ void segment_coverage(
 
 // Stroke distance and coverage: the union of its segments, painted by the fill.
 void stroke_coverage(out float outer, out float shape_cov) {
-    vec2 local = v_surface_position - v_placement.xy;
+    vec2 local = surface_position - v_placement.xy;
     // Derivatives precede the segments' flat branches.
     vec2 dx = dFdx(local);
     vec2 dy = dFdy(local);
@@ -375,7 +378,7 @@ float dash_integral(float x, float duty) {
 // along the ring: thin dashes keep their area and minified dashes fade to their
 // duty instead of aliasing.
 void arc_coverage(out float outer, out float shape_cov) {
-    vec2 local = v_surface_position - v_placement.xy - v_corner_cut.xy;
+    vec2 local = surface_position - v_placement.xy - v_corner_cut.xy;
     // Derivatives precede the flat branches below.
     vec2 dx = dFdx(local);
     vec2 dy = dFdy(local);
@@ -491,7 +494,7 @@ vec4 paint_fill(vec2 local, float outer) {
         v_gradient_coords.zw,
         v_color0,
         outer / max(abs(scale.x), abs(scale.y)),
-        v_paint_data, v_surface_position
+        v_paint_data, surface_position
     );
     color = clamp(color, 0.0, 1.0);
     return vec4(color.rgb, color.a * v_color1.y);
@@ -532,7 +535,7 @@ vec4 shape_color(float paint) {
     // Fill color evaluation: solid, linear gradient, radial gradient, colour field or
     // custom paint.
     vec4 fill_color = v_color0;
-    vec2 local_pos = v_surface_position - v_placement.xy;
+    vec2 local_pos = surface_position - v_placement.xy;
     if (fill_type > GUI_FILL_PAINT - 0.5) {
         fill_color = paint_fill(local_pos, outer);
     } else if (fill_type > 0.5 && fill_type < 1.5) {
@@ -586,14 +589,25 @@ vec4 shape_color(float paint) {
 }
 
 void main() {
+    surface_position = intersection_position(v_surface_position);
+    vec2 footprint = max(fwidth(surface_position),vec2(1e-6));
+    int sections = int(floor(v_material_params.x/64.0));
+    vec4 margin = vec4(footprint,footprint)*2.0;
+    if ((sections&1)!=0) margin.x=0.0;
+    if ((sections&2)!=0) margin.y=0.0;
+    if ((sections&4)!=0) margin.z=0.0;
+    if ((sections&8)!=0) margin.w=0.0;
+    bool outside_record = any(lessThan(surface_position,v_intersection_rect.xy-margin.xy)) || any(greaterThanEqual(surface_position,v_intersection_rect.zw+margin.zw));
+
     // Every screen-space derivative precedes the discard: GLSL ES 3.00 leaves
     // derivatives undefined once a fragment of the quad has discarded.
-    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
-    vec2 clip_inside = min(v_surface_position - v_clip.xy, v_clip.zw - v_surface_position);
+    vec2 clip_width = max(fwidth(surface_position), vec2(1.0 / 65536.0));
+    vec2 clip_inside = min(surface_position - v_clip.xy, v_clip.zw - surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
 
     vec4 color = shape_color(mod(v_material_params.x, 64.0));
-    float out_alpha = color.a * clip_coverage;
+    float out_alpha = color.a * clip_coverage * intersection_coverage;
+    if (u_intersection.x != 0.0 && outside_record) discard;
     if (out_alpha <= 0.0) discard;
 
     o_color = vec4(color.rgb, out_alpha);

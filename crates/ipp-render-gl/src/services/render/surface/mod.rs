@@ -1,7 +1,8 @@
-//! Whole-Surface images: the shared texture cache, its refresh scheduling, projected
-//! presentation, sampled meshes and image quality.
+//! Surface presentation: analytic intersections, whole-Surface image caches,
+//! refresh scheduling, sampled meshes and image quality.
 
 pub(super) mod allocation;
+pub(super) mod analytic;
 pub(super) mod cache_refresh;
 pub(super) mod coverage;
 pub(super) mod damage;

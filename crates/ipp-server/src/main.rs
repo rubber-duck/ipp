@@ -70,6 +70,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         file_access,
         http_prefixes,
         asset_cache_bytes,
+        ..Default::default()
     };
     ipp_server::websocket::serve(listener, options, |address| {
         println!("{{\"event\":\"ready\",\"url\":\"ws://{address}\"}}");

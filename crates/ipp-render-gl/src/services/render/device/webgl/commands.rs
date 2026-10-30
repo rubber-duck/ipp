@@ -289,6 +289,25 @@ impl RenderDevice for WebGlRenderDevice {
         })
     }
 
+    fn set_surface_intersection(
+        &mut self,
+        program: &WebGlRenderProgram,
+        projection: &[f32; 16],
+        inverse: &[f32; 16],
+        parameters: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        // SAFETY: The bridge synchronously copies these live immutable arrays
+        // (16, 16 and 4 floats), retaining no views and never reentering Rust.
+        self.check(unsafe {
+            set_surface_intersection(
+                program.id,
+                projection.as_ptr(),
+                inverse.as_ptr(),
+                parameters.as_ptr(),
+            )
+        })
+    }
+
     fn shadow_map_limit(&self) -> u32 {
         // SAFETY: The context bridge returns scalar cached device limits and retains no references.
         unsafe { shadow_map_limit() }

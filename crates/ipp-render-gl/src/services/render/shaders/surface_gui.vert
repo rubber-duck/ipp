@@ -37,6 +37,7 @@ layout(location = 10) in vec4 a_glow_color; // glow linear RGB, alpha times inte
 layout(location = 11) in vec4 a_clip; // min.xy, max.xy
 
 out vec2 v_surface_position;
+flat out vec4 v_intersection_rect;
 flat out vec4 v_placement;
 flat out vec4 v_shape;
 flat out vec4 v_corner_cut;
@@ -93,6 +94,7 @@ vec2 antialias_pad(vec4 projected) {
     return min(ANTIALIAS_PIXELS * footprint, bound);
 }
 
+// SURFACE_INTERSECTION_VERTEX
 void main() {
     // Corners are selected, not interpolated, so they equal the record's lanes
     // exactly and quads sharing an edge keep sharing it.
@@ -125,6 +127,7 @@ void main() {
         position += movable * (interior * sign(center_delta) * min(pad, abs(center_delta))
             - exterior_low * exterior_pad + exterior_high * exterior_pad);
     }
+    v_intersection_rect = a_rect;
     v_surface_position = position;
     v_placement = a_placement;
     v_shape = a_shape;
@@ -139,4 +142,5 @@ void main() {
     v_glow_color = a_glow_color;
     v_clip = a_clip;
     gl_Position = u_mvp * vec4(position, 0.0, 1.0);
+    if (u_intersection.x != 0.0) gl_Position = intersection_vertex(vec2(far_corner),a_rect);
 }

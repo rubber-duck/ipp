@@ -21,7 +21,7 @@ fn frame_deadline_subtracts_work_and_wakeup_jitter_without_accumulating_drift() 
         });
         let work = Duration::from_millis(8);
         let finished = deadline + jitter + work;
-        deadline = advance_frame_deadline(deadline, finished);
+        deadline = advance_frame_deadline(deadline, finished, FRAME_INTERVAL);
 
         assert_eq!(deadline, origin + FRAME_INTERVAL * (frame + 1));
         assert_eq!(
@@ -35,12 +35,12 @@ fn frame_deadline_subtracts_work_and_wakeup_jitter_without_accumulating_drift() 
 fn frame_deadline_discards_overrun_backlog_without_adding_sleep() {
     let deadline = Instant::now();
     let finished = deadline + FRAME_INTERVAL * 3 + Duration::from_millis(5);
-    let next = advance_frame_deadline(deadline, finished);
+    let next = advance_frame_deadline(deadline, finished, FRAME_INTERVAL);
 
     assert_eq!(next, finished);
     // Once work fits the budget again, the next frame waits for its deadline.
     assert_eq!(
-        advance_frame_deadline(next, finished + Duration::from_millis(8)),
+        advance_frame_deadline(next, finished + Duration::from_millis(8), FRAME_INTERVAL),
         finished + FRAME_INTERVAL,
     );
 }
@@ -50,7 +50,23 @@ fn slow_frames_run_at_the_available_rate_without_extra_sleep() {
     let mut deadline = Instant::now();
     for _ in 0..60 {
         let finished = deadline + Duration::from_millis(20);
-        deadline = advance_frame_deadline(deadline, finished);
+        deadline = advance_frame_deadline(deadline, finished, FRAME_INTERVAL);
+
+        assert_eq!(deadline, finished);
+    }
+}
+
+#[test]
+fn uncapped_frames_never_wait_even_when_work_finishes_below_default_interval() {
+    assert!(!ServeOptions::default().uncapped);
+    let mut deadline = Instant::now();
+    for work in [
+        Duration::ZERO,
+        Duration::from_micros(100),
+        Duration::from_millis(2),
+    ] {
+        let finished = deadline + work;
+        deadline = advance_frame_deadline(deadline, finished, Duration::ZERO);
 
         assert_eq!(deadline, finished);
     }

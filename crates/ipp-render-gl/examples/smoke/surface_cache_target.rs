@@ -32,12 +32,24 @@ pub(crate) fn run(
     }
 
     let program = device.create_program(
-        include_str!("../../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../../src/services/render/shaders/surface_cache.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_cache.frag"
+        )),
     )?;
     let bitmap_program = device.create_program(
-        include_str!("../../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../../src/services/render/shaders/surface_bitmap.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.frag"
+        )),
     )?;
     let white = device.create_texture(1, 1, &[255; 4])?;
     let mut target = device.create_surface_cache_target(16, 8)?;

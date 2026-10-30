@@ -39,7 +39,23 @@ fn main() {
         entries.sort();
         for path in entries {
             println!("cargo:rerun-if-changed={}", path.display());
-            let source = std::fs::read_to_string(&path).expect("read shader source");
+            let mut source = std::fs::read_to_string(&path).expect("read shader source");
+            for (marker, file) in [
+                (
+                    "// SURFACE_INTERSECTION_VERTEX",
+                    "surface-intersection-vertex.glsl",
+                ),
+                (
+                    "// SURFACE_INTERSECTION_FRAGMENT",
+                    "surface-intersection-fragment.glsl",
+                ),
+            ] {
+                if source.contains(marker) {
+                    let shared = std::fs::read_to_string(source_directory.join(file))
+                        .expect("read shared intersection shader");
+                    source = source.replace(marker, &shared);
+                }
+            }
             let name = path.file_name().expect("shader file name");
             std::fs::write(destination.join(name), strip_comments(&source))
                 .expect("write embedded shader");

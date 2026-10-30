@@ -39,6 +39,7 @@ export { workerTransport } from "../../../../packages/ipp-client/src/worker.js";
 export { guiLayerTransitions } from "../scenarios/gui-layer-transitions.js";
 export { guiLayers } from "../scenarios/gui-layers.js";
 export { guiOverlays } from "../scenarios/gui-overlays.js";
+export { guiAnalyticSurfaces } from "../scenarios/gui-analytic-surfaces.js";
 export { guiProjectedAdvanced } from "../scenarios/gui-projected-advanced.js";
 export { guiWidgets } from "../scenarios/gui-widgets.js";
 export { guiPresentationRetention } from "../scenarios/gui-presentation-retention.js";

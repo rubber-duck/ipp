@@ -126,6 +126,25 @@ pub trait RenderDevice: 'static {
         frame: &crate::RenderLightingFrame,
     ) -> Result<(), RenderError>;
 
+    /// Select analytic curved-surface intersection for the next Canvas draw.
+    /// Parameters are provider kind (zero disables), curvature, far/near branch
+    /// and the enclosing radius of the content domain.
+    fn set_surface_intersection(
+        &mut self,
+        _program: &Self::Program,
+        _projection: &[f32; 16],
+        _inverse: &[f32; 16],
+        parameters: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        if parameters[0] == 0.0 {
+            Ok(())
+        } else {
+            Err(RenderError::RenderDevice(
+                "analytic Surface intersections unavailable".into(),
+            ))
+        }
+    }
+
     /// Maximum square atlas dimension supported by this device and viewport.
     fn shadow_map_limit(&self) -> u32 {
         0

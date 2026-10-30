@@ -60,12 +60,24 @@ pub(crate) fn run(context: &super::egl::Context, evidence: &std::path::Path) -> 
     // A fresh device starts its sampling schedule with a checked frame end.
     let mut device = context.device()?;
     let program = device.create_program(
-        include_str!("../../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../../src/services/render/shaders/surface_bitmap.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.frag"
+        )),
     )?;
     let compositor = device.create_program(
-        include_str!("../../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../../src/services/render/shaders/surface_cache.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_cache.frag"
+        )),
     )?;
     let white = device.create_texture(1, 1, &[255; 4])?;
     let target = device.create_surface_cache_target(32, 16)?;

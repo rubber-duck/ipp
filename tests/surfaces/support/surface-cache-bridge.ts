@@ -11,6 +11,8 @@
  * pixels follow from linear premultiplied blending, independently of the bridge.
  */
 
+import { renderShaderSource } from "../../harness/shader-sources.js";
+
 type BridgeImport = (...values: number[]) => number;
 
 interface WebGlBridge {
@@ -26,7 +28,6 @@ interface WebGlBridge {
 
 const WIDTH = 320;
 const HEIGHT = 240;
-const SHADERS = "/crates/ipp-render-gl/src/services/render/shaders";
 
 /** Content [0, 2] x [0, 1] metres to clip space, texture row zero at the top. */
 const CONTENT = [1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, -1, -1, 0, 1];
@@ -143,9 +144,7 @@ export async function probeSurfaceCacheBridge(bridgeUrl: string, gui: boolean) {
   };
   const live = () => device.info().surfaceCacheTargetsLive as number;
   const source = async (name: string) => {
-    const response = await fetch(`${SHADERS}/${name}`);
-    if (!response.ok) throw new Error(`Missing shader ${name}`);
-    return bytes(new TextEncoder().encode(await response.text()));
+    return bytes(new TextEncoder().encode(await renderShaderSource(name)));
   };
   const [bitmapVertex, bitmapFragment, cacheFragment, presentVertex, present] =
     await Promise.all(

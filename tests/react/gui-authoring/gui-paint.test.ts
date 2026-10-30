@@ -48,6 +48,7 @@ if (
 if (
   projected !== undefined &&
   projected !== "advanced" &&
+  projected !== "analytic" &&
   projected !== "recovery" &&
   projected !== "transitions"
 )
@@ -161,6 +162,14 @@ for (const variant of native || instrumentation
                         },
                       };
                     }
+                    if (projected === "analytic")
+                      return {
+                        analytic: await scenario.guiAnalyticSurfaces(
+                          host,
+                          contract,
+                          assets,
+                        ),
+                      };
                     if (projected)
                       return {
                         advanced: await scenario.guiProjectedAdvanced(
@@ -309,6 +318,7 @@ for (const variant of native || instrumentation
       await mkdir(captures, { recursive: true });
       for (const image of [
         ...(result.value.images ?? []),
+        ...(result.value.analytic?.images ?? []),
         ...(result.value.advanced?.images ?? []),
         ...(result.value.advanced?.comparisons ?? []),
         ...(result.value.layers?.images ?? []),
@@ -331,6 +341,20 @@ for (const variant of native || instrumentation
         );
         assert.equal(result.value.transitions.failure, null);
         assert.equal(result.value.transitions.images.length, 31);
+        return;
+      }
+      if (result.value.analytic) {
+        await writeFile(
+          resolve(captures, "analytic-observations.json"),
+          JSON.stringify(
+            result.value.analytic.observations,
+            (_, value) =>
+              typeof value === "bigint" ? value.toString() : value,
+            2,
+          ),
+        );
+        assert.equal(result.value.analytic.failure, null);
+        assert.equal(result.value.analytic.images.length, 27);
         return;
       }
       if (result.value.advanced) {

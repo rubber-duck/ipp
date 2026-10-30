@@ -1945,26 +1945,40 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     assert_eq!(refined, "TEBTEFCC");
 }
 
+/// Exercise image projection explicitly; uncached coincident curves are analytic.
 fn projected(host: &mut ipp_core::HostRuntime, panel: CanvasSurface, curvature: f32, spacing: f32) {
-    canvas::apply(
-        host,
-        panel.parent,
-        vec![
-            Command::RemoveComponent {
-                entity: EntityRef::Handle(panel.anchor),
-                component: ComponentValue::FLAT_SURFACE,
-            },
-            Command::insert_value(
-                EntityRef::Handle(panel.anchor),
-                ComponentValue::CylinderSurface(ipp_core::CylinderSurface {
-                    width: 1.0,
-                    height: 1.0,
-                    curvature,
-                    layer_spacing: spacing,
-                }),
-            ),
-        ],
-    );
+    let has_policy = host
+        .world_mut(panel.parent)
+        .unwrap()
+        .component_incarnation(panel.anchor, ComponentValue::SURFACE_CACHE)
+        .is_some();
+    let mut commands = vec![
+        Command::RemoveComponent {
+            entity: EntityRef::Handle(panel.anchor),
+            component: ComponentValue::FLAT_SURFACE,
+        },
+        Command::insert_value(
+            EntityRef::Handle(panel.anchor),
+            ComponentValue::CylinderSurface(ipp_core::CylinderSurface {
+                width: 1.0,
+                height: 1.0,
+                curvature,
+                layer_spacing: spacing,
+            }),
+        ),
+    ];
+    if !has_policy {
+        commands.push(Command::insert_value(
+            EntityRef::Handle(panel.anchor),
+            ComponentValue::SurfaceCache(SurfaceCache {
+                // Keep images current, without optional distance throttling.
+                direct_distance: 1000.0,
+                ..ALWAYS
+            }),
+        ));
+    }
+
+    canvas::apply(host, panel.parent, commands);
 }
 
 fn edit_projected(
@@ -2400,7 +2414,10 @@ fn projected_provider_replacement_context_recovery_and_affine_transition_retire_
     let flat = frame(&mut renderer, &mut host, world, 0.0);
     assert_eq!(flat.failed_draw_calls, 0);
     assert_eq!(state.cache_targets_live.get(), 0);
-    assert!(diagnostics(&renderer, world).is_empty());
+    assert_eq!(
+        record(&renderer, world, panel.anchor).presentation,
+        SurfaceCachePresentation::Near
+    );
 }
 
 #[test]

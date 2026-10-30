@@ -9,6 +9,8 @@
       "crates/ipp-render-gl/src/services/render/device/gles/completion_fences_tests.rs",
       "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.vert",
       "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.frag",
+      "crates/ipp-render-gl/src/services/render/shaders/surface-intersection-vertex.glsl",
+      "crates/ipp-render-gl/src/services/render/shaders/surface-intersection-fragment.glsl",
       "crates/ipp-render-gl/examples/smoke/egl.rs"
     ],
     "commands": [{
@@ -1560,6 +1562,7 @@
       "tests/react/gui-authoring/scenarios/gui-overlays.tsx",
       "tests/react/gui-authoring/scenarios/gui-projected-surfaces.tsx",
       "tests/react/gui-authoring/scenarios/gui-projected-advanced.tsx",
+      "tests/react/gui-authoring/scenarios/gui-analytic-surfaces.tsx",
       "tests/react/gui-authoring/scenarios/gui-layer-transitions.tsx",
       "tests/react/gui-authoring/projected-oracle.test.ts",
       "tests/react/gui-authoring/gui-paint.test.ts",
@@ -1647,6 +1650,24 @@
         "requirements": ["node", "npm", "browser", "gles"]
       },
       {
+        "name": "analytic-webgl",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "webgl",
+          "--projected",
+          "analytic"
+        ],
+        "builds": ["react-gui-authoring", "browser:render", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render-instrumentation",
+          "target/gles-host",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
         "name": "projected-advanced-webgl",
         "command": [
           "@node",
@@ -1663,6 +1684,26 @@
           "target/gles-host-instrumentation"
         ],
         "requirements": ["node", "npm", "browser"]
+      },
+      {
+        "name": "analytic-gles",
+        "command": [
+          "@node",
+          "target/react-gui-authoring/gui-paint.test.js",
+          "--backend",
+          "gles",
+          "--projected",
+          "analytic",
+          "--egl-dir",
+          "@egl"
+        ],
+        "builds": ["react-gui-authoring", "gles-host", "surface-assets"],
+        "partitionExcludes": [
+          "target/browser-build/render",
+          "target/browser-build/render-instrumentation",
+          "target/gles-host-instrumentation"
+        ],
+        "requirements": ["node", "npm", "browser", "gles"]
       },
       {
         "name": "projected-advanced-gles",
@@ -4805,6 +4846,8 @@
       "crates/ipp-render-gl/src/services/render/device/webgl/webgl-web-images.ts",
       "crates/ipp-render-gl/src/services/render/device/webgl/webgl-completion-fences.ts",
       "tests/rendering/drivers/browser-html-canvas.ts",
+      "tests/harness/shader-sources.ts",
+      "crates/ipp-render-gl/src/services/render/shaders/",
       "tests/rendering/scenarios/html-canvas.ts",
       "tools/products/html-canvas-fixtures.mjs",
       "tools/build/browser-options.mjs",

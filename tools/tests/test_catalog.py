@@ -146,6 +146,8 @@ class CatalogTests(unittest.TestCase):
             "crates/ipp-render-gl/src/services/render/device/gles/completion_fences.rs",
             "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.vert",
             "crates/ipp-render-gl/src/services/render/shaders/surface_bitmap.frag",
+            "crates/ipp-render-gl/src/services/render/shaders/surface-intersection-vertex.glsl",
+            "crates/ipp-render-gl/src/services/render/shaders/surface-intersection-fragment.glsl",
             "crates/ipp-render-gl/examples/smoke/egl.rs",
         ):
             with self.subTest(path=path):

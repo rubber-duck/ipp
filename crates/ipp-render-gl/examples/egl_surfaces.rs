@@ -25,12 +25,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = smoke::egl::Context::new(&library_dir, WIDTH, HEIGHT)?;
     let mut device = context.device()?;
     let path_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface.vert"),
-        include_str!("../src/services/render/shaders/surface.frag"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.vert")),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.frag")),
     )?;
     let bitmap_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../src/services/render/shaders/surface_bitmap.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.frag"
+        )),
     )?;
     use ipp_core::services::asset_management::formats::quadratic::{
         QuadraticContour, QuadraticSegment,

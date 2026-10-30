@@ -146,6 +146,34 @@ impl RenderDevice for GlesRenderDevice {
         self.lighting_uniforms(program, model, normal, surface, frame)
     }
 
+    fn set_surface_intersection(
+        &mut self,
+        program: &GlesRenderProgram,
+        projection: &[f32; 16],
+        inverse: &[f32; 16],
+        parameters: &[f32; 4],
+    ) -> Result<(), RenderError> {
+        let mode = self.surface_location(program, c"u_intersection");
+        if mode < 0 {
+            return Ok(());
+        }
+        let project = self.surface_location(program, c"u_intersection_projection");
+        let unproject = self.surface_location(program, c"u_intersection_inverse");
+        self.use_program(program.id);
+        self.program_vec4(program, mode, parameters);
+        let viewport = [self.surface_viewport[0], self.surface_viewport[1], 0.0, 0.0];
+        self.program_vec4(
+            program,
+            self.surface_location(program, c"u_viewport"),
+            &viewport,
+        );
+        if parameters[0] != 0.0 {
+            self.program_mat4(program, project, projection);
+            self.program_mat4(program, unproject, inverse);
+        }
+        self.check_draw()
+    }
+
     fn shadow_map_limit(&self) -> u32 {
         self.max_texture_size
             .min(self.max_viewport[0] as u32)

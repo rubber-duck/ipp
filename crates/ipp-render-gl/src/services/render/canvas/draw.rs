@@ -3,6 +3,7 @@
 use super::super::assets::loaders::GlTextureData;
 use super::super::retained::surface_paint::{CANVAS_SURFACE, SurfacePaint};
 use super::super::statistics::RenderFrameWork;
+use super::super::surface::analytic::upload as upload_intersection;
 use super::layering::{CanvasChild, CanvasLayering, canvas_attachment};
 use super::scene::{CanvasScene, effective_clip};
 use crate::{RenderDevice, RenderError, RenderService};
@@ -268,8 +269,10 @@ impl<D: RenderDevice> RenderService<D> {
                 clip,
                 opacity,
             );
-        self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
-        self.populate_glyph_misses(&scene)?;
+        if self.analytic_surface.is_none() {
+            self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
+            self.populate_glyph_misses(&scene)?;
+        }
         let mut ops = std::mem::take(&mut self.surface_ops);
         self.prepare_gui_work(&scene, paint, &mut ops, stats, clip)?;
         // The operations already follow logical painter order. Stable sorting
@@ -440,6 +443,11 @@ impl<D: RenderDevice> RenderService<D> {
                             )
                         })
                 };
+                upload_intersection(
+                    self.analytic_surface.as_ref(),
+                    &mut *self.device.borrow_mut(),
+                    program,
+                )?;
                 cache.draw_run(program, path, &run, paint, mvp, instances, build, stats)?;
             }
             CanvasPrimitive::Path {
@@ -503,6 +511,11 @@ impl<D: RenderDevice> RenderService<D> {
                 } else {
                     self.surface_program.as_ref().expect("shared path program")
                 };
+                upload_intersection(
+                    self.analytic_surface.as_ref(),
+                    &mut *self.device.borrow_mut(),
+                    program,
+                )?;
                 self.device.borrow_mut().draw_surface_path(
                     program,
                     data.gpu.as_ref().expect("live generated path"),
@@ -577,6 +590,11 @@ impl<D: RenderDevice> RenderService<D> {
                         .copied()
                         .unwrap_or_else(|| data.drawing.bounds());
                     let program = self.surface_program.as_ref().unwrap();
+                    upload_intersection(
+                        self.analytic_surface.as_ref(),
+                        &mut *self.device.borrow_mut(),
+                        program,
+                    )?;
                     self.device.borrow_mut().draw_surface_path(
                         program, path, &bounds, range, mvp, &placement, &clip, &color, fill_rule,
                     )?;
@@ -606,6 +624,11 @@ impl<D: RenderDevice> RenderService<D> {
                     )?);
                 }
                 let program = self.surface_bitmap_program.as_ref().unwrap();
+                upload_intersection(
+                    self.analytic_surface.as_ref(),
+                    &mut *self.device.borrow_mut(),
+                    program,
+                )?;
                 let placement = [
                     style.position[0],
                     style.position[1],
@@ -660,6 +683,13 @@ impl<D: RenderDevice> RenderService<D> {
                     style.color[2],
                     style.color[3] * style.opacity,
                 ];
+                upload_intersection(
+                    self.analytic_surface.as_ref(),
+                    &mut *self.device.borrow_mut(),
+                    self.surface_bitmap_program
+                        .as_ref()
+                        .expect("bitmap program"),
+                )?;
                 self.device.borrow_mut().draw_surface_bitmap(
                     self.surface_bitmap_program
                         .as_ref()
@@ -713,7 +743,12 @@ impl<D: RenderDevice> RenderService<D> {
             .or_insert_with(|| {
                 super::super::retained::shape_batches::GuiBatchRenderCache::new(device.clone())
             });
-        let mut glyphs = self.glyph_batch_cache.get_mut(&scene.canvas.selection);
+        cache.set_analytic(self.analytic_surface.is_some());
+        let mut glyphs = if self.analytic_surface.is_none() {
+            self.glyph_batch_cache.get_mut(&scene.canvas.selection)
+        } else {
+            None
+        };
         cache.begin_surface(CANVAS_SURFACE);
 
         // Custom paints take their slots and parameter blocks before the boxes that
@@ -911,6 +946,11 @@ impl<D: RenderDevice> RenderService<D> {
             .gui_glyph_program
             .as_ref()
             .expect("glyph program created above");
+        upload_intersection(
+            self.analytic_surface.as_ref(),
+            &mut *self.device.borrow_mut(),
+            shapes,
+        )?;
         let atlas = &self.glyph_atlas;
         cache.draw_pieces_region(
             shapes,
@@ -1216,6 +1256,11 @@ impl<D: RenderDevice> RenderService<D> {
 
             let begun = bound_page.as_ref().map(|(_, begun)| begun.clone());
             let drawn = begun.unwrap_or(Ok(())).and_then(|()| {
+                upload_intersection(
+                    self.analytic_surface.as_ref(),
+                    &mut *self.device.borrow_mut(),
+                    program,
+                )?;
                 self.device.borrow_mut().draw_surface_path(
                     program,
                     glyph.path,

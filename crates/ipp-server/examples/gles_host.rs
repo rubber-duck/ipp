@@ -7,7 +7,7 @@
 //! only through `nativePresentationTransport` of `@ipp/client/testing`.
 //!
 //! ```text
-//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY [--io-read PREFIX DIRECTORY] [--http-prefix PREFIX]
+//! gles_host [--bind 127.0.0.1:PORT] --egl-dir DIRECTORY [--io-read PREFIX DIRECTORY] [--http-prefix PREFIX] [--uncapped]
 //! ```
 //!
 //! Readiness is one stdout line with both loopback URLs:
@@ -37,9 +37,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut egl_directory = std::env::var_os("IPP_EGL_LIBRARY_DIR").map(PathBuf::from);
     let mut read_sources = Vec::new();
     let mut http_prefixes = Vec::new();
+    let mut uncapped = false;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--uncapped" => uncapped = true,
             "--bind" => bind = args.next().ok_or("--bind requires an IP:PORT")?.parse()?,
             "--egl-dir" => {
                 egl_directory = Some(args.next().ok_or("--egl-dir requires a directory")?.into())
@@ -77,6 +79,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         listener,
         ipp_server::websocket::ServeOptions {
             http_prefixes,
+            uncapped,
             ..Default::default()
         },
         |address| {

@@ -9,6 +9,7 @@ import {
   verifyHardwareRenderer,
 } from "#ipp-browser-options";
 import { encodePng } from "../../harness/images.js";
+import { renderShaderSource } from "../../harness/shader-sources.js";
 import type {
   HtmlCanvasCapture,
   HtmlCanvasDriver,
@@ -60,14 +61,17 @@ export async function withHtmlCanvas<T>(
     try {
       response.setHeader("Content-Type", "text/javascript");
       response.end(
-        await readFile(
-          resolve(
-            shaders.has(name)
-              ? "crates/ipp-render-gl/src/services/render/shaders"
-              : "target/html-canvas",
-            name,
-          ),
-        ),
+        shaders.has(name)
+          ? await renderShaderSource(name, (file) =>
+              readFile(
+                resolve(
+                  "crates/ipp-render-gl/src/services/render/shaders",
+                  file,
+                ),
+                "utf8",
+              ),
+            )
+          : await readFile(resolve("target/html-canvas", name)),
       );
     } catch {
       response.writeHead(500);

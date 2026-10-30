@@ -374,6 +374,9 @@ fn report_connection_failure(sender: &Sender<String>, error: &str) {
 /// Host settings chosen at startup.
 #[derive(Default)]
 pub struct ServeOptions {
+    /// Run frames as fast as work permits instead of the default 60 Hz cadence.
+    /// Intended for throughput measurements; the Host still supplies real elapsed time.
+    pub uncapped: bool,
     /// Filesystem data source registered under its literal prefix.
     pub file_access: Option<(String, std::path::PathBuf)>,
     /// Explicit HTTP source namespaces; registration grants no export authority.
@@ -475,8 +478,13 @@ pub fn serve_with<P: HostServices>(
     });
     let mut connection_tasks: Vec<TaskHandle<()>> = Vec::new();
     ready(address)?;
+    let frame_interval = if options.uncapped {
+        Duration::ZERO
+    } else {
+        FRAME_INTERVAL
+    };
     let mut last_frame = Instant::now();
-    let mut next_frame = last_frame + FRAME_INTERVAL;
+    let mut next_frame = last_frame + frame_interval;
     loop {
         for _ in 0..MAX_CONNECTIONS {
             let mut stream = match accepted_connections.try_recv() {
@@ -545,9 +553,11 @@ pub fn serve_with<P: HostServices>(
         }
         host.flush();
         if frame_due {
-            next_frame = advance_frame_deadline(next_frame, Instant::now());
+            next_frame = advance_frame_deadline(next_frame, Instant::now(), frame_interval);
         }
-        std::thread::park_timeout(next_frame.saturating_duration_since(Instant::now()));
+        if !frame_interval.is_zero() {
+            std::thread::park_timeout(next_frame.saturating_duration_since(Instant::now()));
+        }
     }
 }
 
@@ -809,10 +819,10 @@ const FRAME_INTERVAL: Duration = Duration::from_nanos(16_666_667);
 #[cfg(test)]
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(2);
 
-/// Keep the original 60 Hz cadence across wakeup jitter and frame work. On an
-/// overrun, continue immediately without retaining a backlog of missed frames.
-fn advance_frame_deadline(deadline: Instant, now: Instant) -> Instant {
-    (deadline + FRAME_INTERVAL).max(now)
+/// Keep the selected cadence across wakeup jitter and frame work. On an overrun
+/// or with a zero interval, continue immediately without a missed-frame backlog.
+fn advance_frame_deadline(deadline: Instant, now: Instant, interval: Duration) -> Instant {
+    (deadline + interval).max(now)
 }
 
 async fn finish_close(socket: &mut tungstenite::WebSocket<BudgetedStream>) -> Result<(), String> {

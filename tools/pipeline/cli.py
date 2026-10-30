@@ -258,7 +258,13 @@ def parser() -> argparse.ArgumentParser:
     benchmarking.add_argument("--preset", choices=("smoke", "full"))
     benchmarking.add_argument(
         "--scene",
-        choices=("stress", "retained-gui", "gui-stress", "chart-data"),
+        choices=(
+            "stress",
+            "retained-gui",
+            "gui-stress",
+            "chart-data",
+            "cockpit-surfaces",
+        ),
         default="stress",
     )
     benchmarking.add_argument(

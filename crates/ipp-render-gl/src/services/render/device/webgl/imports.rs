@@ -93,6 +93,13 @@ unsafe extern "C" {
         changed: u32,
     ) -> u32;
 
+    pub(super) fn set_surface_intersection(
+        program: u32,
+        projection: *const f32,
+        inverse: *const f32,
+        parameters: *const f32,
+    ) -> u32;
+
     pub(super) fn shadow_map_limit() -> u32;
 
     pub(super) fn create_shadow_map(size: u32) -> u32;

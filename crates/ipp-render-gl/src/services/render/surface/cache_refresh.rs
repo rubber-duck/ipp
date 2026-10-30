@@ -426,7 +426,8 @@ impl<D: RenderDevice> RenderService<D> {
         stats: &mut RenderFrameWork,
     ) -> Result<bool, RenderError> {
         let selection = scene.canvas.selection;
-        if self.canvas_cache_frame.repainting == Some(selection)
+        if self.analytic_surface.is_some()
+            || self.canvas_cache_frame.repainting == Some(selection)
             || self.projected_repainting == Some(selection)
         {
             return Ok(false);
@@ -464,6 +465,13 @@ impl<D: RenderDevice> RenderService<D> {
         };
 
         self.device.borrow_mut().set_surface_double_sided(true)?;
+        super::super::surface::analytic::upload(
+            self.analytic_surface.as_ref(),
+            &mut *self.device.borrow_mut(),
+            self.surface_cache_program
+                .as_ref()
+                .expect("composite program"),
+        )?;
         let drawn = self.device.borrow_mut().draw_surface_cache(
             self.surface_cache_program
                 .as_ref()

@@ -14,7 +14,11 @@ uniform int u_band_width;
 uniform int u_fill_rule;
 uniform vec4 u_clip;
 in vec2 v_path_position;
+flat in vec4 v_path_placement;
+vec2 path_position;
 in vec2 v_surface_position;
+vec2 surface_position;
+// SURFACE_INTERSECTION_FRAGMENT
 in vec4 v_color;
 flat in vec4 v_bounds;
 flat in int v_band_offset;
@@ -194,18 +198,22 @@ bool path_interior(vec2 position) {
 #endif
 
 void main() {
+    surface_position = intersection_position(v_surface_position);
+    path_position = u_intersection.x == 0.0 ? v_path_position : (surface_position-v_path_placement.xy)/v_path_placement.zw;
+
     // Derivatives precede every discard: GLSL ES 3.00 leaves them undefined once a
     // fragment of the quad has discarded.
-    vec2 pixels_per_unit = 1.0 / max(fwidth(v_path_position), vec2(1.0 / 65536.0));
-    vec2 clip_width = max(fwidth(v_surface_position), vec2(1.0 / 65536.0));
-    vec2 clip_inside = min(v_surface_position - u_clip.xy, u_clip.zw - v_surface_position);
+    vec2 pixels_per_unit = 1.0 / max(fwidth(path_position), vec2(1.0 / 65536.0));
+    vec2 clip_width = max(fwidth(surface_position), vec2(1.0 / 65536.0));
+    vec2 clip_inside = min(surface_position - u_clip.xy, u_clip.zw - surface_position);
     float clip_coverage = clamp(min(clip_inside.x / clip_width.x + 0.5, clip_inside.y / clip_width.y + 0.5), 0.0, 1.0);
+    clip_coverage *= intersection_coverage;
 #ifndef IPP_CANVAS_PAINTS
     if (clip_coverage <= 0.0) discard;
 #endif
     float xcov, ycov, xwgt, ywgt, edge_distance;
     vec4 candidates[3];
-    accumulate(v_path_position, pixels_per_unit, u_path_paint.x>0.0, xcov, ycov, xwgt, ywgt, edge_distance,candidates);
+    accumulate(path_position, pixels_per_unit, u_path_paint.x>0.0, xcov, ycov, xwgt, ywgt, edge_distance,candidates);
     float coverage = max(abs(xcov * xwgt + ycov * ywgt) / max(xwgt + ywgt, 1.0 / 65536.0), min(abs(xcov), abs(ycov)));
     coverage = u_fill_rule == 0 ? clamp(coverage, 0.0, 1.0) : 1.0 - abs(1.0 - fract(coverage * 0.5) * 2.0);
 #ifndef IPP_CANVAS_PAINTS
@@ -218,7 +226,7 @@ void main() {
         for(int index=0;index<3;index++) {
             vec4 candidate=candidates[index];
             if(length(candidate.xy)>=2.0) break;
-            vec2 point=v_path_position+candidate.xy;
+            vec2 point=path_position+candidate.xy;
             vec2 offset=candidate.zw*0.025;
             if(path_interior(point+offset)!=path_interior(point-offset)) {
                 edge_distance=length(candidate.xy);
@@ -229,7 +237,7 @@ void main() {
 #endif
     #ifdef IPP_CANVAS_PAINTS
     if(u_path_paint.x>0.0) {
-        color=clamp(ipp_canvas_paint(int(u_path_paint.x),int(u_path_paint.y),v_path_position-v_bounds.xy,v_bounds.zw-v_bounds.xy,v_color,-edge_distance,vec4(0),v_surface_position),0.0,1.0);
+        color=clamp(ipp_canvas_paint(int(u_path_paint.x),int(u_path_paint.y),path_position-v_bounds.xy,v_bounds.zw-v_bounds.xy,v_color,-edge_distance,vec4(0),surface_position),0.0,1.0);
         color.a*=u_path_paint.z;
     }
     #endif

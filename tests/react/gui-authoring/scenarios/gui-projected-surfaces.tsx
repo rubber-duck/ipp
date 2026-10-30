@@ -144,6 +144,7 @@ export function projectedSurfaceRay(
   pose: Pose,
   pixel: Point,
   rank = 0,
+  view = { z: CAMERA_Z, near: 0 },
 ): Point | null {
   const scale = Math.tan(FOV / 2);
   const worldRay: Vec3 = [
@@ -155,9 +156,9 @@ export function projectedSurfaceRay(
   const cosine = Math.cos(yaw),
     sine = Math.sin(yaw);
   const origin: Vec3 = [
-    (-sine * CAMERA_Z) / axes[0],
+    (-sine * view.z) / axes[0],
     0,
-    (cosine * CAMERA_Z) / axes[2],
+    (cosine * view.z) / axes[2],
   ];
   const ray: Vec3 = [
     (cosine * worldRay[0] - sine * worldRay[2]) / axes[0],
@@ -168,7 +169,7 @@ export function projectedSurfaceRay(
   const d = rank * pose.spacing;
   if (k === 0) {
     const t = (d - origin[2]) / ray[2];
-    if (t <= 0) return null;
+    if (t <= view.near) return null;
     return [
       100 * (origin[0] + t * ray[0] + SIZE[0] / 2),
       100 * (SIZE[1] / 2 - origin[1] - t * ray[1]),
@@ -189,7 +190,7 @@ export function projectedSurfaceRay(
     (-b - Math.sqrt(discriminant)) / (2 * a),
     (-b + Math.sqrt(discriminant)) / (2 * a),
   ]) {
-    if (t <= 0) continue;
+    if (t <= view.near) continue;
     const nx = (origin[0] + t * ray[0]) / radius;
     const ny = sphere ? (origin[1] + t * ray[1]) / radius : 0;
     const nz = (oz + t * ray[2]) / radius;

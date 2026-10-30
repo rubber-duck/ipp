@@ -106,6 +106,7 @@ pub struct RenderService<D: RenderDevice> {
         BTreeMap<ipp_core::OutputRef, super::plot::label_layout::PlotLabelLayoutState>,
     pub(super) plot_plane_caches:
         BTreeMap<super::plot::planes::PlotPlaneKey, super::plot::planes::PlotPlaneCache<D>>,
+    pub(super) analytic_surface: Option<super::surface::analytic::AnalyticSurface>,
     pub(super) surface_program: Option<D::Program>,
     pub(super) surface_instance_program: Option<D::Program>,
     pub(super) surface_bitmap_program: Option<D::Program>,

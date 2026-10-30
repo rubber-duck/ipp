@@ -3111,6 +3111,44 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       });
   }
 
+  imports.set_surface_intersection = (
+    handle: number,
+    projection: number,
+    inverse: number,
+    parameters: number,
+  ): number =>
+    status(() => {
+      const program = programs.get(handle >>> 0);
+      if (!program) throw new Error("Stale Surface intersection program");
+      useProgram(program.object);
+      programVec4At(
+        program,
+        parameterLocation(program, "u_intersection"),
+        parameters >>> 0,
+      );
+      const [width, height] = activeSurfaceViewport();
+      programVec4(
+        program,
+        parameterLocation(program, "u_viewport"),
+        width,
+        height,
+        0,
+        0,
+      );
+      programMatrixAt(
+        program,
+        parameterLocation(program, "u_intersection_projection"),
+        projection >>> 0,
+      );
+      programMatrixAt(
+        program,
+        parameterLocation(program, "u_intersection_inverse"),
+        inverse >>> 0,
+      );
+      checkDraw();
+      return 1;
+    });
+
   imports.shadow_map_limit = (): number =>
     Math.min(maxTextureSize, maxViewport[0]!, maxViewport[1]!);
   imports.create_shadow_map = (size: number): number =>

@@ -47,10 +47,12 @@ pub(in crate::services::render) struct SceneOutputSurface {
 }
 
 impl SceneOutputSurface {
-    /// Curvature and separated image cutouts require sampled presentation even
-    /// when temporal caching is off. Coincident affine content remains direct.
+    /// Separated cutouts and providers without direct coverage require images.
+    /// Built-in coincident curved Canvas content can intersect analytically.
     pub fn image_presentation(&self) -> bool {
-        self.geometry.exact_affine(0.0).is_none() || self.layered()
+        (self.geometry.exact_affine(0.0).is_none()
+            && !super::super::surface::analytic::eligible(self))
+            || self.layered()
     }
 
     /// Whether layer planes leave the Surface's own plane.

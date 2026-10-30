@@ -131,6 +131,9 @@ impl<D: RenderDevice> RenderService<D> {
             Some(surface.entity.world),
             Some(surface.entity.entity),
         );
+        if super::super::surface::analytic::eligible(surface) {
+            return self.draw_analytic_surface(host, surface, view_projection, viewport, stats);
+        }
         let placed = math::multiply(view_projection, surface.model);
         let [width, height] = surface.extent.map(f64::from);
         let affine = affine_matrix(&*surface.geometry)?;

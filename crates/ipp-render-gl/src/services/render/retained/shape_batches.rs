@@ -34,7 +34,9 @@ use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use super::super::canvas::paint::CanvasPaintBlocks;
-use super::box_records::{clipped_bounds, hash_painted_box_inputs, painted_box_records};
+use super::box_records::{
+    GUI_SECTION_FLAGS, clipped_bounds, hash_painted_box_inputs, painted_box_records,
+};
 use super::draw_order::{GuiDrawItem, GuiDrawOrder};
 use super::records::{GuiGlyphRecord, GuiRecordKind, GuiShapeRecord};
 use super::storage::{
@@ -157,6 +159,7 @@ impl<D: RenderDevice> GuiSurfaceStorages<D> {
 pub struct GuiBatchRenderCache<D: RenderDevice> {
     device: Rc<RefCell<D>>,
     cpu_primitives: BTreeMap<PrimitiveKey, CachedPrimitiveGeometry>,
+    analytic: bool,
     storage: BTreeMap<ipp_core::EntityId, GuiSurfaceStorages<D>>,
     /// Surfaces waiting to retry after a recoverable storage failure.
     backoff: BTreeMap<ipp_core::EntityId, StorageBackoff>,
@@ -189,6 +192,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
         Self {
             device,
             cpu_primitives: BTreeMap::new(),
+            analytic: false,
             storage: BTreeMap::new(),
             backoff: BTreeMap::new(),
             resident: 0,
@@ -204,6 +208,14 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
             draw_order: GuiDrawOrder::default(),
             frame: 0,
             paints: CanvasPaintBlocks::default(),
+        }
+    }
+
+    /// Analytic intersections cover each primitive once, including sparse outlines.
+    pub(crate) fn set_analytic(&mut self, analytic: bool) {
+        if self.analytic != analytic {
+            self.cpu_primitives.clear();
+            self.analytic = analytic;
         }
     }
 
@@ -299,7 +311,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 )
             };
             let generate = || {
-                let records = painted_box_records(
+                let mut records = painted_box_records(
                     style,
                     size,
                     corner_radius,
@@ -311,6 +323,23 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                     clip,
                     lanes,
                 );
+                if self.analytic && records.len() > 1 {
+                    let mut rect = records[0].rect;
+                    let mut sections =
+                        (records[0].material_params[0] / GUI_SECTION_FLAGS).floor() as u32;
+                    for record in &records[1..] {
+                        sections |= (record.material_params[0] / GUI_SECTION_FLAGS).floor() as u32;
+                        rect[0] = rect[0].min(record.rect[0]);
+                        rect[1] = rect[1].min(record.rect[1]);
+                        rect[2] = rect[2].max(record.rect[2]);
+                        rect[3] = rect[3].max(record.rect[3]);
+                    }
+                    records.truncate(1);
+                    records[0].rect = rect;
+                    records[0].material_params[0] = records[0].material_params[0]
+                        % GUI_SECTION_FLAGS
+                        + sections as f32 * GUI_SECTION_FLAGS;
+                }
                 let bounds = shape_bounds(&records, clip);
                 (records, bounds)
             };
@@ -392,6 +421,7 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
     fn push_box_batch(&mut self, range: std::ops::Range<usize>) {
         let boxes = &self.run_boxes[range];
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        self.analytic.hash(&mut hasher);
         let first = self.piece_boxes.len();
         let mut len = 0;
         for run_box in boxes {

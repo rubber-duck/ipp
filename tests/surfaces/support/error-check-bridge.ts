@@ -10,6 +10,8 @@
  * an unpolled frame end, so recovery never waits for a sampled check.
  */
 
+import { renderShaderSource } from "../../harness/shader-sources.js";
+
 type BridgeImport = (...values: number[]) => number;
 
 interface WebGlBridge {
@@ -21,7 +23,6 @@ interface WebGlBridge {
 }
 
 const SIZE = 64;
-const SHADERS = "/crates/ipp-render-gl/src/services/render/shaders";
 /** Content [0, 2] x [0, 1] metres to clip space. */
 const CONTENT = [1, 0, 0, 0, 0, 2, 0, 0, 0, 0, 1, 0, -1, -1, 0, 1];
 
@@ -90,9 +91,7 @@ export async function probeErrorCheckBridge(bridgeUrl: string) {
   };
   const raise = () => gl.enable(0xffff);
   const source = async (name: string) => {
-    const response = await fetch(`${SHADERS}/${name}`);
-    if (!response.ok) throw new Error(`Missing shader ${name}`);
-    return bytes(new TextEncoder().encode(await response.text()));
+    return bytes(new TextEncoder().encode(await renderShaderSource(name)));
   };
   const [bitmapVertex, bitmapFragment, cacheFragment, presentVertex, present] =
     await Promise.all(

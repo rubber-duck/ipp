@@ -433,20 +433,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let context = smoke::egl::Context::new(&library_dir, WIDTH, HEIGHT)?;
     let mut device = context.device()?;
     let path_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface.vert"),
-        include_str!("../src/services/render/shaders/surface.frag"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.vert")),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.frag")),
     )?;
     let instance_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_instanced.vert"),
-        include_str!("../src/services/render/shaders/surface.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_instanced.vert"
+        )),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.frag")),
     )?;
     let bitmap_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_bitmap.vert"),
-        include_str!("../src/services/render/shaders/surface_bitmap.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_bitmap.frag"
+        )),
     )?;
     let box_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_gui.vert"),
-        include_str!("../src/services/render/shaders/surface_gui.frag"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface_gui.vert")),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface_gui.frag")),
     )?;
 
     // Unit-square contour used as scrolled curves, text-proxy glyphs and
@@ -897,8 +906,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     drop(device);
     let mut device = context.device()?;
     let box_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_gui.vert"),
-        include_str!("../src/services/render/shaders/surface_gui.frag"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface_gui.vert")),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface_gui.frag")),
     )?;
     draw_boxes(&mut device, &box_program)?;
     let recovered = capture(&mut device, "boxes-recovered")?;
@@ -2356,7 +2365,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // stays within a few pixels of the box silhouette instead of stretching toward
     // the camera, and the visible sliver keeps continuous coverage.
     let footprint_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_gui.vert"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface_gui.vert")),
         FOOTPRINT_FRAGMENT,
     )?;
     let grazing_fill = ProbeBox {
@@ -2448,14 +2457,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let path_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface.vert"),
-        include_str!("../src/services/render/shaders/surface.frag"),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.vert")),
+        include_str!(concat!(env!("OUT_DIR"), "/render/shaders/surface.frag")),
     )?;
     let (square, square_descriptor) = unit_square(&mut device)?;
 
     let text_program = device.create_program(
-        include_str!("../src/services/render/shaders/surface_glyph.vert"),
-        include_str!("../src/services/render/shaders/surface_glyph.frag"),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_glyph.vert"
+        )),
+        include_str!(concat!(
+            env!("OUT_DIR"),
+            "/render/shaders/surface_glyph.frag"
+        )),
     )?;
     let page = device.create_glyph_atlas_page(512, 512)?;
 

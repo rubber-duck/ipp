@@ -172,30 +172,52 @@ export async function pose(index: number, mode: "rest" | "bent" | "override") {
   return result;
 }
 
-export async function capture(label: string, draws = 2) {
+export async function capture(label: string, draws = 2, shadowDraws = 0) {
   const c = current();
   const view = presented();
   const after = (await c.waitForFrame()).tick;
   const deadline = performance.now() + 10_000;
+  let shadowsReady = shadowDraws === 0;
+  let lastReadiness: unknown;
   while (performance.now() < deadline) {
     const frame = await view.capture();
     const tick = view.sourceTick(frame);
+    const statistics = await view.diagnostics.statistics();
+    lastReadiness = {
+      drawCalls: frame.drawCalls,
+      failedDrawCalls: frame.failedDrawCalls,
+      shadowDrawCalls: statistics.shadows.shadowDrawCalls,
+    };
+    if (statistics.shadows.shadowDrawCalls !== shadowDraws) {
+      shadowsReady = false;
+      await c.waitForFrame(tick);
+      continue;
+    }
     if (tick >= after && frame.drawCalls === draws) {
-      const statistics = await view.diagnostics.statistics();
-      captures.set(label, { frame, statistics });
-      return {
-        tick,
-        drawCalls: frame.drawCalls,
-        triangles: frame.triangles,
-        failedDrawCalls: frame.failedDrawCalls,
-        statistics,
-        summary: summarizeImage(capturedImage(frame)),
-        resources: (await c.inspect()).resources,
-      };
+      if (shadowsReady) {
+        captures.set(label, { frame, statistics });
+        return {
+          tick,
+          drawCalls: frame.drawCalls,
+          triangles: frame.triangles,
+          failedDrawCalls: frame.failedDrawCalls,
+          statistics,
+          summary: summarizeImage(capturedImage(frame)),
+          resources: (await c.inspect()).resources,
+        };
+      }
+      // Forward and depth programs load independently. Statistics are sampled
+      // after this capture, so only accept a subsequent frame after observing
+      // every caster; this frame may still precede the new shadow program.
+      shadowsReady = true;
+    } else {
+      shadowsReady = false;
     }
     await c.waitForFrame(tick);
   }
-  throw new Error("skinning frame readiness timed out");
+  throw new Error(
+    `skinning frame readiness timed out: expected ${draws} draws and ${shadowDraws} shadow draws; last ${JSON.stringify(lastReadiness)}`,
+  );
 }
 
 export function captureMetadata(label: string) {

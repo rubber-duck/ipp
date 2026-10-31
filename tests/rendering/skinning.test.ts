@@ -35,10 +35,10 @@ for (const configuration of ["render-instrumentation"] as const) {
             invoke<T>(environment.page, module, name, args),
           );
         const captured = new Set<string>();
-        const capture = async (label: string, draws = 2) => {
+        const capture = async (label: string, draws = 2, shadowDraws = 0) => {
           const report = await call<{ drawCalls: number; triangles: number }>(
             "capture",
-            [label, draws],
+            [label, draws, shadowDraws],
           );
           await recordCapture(
             environment.page,
@@ -402,9 +402,9 @@ for (const configuration of ["render-instrumentation"] as const) {
             await call("authoredNormals");
             await call("pose", [0, "bent"]);
             await call("lightingScene");
-            await capture("lit-skinned", 3);
+            await capture("lit-skinned", 3, 2);
             await call("receiveShadows", [false]);
-            await capture("lit-unshadowed", 3);
+            await capture("lit-unshadowed", 3, 2);
             assert.ok(
               (await call<number>("regionDifference", [
                 "lit-skinned",
@@ -416,7 +416,7 @@ for (const configuration of ["render-instrumentation"] as const) {
             );
             await call("receiveShadows", [true]);
             await call("recover", [3]);
-            await capture("lit-recovered", 3);
+            await capture("lit-recovered", 3, 2);
             assert.equal(
               await call<number>("regionDifference", [
                 "lit-skinned",
@@ -428,7 +428,7 @@ for (const configuration of ["render-instrumentation"] as const) {
               "lit deformation and shadows recover exactly",
             );
             await call("bakeBentRig");
-            await capture("lit-baked", 3);
+            await capture("lit-baked", 3, 2);
             assert.ok(
               (await call<number>("regionDifference", [
                 "lit-skinned",
@@ -437,6 +437,18 @@ for (const configuration of ["render-instrumentation"] as const) {
                 400,
               ])) < 30,
               "GPU geometry and shadow silhouette match the independently baked rigid mesh",
+            );
+            await call("recover", [3]);
+            await capture("lit-baked-recovered", 3, 2);
+            assert.equal(
+              await call<number>("regionDifference", [
+                "lit-baked",
+                "lit-baked-recovered",
+                0,
+                400,
+              ]),
+              0,
+              "rigid and skinned shadow programs recover together",
             );
             return;
           }

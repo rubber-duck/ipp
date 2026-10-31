@@ -81,4 +81,4 @@ The [gallery beam fixture](../../examples/demos/scenes/lighting/animation-assets
 
 Forward PBR and spotlight depth use the same palette. Authored normals use inverse-transpose blended skin then model normal transforms; absent normals derive flat shading from deformed positions. `encodeSkinnedMesh` accepts optional `normals`. Rigid/skinned depth programs cache separately and release when shadow demand/context ends.
 
-The suite compares GPU bending/smooth normals/shadows with an independently baked rigid reference, requires a measurable receiver shadow and restores after context loss. Native `egl_skinning` covers lit/depth composition and recovery.
+The suite compares GPU bending/smooth normals/shadows with an independently baked rigid reference, requires a measurable receiver shadow and restores after context loss. Lit captures await both forward and shadow draws, then capture a subsequent frame: rigid and skinned depth programs load independently of forward geometry, including after replacement and recovery. Native `egl_skinning` covers lit/depth composition and recovery.

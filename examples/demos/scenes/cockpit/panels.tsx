@@ -110,6 +110,7 @@ export function CockpitPane({
           ) : index === 1 ? (
             <SystemScreen
               monitor={monitor}
+              navigation={navigation}
               contract={contract}
               width={width - 2 * inset}
             />

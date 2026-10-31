@@ -5,6 +5,7 @@ import {
   Entity,
   PlotFrame2d,
   PlotLine2d,
+  PresentationGate,
   Resources,
   StreamingDataSourceBinding,
   assetRef,
@@ -63,12 +64,14 @@ export function FrameRateChart({
   width,
   height = 140,
   id = "demo-frame-rate-chart",
+  active = true,
 }: {
   source: string;
   contract: FrameRateContract;
   width: number;
   height?: number;
   id?: string;
+  active?: boolean;
 }) {
   const kit = useGuiKit();
   const columns = useMemo(() => {
@@ -81,6 +84,7 @@ export function FrameRateChart({
   }, [contract]);
   return (
     <Entity id={id}>
+      <PresentationGate open={active} />
       <Resources>
         <ColumnBindingAsset id={`${id}-x`} definition={columns.x} />
         <ColumnBindingAsset id={`${id}-y`} definition={columns.y} />

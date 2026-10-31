@@ -1,4 +1,5 @@
-/** Dense analytic paint keeps one alpha union and exact row hits through scaling. */
+/** Dense stroke paint keeps one alpha union and exact row hits through scaling. */
+import { exerciseStrokeSurfaces } from "./stroke-surfaces.js";
 import type {
   Client,
   HostClientBase,
@@ -92,6 +93,7 @@ export async function exerciseDenseLines(
     );
     return result;
   };
+  let rootCleared = false;
   try {
     await fixture.verify();
     // A ready binding may still await font/chart preparation; two identical
@@ -134,6 +136,52 @@ export async function exerciseDenseLines(
       }
     }
     check(covered > 500, "dense line paint absent");
+    // Strong minification must combine the covered pixel intervals before
+    // applying alpha; nearest-segment distance alone loses this dense union.
+    for (const [scale_x, scale_y] of [
+      [1, 0.05],
+      [0.05, 1],
+    ] as const) {
+      await style({ alpha: 1, scale_x, scale_y });
+      const thin = await capture(
+        `dense-line-thin-${scale_x}-${scale_y}`,
+        fixture.binding,
+      );
+      await style({ alpha: 0.35 });
+      const alpha = await capture(
+        `dense-line-thin-alpha-${scale_x}-${scale_y}`,
+        fixture.binding,
+      );
+      let ink = 0;
+      for (let i = 0; i < thin.pixels.length; i += 4) {
+        const x = (i / 4) % thin.width;
+        const y = Math.floor(i / 4 / thin.width);
+        // Exclude the axes and labels underneath the trace: their nonblack
+        // backing deliberately changes the composited translucent colour.
+        if (
+          x <= 8 + 56 * scale_x + 1 ||
+          x >= 8 + 600 * scale_x - 1 ||
+          y <= 8 + 20 * scale_y + 1 ||
+          y >= 8 + 336 * scale_y - 1
+        )
+          continue;
+        if (
+          thin.pixels[i]! < 40 &&
+          thin.pixels[i + 1]! > 220 &&
+          thin.pixels[i + 2]! > 245
+        ) {
+          check(
+            alpha.pixels[i + 2]! > 145 && alpha.pixels[i + 2]! < 180,
+            "thin contour overlap changed union alpha",
+          );
+          ink++;
+        }
+      }
+      check(
+        ink > 30,
+        `thin analytic trace missing: ${scale_x}/${scale_y}: ${ink}`,
+      );
+    }
     await style({ scale_x: 0.01, scale_y: 0.01 });
     await capture("dense-line-minified", fixture.binding);
     await record("dense-line-minified-pick", await pick(0.01));
@@ -152,8 +200,11 @@ export async function exerciseDenseLines(
       "dense row edit did not change paint",
     );
     await record("dense-line-edit-pick", await pick());
-  } finally {
     await host.clearRootOutput(fixture.binding);
+    rootCleared = true;
+    await exerciseStrokeSurfaces(host, fixture.client, capture, record);
+  } finally {
+    if (!rootCleared) await host.clearRootOutput(fixture.binding);
     await fixture.close();
   }
 }

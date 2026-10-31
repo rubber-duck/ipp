@@ -245,6 +245,7 @@ class BrowserDeviceTests(Fixture):
                 ("software", None),
                 ("vulkan", "vulkan"),
                 ("gl-egl", "gl-egl"),
+                ("metal", "metal"),
             ):
                 with self.subTest(device=device):
                     report = self.run_tasks([self.device_task()], browser_device=device)
@@ -342,6 +343,7 @@ class BrowserDeviceTests(Fixture):
         for previous, extra, expected in (
             ("vulkan", [], "vulkan"),
             ("gl-egl", [], "gl-egl"),
+            ("metal", [], "metal"),
             # An automatic run that fell back to software is not detected again.
             ("software", [], "software"),
             # A run without browser steps recorded no device, so the retry detects.
@@ -392,7 +394,7 @@ class BrowserDeviceTests(Fixture):
         ):
             with self.subTest(command=command):
                 self.assertIsNone(arguments.parse_args(command).device)
-                for device in ("vulkan", "gl-egl"):
+                for device in ("vulkan", "gl-egl", "metal"):
                     parsed = arguments.parse_args([*command, "--hardware", device])
                     self.assertEqual(parsed.device, device)
                 parsed = arguments.parse_args([*command, "--software"])
@@ -483,6 +485,15 @@ class BrowserDeviceTests(Fixture):
                 "gl-egl",
                 ["vulkan", "gl-egl"],
             ),
+            (
+                {
+                    "vulkan": refused,
+                    "gl-egl": refused,
+                    "metal": self.hardware_probe("ANGLE Metal Renderer: Apple M4"),
+                },
+                "metal",
+                ["vulkan", "gl-egl", "metal"],
+            ),
         ):
             with self.subTest(expected=expected):
                 report, probed, inspect, console = self.run_browser_plan(results)
@@ -507,9 +518,9 @@ class BrowserDeviceTests(Fixture):
             "noise\nError: Hardware WebGL required; received renderer llvmpipe"
         )
         report, probed, inspect, console = self.run_browser_plan(
-            {"vulkan": refused, "gl-egl": refused}
+            {"vulkan": refused, "gl-egl": refused, "metal": refused}
         )
-        self.assertEqual(probed, ["vulkan", "gl-egl"])
+        self.assertEqual(probed, ["vulkan", "gl-egl", "metal"])
         self.assertIsNone(self.seen())
         self.assertEqual(report["browser"]["device"], "software")
         self.assertEqual(report["browser"]["selection"], "automatic")

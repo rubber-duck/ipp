@@ -27,7 +27,7 @@ class Requirement:
     remedy: str = ""
 
 
-BROWSER_DEVICES = ("software", "vulkan", "gl-egl")
+BROWSER_DEVICES = ("software", "vulkan", "gl-egl", "metal")
 
 # Automatic selection tries these in order and keeps the first real hardware renderer.
 HARDWARE_DEVICES = BROWSER_DEVICES[1:]

@@ -16,6 +16,9 @@ export interface FrameRateHistoryDriver {
     errors: string[];
   };
   call(name: string, ...args: unknown[]): Promise<History>;
+  activity(): Promise<Awaited<ReturnType<typeof Fixture.activity>>>;
+  resize(width: number, height: number): Promise<void>;
+  turnCamera(): Promise<void>;
   idle(milliseconds: number): Promise<void>;
   record(name: string, value: unknown): Promise<void>;
 }
@@ -23,6 +26,9 @@ export interface FrameRateHistoryDriver {
 export async function exerciseFrameRateHistory({
   app,
   call,
+  activity,
+  resize,
+  turnCamera,
   idle,
   record,
 }: FrameRateHistoryDriver) {
@@ -70,6 +76,54 @@ export async function exerciseFrameRateHistory({
         frame: frame.frame,
         ink,
       });
+      const waitActive = async (active: boolean) => {
+        const deadline = performance.now() + 15000;
+        for (;;) {
+          const state = await activity();
+          if (state.active === active) return state;
+          assert.ok(
+            performance.now() < deadline,
+            `Monitor did not become active=${active}`,
+          );
+          await idle(100);
+        }
+      };
+      await app.call("options", { carousel: 3 });
+      await waitActive(false);
+      // Drain the one transition before observing unchanged presentation work.
+      await idle(500);
+      const hidden = await activity();
+      const updated = await call("append", 10);
+      await idle(700);
+      assert.equal(
+        updated.rows,
+        600,
+        "hidden binding retains full rolling history",
+      );
+      assert.deepEqual(
+        (await activity()).layout,
+        hidden.layout,
+        "offscreen monitor does no text measurement or layout work on data updates",
+      );
+      await resize(2400, 756);
+      await waitActive(true);
+      await resize(1224, 756);
+      await waitActive(false);
+      await turnCamera();
+      await waitActive(true);
+      await app.call("action", "resetCamera");
+      await waitActive(false);
+      await app.call("options", { carousel: 1 });
+      await waitActive(true);
+      await app.capture(`restored-history-${surface}`);
+      const restoredPixels =
+        await app.call<ReturnType<typeof Application.image>>("image");
+      const restoredGeometry =
+        await app.call<Awaited<ReturnType<typeof Application.cockpitGeometry>>>(
+          "cockpitGeometry",
+        );
+      assertCockpitChartPixels(restoredPixels, restoredGeometry);
+      await record("hidden-history", { surface, hidden, updated });
       assert.deepEqual(app.errors, []);
     } finally {
       await call("close");

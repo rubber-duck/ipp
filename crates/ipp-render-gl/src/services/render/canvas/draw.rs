@@ -480,8 +480,15 @@ impl<D: RenderDevice> RenderService<D> {
                 paint: authored_paint,
                 ..
             } => {
-                if path.contours.is_empty() {
+                if path.is_empty() {
                     return Ok(());
+                }
+                let stroke = path.is_stroke();
+                if stroke && self.stroke_program.is_none() {
+                    self.stroke_program = Some(self.device.borrow_mut().create_program(
+                        crate::services::render::embedded_shader!("shaders/surface.vert"),
+                        crate::services::render::embedded_shader!("shaders/surface_stroke.frag"),
+                    )?);
                 }
                 let (data, uploaded) = self.generated_paths.get(
                     (scene.world, style.identity, scene.plane.map(|key| key.2)),
@@ -514,6 +521,7 @@ impl<D: RenderDevice> RenderService<D> {
                         &mut self.device.borrow_mut(),
                         output,
                         &cache.paints,
+                        stroke,
                     )?;
                     if let Some(program) = program {
                         if let Some(context) = scene.presentation.filter(|p| p.features & 64 != 0) {
@@ -526,15 +534,23 @@ impl<D: RenderDevice> RenderService<D> {
                                 lanes.slot as f32,
                                 lanes.block as f32,
                                 style.opacity,
-                                u8::from(path.contours.len() > 1) as f32,
+                                u8::from(path.overlapping_contours()) as f32,
                             ],
                         )?;
                         program
                     } else {
-                        self.surface_program.as_ref().expect("shared path program")
+                        if stroke {
+                            self.stroke_program.as_ref().expect("stroke program")
+                        } else {
+                            self.surface_program.as_ref().expect("shared path program")
+                        }
                     }
                 } else {
-                    self.surface_program.as_ref().expect("shared path program")
+                    if stroke {
+                        self.stroke_program.as_ref().expect("stroke program")
+                    } else {
+                        self.surface_program.as_ref().expect("shared path program")
+                    }
                 };
                 upload_intersection(
                     self.analytic_surface.as_ref(),

@@ -32,6 +32,22 @@ test("cockpit full FPS history stays readable without per-sample draws", {
       await exerciseFrameRateHistory({
         app,
         call,
+        activity: () =>
+          invoke<Awaited<ReturnType<typeof Fixture.activity>>>(
+            app.page,
+            helper,
+            "activity",
+            [],
+          ),
+        resize: (width, height) => app.page.setViewportSize({ width, height }),
+        turnCamera: () =>
+          app.page.evaluate(async () => {
+            const canvas = window.ippDemoCanvas!;
+            await window.ippDemoApplication!.navigateCamera(
+              { kind: "turn", yaw: 0.1, pitch: 0 },
+              canvas.view!.binding,
+            );
+          }),
         idle: (milliseconds) => app.page.waitForTimeout(milliseconds),
         record: (name, value) => environment.evidence.record(name, value),
       });

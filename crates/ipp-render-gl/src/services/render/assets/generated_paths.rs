@@ -4,7 +4,7 @@ use super::loaders::SharedRenderDevice;
 use super::paths::pack_surface_paths_with_limit;
 use crate::{RenderDevice, RenderError, SurfacePathDescriptor};
 use ipp_core::systems::canvas::CanvasPrimitiveId;
-use ipp_core::systems::plot::PlotPath;
+use ipp_core::systems::plot::{PlotPath, PlotPathGeometry};
 use ipp_core::{HostRuntime, WorldRef};
 use std::{collections::BTreeMap, rc::Rc, sync::Arc};
 
@@ -62,10 +62,16 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
         // normalization or second Y flip applies to these runtime paths.
         #[cfg(feature = "instrumentation")]
         let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.path-upload");
-        let atlas = pack_surface_paths_with_limit(
-            [(source.bounds, source.contours.as_ref())],
-            self.device.borrow().surface_path_texture_limit(),
-        );
+        let limit = self.device.borrow().surface_path_texture_limit();
+        let atlas = match &source.geometry {
+            PlotPathGeometry::Contours(contours) => {
+                pack_surface_paths_with_limit([(source.bounds, contours.as_ref())], limit)
+            }
+            PlotPathGeometry::Stroke {
+                segments,
+                radius,
+            } => super::strokes::pack_stroke(source.bounds, segments, *radius, limit),
+        };
         let uploaded = atlas.texels.byte_len();
         if let Some(mut previous) = self.entries.remove(&key)
             && let Some(entry) = Rc::get_mut(&mut previous)

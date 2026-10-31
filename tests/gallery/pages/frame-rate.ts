@@ -5,6 +5,7 @@ import type {
   Inspection,
   WorldReference,
 } from "@ipp/client";
+import { renderDiagnostics } from "@ipp/client/diagnostics";
 import { componentFields, successfulBatch } from "../../fixtures/commands.js";
 import { settle } from "./application.js";
 
@@ -17,6 +18,26 @@ let fixture:
       next: number;
     }
   | undefined;
+
+export async function activity() {
+  if (!fixture) throw new Error("Dense FPS fixture is not open");
+  await settle();
+  const { client, entity } = fixture;
+  const state = await client.inspect();
+  const gate = state.entities
+    .find((value) => value.id === entity)!
+    .components.find(
+      (component) =>
+        component.component === client.components.PresentationGate!.id,
+    );
+  const statistics = await renderDiagnostics(
+    window.ippDemoCanvas!.host,
+  )!.statistics();
+  const layout = statistics.guiLayout!.worlds.find(
+    (value) => value.world.id === String(client.worldReference!.id),
+  )!.layout!.total;
+  return { active: gate?.fields.open, layout };
+}
 
 async function source(client: Client, entity: bigint, value: string) {
   successfulBatch(

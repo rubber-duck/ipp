@@ -20,10 +20,20 @@ vec4 intersection_vertex(vec2 corner, vec4 rect) {
     v_intersection_chart = vec4(content[3].xy, content[0].x, content[1].y);
     vec2 lo = rect.xy * v_intersection_chart.zw + v_intersection_chart.xy;
     vec2 hi = rect.zw * v_intersection_chart.zw + v_intersection_chart.xy;
-    vec3 centre = intersection_sample((lo+hi)*0.5);
+    vec2 chart_centre = (lo+hi)*0.5;
+    vec2 half_extent = abs(hi-lo)*0.5;
+    vec3 centre = intersection_sample(chart_centre);
     // Both chart maps have differential norm <= 1 on their valid domains.
     // Thus every mapped point lies in this ball, also at the chart's centre.
-    float radius = length(hi-lo)*0.5;
+    vec3 radius = vec3(length(half_extent));
+    if (u_intersection.x < 1.5) {
+        // Cylinder height is affine and independent of its bend. In X, the
+        // derivatives are cos(k*x) and -sin(k*x); bound each over this chart
+        // interval. Keep narrow glyphs and wide, short paths out of a sphere
+        // sized by their longest dimension, without approximating coverage.
+        float slope = min(1.0, abs(u_intersection.y)*(abs(chart_centre.x)+half_extent.x));
+        radius = vec3(half_extent.x, half_extent.y, half_extent.x*slope);
+    }
     vec2 low = vec2(1.0), high = vec2(-1.0);
     bool crosses_eye = false;
     for (int i=0; i<8; ++i) {

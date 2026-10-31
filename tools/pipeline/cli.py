@@ -80,7 +80,7 @@ def parser() -> argparse.ArgumentParser:
             dest="device",
             choices=HARDWARE_DEVICES,
             help="run browser steps on this hardware ANGLE backend and fail on a software renderer "
-            "(default: the first available of vulkan and gl-egl, otherwise software)",
+            "(default: the first available of vulkan, gl-egl and metal, otherwise software)",
         )
         devices.add_argument(
             "--software",

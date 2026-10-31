@@ -354,7 +354,7 @@ for (const variant of native || instrumentation
           ),
         );
         assert.equal(result.value.analytic.failure, null);
-        assert.equal(result.value.analytic.images.length, 27);
+        assert.equal(result.value.analytic.images.length, 35);
         return;
       }
       if (result.value.advanced) {

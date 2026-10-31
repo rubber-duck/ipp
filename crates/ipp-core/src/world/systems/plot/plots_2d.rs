@@ -2,8 +2,8 @@
 //!
 //! Samples retain source order and identity. Invalid outputs split line runs and
 //! omit bars/sectors; preparation never interpolates a missing source sample.
-//! Closed contours are in Canvas top-left/+Y-down coordinates. Stroke and arc
-//! expansion feed the existing analytic quadratic renderer, not a new renderer.
+//! Geometry uses Canvas top-left/+Y-down coordinates. Lines retain compact
+//! round-capped segments; arbitrary outlines retain closed quadratic contours.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -65,11 +65,16 @@ pub fn prepare_line(
                 return Err(ErrorReason::InvalidValue);
             }
             let tangents = monotone_tangents(&points);
-            let mut contours = Vec::new();
+            let mut segments = Vec::new();
             let mut color = run[0].color;
             for index in 0..points.len().saturating_sub(1) {
                 if run[index].color != color {
-                    emit_data_path(&mut geometry, std::mem::take(&mut contours), color);
+                    emit_stroke(
+                        &mut geometry,
+                        std::mem::take(&mut segments),
+                        chart.line_width,
+                        color,
+                    );
                     color = run[index].color;
                 }
                 let a = points[index];
@@ -85,12 +90,12 @@ pub fn prepare_line(
                         [b[0] - dx, b[1] - mb * dx],
                         b,
                     ];
-                    smooth_stroke(cubic, chart.line_width, mapping.rect, &mut contours, 0);
+                    smooth_segments(cubic, mapping.rect, &mut segments, 0);
                 } else {
-                    stroke_segment(a, b, chart.line_width, mapping.rect, &mut contours);
+                    retain_segment(a, b, mapping.rect, &mut segments);
                 }
             }
-            emit_data_path(&mut geometry, contours, color);
+            emit_stroke(&mut geometry, segments, chart.line_width, color);
 
             for (sample, point) in run.iter().zip(points) {
                 if !inside(point, mapping.rect) {
@@ -797,7 +802,7 @@ fn emit_path(
     }
     let path = PlotPath {
         bounds,
-        contours: contours.into(),
+        geometry: PlotPathGeometry::Contours(contours.into()),
         fill_rule: FillRule::NonZero,
     };
     geometry.canvas.push(PlotPrimitive::path(
@@ -805,6 +810,70 @@ fn emit_path(
         path,
         color,
     ));
+}
+
+/// Convert compact stroke geometry to the former filled-contour reference.
+pub(super) fn stroke_reference(segments: &[[f32; 4]], radius: f32) -> Vec<QuadraticContour> {
+    let mut contours = Vec::with_capacity(segments.len() * 3);
+    for &[ax, ay, bx, by] in segments {
+        stroke_segment(
+            [ax, ay],
+            [bx, by],
+            radius * 2.0,
+            [-f32::MAX, -f32::MAX, f32::MAX, f32::MAX],
+            &mut contours,
+        );
+    }
+    contours
+}
+
+fn emit_stroke(
+    geometry: &mut PlotPreparedGeometry,
+    segments: Vec<[f32; 4]>,
+    width: f32,
+    color: [f32; 4],
+) {
+    if segments.is_empty() || width <= 0.0 {
+        return;
+    }
+    let radius = width / 2.0;
+    let mut bounds = [
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    ];
+    for segment in &segments {
+        for point in segment.as_chunks::<2>().0 {
+            for axis in 0..2 {
+                bounds[axis] = bounds[axis].min(point[axis] - radius);
+                bounds[axis + 2] = bounds[axis + 2].max(point[axis] + radius);
+            }
+        }
+    }
+    geometry.canvas.push(
+        PlotPrimitive::path(
+            geometry.canvas.len() as u32,
+            PlotPath {
+                bounds,
+                geometry: PlotPathGeometry::Stroke {
+                    segments: segments.into(),
+                    radius,
+                },
+                fill_rule: FillRule::NonZero,
+            },
+            color,
+        )
+        .with_data_paint(),
+    );
+}
+
+fn retain_segment(a: [f32; 2], b: [f32; 2], rect: [f32; 4], segments: &mut Vec<[f32; 4]>) {
+    if let Some([a, b]) = clip(a, b, rect)
+        && normal(a, b, 1.0) != [0.0; 2]
+    {
+        segments.push([a[0], a[1], b[0], b[1]]);
+    }
 }
 
 fn polygon(points: &[[f32; 2]]) -> QuadraticContour {
@@ -1014,6 +1083,30 @@ fn chord_distance(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     }
 }
 
+fn smooth_segments(p: [[f32; 2]; 4], rect: [f32; 4], segments: &mut Vec<[f32; 4]>, depth: u32) {
+    // Convex-hull culling prevents expensive subdivision far outside fixed axes.
+    if (0..2).any(|axis| {
+        p.iter().all(|point| point[axis] < rect[axis])
+            || p.iter().all(|point| point[axis] > rect[axis + 2])
+    }) {
+        return;
+    }
+
+    // The control hull bounds the entire cubic's distance from its chord.
+    // Subdivision preserves every source endpoint and expands rather than
+    // reduces the curve. Coverage consumes the resulting round-capped segments.
+    let error = chord_distance(p[1], p[0], p[3]).max(chord_distance(p[2], p[0], p[3]));
+    if error <= CURVE_ERROR || depth == 16 {
+        retain_segment(p[0], p[3], rect, segments);
+        return;
+    }
+
+    for half in split_cubic(p) {
+        smooth_segments(half, rect, segments, depth + 1);
+    }
+}
+
+#[cfg(test)]
 fn smooth_stroke(
     p: [[f32; 2]; 4],
     width: f32,

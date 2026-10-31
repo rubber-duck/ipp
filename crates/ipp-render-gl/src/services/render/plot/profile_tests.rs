@@ -389,13 +389,20 @@ fn chart_path_scaling() {
             .canvas
             .iter()
             .filter_map(|p| match &p.kind {
-                PlotPrimitiveKind::Path(path) if path.contours.len() > count => Some(path),
+                PlotPrimitiveKind::Path(path) if path.quadratic_contours().len() > count => {
+                    Some(path)
+                }
                 _ => None,
             })
             .collect();
         assert_eq!(paths.len(), 1);
-        let atlas =
-            crate::pack_surface_paths(paths.iter().map(|p| (p.bounds, p.contours.as_ref())));
+        let contours: Vec<_> = paths.iter().map(|p| p.quadratic_contours()).collect();
+        let atlas = crate::pack_surface_paths(
+            paths
+                .iter()
+                .zip(&contours)
+                .map(|(p, c)| (p.bounds, c.as_ref())),
+        );
         let band = |i| match &atlas.texels.bands {
             crate::SurfaceBandTexels::Uint16(v) => u32::from(v[i]),
             crate::SurfaceBandTexels::Uint32(v) => v[i],
@@ -414,7 +421,7 @@ fn chart_path_scaling() {
             .unwrap_or(0);
         println!(
             "{{\"diagnostic\":\"dense_path_bands\",\"scale\":{count},\"contours\":{},\"curveTexels\":{},\"maxHorizontalCurves\":{horizontal},\"maxVerticalCurves\":{vertical},\"tileGrid\":{grid},\"maxTileHorizontalCurves\":{tile_horizontal},\"maxTileVerticalCurves\":{tile_vertical},\"atlasBytes\":{}}}",
-            paths[0].contours.len(),
+            paths[0].quadratic_contours().len(),
             atlas.texels.curves.len(),
             atlas.texels.byte_len()
         );

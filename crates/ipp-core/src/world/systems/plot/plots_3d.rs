@@ -1051,7 +1051,7 @@ fn polygon(part: u32, points: &[[f32; 2]], color: [f32; 4]) -> PlotPrimitive {
         part,
         PlotPath {
             bounds,
-            contours: Arc::from([QuadraticContour {
+            geometry: PlotPathGeometry::Contours(Arc::from([QuadraticContour {
                 start: points[0],
                 segments: points[1..]
                     .iter()
@@ -1059,7 +1059,7 @@ fn polygon(part: u32, points: &[[f32; 2]], color: [f32; 4]) -> PlotPrimitive {
                         to,
                     })
                     .collect(),
-            }]),
+            }])),
             fill_rule: FillRule::NonZero,
         },
         color,

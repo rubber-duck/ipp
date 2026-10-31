@@ -191,6 +191,31 @@ async function event(name: string, action: () => void): Promise<void> {
   });
 }
 async function checks() {
+  let capabilityQueries = 0;
+  const getParameter = gl.getParameter.bind(gl);
+  gl.getParameter = (name) => {
+    capabilityQueries++;
+    return getParameter(name);
+  };
+  const checkDeviceInfo = () => {
+    const before = capabilityQueries;
+    const info = device.info();
+    require(capabilityQueries ===
+      before, "Statistics queried synchronous GL capabilities");
+    require(Number(info.depthBits) >=
+      16, "Device lost default framebuffer depth information");
+    const attributes = info.contextAttributes as WebGLContextAttributes;
+    require(attributes.depth, "Device lost context attributes");
+    attributes.depth = false;
+    require((device.info().contextAttributes as WebGLContextAttributes)
+      .depth, "Observer mutated retained device capabilities");
+  };
+  checkDeviceInfo();
+  const framebuffer = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+  checkDeviceInfo();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.deleteFramebuffer(framebuffer);
   const target = ok("create_texture", 8, 8, 0, 0);
   const first = snapshot();
   const firstId = device.stageWebImage(first);
@@ -262,10 +287,15 @@ async function checks() {
   }
   require(refused, "Lost context accepted staging");
   closed(duringLoss);
+  const beforeRestore = capabilityQueries;
   await event("webglcontextrestored", () => {
     // Restoration is permitted after the loss event has finished dispatching.
     setTimeout(() => device.restoreContext(), 0);
   });
+  require(capabilityQueries >
+    beforeRestore, "Restoration did not refresh device capabilities");
+  checkDeviceInfo();
+  gl.getParameter = getParameter;
   require(call("completion_fence_poll", lostFence) ===
     0, "Restoration revived old fence");
   const newFence = ok("completion_fence_create");
@@ -287,6 +317,7 @@ async function checks() {
   require(refused, "Disposed bridge accepted staging");
   closed(afterDispose);
   return {
+    deviceInfoCached: true,
     capacityRejected: true,
     uploadErrorClosed: true,
     extentRejected: true,

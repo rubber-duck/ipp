@@ -5,7 +5,15 @@ import { withHtmlCanvas } from "./drivers/browser-html-canvas.js";
 import {
   exerciseHtmlCanvas,
   exerciseHtmlCanvasDevice,
+  exerciseHtmlCanvasDeviceInfo,
 } from "./scenarios/html-canvas.js";
+
+test("WebGL device capabilities are cached and refreshed after context restoration", {
+  timeout: 30_000,
+}, async (context) => {
+  const result = await withHtmlCanvas(true, exerciseHtmlCanvasDeviceInfo, true);
+  context.diagnostic(JSON.stringify(result));
+});
 
 test("HTML canvas GPU bridge preserves live content and exact retained frames", {
   timeout: 60_000,

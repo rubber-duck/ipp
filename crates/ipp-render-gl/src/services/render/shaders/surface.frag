@@ -135,12 +135,15 @@ void accumulate(vec2 sample_position, vec2 pixels_per_unit, bool collect_distanc
     int horizontal = v_band_offset + band.y * 2;
     int vertical = v_band_offset + 32 + band.x * 2;
     int grid = band_value(v_band_offset + 64);
-    // A tile margin covers the entire pixel footprint. Retain full band
-    // winding for minification, including oblique/projected presentation.
-    if (grid > 0 && all(lessThanEqual(1.0 / pixels_per_unit, extent / float(grid)))) {
+    // Each ray has a one-tile margin along its own axis. The perpendicular
+    // axis only tests the sample centre, so minification there must not force
+    // a long full-band scan (particularly for thin, dense traces).
+    if (grid > 0) {
         ivec2 tile = clamp(ivec2((sample_position - v_bounds.xy) / extent * float(grid)), ivec2(0), ivec2(grid - 1));
-        horizontal = v_band_offset + band_value(v_band_offset + 65) + (tile.y * grid + tile.x) * 4;
-        vertical = horizontal + 2;
+        int header = v_band_offset + band_value(v_band_offset + 65) + (tile.y * grid + tile.x) * 4;
+        bvec2 fits = lessThanEqual(1.0 / pixels_per_unit, extent / float(grid));
+        if (fits.x) horizontal = header;
+        if (fits.y) vertical = header + 2;
     }
     int list = v_band_offset + band_value(horizontal);
     int count = band_value(horizontal + 1);

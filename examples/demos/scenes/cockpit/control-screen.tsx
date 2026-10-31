@@ -32,6 +32,7 @@ export type CockpitUpdate = (patch: GalleryOptions) => void | Promise<void>;
 
 export interface CockpitNavigationSource {
   focus(): number;
+  monitorActive?(): boolean;
   subscribe(listener: () => void): () => void;
 }
 

@@ -11,6 +11,7 @@ import type {
   Command,
   WorldReference,
   GuiTarget,
+  LifecycleTargetWatch,
 } from "@ipp/client";
 import {
   CanvasWorld,
@@ -67,6 +68,7 @@ import {
 } from "./carousel.js";
 import { CockpitCarouselInput } from "./carousel-input.js";
 import type { CockpitNavigationSource } from "./control-screen.js";
+import { monitorInView } from "./monitor-visibility.js";
 
 export const COCKPIT_WORLD = "/target/demos-cockpit-assets/cockpit.ipp";
 const PANEL_SYSTEMS = [
@@ -456,6 +458,16 @@ export const cockpitScene: GallerySceneDefinition = {
     const gripIds: bigint[] = [];
     const wheelTargets = new Map<string, GuiTarget>();
     const panelHandles = new Map<number, CanvasWorldHandle>();
+    let monitorActive = true;
+    let monitorDisposed = false;
+    let forwardCamera = true;
+    let monitorEpoch = 0;
+    let monitorTimer: ReturnType<typeof setTimeout> | undefined;
+    let cameraWatch: LifecycleTargetWatch | undefined;
+    const viewport = context.canvas.viewport;
+    let viewAspect = viewport
+      ? viewport.width / viewport.height
+      : Number.POSITIVE_INFINITY;
     const listeners = new Set<() => void>();
     const navigationListeners = new Set<() => void>();
     let resolvePanels!: () => void;
@@ -487,9 +499,56 @@ export const cockpitScene: GallerySceneDefinition = {
     const notify = () => {
       for (const listener of listeners) listener();
       notifyNavigation();
+      scheduleMonitor();
+    };
+    const setMonitorActive = (active: boolean) => {
+      if (monitorActive === active) return;
+      monitorActive = active;
+      notifyNavigation();
+    };
+    const wakeMonitor = () => {
+      ++monitorEpoch;
+      clearTimeout(monitorTimer);
+      setMonitorActive(true);
+    };
+    // Poll only a moving carousel's endpoint, never an unchanged frame. Host
+    // motion remains authoritative; elapsed client time cannot prove settling.
+    const scheduleMonitor = () => {
+      if (monitorDisposed) return;
+      wakeMonitor();
+      if (!carouselReady || !forwardCamera || context.signal.aborted) return;
+      const epoch = monitorEpoch;
+      monitorTimer = setTimeout(() => {
+        void (async () => {
+          const state = await readMotion();
+          if (epoch !== monitorEpoch || context.signal.aborted) return;
+          const focus = Number(mount.options.carousel);
+          if (
+            trackingKind ||
+            Math.abs(state.time - focus) > 0.001 ||
+            Math.abs(state.motion?.velocity ?? 0) > 0.001
+          ) {
+            scheduleMonitor();
+            return;
+          }
+          setMonitorActive(
+            Boolean(mount.options.exploded) ||
+              monitorInView(
+                state.time,
+                Number(mount.options.projection),
+                runtime.bridge.paneExtent[0],
+                Number(cameraProjection.fov_y),
+                viewAspect,
+              ),
+          );
+        })().catch((error) => {
+          if (!monitorDisposed && !context.signal.aborted) report(error);
+        });
+      }, 200);
     };
     let mounted: GallerySceneMount | undefined;
     const navigation: CockpitNavigationSource = {
+      monitorActive: () => monitorActive,
       focus: () =>
         Number(
           mounted?.options.carousel ??
@@ -638,6 +697,7 @@ export const cockpitScene: GallerySceneDefinition = {
       velocity = 0,
     ) => {
       if (!current()) return;
+      wakeMonitor();
       trackingFocus = boundFocus(focus);
       trackingKind = kind;
       notifyNavigation();
@@ -726,6 +786,37 @@ export const cockpitScene: GallerySceneDefinition = {
         ),
       );
       carouselReady = true;
+      cameraWatch = await client.watchLifecycle(
+        [
+          {
+            target: {
+              kind: "value",
+              entity: camera.id,
+              component: transform.id,
+              fields: TRANSFORM_FIELDS.map(
+                (name) => transform.fields[name]!.offset,
+              ).sort((a, b) => a - b),
+            },
+            kinds: 128,
+          },
+        ],
+        (event) => {
+          if (event.kind !== "value") return;
+          forwardCamera =
+            event.values !== null &&
+            TRANSFORM_FIELDS.every((name) => {
+              const value = event.values?.find(
+                (field) => field.offset === transform.fields[name]!.offset,
+              )?.value;
+              return (
+                typeof value === "number" &&
+                Math.abs(value - Number(cameraPose[name])) < 1e-6
+              );
+            });
+          scheduleMonitor();
+        },
+      );
+      scheduleMonitor();
     });
     void ready.catch(report);
     const unsubscribeBase = base.subscribe?.(notify);
@@ -831,6 +922,7 @@ export const cockpitScene: GallerySceneDefinition = {
           await settle(focus + (state.motion?.velocity ?? 0) * 0.12, current);
         },
         begin: async (current) => {
+          wakeMonitor();
           ++trackingEpoch;
           if (pendingTracking.size)
             await Promise.allSettled([...pendingTracking]);
@@ -868,6 +960,8 @@ export const cockpitScene: GallerySceneDefinition = {
       },
       async resize(viewport) {
         const aspect = viewport.width / viewport.height;
+        viewAspect = aspect;
+        scheduleMonitor();
         // Fit a central panel on narrow displays; surrounding scenery and other
         // carousel segments naturally leave the view. World geometry stays fixed.
         const fov =
@@ -890,6 +984,7 @@ export const cockpitScene: GallerySceneDefinition = {
         if (!result.ok) throw new Error(result.error.reason);
       },
       async update(patch: GalleryOptions) {
+        wakeMonitor();
         const value = cockpitOptions({ ...mount.options, ...patch });
         // External navigation retargets the same Host-owned motion. Existing
         // samples precede it in the ordered transport; no component pose is reset.
@@ -914,6 +1009,9 @@ export const cockpitScene: GallerySceneDefinition = {
         };
       },
       async dispose() {
+        monitorDisposed = true;
+        ++monitorEpoch;
+        clearTimeout(monitorTimer);
         mount.sceneInput?.cancel();
         panelHandles.clear();
         wheelTargets.clear();
@@ -924,6 +1022,14 @@ export const cockpitScene: GallerySceneDefinition = {
         rejectPanels(new Error("Cockpit disposed"));
         const failures: unknown[] = [];
         await ready.catch(() => {});
+        // Readiness may have admitted the watch while disposal was waiting.
+        ++monitorEpoch;
+        clearTimeout(monitorTimer);
+        try {
+          await cameraWatch?.remove();
+        } catch (failure) {
+          failures.push(failure);
+        }
         terminalDisposed = true;
         await terminalStarting?.catch(() => {});
         try {

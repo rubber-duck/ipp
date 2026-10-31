@@ -44,8 +44,14 @@ function browserExecutable() {
 /** Latest Stable Chrome, resolved to an exact pin; HTML-in-Canvas is opt-out only for capability tests. */
 export function browserLaunchOptions(
   rendering = true,
-  { htmlInCanvas = true, experimentalWebPlatformFeatures = true } = {},
+  {
+    htmlInCanvas = true,
+    experimentalWebPlatformFeatures = true,
+    framePacing = process.env.IPP_BROWSER_FRAME_PACING ?? "display",
+  } = {},
 ) {
+  if (framePacing !== "display" && framePacing !== "uncapped")
+    throw new Error("IPP_BROWSER_FRAME_PACING must be display or uncapped");
   const angle = process.env.IPP_BROWSER_ANGLE;
   const args = htmlInCanvas
     ? [
@@ -55,14 +61,18 @@ export function browserLaunchOptions(
           : []),
       ]
     : ["--disable-blink-features=CanvasDrawElement"];
+  // Benchmark-only launch choice: Chromium owns rAF scheduling and GPU vsync.
+  // Keep the real Host clock/event loop, including hidden-document maintenance.
+  // https://chromium.googlesource.com/chromium/src/+/HEAD/components/viz/common/switches.cc
+  if (framePacing === "uncapped") args.push("--disable-frame-rate-limit");
   const base = { headless: true, executablePath: browserExecutable() };
   if (!angle)
     return {
       ...base,
       args: [...args, ...(rendering ? ["--enable-unsafe-swiftshader"] : [])],
     };
-  if (angle !== "vulkan" && angle !== "gl-egl")
-    throw new Error("IPP_BROWSER_ANGLE must be vulkan or gl-egl");
+  if (angle !== "vulkan" && angle !== "gl-egl" && angle !== "metal")
+    throw new Error("IPP_BROWSER_ANGLE must be vulkan, gl-egl or metal");
   return {
     ...base,
     args: [

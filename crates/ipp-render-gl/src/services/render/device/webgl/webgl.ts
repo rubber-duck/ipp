@@ -110,12 +110,34 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   initializeAttributeDefaults();
   // The Rust shader emits sRGB-encoded values for this drawing buffer.
   gl.drawingBufferColorSpace = "srgb";
+  // Capabilities belong to a context generation. Query them before any owned
+  // framebuffer is bound, and again after restoration, never during statistics.
+  function deviceCapabilities() {
+    const debug = gl.getExtension("WEBGL_debug_renderer_info");
+    return {
+      version: gl.getParameter(gl.VERSION),
+      shadingLanguage: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
+      vendor: gl.getParameter(gl.VENDOR),
+      renderer: gl.getParameter(gl.RENDERER),
+      unmaskedRenderer: debug
+        ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
+        : null,
+      unmaskedVendor: debug
+        ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)
+        : null,
+      maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS),
+      depthBits: gl.getParameter(gl.DEPTH_BITS),
+      contextAttributes: gl.getContextAttributes(),
+    };
+  }
+
+  let capabilities = deviceCapabilities();
   let maxViewport = gl.getParameter(gl.MAX_VIEWPORT_DIMS) as Int32Array;
   if (
     gl.isContextLost() ||
-    !gl.getContextAttributes()?.depth ||
-    gl.getParameter(gl.DEPTH_BITS) < 16 ||
-    gl.getParameter(gl.MAX_VERTEX_ATTRIBS) < REQUIRED_VERTEX_ATTRIBUTES ||
+    !capabilities.contextAttributes?.depth ||
+    capabilities.depthBits < 16 ||
+    capabilities.maxVertexAttributes < REQUIRED_VERTEX_ATTRIBUTES ||
     maxViewport[0]! <= 0 ||
     maxViewport[1]! <= 0
   ) {
@@ -1189,6 +1211,7 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
 
   function restored(): void {
     initializeAttributeDefaults();
+    capabilities = deviceCapabilities();
     ippSampler = undefined;
     parameterBufferBound = false;
     // A restored context starts from default bindings and state.
@@ -3634,28 +3657,18 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
     },
     info() {
       live();
-      const debug = gl.getExtension("WEBGL_debug_renderer_info");
       return {
         api: "WebGL 2",
+        ...capabilities,
+        contextAttributes: capabilities.contextAttributes
+          ? { ...capabilities.contextAttributes }
+          : null,
         shaderProgramsCreated,
         shaderProgramAttempts,
         shaderProgramsLive: programs.size,
-        version: gl.getParameter(gl.VERSION),
-        shadingLanguage: gl.getParameter(gl.SHADING_LANGUAGE_VERSION),
-        vendor: gl.getParameter(gl.VENDOR),
-        renderer: gl.getParameter(gl.RENDERER),
-        unmaskedRenderer: debug
-          ? gl.getParameter(debug.UNMASKED_RENDERER_WEBGL)
-          : null,
-        unmaskedVendor: debug
-          ? gl.getParameter(debug.UNMASKED_VENDOR_WEBGL)
-          : null,
-        maxVertexAttributes: gl.getParameter(gl.MAX_VERTEX_ATTRIBS),
         maxViewport: Array.from(maxViewport),
         maxTextureSize,
         surfaceCacheTargetsLive: surfaceCacheTargets.size,
-        depthBits: gl.getParameter(gl.DEPTH_BITS),
-        contextAttributes: gl.getContextAttributes(),
         colorSpace: gl.drawingBufferColorSpace,
       };
     },

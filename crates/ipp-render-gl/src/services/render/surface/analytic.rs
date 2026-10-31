@@ -101,6 +101,36 @@ pub(in crate::services::render) fn upload<D: RenderDevice>(
     }
 }
 
+/// A perspective camera strictly inside the complete cylinder/sphere cannot
+/// see its near root: every forward ray leaves the solid at the far root only.
+/// This rejects a complete pass, including paints that need quad derivatives
+/// before discarding misses. Outside, orthographic and uncertain views retain
+/// both branches, including wrapped charts and near-plane clipping.
+fn near_branch_required(surface: &AnalyticSurface) -> bool {
+    let inverse = surface.inverse.map(f64::from);
+    let eye_w = inverse[11];
+    let lateral_w = inverse[3].abs() + inverse[7].abs();
+    // The shader unprojects clip Z=-1 and Z=0. Require positive homogeneous W
+    // throughout both screen planes and rays directed away from the eye.
+    if eye_w >= 0.0 || inverse[15] <= lateral_w || inverse[15] - eye_w <= lateral_w {
+        return true;
+    }
+
+    // inverse * (0,0,1,0) is the homogeneous eye. Evaluate the implicit solid in
+    // radius-normalized coordinates; avoid constructing a huge 1/curvature.
+    let k = f64::from(surface.parameters[1]);
+    let x = k * inverse[8] / eye_w;
+    let y = if surface.parameters[0] < 1.5 {
+        0.0
+    } else {
+        k * inverse[9] / eye_w
+    };
+    let z = 1.0 + k * inverse[10] / eye_w;
+    let radius_squared = x * x + y * y + z * z;
+    // Leave a margin around the surface for the f32 transform/intersection.
+    !radius_squared.is_finite() || radius_squared >= 1.0 - 64.0 * f64::from(f32::EPSILON)
+}
+
 impl<D: RenderDevice> RenderService<D> {
     pub(in crate::services::render) fn draw_analytic_surface(
         &mut self,
@@ -122,11 +152,16 @@ impl<D: RenderDevice> RenderService<D> {
         let [cw, ch] = scene.canvas.logical_extent.map(f64::from);
         let content = plane_matrix([-w * 0.5, h * 0.5], [w / cw, -h / ch])?;
         let mvp = math::multiply(projection, content);
+        let branch_count = if near_branch_required(&context) {
+            2
+        } else {
+            1
+        };
         let result = (|| {
             // A wrapped segment can intersect a ray twice. Compose the complete
             // far canvas before the near canvas; each keeps ordinary painter order.
-            for branch in [0.0, 1.0] {
-                context.parameters[2] = branch;
+            for branch in 0..branch_count {
+                context.parameters[2] = branch as f32;
                 self.analytic_surface = Some(context);
                 self.draw_canvas(
                     &scene,

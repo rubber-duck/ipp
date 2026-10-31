@@ -1,4 +1,5 @@
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
+import type { CockpitNavigationSource } from "./control-screen.js";
 import {
   Column,
   FormSection,
@@ -20,17 +21,41 @@ const number = (value: number | null | undefined, digits = 0) =>
   value == null ? "—" : value.toFixed(digits);
 const bytes = (value: number | null | undefined) =>
   value == null ? "Not available" : `${(value / 1048576).toFixed(1)} MiB`;
+const unsubscribe = () => {};
+const inactiveSubscribe = () => unsubscribe;
 export function SystemScreen({
   monitor,
   contract,
   width,
+  navigation,
 }: {
   monitor?: GalleryDiagnosticsMonitor | undefined;
   contract: FrameRateContract;
   width: number;
+  navigation?: CockpitNavigationSource | undefined;
 }) {
-  return monitor ? (
-    <LiveSystemScreen monitor={monitor} contract={contract} width={width} />
+  const active = useSyncExternalStore(
+    navigation?.subscribe ?? inactiveSubscribe,
+    () => navigation?.monitorActive?.() ?? true,
+  );
+  // The producer and streaming binding retain history. Only presentation stops:
+  // no formatted text updates or Plot geometry while the pane is out of view.
+  const presentation = useMemo(() => {
+    if (!monitor || active) return monitor;
+    const snapshot = monitor.getSnapshot();
+    return {
+      ...monitor,
+      subscribe: inactiveSubscribe,
+      getSnapshot: () => snapshot,
+    };
+  }, [monitor, active]);
+  return presentation ? (
+    <LiveSystemScreen
+      monitor={presentation}
+      active={active}
+      contract={contract}
+      width={width}
+    />
   ) : (
     <Column>
       <TextLine text="System monitor" size="display" />
@@ -40,10 +65,12 @@ export function SystemScreen({
 }
 function LiveSystemScreen({
   monitor,
+  active,
   contract,
   width,
 }: {
   monitor: GalleryDiagnosticsMonitor;
+  active: boolean;
   contract: FrameRateContract;
   width: number;
 }) {
@@ -79,6 +106,7 @@ function LiveSystemScreen({
         />
       </Row>
       <FrameRateChart
+        active={active}
         id="cockpit-fps-chart"
         source={monitor.source}
         contract={contract}

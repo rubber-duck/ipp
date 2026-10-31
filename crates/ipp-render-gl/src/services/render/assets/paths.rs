@@ -37,7 +37,9 @@
 //! and vertical offset/count pairs. A list retains original curve order, but
 //! omits entire contours beyond the ray's antialiasing footprint: their closed
 //! winding cancels and their edge weight is zero. No contours are split into
-//! separately blended draws. Minified paths use the original bands. GPU callers
+//! separately blended draws. Grids shrink when the finer lookup exceeds its
+//! storage budget. Each ray axis retains bands when its footprint exceeds a
+//! tile; minification on the other axis does not disable the lookup. GPU callers
 //! also retain bands when optional tiles exceed the device's texture extent.
 
 use ipp_core::services::asset_management::formats::quadratic::{
@@ -227,14 +229,21 @@ fn pack_surface_paths_inner<'a>(
         // Bound extra lookup storage relative to the existing band lists. Large
         // spanning contours can make tiling less useful; they keep exact bands.
         let budget = (bands.len() - band_offset).saturating_mul(8);
-        if let Some(tiles) = tiles_enabled
-            .then(|| fill_tile_lists(&extents[start..start + count], *path_bounds, budget))
-            .flatten()
-        {
+        let tiles = tiles_enabled
+            .then(|| {
+                [TILE_COUNT, TILE_COUNT / 2, TILE_COUNT / 4]
+                    .into_iter()
+                    .find_map(|grid| {
+                        fill_tile_lists(&extents[start..start + count], *path_bounds, budget, grid)
+                            .map(|tiles| (grid, tiles))
+                    })
+            })
+            .flatten();
+        if let Some((grid, tiles)) = tiles {
             let header = bands.len();
-            bands[band_offset + TILE_METADATA] = TILE_COUNT as u32;
+            bands[band_offset + TILE_METADATA] = grid as u32;
             bands[band_offset + TILE_METADATA + 1] = (header - band_offset) as u32;
-            bands.resize(header + TILE_COUNT * TILE_COUNT * 4, 0);
+            bands.resize(header + grid * grid * 4, 0);
             for (tile, lists) in tiles.iter().enumerate() {
                 for (axis, list) in lists.iter().enumerate() {
                     let index = header + tile * 4 + axis * 2;
@@ -345,11 +354,12 @@ fn fill_band_lists(
 
 /// Conservative closed-contour ray candidates for each tile, in curve order.
 /// Empty hulls terminate contours. The ray margin covers one full tile;
-/// the shader selects these lists only when its pixel footprint fits a tile.
+/// each shader ray selects its list only when its own footprint fits a tile.
 fn fill_tile_lists(
     extents: &[[f32; 4]],
     bounds: [f32; 4],
     budget: usize,
+    grid: usize,
 ) -> Option<Vec<[Vec<u32>; 2]>> {
     if extents.len() < 8192 || extents.iter().filter(|hull| hull[0] > hull[2]).count() < 128 {
         return None;
@@ -362,14 +372,12 @@ fn fill_tile_lists(
     {
         return None;
     }
-    let cell = size.map(|value| value / TILE_COUNT as f32);
+    let cell = size.map(|value| value / grid as f32);
     let range = |hull: [f32; 4], axis: usize, margin: f32| {
         let estimate = |value: f32| ((value - bounds[axis]) / cell[axis]).floor();
         // Widen before exact tests, including rounding at cell boundaries.
-        let first =
-            (estimate(hull[axis]) - margin - 1.0).clamp(0.0, (TILE_COUNT - 1) as f32) as usize;
-        let last =
-            (estimate(hull[axis + 2]) + margin + 1.0).clamp(0.0, (TILE_COUNT - 1) as f32) as usize;
+        let first = (estimate(hull[axis]) - margin - 1.0).clamp(0.0, (grid - 1) as f32) as usize;
+        let last = (estimate(hull[axis + 2]) + margin + 1.0).clamp(0.0, (grid - 1) as f32) as usize;
         first..=last
     };
     let meets = |hull: [f32; 4], axis: usize, index: usize, margin: f32| {
@@ -377,10 +385,8 @@ fn fill_tile_lists(
         let high = bounds[axis] + cell[axis] * (index as f32 + 1.0 + margin);
         hull[axis + 2] >= low && hull[axis] <= high
     };
-    let mut tiles: Vec<[Vec<u32>; 2]> = (0..TILE_COUNT * TILE_COUNT)
-        .map(|_| Default::default())
-        .collect();
-    let mut entries = TILE_COUNT * TILE_COUNT * 4;
+    let mut tiles: Vec<[Vec<u32>; 2]> = (0..grid * grid).map(|_| Default::default()).collect();
+    let mut entries = grid * grid * 4;
     let mut first = 0;
     for (end, hull) in extents.iter().enumerate() {
         if hull[0] <= hull[2] {
@@ -425,7 +431,7 @@ fn fill_tile_lists(
                         if entries > budget {
                             return None;
                         }
-                        tiles[y * TILE_COUNT + x][axis].push(local as u32);
+                        tiles[y * grid + x][axis].push(local as u32);
                     }
                 }
             }

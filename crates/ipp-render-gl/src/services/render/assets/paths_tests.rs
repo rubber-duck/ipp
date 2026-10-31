@@ -34,21 +34,20 @@ fn bands(atlas: &SurfacePathAtlas) -> Vec<u32> {
     }
 }
 
-#[test]
-fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
+fn dense_chart_paths(count: usize, height: f32) -> Vec<ipp_core::systems::plot::PlotPath> {
     use ipp_core::expressions::ExpressionResult;
     use ipp_core::services::data::DataRowId;
     use ipp_core::systems::data_bindings::DataBindingColumnView;
     use ipp_core::systems::plot::*;
     use ipp_core::{DynamicPropertyKind, DynamicValue};
 
-    let rows: Vec<_> = (1..=1000).map(DataRowId).collect();
-    let x: Vec<_> = (0..1000)
-        .map(|i| ExpressionResult::Valid(DynamicValue::F32(i as f32 / 999.0)))
+    let rows: Vec<_> = (1..=count as u64).map(DataRowId).collect();
+    let x: Vec<_> = (0..count)
+        .map(|i| ExpressionResult::Valid(DynamicValue::F32(i as f32 / (count - 1) as f32)))
         .collect();
-    let y: Vec<_> = (0..1000)
+    let y: Vec<_> = (0..count)
         .map(|i| {
-            let x = i as f32 / 999.0;
+            let x = i as f32 / (count - 1) as f32;
             ExpressionResult::Valid(DynamicValue::F32(
                 0.5 + 0.3 * (x * 16.0 + ((i * 17) % 101) as f32 / 100.0 * 3.0).sin(),
             ))
@@ -74,7 +73,7 @@ fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
         &chart,
         &PlotFrame2d {
             width: 624.0,
-            height: 384.0,
+            height,
             min_x: 0.0,
             max_x: 1.0,
             min_y: 0.0,
@@ -87,13 +86,30 @@ fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
         None,
     )
     .unwrap();
-    let paths: Vec<_> = output
+    output
         .canvas
         .iter()
         .filter_map(|p| match &p.kind {
-            PlotPrimitiveKind::Path(path) => Some((path.bounds, path.contours.as_ref())),
+            PlotPrimitiveKind::Path(path) => Some(ipp_core::systems::plot::PlotPath {
+                bounds: path.bounds,
+                geometry: ipp_core::systems::plot::PlotPathGeometry::Contours(
+                    path.quadratic_contours().into_owned().into(),
+                ),
+                fill_rule: path.fill_rule,
+            }),
             _ => None,
         })
+        .collect()
+}
+
+#[test]
+fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
+    let sources = dense_chart_paths(1000, 384.0);
+    let contours: Vec<_> = sources.iter().map(|p| p.quadratic_contours()).collect();
+    let paths: Vec<_> = sources
+        .iter()
+        .zip(&contours)
+        .map(|(p, c)| (p.bounds, c.as_ref()))
         .collect();
     assert!(
         paths.len() > 1,
@@ -124,6 +140,42 @@ fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
         assert_eq!(
             bands(&fallback)[descriptor.band_offset as usize + TILE_METADATA],
             0
+        );
+    }
+}
+
+#[test]
+fn dense_short_charts_retain_a_bounded_lookup() {
+    // The fine grid can exceed the storage budget for short, jagged traces.
+    // Retain all samples and a useful coarser lookup instead of reverting to
+    // thousands of candidate curves per fragment.
+    let sources = dense_chart_paths(600, 140.0);
+    let path = sources
+        .iter()
+        .max_by_key(|p| p.quadratic_contours().len())
+        .unwrap();
+    let tiled = pack_surface_paths([(path.bounds, path.quadratic_contours().as_ref())]);
+    let original =
+        pack_surface_paths_inner([(path.bounds, path.quadratic_contours().as_ref())], false);
+    let band = bands(&tiled);
+    let grid = band[TILE_METADATA] as usize;
+    assert!(grid > 0 && grid < TILE_COUNT, "coarse grid: {grid}");
+    assert_eq!(tiled.texels.curves, original.texels.curves);
+    assert_eq!(tiled.texels.curve_scale, original.texels.curve_scale);
+    assert!(tiled.texels.bands.len() <= original.texels.bands.len() * 9);
+    let header = band[TILE_METADATA + 1] as usize;
+    for axis in 0..2 {
+        let longest_band = (0..BAND_COUNT)
+            .map(|i| band[(axis * BAND_COUNT + i) * 2 + 1])
+            .max()
+            .unwrap();
+        let longest_tile = (0..grid * grid)
+            .map(|i| band[header + i * 4 + axis * 2 + 1])
+            .max()
+            .unwrap();
+        assert!(
+            longest_tile < longest_band / 2,
+            "axis {axis}: {longest_tile} / {longest_band}"
         );
     }
 }
@@ -160,7 +212,7 @@ fn tiled_closed_contours_preserve_two_axis_winding_and_edge_weights() {
     let extents = curve_extents(&points, &atlas.texels.curves, atlas.texels.curve_scale);
     // Exercise the conservative lookup independently of the optional atlas
     // storage heuristic, which can choose bands for short rectangle contours.
-    let tiles = fill_tile_lists(&extents, bounds, usize::MAX).unwrap();
+
     let curves = int16(&atlas);
     let scale = atlas.texels.curve_scale;
     let all: Vec<u32> = curves
@@ -198,28 +250,30 @@ fn tiled_closed_contours_preserve_two_axis_winding_and_edge_weights() {
         }
         (winding, weight)
     };
-    let cell = (bounds[2] - bounds[0]) / TILE_COUNT as f32;
-    for y in [0, 1, 20, 40, 63] {
-        for x in [0, 1, 20, 40, 63] {
-            for delta in [-0.001, 0.0, 0.001, 0.5, 0.999] {
-                let point = [
-                    bounds[0] + cell * (x as f32 + delta),
-                    bounds[1] + cell * (y as f32 + delta),
-                ];
-                let tile = point.map(|p| {
-                    (((p - bounds[0]) / cell).floor() as i32).clamp(0, TILE_COUNT as i32 - 1)
-                        as usize
-                });
-                for (axis, list) in tiles[tile[1] * TILE_COUNT + tile[0]].iter().enumerate() {
-                    assert!(list.windows(2).all(|pair| pair[0] < pair[1]));
-                    for footprint in [cell / 16.0, cell / 2.0, cell] {
-                        let expected = integrate(&all, point, footprint, axis);
-                        let actual = integrate(list, point, footprint, axis);
-                        assert!(
-                            (actual.0 - expected.0).abs() < 0.00001,
-                            "winding: {point:?}/{axis}: {actual:?} != {expected:?}"
-                        );
-                        assert_eq!(actual.1, expected.1, "edge weight: {point:?}/{axis}");
+    for grid in [TILE_COUNT, TILE_COUNT / 2, TILE_COUNT / 4] {
+        let tiles = fill_tile_lists(&extents, bounds, usize::MAX, grid).unwrap();
+        let cell = (bounds[2] - bounds[0]) / grid as f32;
+        for y in [0, 1, grid / 3, grid * 2 / 3, grid - 1] {
+            for x in [0, 1, grid / 3, grid * 2 / 3, grid - 1] {
+                for delta in [-0.001, 0.0, 0.001, 0.5, 0.999] {
+                    let point = [
+                        bounds[0] + cell * (x as f32 + delta),
+                        bounds[1] + cell * (y as f32 + delta),
+                    ];
+                    let tile = point.map(|p| {
+                        (((p - bounds[0]) / cell).floor() as i32).clamp(0, grid as i32 - 1) as usize
+                    });
+                    for (axis, list) in tiles[tile[1] * grid + tile[0]].iter().enumerate() {
+                        assert!(list.windows(2).all(|pair| pair[0] < pair[1]));
+                        for footprint in [cell / 16.0, cell / 2.0, cell] {
+                            let expected = integrate(&all, point, footprint, axis);
+                            let actual = integrate(list, point, footprint, axis);
+                            assert!(
+                                (actual.0 - expected.0).abs() < 0.00001,
+                                "winding: {point:?}/{axis}: {actual:?} != {expected:?}"
+                            );
+                            assert_eq!(actual.1, expected.1, "edge weight: {point:?}/{axis}");
+                        }
                     }
                 }
             }
@@ -236,10 +290,10 @@ fn dense_tiles_are_optional_and_storage_bounded() {
     let (curves, scale) = quantize(&points);
     let extents = curve_extents(&points, &curves, scale);
     assert!(
-        fill_tile_lists(&extents, [0.0, 0.0, 1.0, 1.0], 100000).is_none(),
+        fill_tile_lists(&extents, [0.0, 0.0, 1.0, 1.0], 100000, TILE_COUNT).is_none(),
         "spanning contours must fall back rather than grow lookup storage without a bound"
     );
-    assert!(fill_tile_lists(&extents, [0.0; 4], usize::MAX).is_none());
+    assert!(fill_tile_lists(&extents, [0.0; 4], usize::MAX, TILE_COUNT).is_none());
     let atlas = pack_surface_paths([([0.0, 0.0, 1.0, 1.0], contours.as_slice())]);
     assert_eq!(bands(&atlas)[TILE_METADATA], 0);
     assert!(

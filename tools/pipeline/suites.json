@@ -3200,6 +3200,9 @@
       "tests/data/support/plot-capture.ts",
       "tests/data/scenarios/plots-2d.ts",
       "tests/data/scenarios/dense-lines.ts",
+      "tests/data/scenarios/stroke-surfaces.ts",
+      "crates/ipp-render-gl/src/services/render/assets/strokes.rs",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_stroke.frag",
       "tests/data/scenarios/chart-data-workload.ts",
       "tests/data/scenarios/plots-3d.ts",
       "tests/data/scenarios/react-plots.ts",
@@ -4673,6 +4676,12 @@
     ],
     "commands": [
       {
+        "name": "frame-rate",
+        "command": ["@node", "--test", "dist/tests/gallery/frame-rate.browser.test.js"],
+        "builds": ["typescript", "gallery-fixtures", "browser:render", "gallery", "font-assets"],
+        "requirements": ["node", "npm", "browser", "wasm"]
+      },
+      {
         "name": "fonts",
         "command": [
           "@node",
@@ -4990,6 +4999,12 @@
       "tools/pipeline/browser.py"
     ],
     "commands": [
+      {
+        "name": "device-info",
+        "command": ["@node", "--test", "--test-name-pattern", "device capabilities", "target/html-canvas/html-canvas.browser.test.js"],
+        "builds": ["html-canvas-fixtures"],
+        "requirements": ["node", "npm", "browser"]
+      },
       {
         "name": "static",
         "command": [

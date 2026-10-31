@@ -114,6 +114,7 @@ pub struct RenderService<D: RenderDevice> {
         BTreeMap<super::plot::planes::PlotPlaneKey, super::plot::planes::PlotPlaneCache<D>>,
     pub(super) analytic_surface: Option<super::surface::analytic::AnalyticSurface>,
     pub(super) surface_program: Option<D::Program>,
+    pub(super) stroke_program: Option<D::Program>,
     pub(super) surface_instance_program: Option<D::Program>,
     pub(super) surface_bitmap_program: Option<D::Program>,
     pub(super) surface_cache_program: Option<D::Program>,

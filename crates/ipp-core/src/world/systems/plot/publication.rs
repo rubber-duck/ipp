@@ -15,15 +15,64 @@ pub struct PlotRowIdentity {
     pub row_id: DataRowId,
 }
 
-/// Local closed contours, shared with the existing analytic path renderer.
+/// Compact local path geometry. Stroke segments retain their source order and gaps.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PlotPathGeometry {
+    /// Filled arbitrary quadratic outlines.
+    Contours(Arc<[QuadraticContour]>),
+    /// A union of round-capped segments, blended once for the complete paint.
+    Stroke {
+        /// Endpoint pairs in top-left/Y-down local coordinates.
+        segments: Arc<[[f32; 4]]>,
+        /// Half of the authored line width.
+        radius: f32,
+    },
+}
+
+/// Local filled or stroked path retained with a completed publication.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlotPath {
     /// Local top-left/Y-down control-point enclosure.
     pub bounds: [f32; 4],
-    /// Ordered closed quadratic contours; algorithms expand strokes into contours.
-    pub contours: Arc<[QuadraticContour]>,
+    /// Compact geometry; renderer packing does not change source-row identity.
+    pub geometry: PlotPathGeometry,
     /// Winding convention for this paint.
     pub fill_rule: FillRule,
+}
+
+impl PlotPath {
+    /// Whether there is no geometry to present.
+    pub fn is_empty(&self) -> bool {
+        match &self.geometry {
+            PlotPathGeometry::Contours(contours) => contours.is_empty(),
+            PlotPathGeometry::Stroke {
+                segments,
+                ..
+            } => segments.is_empty(),
+        }
+    }
+
+    /// Whether the path uses compact stroke coverage.
+    pub fn is_stroke(&self) -> bool {
+        matches!(self.geometry, PlotPathGeometry::Stroke { .. })
+    }
+
+    /// Filled-contour reference for diagnostics and geometry equivalence checks.
+    /// Ordinary stroke rendering consumes the compact segments directly.
+    pub fn quadratic_contours(&self) -> std::borrow::Cow<'_, [QuadraticContour]> {
+        match &self.geometry {
+            PlotPathGeometry::Contours(contours) => std::borrow::Cow::Borrowed(contours),
+            PlotPathGeometry::Stroke {
+                segments,
+                radius,
+            } => std::borrow::Cow::Owned(super::plots_2d::stroke_reference(segments, *radius)),
+        }
+    }
+
+    /// Multiple filled outlines need internal-edge rejection for authored paints.
+    pub fn overlapping_contours(&self) -> bool {
+        matches!(&self.geometry, PlotPathGeometry::Contours(contours) if contours.len() > 1)
+    }
 }
 
 /// One compact plane-local paint item. Parts are stable within this component.

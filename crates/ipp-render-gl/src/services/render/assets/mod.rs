@@ -7,5 +7,6 @@ pub(super) mod generated_meshes;
 pub(super) mod generated_paths;
 pub(super) mod loaders;
 pub(super) mod paths;
+mod strokes;
 pub(super) mod surface_resources;
 mod triangle_order;

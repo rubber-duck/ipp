@@ -228,6 +228,10 @@ export async function guiAnalyticSurfaces(
             <Style x={90} y={12} scale_x={0.3} scale_y={0.3} />
             <Drawing source={assetRef("analytic-drawing")} />
           </Entity>
+          <Entity id="analytic-wide-line">
+            <Style x={10} y={72} red={1} green={1} blue={1} />
+            <Box width={140} height={0.4} />
+          </Entity>
           <Entity id="analytic-image">
             <Style x={120} y={15} />
             <Image
@@ -294,6 +298,7 @@ export async function guiAnalyticSurfaces(
     }
   }
   let failure: string | null = null;
+  let twoBranchDrawCalls = 0;
   try {
     for (const [i, pose] of poses.entries()) {
       await root.render(scene(pose, false));
@@ -307,6 +312,7 @@ export async function guiAnalyticSurfaces(
           { width: 400, height: 300, devicePixelRatio: 1 },
         );
       const direct = await capture(`analytic-${i}`);
+      if (i === 0) twoBranchDrawCalls = direct.drawCalls;
       const probe = pixel(
         direct,
         pixelFor(projectedSurfacePoint(pose, [80, 65])),
@@ -400,6 +406,16 @@ export async function guiAnalyticSurfaces(
     );
     const variants = [
       {
+        label: "inside-cylinder",
+        pose: { shape: "cylinder", curvature: -0.8, spacing: 0 } as Pose,
+        view: { z: 1.25, near: 0.05, projection: 0 },
+      },
+      {
+        label: "inside-sphere",
+        pose: { shape: "sphere", curvature: -0.8, spacing: 0 } as Pose,
+        view: { z: 1.25, near: 0.05, projection: 0 },
+      },
+      {
         label: "orthographic",
         pose: poses[1]!,
         view: { z: 2.5, near: 0.05, projection: 1 },
@@ -422,6 +438,20 @@ export async function guiAnalyticSurfaces(
         } as Pose,
       },
       {
+        label: "negative-wrapped-cylinder",
+        pose: {
+          shape: "cylinder",
+          curvature: -3.5,
+          spacing: 0,
+          placement: { yaw: -1.5, scale: [1.1, 0.8, 0.9] },
+        } as Pose,
+      },
+      {
+        label: "cylinder-near-plane",
+        pose: { shape: "cylinder", curvature: 2.8, spacing: 0 } as Pose,
+        view: { z: 0.3, near: 0.35, projection: 0 },
+      },
+      {
         label: "wrapped-sphere",
         pose: {
           shape: "sphere",
@@ -439,6 +469,11 @@ export async function guiAnalyticSurfaces(
     for (const variant of variants) {
       await root.render(scene(variant.pose, false, false, false, variant.view));
       const direct = await capture(`analytic-${variant.label}`);
+      if (variant.label.startsWith("inside-"))
+        check(
+          direct.drawCalls < twoBranchDrawCalls * 0.75,
+          `Inside view still submitted both branches: ${direct.drawCalls} / ${twoBranchDrawCalls}`,
+        );
       await root.render(scene(variant.pose, true, false, false, variant.view));
       const reference = await capture(`reference-${variant.label}`);
       const a = new Uint8Array(direct.pixels),

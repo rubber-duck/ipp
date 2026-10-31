@@ -155,6 +155,24 @@ export async function exerciseHtmlCanvasDevice(driver: HtmlCanvasDriver) {
   }>("rejectStale");
   assert.equal(rejected.statistics.rejected, 1);
   assert.equal(rejected.statistics.closed, rejected.statistics.received);
+  return deviceChecks(driver);
+}
+
+/** Capability observation and recovery over a real device and imported image. */
+export async function exerciseHtmlCanvasDeviceInfo(driver: HtmlCanvasDriver) {
+  const frame = await driver.call<HtmlCanvasCapture>("capture");
+  await driver.save("device-info-import", frame);
+  assert.deepEqual(
+    frame.pixels.slice(
+      (8 * frame.width + 8) * 4,
+      (8 * frame.width + 8) * 4 + 4,
+    ),
+    [0, 255, 0, 255],
+  );
+  return deviceChecks(driver);
+}
+
+async function deviceChecks(driver: HtmlCanvasDriver) {
   const { checks } = await driver.call<{
     checks: Record<string, boolean | number>;
   }>("deviceChecks");

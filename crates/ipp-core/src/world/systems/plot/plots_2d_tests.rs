@@ -499,3 +499,56 @@ fn authored_highlight_color_preserves_marks_and_picking_for_every_2d_family() {
     compare!(PlotBars2d, prepare_bars);
     compare!(PlotPie2d, prepare_pie);
 }
+
+#[test]
+fn dense_lines_publish_compact_segments_with_every_source_endpoint() {
+    let ids: Vec<_> = (0..600).map(DataRowId).collect();
+    let x = values(
+        &(0..600)
+            .map(|i| i as f32 * 10.0 / 599.0)
+            .collect::<Vec<_>>(),
+    );
+    let y = values(
+        &(0..600)
+            .map(|i| 50.0 + (i as f32 * 0.7).sin() * 30.0)
+            .collect::<Vec<_>>(),
+    );
+    let frame = fixed_frame();
+    let geometry = prepare_line(&line(0), &frame, &input(&ids, &x, &y), None).unwrap();
+    let strokes: Vec<_> = geometry
+        .canvas
+        .iter()
+        .filter_map(|p| match &p.kind {
+            PlotPrimitiveKind::Path(path) if path.is_stroke() => Some(path),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(strokes.len(), 1);
+    let PlotPathGeometry::Stroke {
+        segments,
+        radius,
+    } = &strokes[0].geometry
+    else {
+        unreachable!()
+    };
+    assert_eq!(segments.len(), 599);
+    assert_eq!(*radius, line(0).line_width / 2.0);
+    assert_eq!(geometry.hits.len(), 600);
+    for (i, segment) in segments.iter().enumerate() {
+        let PlotHitShape::Circle {
+            center: a,
+            ..
+        } = geometry.hits[i].shape
+        else {
+            panic!("source row mark")
+        };
+        let PlotHitShape::Circle {
+            center: b,
+            ..
+        } = geometry.hits[i + 1].shape
+        else {
+            panic!("source row mark")
+        };
+        assert_eq!(*segment, [a[0], a[1], b[0], b[1]]);
+    }
+}

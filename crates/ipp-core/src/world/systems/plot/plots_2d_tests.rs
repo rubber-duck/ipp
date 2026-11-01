@@ -269,13 +269,14 @@ fn pie_normalizes_positive_values_and_preserves_a_hollow_center() {
         .collect();
     assert!((sweeps.iter().sum::<f32>() - TAU).abs() < 1e-5);
     assert!((sweeps[0] / TAU - 0.4).abs() < 1e-6);
-    // The hole is a reversed inner arc, not an opaque disk painted over sectors.
-    assert!(
-        geometry
-            .canvas
-            .iter()
-            .all(|paint| matches!(paint.kind, PlotPrimitiveKind::Path(_)))
-    );
+    // The instanced arc retains its hole; no opaque disk paints over sectors.
+    assert!(geometry.canvas.iter().all(|paint| matches!(
+        paint.kind,
+        PlotPrimitiveKind::Shape {
+            shape: crate::systems::canvas::CanvasBoxShape::Arc { .. },
+            ..
+        }
+    )));
 }
 
 #[test]
@@ -407,7 +408,10 @@ fn only_data_marks_select_sibling_paint_in_all_2d_families() {
                 .canvas
                 .iter()
                 .filter(|item| item.data_mark)
-                .all(|item| matches!(item.kind, PlotPrimitiveKind::Path(_)))
+                .all(|item| matches!(
+                    item.kind,
+                    PlotPrimitiveKind::Path(_) | PlotPrimitiveKind::Shape { .. }
+                ))
         );
         assert!(
             prepared

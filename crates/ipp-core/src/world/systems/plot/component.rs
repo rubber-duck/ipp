@@ -23,6 +23,9 @@ pub struct PlotSeriesRow {
     /// Vertical coordinate output (height in 3D).
     #[schema(text = 256)]
     pub y: Arc<str>,
+    /// Optional lower boundary for a 2D line fill. Empty uses fill_baseline.
+    #[schema(text = 256)]
+    pub lower: Arc<str>,
     /// Depth coordinate output.
     #[schema(text = 256)]
     pub z: Arc<str>,
@@ -50,6 +53,7 @@ impl Default for PlotSeriesRow {
             name: Arc::default(),
             x: "x".into(),
             y: "y".into(),
+            lower: Arc::default(),
             z: "z".into(),
             value: "value".into(),
             radius: Arc::default(),
@@ -424,6 +428,10 @@ chart_component!(PlotLine2d, PLOT_FRAME2D, CANVAS_BOUNDS, {
     line_width: f32 = 2.0,
     /// Sample marker extent in local logical units; zero omits markers.
     marker_size: f32 = 6.0,
+    /// Fill alpha multiplier in [0,1]; zero omits the area/band.
+    fill_opacity: f32 = 0.0,
+    /// Data-space lower boundary when a series has no lower column.
+    fill_baseline: f32 = 0.0,
 });
 
 chart_component!(PlotBars2d, PLOT_FRAME2D, CANVAS_BOUNDS, {
@@ -470,8 +478,15 @@ chart_component!(PlotPie3d, PLOT_FRAME3D, BOUNDING_GEOMETRY, {
 
 impl PlotLine2d {
     fn validate_chart(&self) -> Result<(), ErrorReason> {
-        positive(&[self.line_width])?;
-        if self.interpolation > 1 || !self.marker_size.is_finite() || self.marker_size < 0.0 {
+        if self.interpolation > 1
+            || !self.line_width.is_finite()
+            || self.line_width < 0.0
+            || !self.marker_size.is_finite()
+            || self.marker_size < 0.0
+            || !self.fill_baseline.is_finite()
+            || !self.fill_opacity.is_finite()
+            || !(0.0..=1.0).contains(&self.fill_opacity)
+        {
             return Err(ErrorReason::InvalidValue);
         }
         Ok(())

@@ -115,6 +115,7 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) analytic_surface: Option<super::surface::analytic::AnalyticSurface>,
     pub(super) surface_program: Option<D::Program>,
     pub(super) stroke_program: Option<D::Program>,
+    pub(super) fill_program: Option<D::Program>,
     pub(super) surface_instance_program: Option<D::Program>,
     pub(super) surface_bitmap_program: Option<D::Program>,
     pub(super) surface_cache_program: Option<D::Program>,

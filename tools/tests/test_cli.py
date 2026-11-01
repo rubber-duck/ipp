@@ -129,6 +129,30 @@ class PlanningTests(unittest.TestCase):
                 )
             )
 
+    def test_plot_coverage_uses_ordinary_hardware_builds_and_explicit_reuse(self):
+        selected = plan(
+            "benchmark", "browser", "--scene", "plot-coverage", "--hardware", "metal"
+        )
+        ids = [task.id for task in selected.tasks]
+        self.assertIn("build:browser:render", ids)
+        self.assertNotIn("build:browser:render-instrumentation", ids)
+        self.assertEqual(ids[-1], "benchmark:plot-coverage")
+        reused = plan(
+            "benchmark",
+            "browser",
+            "--scene",
+            "plot-coverage",
+            "--hardware",
+            "metal",
+            "--reuse-build",
+        )
+        self.assertEqual(
+            [task.id for task in reused.tasks], ["benchmark:plot-coverage"]
+        )
+        for flags in [("--instrumented",), ("--software",), ("--samples", "0")]:
+            with self.assertRaises(ValueError):
+                plan("benchmark", "browser", "--scene", "plot-coverage", *flags)
+
     def test_performance_reuse_and_comparison_options(self):
         selected = plan(
             "benchmark",

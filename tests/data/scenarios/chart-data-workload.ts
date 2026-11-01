@@ -50,6 +50,7 @@ export interface Workload {
   component:
     | "PlotLine2d"
     | "PlotBars2d"
+    | "PlotPie2d"
     | "PlotPoints3d"
     | "PlotGridBars3d"
     | "PlotHeightSurface3d";
@@ -310,6 +311,7 @@ export async function openWorkload(
                 value: "y",
                 radius: "",
                 height: "",
+                lower: "",
                 color_column: "",
                 color: CYAN,
                 visible: true,
@@ -463,6 +465,18 @@ export async function openWorkload(
       client,
       binding,
       source,
+      async editRows(rows: readonly (readonly DatasetValue[])[]) {
+        equal(rows.length, workload.rows);
+        const result = await host.datasets.update(
+          producer,
+          rows.map((values, index) => ({
+            operation: "edit" as const,
+            row: BigInt(index + 1),
+            values,
+          })),
+        );
+        equal(result.failure, undefined);
+      },
       entities,
       spatial,
       async action(mode: string, cycle: number) {

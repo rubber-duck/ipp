@@ -144,6 +144,11 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
 
+    if args.scene == "plot-coverage":
+        from .plot_benchmark import plan as plan_plots
+
+        return plan_plots(args, tasks)
+
     if args.scene == "cockpit-surfaces":
         from .cockpit_benchmark import plan as plan_cockpit
 

@@ -52,6 +52,12 @@ Frames can fit their numeric range with `automatic_x`, `automatic_y` and, in 3D,
 
 `PlotFrame3d` starts with `adaptive_axes={false}`. Enable it for an interacting chart to allow camera-aware boundary placement; disable it to freeze that view's current station, including halfway through a transition. Reenabling resumes from the displayed station without a return jump. The client owns interaction policy, independently of camera navigation.
 
+## Filled line plots
+
+`PlotLine2d` accepts `fill_opacity` and `fill_baseline`. A series with `lower: "lowerColumn"` fills between its `y` and `lower` evaluated columns; omitting `lower` fills to the baseline. Use `line_width={0}` and `marker_size={0}` for a fill alone. Multiple series, smooth interpolation, markers and ordinary chart paints compose with fills without selecting the generic curve renderer.
+
+Fills use original source order and retain every sample. Missing upper values split both line and fill; missing lower values split only the fill. Repeated X contributes no area, reversing X forms overlapping intervals, and upper/lower crossings preserve both lobes. Same-color intervals within a continuous run form one transparent union. Color changes and separate series blend in their authored order, with all fills beneath all lines and markers. A filled interval picks its starting source row; later intervals win at overlaps. Automatic bounds include valid lower values or the baseline.
+
 ## Color legends
 
 `PlotLegend` is a reusable Canvas composition for categorical swatches and labels, or a numeric color scale. It reads only caller-authored colors and ranges. Share those inputs with series colors, color-column producers or column expressions so source updates and palette edits retain the same meaning; a legend does not infer categories, query datasets or observe chart state. Colors are straight linear RGBA in `0..1`, matching Canvas tint and Plot color columns.

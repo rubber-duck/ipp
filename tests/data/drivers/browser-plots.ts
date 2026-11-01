@@ -3,6 +3,10 @@ import type { Client, HostClientBase } from "@ipp/client";
 import { createWorkerHost } from "../../../packages/ipp-client/src/worker.js";
 import { createPlotCapture } from "../support/plot-capture.js";
 import { exercisePlot2d } from "../scenarios/plots-2d.js";
+import { presentationTesting } from "../../../packages/ipp-client/src/testing.js";
+import { renderDiagnostics } from "../../../packages/ipp-client/src/diagnostics.js";
+import { check } from "../../harness/page/checks.js";
+import { exercisePlotFills } from "../scenarios/plot-fills.js";
 import { exerciseDenseLines } from "../scenarios/dense-lines.js";
 import { exercisePlot3d } from "../scenarios/plots-3d.js";
 import { reactPlots } from "../scenarios/react-plots.js";
@@ -36,6 +40,8 @@ export async function workerPlots(
     | "glass-lifecycle"
     | "2d"
     | "dense"
+    | "fills"
+    | "fills-recovery"
     | "3d"
     | "react"
     | "view"
@@ -84,72 +90,120 @@ export async function workerPlots(
       ).arrayBuffer(),
     );
     const surface = await host.presentation.surface();
-    const capture = createPlotCapture(
-      host,
-      surface,
-      async (label, frame) => {
-        await record("capture", {
-          label,
-          width: frame.width,
-          height: frame.height,
-          rgba: encodePixels(frame.pixels),
-        });
-      },
-      record,
-    );
+    const saveFrame = async (
+      label: string,
+      frame: { width: number; height: number; pixels: Uint8Array },
+    ) =>
+      record("capture", {
+        label,
+        width: frame.width,
+        height: frame.height,
+        rgba: encodePixels(frame.pixels),
+      });
+    let capture = createPlotCapture(host, surface, saveFrame, record);
+    const recover = async () => {
+      await renderDiagnostics(host)!.statistics();
+      const testing = presentationTesting(host);
+      testing.loseContext();
+      let lost = false;
+      const deadline = performance.now() + 30000;
+      while (performance.now() < deadline) {
+        try {
+          await host.presentation.surface();
+        } catch {
+          lost = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      check(lost, "Plot context loss was not observed");
+      testing.restoreContext();
+      while (performance.now() < deadline) {
+        try {
+          const restored = await host.presentation.surface();
+          if (restored.context !== surface.context) {
+            capture = createPlotCapture(host, restored, saveFrame, record);
+            await record("plot-context-restored", {
+              before: surface.context,
+              after: restored.context,
+            });
+            return;
+          }
+        } catch {
+          /* Restoration is asynchronous. */
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      throw new Error("Plot context restoration timed out");
+    };
     return family === "glass-2d" ||
       family === "glass-3d" ||
       family === "glass-lifecycle"
       ? await exercisePlotGlass(host, contract, font, capture, record, family)
       : family === "2d"
         ? await exercisePlot2d(host, contract, font, capture, record)
-        : family === "dense"
-          ? await exerciseDenseLines(host, contract, font, capture, record)
-          : family === "3d"
-            ? await exercisePlot3d(host, contract, font, capture)
-            : family === "percentage"
-              ? await exercisePlotPercentage(
-                  host,
-                  contract,
-                  font,
-                  capture,
-                  record,
-                )
-              : family === "axis-gating"
-                ? await exercisePlotAxisGating(
+        : family === "fills" || family === "fills-recovery"
+          ? await exercisePlotFills(
+              host,
+              contract,
+              font,
+              (label, binding) => capture(label, binding),
+              record,
+              family === "fills-recovery" ? recover : undefined,
+            )
+          : family === "dense"
+            ? await exerciseDenseLines(host, contract, font, capture, record)
+            : family === "3d"
+              ? await exercisePlot3d(host, contract, font, capture)
+              : family === "percentage"
+                ? await exercisePlotPercentage(
                     host,
                     contract,
                     font,
                     capture,
                     record,
                   )
-                : family === "axis-motion"
-                  ? await exercisePlotAxisMotion(
+                : family === "axis-gating"
+                  ? await exercisePlotAxisGating(
                       host,
                       contract,
                       font,
                       capture,
                       record,
                     )
-                  : family === "axis"
-                    ? await exercisePlotAxisSupport(
+                  : family === "axis-motion"
+                    ? await exercisePlotAxisMotion(
                         host,
                         contract,
                         font,
                         capture,
                         record,
-                        transformed,
                       )
-                    : family === "view"
-                      ? await exercisePlotViewPlacement(
+                    : family === "axis"
+                      ? await exercisePlotAxisSupport(
                           host,
                           contract,
                           font,
                           capture,
                           record,
-                          offscreen,
+                          transformed,
                         )
-                      : await reactPlots(host, contract, font, capture, record);
+                      : family === "view"
+                        ? await exercisePlotViewPlacement(
+                            host,
+                            contract,
+                            font,
+                            capture,
+                            record,
+                            offscreen,
+                          )
+                        : await reactPlots(
+                            host,
+                            contract,
+                            font,
+                            capture,
+                            record,
+                          );
   } finally {
     try {
       await connection?.close();

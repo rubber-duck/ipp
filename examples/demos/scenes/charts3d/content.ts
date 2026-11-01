@@ -80,6 +80,7 @@ function series(
     value: "value",
     radius: variable ? "radius" : "",
     height: variable ? "height" : "",
+    lower: "",
     color_column: variable ? "color" : "",
     color,
     visible: true,

@@ -114,6 +114,25 @@ impl PlotHitShape {
     /// Test compact 2D marks in top-left/Y-down local coordinates.
     pub fn contains_canvas_point(&self, point: [f32; 2]) -> bool {
         match *self {
+            Self::Band {
+                ends: [a, b],
+                clip,
+            } => {
+                if point[0] < clip[0]
+                    || point[0] > clip[2]
+                    || point[1] < clip[1]
+                    || point[1] > clip[3]
+                    || a[0] == b[0]
+                {
+                    return false;
+                }
+                let t = (point[0] - a[0]) / (b[0] - a[0]);
+                let upper = a[1] + t * (b[1] - a[1]);
+                let lower = a[2] + t * (b[2] - a[2]);
+                (0.0..=1.0).contains(&t)
+                    && point[1] >= upper.min(lower)
+                    && point[1] <= upper.max(lower)
+            }
             Self::Rect([left, top, right, bottom]) => {
                 point[0] >= left && point[0] <= right && point[1] >= top && point[1] <= bottom
             }

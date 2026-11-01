@@ -127,6 +127,25 @@ void main() {
         position += movable * (interior * sign(center_delta) * min(pad, abs(center_delta))
             - exterior_low * exterior_pad + exterior_high * exterior_pad);
     }
+    // A narrow sector's axis-aligned rectangle can cover hundreds of times
+    // its painted area. Use a conservative rectangle aligned with its bisector.
+    // Curved Surfaces keep the intersection enclosure: it bounds the warped arc.
+    int shape_kind = int(a_material_params.x) % 64 / 16;
+    if (u_intersection.x == 0.0 && shape_kind == 2 && a_shape.y <= 0.7853981634) {
+        vec2 middle = a_corner_cut.zw;
+        vec2 tangent = vec2(-middle.y, middle.x);
+        float outer = a_shape.x + a_shape.z * 0.5;
+        float inner = max(0.0, a_shape.x - a_shape.z * 0.5);
+        float across = outer * a_corner_accent.x;
+        vec2 center = a_placement.xy + a_corner_cut.xy;
+        position = center + middle * (far_corner.x ? outer : inner * a_corner_accent.y)
+            + tangent * (far_corner.y ? across : -across);
+        vec4 arc_projected = u_mvp * vec4(position, 0.0, 1.0);
+        vec2 pad = vec2(a_material_params.z + GUI_BOX_ANTIALIAS_PAD);
+        if (arc_projected.w > 0.0) pad += antialias_pad(arc_projected);
+        position += middle * (far_corner.x ? 1.0 : -1.0) * dot(abs(middle), pad)
+            + tangent * (far_corner.y ? 1.0 : -1.0) * dot(abs(tangent), pad);
+    }
     v_intersection_rect = a_rect;
     v_surface_position = position;
     v_placement = a_placement;

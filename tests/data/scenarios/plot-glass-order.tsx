@@ -58,6 +58,7 @@ export async function assertPlotTriangleOrder(
             height: "",
             x: "x",
             y: "y",
+            lower: "",
             z: "z",
             color_column: "color",
             color: [1, 1, 1, 1],

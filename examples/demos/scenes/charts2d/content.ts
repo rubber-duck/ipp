@@ -66,6 +66,7 @@ function series(color: readonly number[], y = "y", colorColumn = ""): Row {
     value: "value",
     radius: "",
     height: "",
+    lower: "",
     color_column: colorColumn,
     color,
     visible: true,

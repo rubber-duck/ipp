@@ -32,6 +32,7 @@ impl<D: RenderDevice> RenderService<D> {
             analytic_surface: None,
             surface_program: None,
             stroke_program: None,
+            fill_program: None,
             surface_instance_program: None,
             surface_bitmap_program: None,
             surface_cache_program: None,
@@ -218,6 +219,9 @@ impl<D: RenderDevice> RenderService<D> {
         self.plot_plane_caches.clear();
         self.plot_label_layouts.clear();
         if let Some(program) = self.surface_program.take() {
+            self.device.borrow_mut().delete_program(program);
+        }
+        if let Some(program) = self.fill_program.take() {
             self.device.borrow_mut().delete_program(program);
         }
         if let Some(program) = self.stroke_program.take() {

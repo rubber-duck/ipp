@@ -64,6 +64,7 @@ impl<D: RenderDevice> GeneratedPathCache<D> {
         let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.path-upload");
         let limit = self.device.borrow().surface_path_texture_limit();
         let atlas = match &source.geometry {
+            PlotPathGeometry::Fill(triangles) => super::fills::pack_fill(triangles, limit),
             PlotPathGeometry::Contours(contours) => {
                 pack_surface_paths_with_limit([(source.bounds, contours.as_ref())], limit)
             }

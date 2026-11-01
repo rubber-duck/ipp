@@ -337,10 +337,8 @@ struct CanvasPaintSlot {
 pub(crate) struct CanvasPaintPrograms<D: RenderDevice> {
     slots: [Option<CanvasPaintSlot>; CANVAS_PAINT_SLOTS],
     program: Option<D::Program>,
-    path_program: Option<D::Program>,
-    stroke_program: Option<D::Program>,
-    stroke_uploaded: Option<(ipp_core::OutputRef, u64)>,
-    path_uploaded: Option<(ipp_core::OutputRef, u64)>,
+    path_programs: [Option<D::Program>; 3],
+    path_uploaded: [Option<(ipp_core::OutputRef, u64)>; 3],
     /// The slots changed since the program was built.
     stale: bool,
     /// Paints admitted since the last successful build.
@@ -359,10 +357,8 @@ impl<D: RenderDevice> Default for CanvasPaintPrograms<D> {
         Self {
             slots: Default::default(),
             program: None,
-            path_program: None,
-            stroke_program: None,
-            stroke_uploaded: None,
-            path_uploaded: None,
+            path_programs: Default::default(),
+            path_uploaded: [None; 3],
             stale: false,
             added: Vec::new(),
             rejected: BTreeMap::new(),
@@ -457,17 +453,13 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         device: &mut D,
         output: ipp_core::OutputRef,
         blocks: &CanvasPaintBlocks,
-        stroke: bool,
+        kind: usize,
     ) -> Result<Option<&D::Program>, RenderError> {
         if self.program.is_none() || self.stale {
             self.build(device)?;
         }
 
-        let (program, uploaded) = if stroke {
-            (&self.stroke_program, &mut self.stroke_uploaded)
-        } else {
-            (&self.path_program, &mut self.path_uploaded)
-        };
+        let (program, uploaded) = (&self.path_programs[kind], &mut self.path_uploaded[kind]);
         let Some(program) = program.as_ref() else {
             return Ok(None);
         };
@@ -485,15 +477,13 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         if let Some(program) = self.program.take() {
             device.delete_program(program);
         }
-        if let Some(program) = self.path_program.take() {
-            device.delete_program(program);
+        for program in &mut self.path_programs {
+            if let Some(program) = program.take() {
+                device.delete_program(program);
+            }
         }
-        if let Some(program) = self.stroke_program.take() {
-            device.delete_program(program);
-        }
-        self.stroke_uploaded = None;
+        self.path_uploaded = [None; 3];
         self.uploaded = None;
-        self.path_uploaded = None;
         let vertex = crate::services::render::embedded_shader!("shaders/surface_gui.vert");
         loop {
             let fragment = canvas_fragment_source(
@@ -505,50 +495,45 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
             let created = device
                 .create_program(vertex, &fragment)
                 .and_then(|program| {
-                    if self.slots.iter().all(Option::is_none) {
-                        return Ok((program, None, None));
-                    }
-                    let path_fragment = fragment_source(
-                        crate::services::render::embedded_shader!("shaders/surface.frag"),
-                        self.slots
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, slot)| Some((index + 1, &slot.as_ref()?.source))),
-                    );
-                    let path = match device.create_program(
-                        crate::services::render::embedded_shader!("shaders/surface.vert"),
-                        &path_fragment,
-                    ) {
-                        Ok(path) => path,
-                        Err(error) => {
-                            device.delete_program(program);
-                            return Err(error);
-                        }
-                    };
-                    let stroke_fragment = fragment_source(
-                        crate::services::render::embedded_shader!("shaders/surface_stroke.frag"),
-                        self.slots
-                            .iter()
-                            .enumerate()
-                            .filter_map(|(index, slot)| Some((index + 1, &slot.as_ref()?.source))),
-                    );
-                    match device.create_program(
-                        crate::services::render::embedded_shader!("shaders/surface.vert"),
-                        &stroke_fragment,
-                    ) {
-                        Ok(stroke) => Ok((program, Some(path), Some(stroke))),
-                        Err(error) => {
-                            device.delete_program(path);
-                            device.delete_program(program);
-                            Err(error)
+                    let mut paths: [Option<D::Program>; 3] = Default::default();
+                    if self.slots.iter().any(Option::is_some) {
+                        for (index, source) in [
+                            crate::services::render::embedded_shader!("shaders/surface.frag"),
+                            crate::services::render::embedded_shader!(
+                                "shaders/surface_stroke.frag"
+                            ),
+                            crate::services::render::embedded_shader!("shaders/surface_fill.frag"),
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        {
+                            let fragment = fragment_source(
+                                source,
+                                self.slots.iter().enumerate().filter_map(|(index, slot)| {
+                                    Some((index + 1, &slot.as_ref()?.source))
+                                }),
+                            );
+                            match device.create_program(
+                                crate::services::render::embedded_shader!("shaders/surface.vert"),
+                                &fragment,
+                            ) {
+                                Ok(path) => paths[index] = Some(path),
+                                Err(error) => {
+                                    for path in paths.into_iter().flatten() {
+                                        device.delete_program(path);
+                                    }
+                                    device.delete_program(program);
+                                    return Err(error);
+                                }
+                            }
                         }
                     }
+                    Ok((program, paths))
                 });
             match created {
-                Ok((program, path, stroke)) => {
+                Ok((program, paths)) => {
                     self.program = Some(program);
-                    self.path_program = path;
-                    self.stroke_program = stroke;
+                    self.path_programs = paths;
                     self.stale = false;
                     self.added.clear();
                     self.builds += 1;
@@ -597,14 +582,12 @@ impl<D: RenderDevice> CanvasPaintPrograms<D> {
         if let Some(program) = self.program.take() {
             device.delete_program(program);
         }
-        if let Some(program) = self.path_program.take() {
-            device.delete_program(program);
+        for program in &mut self.path_programs {
+            if let Some(program) = program.take() {
+                device.delete_program(program);
+            }
         }
-        if let Some(program) = self.stroke_program.take() {
-            device.delete_program(program);
-        }
-        self.stroke_uploaded = None;
-        self.path_uploaded = None;
+        self.path_uploaded = [None; 3];
         self.slots = Default::default();
         self.stale = false;
         self.added.clear();

@@ -542,6 +542,7 @@ export class ChartContent {
       value: spec.component.includes("Pie") ? "value" : y,
       radius: "radius",
       height: "height",
+      lower: "",
       color_column: spec.colorByRow ? "color" : "",
       color,
       visible: true,

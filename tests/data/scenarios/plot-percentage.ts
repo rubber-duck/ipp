@@ -80,6 +80,7 @@ function series(ambiguous = false): Readonly<Record<string, RowPropertyValue>> {
     value: "",
     radius: "",
     height: "",
+    lower: "",
     color_column: "",
     color: cyan,
     visible: true,

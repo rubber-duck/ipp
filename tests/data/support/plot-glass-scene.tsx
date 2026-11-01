@@ -340,6 +340,7 @@ async function pieDimensions(scene: PlotGlassScene, variable: boolean) {
           name: "Group A",
           x: "x",
           y: "y",
+          lower: "",
           z: "z",
           value: "value",
           radius: variable ? "radius" : "",

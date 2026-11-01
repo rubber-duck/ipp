@@ -65,6 +65,24 @@ pub(super) fn prepare(
                 glow: None,
                 shape: CanvasBoxShape::RECT,
             },
+            PlotPrimitiveKind::Shape {
+                size,
+                radius,
+                width,
+                shape,
+            } => CanvasPrimitive::Box {
+                style: CanvasPrimitiveStyle {
+                    color: [1.0; 4],
+                    ..style
+                },
+                size: *size,
+                corner_radius: *radius,
+                border_width: *width,
+                border_color: item.color,
+                fill: CanvasShapeFill::Solid(item.color),
+                glow: None,
+                shape: *shape,
+            },
             PlotPrimitiveKind::Path(path) => CanvasPrimitive::Path {
                 style,
                 path: path.clone(),

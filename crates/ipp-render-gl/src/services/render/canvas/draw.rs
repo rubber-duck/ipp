@@ -484,6 +484,13 @@ impl<D: RenderDevice> RenderService<D> {
                     return Ok(());
                 }
                 let stroke = path.is_stroke();
+                let fill = path.is_fill();
+                if fill && self.fill_program.is_none() {
+                    self.fill_program = Some(self.device.borrow_mut().create_program(
+                        crate::services::render::embedded_shader!("shaders/surface.vert"),
+                        crate::services::render::embedded_shader!("shaders/surface_fill.frag"),
+                    )?);
+                }
                 if stroke && self.stroke_program.is_none() {
                     self.stroke_program = Some(self.device.borrow_mut().create_program(
                         crate::services::render::embedded_shader!("shaders/surface.vert"),
@@ -521,7 +528,11 @@ impl<D: RenderDevice> RenderService<D> {
                         &mut self.device.borrow_mut(),
                         output,
                         &cache.paints,
-                        stroke,
+                        if fill {
+                            2
+                        } else {
+                            usize::from(stroke)
+                        },
                     )?;
                     if let Some(program) = program {
                         if let Some(context) = scene.presentation.filter(|p| p.features & 64 != 0) {
@@ -539,14 +550,18 @@ impl<D: RenderDevice> RenderService<D> {
                         )?;
                         program
                     } else {
-                        if stroke {
+                        if fill {
+                            self.fill_program.as_ref().expect("fill program")
+                        } else if stroke {
                             self.stroke_program.as_ref().expect("stroke program")
                         } else {
                             self.surface_program.as_ref().expect("shared path program")
                         }
                     }
                 } else {
-                    if stroke {
+                    if fill {
+                        self.fill_program.as_ref().expect("fill program")
+                    } else if stroke {
                         self.stroke_program.as_ref().expect("stroke program")
                     } else {
                         self.surface_program.as_ref().expect("shared path program")

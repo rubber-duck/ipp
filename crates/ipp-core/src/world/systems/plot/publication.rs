@@ -20,6 +20,8 @@ pub struct PlotRowIdentity {
 pub enum PlotPathGeometry {
     /// Filled arbitrary quadratic outlines.
     Contours(Arc<[QuadraticContour]>),
+    /// Union of filled triangles. Internal edges never blend independently.
+    Fill(Arc<[[[f32; 2]; 3]]>),
     /// A union of round-capped segments, blended once for the complete paint.
     Stroke {
         /// Endpoint pairs in top-left/Y-down local coordinates.
@@ -45,6 +47,7 @@ impl PlotPath {
     pub fn is_empty(&self) -> bool {
         match &self.geometry {
             PlotPathGeometry::Contours(contours) => contours.is_empty(),
+            PlotPathGeometry::Fill(triangles) => triangles.is_empty(),
             PlotPathGeometry::Stroke {
                 segments,
                 ..
@@ -57,11 +60,34 @@ impl PlotPath {
         matches!(self.geometry, PlotPathGeometry::Stroke { .. })
     }
 
+    /// Whether this path uses retained triangle-union coverage.
+    pub fn is_fill(&self) -> bool {
+        matches!(self.geometry, PlotPathGeometry::Fill(_))
+    }
+
     /// Filled-contour reference for diagnostics and geometry equivalence checks.
     /// Ordinary stroke rendering consumes the compact segments directly.
     pub fn quadratic_contours(&self) -> std::borrow::Cow<'_, [QuadraticContour]> {
         match &self.geometry {
             PlotPathGeometry::Contours(contours) => std::borrow::Cow::Borrowed(contours),
+            PlotPathGeometry::Fill(triangles) => {
+                use crate::services::asset_management::formats::quadratic::QuadraticSegment;
+
+                std::borrow::Cow::Owned(
+                    triangles
+                        .iter()
+                        .map(|p| QuadraticContour {
+                            start: p[0],
+                            segments: p[1..]
+                                .iter()
+                                .map(|&to| QuadraticSegment::Line {
+                                    to,
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                )
+            }
             PlotPathGeometry::Stroke {
                 segments,
                 radius,
@@ -105,6 +131,13 @@ pub enum PlotPrimitiveKind {
         size: [f32; 2],
         border_width: f32,
         border_color: [f32; 4],
+    },
+    /// Instanced shared Canvas contour (circles, sectors and decoration).
+    Shape {
+        size: [f32; 2],
+        radius: [f32; 2],
+        width: f32,
+        shape: crate::systems::canvas::CanvasBoxShape,
     },
     /// Runtime-derived closed analytic path.
     Path(Arc<PlotPath>),
@@ -261,6 +294,12 @@ pub struct PlotHit {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum PlotHitShape {
+    /// One source interval's filled band, clipped to the Cartesian frame.
+    Band {
+        /// X, upper Y and lower Y at both ends; X may increase or decrease.
+        ends: [[f32; 3]; 2],
+        clip: [f32; 4],
+    },
     /// Canvas-local rectangle.
     Rect([f32; 4]),
     /// Canvas-local circle.

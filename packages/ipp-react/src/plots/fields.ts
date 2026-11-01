@@ -104,6 +104,8 @@ export const plotComponentContract = {
       interpolation: "number",
       line_width: "number",
       marker_size: "number",
+      fill_opacity: "number",
+      fill_baseline: "number",
     },
   },
   PlotBars2d: {

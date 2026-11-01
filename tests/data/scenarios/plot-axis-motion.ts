@@ -141,6 +141,8 @@ export async function exercisePlotAxisMotion(
       binding = await host.setRootOutput(chart.binding.output, EXTENT);
     // A 10 m view keeps a quarter tick at least 35px inside the 480px viewport
     // over either complete X/Z boundary route; the numeric glyph is 13px high.
+    // A 14 m Y view keeps the sampled intermediate stations inside. Its
+    // adjacent corners stay offscreen, preserving the opposite-edge transition.
     const cases = [
       {
         axis: 0,
@@ -149,8 +151,8 @@ export async function exercisePlotAxisMotion(
       },
       {
         axis: 1,
-        initial: camera([0, 2.5, 10], -Math.PI / 4, -0.4, 12),
-        target: camera([10, 2.5, 0], (3 * Math.PI) / 4, -0.4, 12),
+        initial: camera([0, 2.5, 10], -Math.PI / 4, -0.4, 14),
+        target: camera([10, 2.5, 0], (3 * Math.PI) / 4, -0.4, 14),
       },
       {
         axis: 2,

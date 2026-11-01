@@ -24,10 +24,11 @@ use crate::{
 const CURVE_ERROR: f32 = 0.2;
 
 #[derive(Clone, Copy, Debug)]
-struct Sample {
-    row: PlotRowIdentity,
-    point: [f64; 2],
-    color: [f32; 4],
+pub(super) struct Sample {
+    pub row: PlotRowIdentity,
+    pub point: [f64; 2],
+    pub color: [f32; 4],
+    pub lower: Option<f64>,
 }
 
 struct Series {
@@ -48,11 +49,27 @@ pub fn prepare_line(
     input: &PlotPreparedInput<'_>,
     callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
-    let series = samples(&chart.series, input, false)?;
+    let series = samples(
+        &chart.series,
+        input,
+        false,
+        (chart.fill_opacity > 0.0).then_some(chart),
+    )?;
     let (min, max) = ranges(frame, &series, false);
     let mapping = PlotFrameMapping2d::new(frame, min, max)?;
     let mut geometry = CartesianPaint::new(frame, mapping, min, max).prepare();
     let mut anchors = BTreeMap::new();
+
+    // Every fill precedes every line/marker. A lower-column gap splits only its
+    // fill; the upper line retains its own source samples and interpolation.
+    if chart.fill_opacity > 0.0 {
+        for series in &series {
+            for run in series.samples.split(Option::is_none) {
+                let run: Vec<_> = run.iter().filter_map(|sample| *sample).collect();
+                super::line_fills::prepare(&mut geometry, &run, chart, mapping)?;
+            }
+        }
+    }
 
     for series in &series {
         for run in series.samples.split(Option::is_none) {
@@ -103,7 +120,15 @@ pub fn prepare_line(
                 }
                 let radius = chart.marker_size / 2.0;
                 if radius > 0.0 {
-                    emit_data_path(&mut geometry, vec![circle(point, radius)], sample.color);
+                    push_shape(
+                        &mut geometry,
+                        point,
+                        radius,
+                        0.0,
+                        crate::systems::canvas::CanvasBoxShape::RECT,
+                        sample.color,
+                        true,
+                    );
                 }
                 geometry.hits.push(PlotHit {
                     row: sample.row,
@@ -135,7 +160,7 @@ pub fn prepare_bars(
     input: &PlotPreparedInput<'_>,
     callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
-    let series = samples(&chart.series, input, false)?;
+    let series = samples(&chart.series, input, false, None)?;
     let highlighted = highlighted_rows(&chart.labels)?;
     let spacing = bar_spacing(&series);
     let (min, max) = bar_ranges(frame, &series, spacing);
@@ -220,7 +245,7 @@ pub fn prepare_pie(
     input: &PlotPreparedInput<'_>,
     callout: Option<&PlotCalloutStyle>,
 ) -> Result<PlotPreparedGeometry, ErrorReason> {
-    let series = samples(&chart.series, input, true)?;
+    let series = samples(&chart.series, input, true, None)?;
     let highlighted = highlighted_rows(&chart.labels)?;
     let left = frame.padding_left;
     let top = frame.padding_top;
@@ -251,8 +276,16 @@ pub fn prepare_pie(
         } else {
             (sample.point[1] / total * f64::from(TAU)) as f32
         };
-        let contour = sector(center, inner, radius, start, sweep);
-        emit_data_path(&mut geometry, vec![contour], sample.color);
+        push_arc(
+            &mut geometry,
+            center,
+            inner,
+            radius,
+            start,
+            sweep,
+            sample.color,
+            true,
+        );
         if highlighted.contains(&row_key(sample.row)) {
             let half_width = frame.line_width.max(2.0) / 2.0;
             let mut contours = vec![sector(
@@ -312,6 +345,7 @@ fn samples(
     rows: &Rows<PlotSeriesRow>,
     input: &PlotPreparedInput<'_>,
     radial: bool,
+    fill: Option<&PlotLine2d>,
 ) -> Result<Vec<Series>, ErrorReason> {
     let mut series = Vec::new();
     for (slot, row) in rows.iter().filter(|(_, row)| row.visible) {
@@ -340,6 +374,11 @@ fn samples(
             }
             Some(column)
         };
+        let lower = if fill.is_some() && !row.lower.is_empty() {
+            Some(numeric(input, &row.lower)?)
+        } else {
+            None
+        };
         let mut samples = Vec::with_capacity(input.row_ids.len());
         for (index, row_id) in input.row_ids.iter().enumerate() {
             let x = match x {
@@ -359,6 +398,11 @@ fn samples(
                     },
                     point: [x, y],
                     color,
+                    lower: match (fill, lower) {
+                        (Some(chart), None) => Some(f64::from(chart.fill_baseline)),
+                        (Some(_), Some(column)) => column.number(index)?,
+                        _ => None,
+                    },
                 }),
                 _ => None,
             });
@@ -395,6 +439,10 @@ fn ranges(frame: &PlotFrame2d, series: &[Series], baseline: bool) -> ([f64; 2], 
         for axis in 0..2 {
             min[axis] = min[axis].min(sample.point[axis]);
             max[axis] = max[axis].max(sample.point[axis]);
+        }
+        if let Some(lower) = sample.lower {
+            min[1] = min[1].min(lower);
+            max[1] = max[1].max(lower);
         }
     }
     if baseline && min[1].is_finite() {
@@ -589,16 +637,15 @@ fn labels(
         };
         if label.highlighted && anchor.radius > 0.0 {
             // A ring makes the selected sample clear without covering its value colour.
-            emit_path(
+            push_arc(
                 geometry,
-                vec![sector(
-                    anchor.point,
-                    anchor.radius + 2.0,
-                    anchor.radius + 4.0,
-                    0.0,
-                    TAU,
-                )],
+                anchor.point,
+                anchor.radius + 2.0,
+                anchor.radius + 4.0,
+                0.0,
+                TAU,
                 highlight,
+                false,
             );
         }
         if label.text.is_empty() {
@@ -720,17 +767,54 @@ fn push_data_box(
     geometry.canvas.last_mut().expect("inserted mark").data_mark = true;
 }
 
-fn emit_data_path(
+fn push_shape(
     geometry: &mut PlotPreparedGeometry,
-    contours: Vec<QuadraticContour>,
+    center: [f32; 2],
+    radius: f32,
+    width: f32,
+    shape: crate::systems::canvas::CanvasBoxShape,
     color: [f32; 4],
+    data_mark: bool,
 ) {
-    if contours.is_empty() {
-        return;
-    }
+    geometry.canvas.push(PlotPrimitive {
+        data_mark,
+        part: geometry.canvas.len() as u32,
+        position: [center[0] - radius, center[1] - radius],
+        color,
+        kind: PlotPrimitiveKind::Shape {
+            size: [radius * 2.0; 2],
+            radius: [radius; 2],
+            width,
+            shape,
+        },
+    });
+}
 
-    emit_path(geometry, contours, color);
-    geometry.canvas.last_mut().expect("inserted mark").data_mark = true;
+#[allow(clippy::too_many_arguments)]
+fn push_arc(
+    geometry: &mut PlotPreparedGeometry,
+    center: [f32; 2],
+    inner: f32,
+    radius: f32,
+    start: f32,
+    sweep: f32,
+    color: [f32; 4],
+    data_mark: bool,
+) {
+    push_shape(
+        geometry,
+        center,
+        radius,
+        radius - inner,
+        crate::systems::canvas::CanvasBoxShape::Arc {
+            start: start / TAU,
+            sweep: sweep / TAU,
+            dashes: 0.0,
+            dash_duty: 1.0,
+        },
+        color,
+        data_mark,
+    );
 }
 
 fn push_box(
@@ -1031,7 +1115,7 @@ fn sector(center: [f32; 2], inner: f32, radius: f32, start: f32, sweep: f32) -> 
 
 /// Fritsch-Carlson harmonic tangents suppress overshoot in each strictly
 /// increasing-X run. Discontinuities in X deliberately disable nearby smoothing.
-fn monotone_tangents(points: &[[f32; 2]]) -> Vec<Option<f32>> {
+pub(super) fn monotone_tangents(points: &[[f32; 2]]) -> Vec<Option<f32>> {
     if points.len() < 2 {
         return vec![None; points.len()];
     }
@@ -1063,7 +1147,7 @@ fn monotone_tangents(points: &[[f32; 2]]) -> Vec<Option<f32>> {
         .collect()
 }
 
-fn split_cubic(p: [[f32; 2]; 4]) -> [[[f32; 2]; 4]; 2] {
+pub(super) fn split_cubic(p: [[f32; 2]; 4]) -> [[[f32; 2]; 4]; 2] {
     let a = mid(p[0], p[1]);
     let b = mid(p[1], p[2]);
     let c = mid(p[2], p[3]);
@@ -1073,7 +1157,7 @@ fn split_cubic(p: [[f32; 2]; 4]) -> [[[f32; 2]; 4]; 2] {
     [[p[0], a, d, f], [f, e, c, p[3]]]
 }
 
-fn chord_distance(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+pub(super) fn chord_distance(point: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     let delta = sub(b, a);
     let length = delta[0].hypot(delta[1]);
     if length <= f32::EPSILON {

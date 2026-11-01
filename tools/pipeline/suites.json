@@ -3227,7 +3227,10 @@
       "tests/data/support/plot-glass-oracle.ts",
       "tests/data/support/plot-glass-scene.tsx",
       "tests/data/support/plot-contour-oracle.ts",
-      "tests/gui/glass-skin/chart-material/"
+      "tests/gui/glass-skin/chart-material/",
+      "tests/data/scenarios/plot-fills.ts",
+      "crates/ipp-render-gl/src/services/render/assets/fills.rs",
+      "crates/ipp-render-gl/src/services/render/shaders/surface_fill.frag"
     ],
     "commands": [
       {
@@ -3278,7 +3281,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "dense-native",
@@ -3290,7 +3293,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "browser",
@@ -3302,7 +3305,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "dense-browser",
@@ -3314,7 +3317,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "views-native",
@@ -3326,7 +3329,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "views-browser",
@@ -3338,7 +3341,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "3d-native",
@@ -3350,7 +3353,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "3d-browser",
@@ -3362,7 +3365,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "axis-native",
@@ -3374,7 +3377,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "axis-browser",
@@ -3386,7 +3389,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "axis-gating-native",
@@ -3398,7 +3401,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "axis-gating-browser",
@@ -3410,7 +3413,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "percentage-native",
@@ -3422,7 +3425,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "percentage-browser",
@@ -3434,7 +3437,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-2d-native",
@@ -3446,7 +3449,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-2d-browser",
@@ -3458,7 +3461,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-3d-native",
@@ -3470,7 +3473,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-3d-browser",
@@ -3482,7 +3485,7 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-lifecycle-native",
@@ -3494,7 +3497,7 @@
         ],
         "builds": ["plots-fixtures", "gles-host", "font-assets"],
         "requirements": ["rust", "node", "npm", "gles"],
-        "partitionExcludes": ["target/browser-build/render"]
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
       },
       {
         "name": "glass-lifecycle-browser",
@@ -3506,7 +3509,43 @@
         ],
         "builds": ["plots-fixtures", "browser:render", "font-assets"],
         "requirements": ["rust", "wasm", "node", "npm", "browser"],
-        "partitionExcludes": ["target/gles-host"]
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
+      },
+      {
+        "name": "fills-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^fills Plot through native WebSocket/GLES",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "gles-host", "font-assets"],
+        "requirements": ["rust", "node", "npm", "gles"],
+        "partitionExcludes": ["target/browser-build/render", "target/browser-build/render-instrumentation"]
+      },
+      {
+        "name": "fills-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^fills Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "browser:render", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render-instrumentation"]
+      },
+      {
+        "name": "fills-recovery-browser",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern=^fills-recovery Plot through worker WASM/WebGL",
+          "target/plots/plots-runtime.test.js"
+        ],
+        "builds": ["plots-fixtures", "browser:render-instrumentation", "font-assets"],
+        "requirements": ["rust", "wasm", "node", "npm", "browser"],
+        "partitionExcludes": ["target/gles-host", "target/browser-build/render"]
       }
     ]
   },

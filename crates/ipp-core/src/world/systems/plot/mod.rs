@@ -4,6 +4,7 @@
 pub(in crate::world::systems) mod callout;
 mod component;
 mod frame_mapping;
+mod line_fills;
 mod picking;
 mod prepared_input;
 mod primitive_preparation;

@@ -68,6 +68,8 @@ A chart entity's sibling `CanvasPaint` applies only to data marks. Plot keeps it
 
 Analytic paths use the same admitted paint slots and parameter blocks as boxes, with a separate variant of the existing analytic path program. Position is relative to the path enclosure's top-left corner, size is that enclosure's extent, and data is zero. The original winding coverage, antialiasing and clipping remain unchanged. Paint alpha is multiplied by inherited opacity exactly once. Text continues through its ordinary program.
 
+Filled Plot unions remove internal triangulation edges from paint boundaries. Their `edge` input resolves the exterior within two local units and saturates at −2 farther inside, including overlapping intervals; it is intended for contour finishes, not a full interior distance field.
+
 Analytic paths retain native coverage, antialiasing and clipping. Their contour-distance implementation lives with the [path shaders](../shaders) rather than becoming a separate geometry or texture pipeline.
 
 ## Shared part paints

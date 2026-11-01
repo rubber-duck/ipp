@@ -46,6 +46,8 @@ export interface PlotSeries {
   readonly name?: string;
   readonly x?: string;
   readonly y?: string;
+  /** Lower boundary of a line band; omitted uses the chart's fill_baseline. */
+  readonly lower?: string;
   readonly z?: string;
   readonly value?: string;
   readonly radius?: string;
@@ -225,6 +227,7 @@ export function describePlot<Name extends ChartName>(
                   value: item.value ?? "value",
                   radius: item.radius ?? "",
                   height: item.height ?? "",
+                  lower: item.lower ?? "",
                   color_column: item.color_column ?? "",
                   color: item.color ?? [0, 0.8, 1, 1],
                   visible: item.visible ?? true,

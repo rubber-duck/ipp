@@ -469,9 +469,9 @@ fn sibling_paint_updates_and_replacement_keep_data_geometry_and_decoration() {
 }
 
 #[test]
-fn sibling_paint_selects_line_and_sector_paths_without_painting_axes() {
+fn sibling_paint_selects_lines_markers_and_sectors_without_painting_axes() {
     use ipp_core::systems::canvas::{
-        CanvasPaint, CanvasPaintEntry, CanvasPrimitive, CanvasPublication,
+        CanvasPaint, CanvasPaintEntry, CanvasPrimitive, CanvasPublication, CanvasShapeFill,
     };
     use support::CanvasTestHost;
     let mut fixture = Fixture::new([20.0, 40.0], 1.0);
@@ -530,7 +530,24 @@ fn sibling_paint_selects_line_and_sector_paths_without_painting_axes() {
             )
         })
         .count();
-    assert_eq!(painted, 3);
+    assert_eq!(painted, 1);
+    assert_eq!(
+        canvas
+            .entries
+            .iter()
+            .filter(|entry| matches!(
+                entry.as_ref(),
+                CanvasPaintEntry::Primitive {
+                    primitive: CanvasPrimitive::Box {
+                        fill: CanvasShapeFill::Paint { .. },
+                        ..
+                    },
+                    ..
+                }
+            ))
+            .count(),
+        2
+    );
     assert!(canvas.entries.iter().any(|entry| matches!(
         entry.as_ref(),
         CanvasPaintEntry::Primitive {
@@ -586,8 +603,8 @@ fn sibling_paint_selects_line_and_sector_paths_without_painting_axes() {
             .filter(|entry| matches!(
                 entry.as_ref(),
                 CanvasPaintEntry::Primitive {
-                    primitive: CanvasPrimitive::Path {
-                        paint: Some(_),
+                    primitive: CanvasPrimitive::Box {
+                        fill: CanvasShapeFill::Paint { .. },
                         ..
                     },
                     ..

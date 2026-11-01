@@ -264,6 +264,7 @@ def parser() -> argparse.ArgumentParser:
             "gui-stress",
             "chart-data",
             "cockpit-surfaces",
+            "plot-coverage",
         ),
         default="stress",
     )

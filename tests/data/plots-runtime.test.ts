@@ -10,6 +10,7 @@ import { encodePng } from "../harness/images.js";
 import { runNativeEnvironment } from "../harness/native.js";
 import { runBrowserEnvironment } from "../harness/browser.js";
 import { exercisePlot2d } from "./scenarios/plots-2d.js";
+import { exercisePlotFills } from "./scenarios/plot-fills.js";
 import { exerciseDenseLines } from "./scenarios/dense-lines.js";
 import { exercisePlot3d } from "./scenarios/plots-3d.js";
 import { reactPlots } from "./scenarios/react-plots.js";
@@ -31,6 +32,8 @@ for (const [family, offscreen, transformed] of [
   ["glass-3d", undefined],
   ["glass-lifecycle", undefined],
   ["dense", undefined],
+  ["fills", undefined],
+  ["fills-recovery", undefined],
   ["3d", undefined],
   ["react", undefined],
   ["view", undefined],
@@ -53,6 +56,7 @@ for (const [family, offscreen, transformed] of [
       : "";
   const caseName = `${family}${suffix.replaceAll(" ", "-")}`;
   test(`${family} Plot through native WebSocket/GLES${suffix}`, {
+    skip: family === "fills-recovery",
     timeout: 180_000,
   }, async (context) => {
     const workspace = process.cwd();
@@ -123,53 +127,61 @@ for (const [family, offscreen, transformed] of [
             ? exercisePlotGlass(host, contract, font, capture, record, family)
             : family === "2d"
               ? exercisePlot2d(host, contract, font, capture, record)
-              : family === "dense"
-                ? exerciseDenseLines(host, contract, font, capture, record)
-                : family === "3d"
-                  ? exercisePlot3d(host, contract, font, capture)
-                  : family === "percentage"
-                    ? exercisePlotPercentage(
-                        host,
-                        contract,
-                        font,
-                        capture,
-                        record,
-                      )
-                    : family === "axis-gating"
-                      ? exercisePlotAxisGating(
+              : family === "fills"
+                ? exercisePlotFills(host, contract, font, capture, record)
+                : family === "dense"
+                  ? exerciseDenseLines(host, contract, font, capture, record)
+                  : family === "3d"
+                    ? exercisePlot3d(host, contract, font, capture)
+                    : family === "percentage"
+                      ? exercisePlotPercentage(
                           host,
                           contract,
                           font,
                           capture,
                           record,
                         )
-                      : family === "axis-motion"
-                        ? exercisePlotAxisMotion(
+                      : family === "axis-gating"
+                        ? exercisePlotAxisGating(
                             host,
                             contract,
                             font,
                             capture,
                             record,
                           )
-                        : family === "axis"
-                          ? exercisePlotAxisSupport(
+                        : family === "axis-motion"
+                          ? exercisePlotAxisMotion(
                               host,
                               contract,
                               font,
                               capture,
                               record,
-                              transformed ?? false,
                             )
-                          : family === "view"
-                            ? exercisePlotViewPlacement(
+                          : family === "axis"
+                            ? exercisePlotAxisSupport(
                                 host,
                                 contract,
                                 font,
                                 capture,
                                 record,
-                                offscreen,
+                                transformed ?? false,
                               )
-                            : reactPlots(host, contract, font, capture, record),
+                            : family === "view"
+                              ? exercisePlotViewPlacement(
+                                  host,
+                                  contract,
+                                  font,
+                                  capture,
+                                  record,
+                                  offscreen,
+                                )
+                              : reactPlots(
+                                  host,
+                                  contract,
+                                  font,
+                                  capture,
+                                  record,
+                                ),
         );
       },
     );
@@ -179,13 +191,20 @@ for (const [family, offscreen, transformed] of [
     timeout: 180_000,
   }, async (context) => {
     const workspace = process.cwd();
-    const profile = resolve(workspace, "target/browser-build/render");
+    const profileName =
+      family === "fills-recovery" ? "render-instrumentation" : "render";
+    const profile = resolve(
+      workspace,
+      family === "fills-recovery"
+        ? "target/browser-build/render-instrumentation"
+        : "target/browser-build/render",
+    );
     await runBrowserEnvironment(
       `plots-${caseName}-webgl`,
       {
         workspace,
         build: {
-          name: "render",
+          name: profileName,
           generatedModule: join(profile, "generated.js"),
           runtimeWasm: join(profile, "runtime.wasm"),
           contractArtifact: join(profile, "contract.bin"),

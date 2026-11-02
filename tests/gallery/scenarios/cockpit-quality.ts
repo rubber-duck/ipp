@@ -9,6 +9,16 @@ import {
 } from "../cockpit-oracle.js";
 import type { RgbaImage } from "../../../tools/shared-host/images.js";
 
+function cachePolicy(state: CockpitState, panel: number) {
+  const entity = state.scene.entities.find(
+    (item) => item.metadata.symbolicId === `cockpit-screen-${panel}`,
+  );
+  assert.ok(entity, "carousel pane exists");
+  return entity.components.find(
+    (item) => item.component === state.componentIds.SurfaceCache,
+  )?.fields;
+}
+
 function clearance(state: CockpitState) {
   const camera = cockpitFields(
     state.scene,
@@ -146,26 +156,36 @@ export async function exerciseCockpitQuality(
         "cache controls preserve the panel Worlds and their state",
       );
       for (let panel = 0; panel < 3; panel++) {
-        const policy = cockpitFields(
-          changed.scene,
-          `cockpit-screen-${panel}`,
-          changed.componentIds.SurfaceCache!,
-        );
+        const policy = cachePolicy(changed, panel);
         const live = caching === "off" || (caching === "auto" && panel === 0);
-        const sharp = caching !== "auto" || panel === 0;
+        if (live) {
+          assert.equal(
+            policy,
+            undefined,
+            "current panes opt out of image caching",
+          );
+          continue;
+        }
+        assert.ok(policy, "distant Auto and Force panes opt into caching");
         assert.equal(
           policy.resolution_scale,
-          sharp ? 1.5 : 0.75,
-          "Off preserves focused quality on every panel; Automatic restores side-panel quality",
+          caching === "force" ? 1.5 : 0.75,
+          "Automatic lowers distant image demand",
         );
-        assert.ok(
-          live
-            ? Number(policy.direct_distance) > 12
-            : policy.direct_distance === 0,
-          "the native cache policy follows the routed GUI selection",
-        );
+        assert.equal(policy.direct_distance, 0);
+        assert.equal(policy.force_cache, caching === "force");
       }
       await driver.capture(`caching-${surface}-${caching}`);
+    }
+    for (const cap of [256, 2048]) {
+      await driver.options({ surfaceTextureSize: cap });
+      await driver.capture(`direct-${surface}-${cap}`);
+      const work = (await driver.statistics()).surfaces;
+      assert.equal(
+        work.surfaceCacheRepaints + work.surfaceCacheReuses,
+        0,
+        "Off draws flat/curved panels directly, independently of the image cap",
+      );
     }
     await driver.press(0, "cockpit-exploded");
     await driver.advance(0.2);
@@ -227,26 +247,45 @@ export async function exerciseCockpitQuality(
   for (const focus of [0, 0.5, 1, 1.5, 2, 1]) {
     await driver.options({ carousel: focus });
     await driver.advance(0.5);
-    const state = await driver.state();
+    let state = await driver.state();
+    for (let index = 0; index < 3; index++) {
+      if (Math.abs(focus - index) < 1)
+        assert.equal(
+          cachePolicy(state, index),
+          undefined,
+          "incoming panes are direct",
+        );
+    }
+    // The outgoing pane stays direct until the spring's quality hold expires.
+    const deadline = performance.now() + 10_000;
+    while (
+      [0, 1, 2].some(
+        (index) =>
+          Boolean(cachePolicy(state, index)) !== Math.abs(focus - index) >= 1,
+      )
+    ) {
+      assert.ok(
+        performance.now() < deadline,
+        "distant panes return to cached quality",
+      );
+      await driver.advance(0.025);
+      state = await driver.state();
+    }
     clearance(state);
     for (let index = 0; index < 3; index++) {
-      const policy = cockpitFields(
-        state.scene,
-        `cockpit-screen-${index}`,
-        state.componentIds.SurfaceCache!,
-      );
+      const policy = cachePolicy(state, index);
       const near = Math.abs(focus - index) < 1;
-      assert.equal(
-        policy.resolution_scale,
-        near ? 1.5 : 0.75,
-        "incoming and outgoing panels retain sharp quality",
-      );
-      assert.ok(
-        near
-          ? Number(policy.direct_distance) > 12
-          : policy.direct_distance === 0,
-        "focused images refresh with current content",
-      );
+      if (near) {
+        assert.equal(
+          policy,
+          undefined,
+          "focused panes use direct presentation",
+        );
+        continue;
+      }
+      assert.ok(policy);
+      assert.equal(policy.resolution_scale, 0.75);
+      assert.equal(policy.direct_distance, 0);
       assert.equal(policy.max_refresh_hz, 5);
     }
     const frame = await driver.capture(

@@ -41,15 +41,14 @@ export function CarouselQuality({
     const timer = setTimeout(() => setRetained(false), 800);
     return () => clearTimeout(timer);
   }, [near]);
-  // Disabling optional caching keeps even side panes current. Curved geometry
-  // still needs rasterization, with the same sharp resolution as a focused pane.
-  const current =
-    caching === "off" || (caching === "auto" && (near || retained));
-  const sharp = caching !== "auto" || near || retained;
+  // An attached cache policy opts curved panes into image projection even in
+  // its near band. Remove it to use direct presentation for current panes.
+  if (caching === "off" || (caching === "auto" && (near || retained)))
+    return null;
   return (
     <SurfaceCache
-      resolution_scale={sharp ? 1.5 : 0.75}
-      direct_distance={current ? 100 : 0}
+      resolution_scale={caching === "force" ? 1.5 : 0.75}
+      direct_distance={0}
       max_refresh_hz={refreshHz}
       max_texture_size={textureSize}
       force_cache={caching === "force"}

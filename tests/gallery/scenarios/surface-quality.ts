@@ -32,6 +32,41 @@ function dashboardDifference(before: RgbaImage, after: RgbaImage) {
   return { difference: change / samples, detail: detail / samples };
 }
 
+function headerDifference(
+  before: RgbaImage,
+  after: RgbaImage,
+  bounds: readonly number[],
+) {
+  assert.equal(after.width, before.width);
+  assert.equal(after.height, before.height);
+  let difference = 0,
+    bright = 0,
+    samples = 0;
+  for (
+    let y = Math.max(0, Math.ceil(bounds[1]!));
+    y < Math.min(before.height, bounds[3]!);
+    y++
+  )
+    for (
+      let x = Math.max(0, Math.ceil(bounds[0]!));
+      x < Math.min(before.width, bounds[2]!);
+      x++
+    ) {
+      const i = (y * before.width + x) * 4;
+      if (
+        before.pixels[i]! > 70 &&
+        before.pixels[i + 1]! > 130 &&
+        before.pixels[i + 2]! > 140
+      )
+        bright++;
+      for (let c = 0; c < 3; c++)
+        difference += Math.abs(before.pixels[i + c]! - after.pixels[i + c]!);
+      samples += 3;
+    }
+  assert.ok(bright > 30, "panel header reference contains readable cyan text");
+  return { difference: difference / samples, bright, samples };
+}
+
 export async function exerciseSurfaceQuality(
   app: Application,
   record: (name: string, data: unknown) => Promise<void>,
@@ -46,8 +81,11 @@ export async function exerciseSurfaceQuality(
   const stopped = () =>
     app.waitFor(
       (state) =>
-        state.controllers?.every((controller) => !controller.transition) ??
-        true,
+        state.controllers?.every(
+          (controller) =>
+            !controller.transition &&
+            (!controller.motion || controller.state !== "playing"),
+        ) ?? false,
     );
   await app.call("startCockpitInputTrace");
   for (const surface of ["flat", "curved"]) {
@@ -62,6 +100,63 @@ export async function exerciseSurfaceQuality(
     const before = await app.call<RgbaImage>("image");
     assert.equal(before.width, 2448);
     assert.equal(before.height, 1512);
+    const canvas = await app.page.locator("#ipp-demo-canvas").boundingBox();
+    assert.ok(canvas);
+    const corners = [];
+    for (const u of [0, 0.5, 1])
+      for (const v of [0, 1])
+        corners.push(await app.cockpitCoordinates(1, "cockpit-header-1", u, v));
+    const header = [
+      ((Math.min(...corners.map((p) => p.x)) - canvas.x) * before.width) /
+        canvas.width,
+      ((Math.min(...corners.map((p) => p.y)) - canvas.y) * before.height) /
+        canvas.height,
+      ((Math.max(...corners.map((p) => p.x)) - canvas.x) * before.width) /
+        canvas.width,
+      ((Math.max(...corners.map((p) => p.y)) - canvas.y) * before.height) /
+        canvas.height,
+    ];
+    for (const [mode, cap] of [
+      ["force", 256],
+      ["off", 256],
+      ["off", 2048],
+    ] as const) {
+      await app.call("options", {
+        surfaceCaching: mode,
+        surfaceTextureSize: cap,
+      });
+      await app.capture(`panel-detail-${surface}-${mode}-${cap}`);
+      const frame = await app.call<RgbaImage>("image");
+      const pixels = headerDifference(before, frame, header);
+      const work = (
+        await app.call<RenderStatisticsSnapshot>("renderStatistics")
+      ).surfaces;
+      if (mode === "off") {
+        assert.ok(
+          pixels.difference < 0.5,
+          `Off preserves direct header detail at ${cap}px: ${JSON.stringify(pixels)}`,
+        );
+        assert.equal(
+          work.surfaceCacheRepaints + work.surfaceCacheReuses,
+          0,
+          "Off presents panels without raster images",
+        );
+      } else {
+        assert.ok(
+          pixels.difference > 0.5,
+          "Force applies the low-resolution image cap to the panel",
+        );
+        assert.ok(work.surfaceCacheRepaints + work.surfaceCacheReuses > 0);
+      }
+      await record("panel-detail", {
+        surface,
+        mode,
+        cap,
+        header,
+        pixels,
+        surfaces: work,
+      });
+    }
     const picker = await app.call<{ bounds: Record<string, number> }>(
       "point",
       "demo-scene-picker",

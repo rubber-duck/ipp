@@ -8,4 +8,4 @@ Keep the following notices with redistributed fonts:
 - Adwaita Mono: [OFL](AdwaitaMono-OFL.txt).
 - Noto Sans: [OFL](NotoSans-OFL.txt).
 
-The gallery site packager includes the Shure notices with its shared runtime font.
+The gallery site packager includes the Shure and Noto notices with its application fonts.

@@ -79,12 +79,14 @@ async function captureScene(page) {
       await window.ippDemoApplication.flush();
       await handle.flush();
       const state = await client.inspect();
+      const { shell } = await window.ippDemoApplication.inspectApplication();
       const cockpit =
         window.ippDemoApplication.sceneId === "cockpit"
           ? await window.ippDemoApplication.inspect()
           : undefined;
       const resources = [
         ...state.resources,
+        ...shell.resources,
         ...(cockpit?.panels.flatMap((panel) => panel.resources) ?? []),
       ];
       const failed = resources.find((resource) => resource.status === "failed");
@@ -139,6 +141,13 @@ async function captureScene(page) {
         canvas
           .getContext("2d")
           .putImageData(new ImageData(pixels, width, height), 0, 0);
+        const button = shell.entities.find(
+          (entity) => entity.metadata.symbolicId === "demo-controls-toggle",
+        );
+        const fields = (name) =>
+          button.components.find(
+            (component) => component.component === client.components[name].id,
+          ).fields;
         return {
           width,
           height,
@@ -148,6 +157,12 @@ async function captureScene(page) {
           fallbackRed,
           blueInk,
           sequence: String(frame.sequence),
+          font: {
+            key: window.ippDemoApplication.options.font,
+            source: fields("GuiFont").source,
+            button: String(button.id),
+            width: fields("CanvasBounds").width,
+          },
           cockpit: cockpit && {
             sceneWorld: `${output.world.incarnation}:${output.world.id}`,
             focusedPanel: Math.round(cockpit.options.carousel),
@@ -155,6 +170,21 @@ async function captureScene(page) {
               world: `${panel.world.incarnation}:${panel.world.id}`,
               entities: panel.entities.length,
               sources: panel.resources.map(({ source }) => source),
+              header: panel.entities.some((entity) =>
+                entity.metadata.symbolicId?.startsWith("cockpit-header-"),
+              ),
+              fonts: [
+                ...new Set(
+                  panel.entities.flatMap((entity) =>
+                    entity.components
+                      .filter(
+                        (component) =>
+                          component.component === client.components.GuiFont.id,
+                      )
+                      .map((component) => component.fields.source),
+                  ),
+                ),
+              ],
               completed: frame.sources.some(
                 (source) =>
                   source.output.kind === "canvas" &&
@@ -168,7 +198,10 @@ async function captureScene(page) {
               "cockpit-planet",
               "cockpit-atmosphere",
               "cockpit-starfield",
-              "cockpit-bridge-front",
+              "cockpit-bridge-upper-left",
+              "cockpit-bridge-upper-right",
+              "cockpit-bridge-lower-left",
+              "cockpit-bridge-lower-right",
             ].map((name) => {
               const entity = state.entities.find(
                 (entity) => entity.metadata.symbolicId === name,
@@ -215,9 +248,10 @@ async function press(page, id) {
           (component) => component.component === root.components[name].id,
         )?.fields;
       const bounds = fields(entity, "CanvasBounds");
-      if (id.startsWith("demo-scene-picker/options/")) {
+      if (id.includes("/options/")) {
+        const picker = id.slice(0, id.indexOf("/options/"));
         const menu = state.entities.find(
-          (entity) => entity.metadata.symbolicId === "demo-scene-picker/list",
+          (entity) => entity.metadata.symbolicId === `${picker}/list`,
         );
         if (
           !fields(menu, "GuiOverlay") ||
@@ -321,6 +355,14 @@ test("the release gallery is complete and renders at root and project URLs", {
       entry.sha256,
     );
   }
+  for (const path of [
+    "assets/shared/noto-sans.ippf",
+    "notices/NotoSans-OFL.txt",
+  ])
+    assert.ok(
+      report.artifacts.some((entry) => entry.path === path),
+      `Missing font artifact: ${path}`,
+    );
   const cockpitManifest = JSON.parse(
     await readFile(resolve(site, "assets/cockpit/manifest.json"), "utf8"),
   );
@@ -425,17 +467,28 @@ test("the release gallery is complete and renders at root and project URLs", {
                 exterior.custom,
                 `${exterior.name} uses the runtime exterior shader`,
               );
-              for (const name of [
-                "base",
-                "cities",
-                "role",
-                "phase",
-                "cloudPhase",
-                "cityPhase",
-                "intensity",
-                "cityGain",
-                "starGain",
-              ])
+              const parameters = exterior.name.startsWith("cockpit-bridge-")
+                ? [
+                    "base0",
+                    "base1",
+                    "contribution0",
+                    "contribution1",
+                    "illumination",
+                    "cabinPhase",
+                    "cabinTint",
+                  ]
+                : [
+                    "base",
+                    "cities",
+                    "role",
+                    "phase",
+                    "cloudPhase",
+                    "cityPhase",
+                    "intensity",
+                    "cityGain",
+                    "starGain",
+                  ];
+              for (const name of parameters)
                 assert.ok(
                   exterior.properties.includes(name),
                   `${exterior.name} exposes ${name}`,
@@ -453,6 +506,73 @@ test("the release gallery is complete and renders at root and project URLs", {
               frame.cockpit.sceneWorld,
               ...frame.cockpit.panels.map(({ world }) => world),
             ];
+            await press(page, "demo-display");
+            for (const font of ["noto-sans", "shure-tech-mono"]) {
+              await press(page, "demo-font-picker");
+              await press(page, `demo-font-picker/options/${font}`);
+              await page.waitForFunction(
+                (font) => window.ippDemoApplication.options.font === font,
+                font,
+              );
+              const { png, ...selected } = await captureScene(page);
+              await writeFile(
+                resolve(evidence, `${label}-cockpit-${font}.png`),
+                Buffer.from(png.split(",")[1], "base64"),
+              );
+              await writeFile(
+                resolve(evidence, `${label}-cockpit-${font}.json`),
+                JSON.stringify(selected, null, 2),
+              );
+              assert.equal(selected.font.key, font);
+              assert.ok(selected.font.source.endsWith(`/${font}.ippf`));
+              assert.equal(
+                selected.font.button,
+                frame.font.button,
+                "font selection preserves shell controls",
+              );
+              assert.deepEqual(
+                [
+                  selected.cockpit.sceneWorld,
+                  ...selected.cockpit.panels.map(({ world }) => world),
+                ],
+                cockpitWorlds,
+                "font selection preserves the scene and panel Worlds",
+              );
+              const textPanels = selected.cockpit.panels.filter(
+                (panel) => panel.header,
+              );
+              assert.equal(
+                textPanels.length,
+                4,
+                "all four carousel panes contain text; the two dashboard instruments are drawings",
+              );
+              assert.ok(
+                textPanels.every((panel) =>
+                  panel.fonts.some((source) =>
+                    source.endsWith(`/${font}.ippf`),
+                  ),
+                ),
+                "all text panels select the published font",
+              );
+              assert.ok(
+                selected.cockpit.panels[
+                  selected.cockpit.focusedPanel
+                ].sources.some((source) => source.endsWith(`/${font}.ippf`)),
+                "the focused panel loads the selected published font",
+              );
+              const widthChange = Math.abs(
+                selected.font.width - frame.font.width,
+              );
+              assert.ok(
+                font === "noto-sans" ? widthChange > 2 : widthChange < 0.1,
+                "native font metrics change and restore the shell label width",
+              );
+              assert.ok(
+                selected.foreground > 1000 && selected.blueInk > 500,
+                "font selection retains visible cockpit content",
+              );
+            }
+            await press(page, "demo-display");
           }
           if (scene === "shapes") {
             const worlds = await page.evaluate(() =>
@@ -480,6 +600,7 @@ test("the release gallery is complete and renders at root and project URLs", {
         for (const required of [
           "runtime/runtime.wasm",
           "assets/shared/shure-tech-mono.ippf",
+          "assets/shared/noto-sans.ippf",
           "assets/platformer/platformer.ipp",
           "assets/platformer/pose-origins.json",
           "assets/cockpit/cockpit.ipp",

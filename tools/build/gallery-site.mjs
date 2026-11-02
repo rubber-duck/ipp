@@ -109,10 +109,9 @@ export async function buildGallerySite(output) {
 
   for (const name of ["spot-marker.mesh", "sun-marker.mesh"])
     await copy(`target/gallery-assets/${name}`, `assets/${name}`);
-  await copy(
-    "target/font-assets/shure-tech-mono.ippf",
-    "assets/shared/shure-tech-mono.ippf",
-  );
+  for (const name of await readdir(resolve(workspace, "target/font-assets")))
+    if (name.endsWith(".ippf"))
+      await copy(`target/font-assets/${name}`, `assets/shared/${name}`);
 
   const platformer = "target/gallery-platformer-assets";
   const catalog = JSON.parse(
@@ -143,6 +142,7 @@ export async function buildGallerySite(output) {
   for (const name of [
     "ShureTechMono-OFL.txt",
     "ShureTechMono-Nerd-Font-README.md",
+    "NotoSans-OFL.txt",
   ])
     await copy(`licences/fonts/${name}`, `notices/${name}`);
   for (const name of [

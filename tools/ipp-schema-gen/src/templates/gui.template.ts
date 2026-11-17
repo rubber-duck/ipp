@@ -13,6 +13,9 @@ import type {
   GuiAction,
 } from "./gui-types.js";
 export * from "./gui-types.js";
+export { createGuiAgent } from "./gui-agent.js";
+export { guiAgentTools, guiAgentResultSchema } from "./gui-agent-schema.js";
+export type * from "./gui-agent-types.js";
 
 function readGuiTarget(reader: Reader): GuiTarget {
   return {

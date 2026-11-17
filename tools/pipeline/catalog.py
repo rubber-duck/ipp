@@ -118,6 +118,7 @@ REGRESSION_GROUPS = {
             "gui-composites",
             "gui-local",
             "gui-motion",
+            "gui-agents",
             "gui-default-skin",
             "gui-glass-skin",
             "output-inclusion",
@@ -274,6 +275,9 @@ PRODUCT_SCRIPTS = {
     ),
     "gui-motion-fixtures": ProductScript(
         "tests/gui/motion/build.mjs", "target/gui-motion"
+    ),
+    "gui-agents-fixtures": ProductScript(
+        "tests/gui/agents/build.mjs", "target/gui-agents"
     ),
     "gui-composites-fixtures": ProductScript(
         "tests/gui/composites/build.mjs", "target/gui-composites"
@@ -492,6 +496,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         ("node", "npm"),
     )
     build("gui-motion-fixtures", (), ("target/gui-motion",), ("node", "npm"))
+    build("gui-agents-fixtures", (), ("target/gui-agents",), ("node", "npm"))
     # The harness's Node side is typed by the native build's generated client.
     build(
         "gui-composites-fixtures",

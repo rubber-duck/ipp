@@ -1101,6 +1101,26 @@
       }
     ]
   },
+  "gui-agents": {
+    "description": "Typed semantic discovery and actions through real generated native and worker clients, React controls, lifecycle fencing and completed GUI frames",
+    "sourceRoots": ["tests/gui/agents/", "packages/ipp-client/src/gui-agent.ts", "packages/ipp-client/src/gui-agent-tree.ts", "packages/ipp-client/src/gui-agent-types.ts", "packages/ipp-client/src/gui-agent-schema.ts"],
+    "commands": [
+      {
+        "name": "native",
+        "command": ["@node", "--test", "--test-name-pattern", "native", "target/gui-agents/agent-actions.test.js"],
+        "builds": ["gles-host", "font-assets", "gui-agents-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "browser",
+        "command": ["@node", "--test", "--test-name-pattern", "browser", "target/gui-agents/agent-actions.test.js"],
+        "builds": ["browser:render", "font-assets", "gui-agents-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      }
+    ]
+  },
   "gui-motion": {
     "description": "Skin transitions through generated native/worker clients: explicit client skin timing under physical input over Host time, a theme's own transitions in causally witnessed nested Canvas captures, and the React kit's one reduced-motion setting snapping them and stilling its spinner",
     "sourceRoots": [

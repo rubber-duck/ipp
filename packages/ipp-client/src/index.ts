@@ -112,6 +112,9 @@ export { clientAssetSource } from "./asset-sources.js";
 export * from "./surface-mapping.js";
 export * from "./surface-config.js";
 export * from "./gui-types.js";
+export { createGuiAgent } from "./gui-agent.js";
+export { guiAgentTools, guiAgentResultSchema } from "./gui-agent-schema.js";
+export type * from "./gui-agent-types.js";
 export {
   LifecycleWatchStartError,
   isLifecycleWatchRemoveError,

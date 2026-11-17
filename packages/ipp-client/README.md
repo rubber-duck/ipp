@@ -2,6 +2,8 @@
 
 `@ipp/client` supplies shared session and transport support for target-generated IPP clients. Applications author state and observe outcomes; the Host owns runtime clocks, evaluation and presentation.
 
+The [semantic GUI agent adapter](GUI_AGENTS.md) provides typed discovery and actions through those same generated clients, with exact control lifetimes, JSON schemas and explicit acknowledgement versus observation results.
+
 ## Build and connect
 
 Use a generated client matching the Host's actual target. Native and WASM layouts are not interchangeable. Generated contracts and assembled distributions are build artifacts; maintain shared support here and generation in [ipp-schema-gen](../../tools/ipp-schema-gen/README.md).

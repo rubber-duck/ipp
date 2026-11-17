@@ -4304,6 +4304,19 @@
         "requirements": ["node", "npm", "browser"]
       },
       {
+        "name": "selection-contours-worker",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin worker selection-contours$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["browser:render", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/gles-host"],
+        "requirements": ["node", "npm", "browser"]
+      },
+      {
         "name": "appearance-native",
         "command": [
           "@node",
@@ -4414,6 +4427,19 @@
           "--test",
           "--test-name-pattern",
           "glass GUI skin native composite-selection$",
+          "target/gui-glass-skin/glass-skin.test.js"
+        ],
+        "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],
+        "partitionExcludes": ["target/browser-build/render"],
+        "requirements": ["node", "npm", "browser", "gles"]
+      },
+      {
+        "name": "selection-contours-native",
+        "command": [
+          "@node",
+          "--test",
+          "--test-name-pattern",
+          "glass GUI skin native selection-contours$",
           "target/gui-glass-skin/glass-skin.test.js"
         ],
         "builds": ["gles-host", "font-assets", "gui-glass-skin-fixtures"],

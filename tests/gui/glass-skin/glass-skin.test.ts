@@ -35,6 +35,7 @@ for (const mode of ["worker", "native"] as const) {
     "composite-values",
     "composite-containers",
     "composite-selection",
+    "selection-contours",
     "composite-overlays",
   ] as const) {
     // Full production sheets and the multi-skin contour matrix can keep making
@@ -42,7 +43,9 @@ for (const mode of ["worker", "native"] as const) {
     const extendedBudget =
       region === "composite-overlays" ||
       (mode === "worker" &&
-        (region === "production-optics" || region === "composite-selection"));
+        (region === "production-optics" ||
+          region === "composite-selection" ||
+          region === "selection-contours"));
     test(`glass GUI skin ${mode} ${region}`, {
       timeout: extendedBudget ? 420_000 : 300_000,
     }, async (context) => {

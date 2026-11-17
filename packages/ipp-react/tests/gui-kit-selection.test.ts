@@ -1612,3 +1612,118 @@ test("controlled MultiSelect repeats rejected toggle proposals from committed in
     ["render", "physics"],
   ]);
 });
+
+for (const [name, compose, symbol, target, initial] of [
+  ["Dropdown", dropdown, "skin", "neon", "aurora"],
+  ["SearchableDropdown", searchable, "node", "beta", "alpha"],
+] as const) {
+  test(`${name}: popup activation uses committed callbacks without structural writes and ends on unmount`, async () => {
+    const first: string[] = [];
+    const latest: string[] = [];
+    const { world, root, draw } = await render(
+      compose({ defaultOpen: true, onChange: (key) => first.push(key) }),
+    );
+    await settle(root);
+    const row = world.entity(`${symbol}/options/${target}`);
+    const writes: string[] = [];
+    const batch = world.batch.bind(world);
+    world.batch = async (operations) => {
+      writes.push(...operations.map((operation) => operation.kind));
+      return batch(operations);
+    };
+    await draw(
+      compose({ defaultOpen: true, onChange: (key) => latest.push(key) }),
+    );
+    assert.deepEqual(writes, [], "callback replacement issues no World writes");
+    assert.equal(world.entity(`${symbol}/options/${target}`), row);
+    world.effect(`${symbol}/options/${target}`, { kind: "pressed" });
+    world.effect(`${symbol}/options/${initial}`, { kind: "pressed" });
+    await settle(root);
+    assert.deepEqual(first, []);
+    assert.deepEqual(latest, [target]);
+    // Leave the popup open so only unmount can suppress the next row press.
+    world.effect(symbol, { kind: "pressed" });
+    await settle(root);
+    assert.equal(
+      world.fields(`${symbol}/list`, "GuiBehavior").get("visible"),
+      true,
+    );
+    await root.unmount();
+    // Unmount keeps the native entities but releases all callback ownership.
+    world.effect(`${symbol}/options/${initial}`, { kind: "pressed" });
+    await settle(root);
+    assert.deepEqual(latest, [target]);
+  });
+
+  test(`${name}: controlled rejection restores intent before a later activation`, async () => {
+    const reports: unknown[] = [];
+    const composeControlled = (open: boolean) =>
+      compose({
+        value: initial,
+        open,
+        onOpenChange: (next) => reports.push(["open", next]),
+        onChange: (key) => reports.push(["select", key]),
+      });
+    const { world, root, draw } = await render(composeControlled(true));
+    let reported = true;
+    // KitWorld applies compare-and-set writes without publishing them. Drain
+    // those actual values, including a transient close and its restoration,
+    // just as the real native visibility subscription does.
+    const reportVisibility = async () => {
+      for (let pass = 0; pass < 4; pass++) {
+        const visible = world
+          .fields(`${symbol}/list`, "GuiBehavior")
+          .get("visible") as boolean;
+        if (visible === reported) return;
+        reported = visible;
+        world.value(`${symbol}/list`, "GuiBehavior", { visible });
+        await settle(root);
+      }
+      assert.fail("Controlled visibility did not converge");
+    };
+    const activate = async () => {
+      world.effect(`${symbol}/options/${target}`, { kind: "pressed" });
+      world.effect(`${symbol}/options/${initial}`, { kind: "pressed" });
+      await settle(root);
+      await reportVisibility();
+      assert.equal(
+        world.fields(`${symbol}/list`, "GuiBehavior").get("visible"),
+        true,
+      );
+      assert.equal(
+        world
+          .fields(`${symbol}/options/${initial}`, "GuiButton")
+          .get("selected"),
+        true,
+      );
+      assert.equal(
+        world
+          .fields(`${symbol}/options/${target}`, "GuiButton")
+          .get("selected"),
+        false,
+      );
+    };
+    await activate();
+    await activate();
+    // Accept a closed prop, then reopen through props. The same native rows
+    // must again deliver selection proposals after the controlled transition.
+    await draw(composeControlled(false));
+    assert.equal(
+      world.fields(`${symbol}/list`, "GuiBehavior").get("visible"),
+      false,
+    );
+    await reportVisibility();
+    await draw(composeControlled(true));
+    await reportVisibility();
+    await activate();
+    assert.deepEqual(reports, [
+      ["open", false],
+      ["select", target],
+      ["open", false],
+      ["select", target],
+      ["open", false],
+      ["select", target],
+    ]);
+    await root.unmount();
+  });
+}

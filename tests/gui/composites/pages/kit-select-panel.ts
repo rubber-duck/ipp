@@ -75,6 +75,7 @@ export const SEARCH_ROWS = NODES.map(
 /** What each control reported to the application, in order. */
 export interface SelectReports {
   readonly dropdown: string[];
+  readonly dropdownOpen: boolean[];
   readonly searchable: string[];
   readonly multi: (readonly string[])[];
   readonly input: string[];
@@ -135,6 +136,7 @@ export function kitSelectPanel(origin: readonly [number, number]) {
       const [width, height] = KIT_SELECT_PANEL;
       const reports: SelectReports = {
         dropdown: [],
+        dropdownOpen: [],
         searchable: [],
         multi: [],
         input: [],
@@ -146,84 +148,91 @@ export function kitSelectPanel(origin: readonly [number, number]) {
         onError: report,
       });
       const below = { width: COLUMN, margin_top: MARGIN };
-      await root.render(
-        h(
-          GuiKit,
-          {
-            contract,
-            skin: cybertronSkin(contract),
-            font,
-            fontSize: FONT_SIZE,
-          },
+      const draw = (controlled = false) =>
+        root.render(
           h(
-            Entity,
-            { id: "select-root" },
-            h(Layout, {
-              kind: 1,
-              width,
-              height,
-              padding_left: MARGIN,
-              padding_right: MARGIN,
-              padding_top: MARGIN,
-              padding_bottom: MARGIN,
-            }),
+            GuiKit,
+            {
+              contract,
+              skin: cybertronSkin(contract),
+              font,
+              fontSize: FONT_SIZE,
+            },
             h(
-              Children,
-              null,
+              Entity,
+              { id: "select-root" },
+              h(Layout, {
+                kind: 1,
+                width,
+                height,
+                padding_left: MARGIN,
+                padding_right: MARGIN,
+                padding_top: MARGIN,
+                padding_bottom: MARGIN,
+              }),
               h(
-                Entity,
-                { id: "select-column" },
-                h(Layout, { kind: 2, width: COLUMN }),
+                Children,
+                null,
                 h(
-                  Children,
-                  null,
-                  h(Dropdown, {
-                    id: "sel-dropdown",
-                    label: "Skin",
-                    options: SKINS,
-                    defaultValue: "aurora",
-                    onChange: (key) => reports.dropdown.push(key),
-                    layout: { width: COLUMN },
-                  }),
-                  h(SearchableDropdown, {
-                    id: "sel-search",
-                    label: "Node",
-                    options: NODES,
-                    defaultValue: "alpha",
-                    onChange: (key) => reports.searchable.push(key),
-                    layout: below,
-                  }),
-                  h(MultiSelect, {
-                    id: "sel-multi",
-                    label: "Channels",
-                    options: CHANNELS,
-                    onChange: (keys) => reports.multi.push(keys),
-                    layout: below,
-                  }),
-                  h(Destination, { reports }),
+                  Entity,
+                  { id: "select-column" },
+                  h(Layout, { kind: 2, width: COLUMN }),
+                  h(
+                    Children,
+                    null,
+                    h(Dropdown, {
+                      id: "sel-dropdown",
+                      label: "Skin",
+                      options: SKINS,
+                      key: controlled ? "controlled" : "uncontrolled",
+                      ...(controlled
+                        ? { open: true, value: "aurora" }
+                        : { defaultValue: "aurora" }),
+                      onOpenChange: (open) => reports.dropdownOpen.push(open),
+                      onChange: (key) => reports.dropdown.push(key),
+                      layout: { width: COLUMN },
+                    }),
+                    h(SearchableDropdown, {
+                      id: "sel-search",
+                      label: "Node",
+                      options: NODES,
+                      defaultValue: "alpha",
+                      onChange: (key) => reports.searchable.push(key),
+                      layout: below,
+                    }),
+                    h(MultiSelect, {
+                      id: "sel-multi",
+                      label: "Channels",
+                      options: CHANNELS,
+                      onChange: (keys) => reports.multi.push(keys),
+                      layout: below,
+                    }),
+                    h(Destination, { reports }),
+                  ),
                 ),
-              ),
-              h(
-                Entity,
-                { id: "sel-beneath" },
-                h(Layout, {
-                  kind: 0,
-                  width: width - COLUMN - 3 * MARGIN,
-                  height: 20,
-                  margin_left: MARGIN,
-                }),
-                h(Behavior, { semantic_label: "Beneath" }),
-                h(Button, {
-                  label: "",
-                  onPress: () => {
-                    reports.beneath++;
-                  },
-                }),
+                h(
+                  Entity,
+                  { id: "sel-beneath" },
+                  h(Layout, {
+                    kind: 0,
+                    width: width - COLUMN - 3 * MARGIN,
+                    height: 20,
+                    margin_left: MARGIN,
+                  }),
+                  h(Behavior, { semantic_label: "Beneath" }),
+                  h(Button, {
+                    label: "",
+                    onPress: () => {
+                      reports.beneath++;
+                    },
+                  }),
+                ),
               ),
             ),
           ),
-        ),
-      );
+        );
+
+      await draw();
 
       const symbolOf = (ids: Map<string, bigint>, entity: bigint) =>
         [...ids].find(([, id]) => id === entity)?.[0] ?? String(entity);
@@ -259,6 +268,13 @@ export function kitSelectPanel(origin: readonly [number, number]) {
 
       return {
         reports,
+        /** Mount a controlled owner that rejects both closing and selection. */
+        async rejectDropdownChanges() {
+          reports.dropdown.length = 0;
+          reports.dropdownOpen.length = 0;
+          await draw(true);
+          await root.flush();
+        },
         /** The entity `symbol` names. */
         async entity(symbol: string) {
           const found = (await symbols(client)).get(symbol);
@@ -295,6 +311,7 @@ export function kitSelectPanel(origin: readonly [number, number]) {
             searchText: text(2, "text"),
             autoText: text(3, "text"),
             dropdown: [...reports.dropdown],
+            dropdownOpen: [...reports.dropdownOpen],
             searchable: [...reports.searchable],
             multi: [...reports.multi],
             input: [...reports.input],

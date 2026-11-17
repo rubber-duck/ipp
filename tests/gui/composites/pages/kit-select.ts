@@ -38,6 +38,7 @@ export async function prepare(setup: CompositeSetup) {
       return [x + width * fraction[0], y + height * fraction[1]] as const;
     },
     selectBounds: box,
+    rejectDropdownChanges: () => kit.rejectDropdownChanges(),
     /**
      * Wait until the field `symbol` takes typed text: the context's native
      * text target, its native buffer holding DOM focus.

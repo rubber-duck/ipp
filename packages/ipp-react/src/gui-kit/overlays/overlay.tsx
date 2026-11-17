@@ -124,7 +124,10 @@ export function useOverlayOpen({
   defaultOpen = false,
   onOpenChange,
 }: OverlayOpenProps = {}): OverlayOpen {
-  const [own, setOwn] = useState(defaultOpen);
+  // Even controlled intent needs a changed local value to schedule rejection
+  // convergence after an activation. Starting from defaultOpen can make the
+  // first close a no-op setState and leave the live intent stuck closed.
+  const [own, setOwn] = useState(open ?? defaultOpen);
   const current = open ?? own;
   // The state as this client last set or rendered it.
   const latest = useRef(current);

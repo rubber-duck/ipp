@@ -76,6 +76,25 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
       dropdown: ["neon"],
       dropdownText: "Neon",
     });
+    // Reopening and activating the selected row still closes the popup,
+    // without reporting a duplicate application selection.
+    await page.keyboard.press("Enter");
+    await step("expectSelect", { open: list });
+    await page.mouse.click(...(await selectAt("sel-dropdown/options/neon")));
+    const selectedAgain = await step("expectSelect", {
+      open: [],
+      focus: "sel-dropdown",
+      dropdown: ["neon"],
+      dropdownText: "Neon",
+    });
+    await page.keyboard.press("Enter");
+    await step("expectSelect", { open: list });
+    checkJoinedOutline(
+      await run.capture("kit-dropdown-reopened"),
+      await step("selectBounds", "sel-dropdown"),
+    );
+    await page.keyboard.press("Escape");
+    await step("expectSelect", { open: [], focus: "sel-dropdown" });
     // An outside press closes the list and is swallowed: the button beside
     // it hears nothing until a press with the list closed.
     await page.mouse.click(...(await selectAt("sel-dropdown")));
@@ -88,7 +107,13 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
     });
     await page.mouse.click(...besideAt);
     await step("expectSelect", { beneath: 1, dropdown: ["neon"] });
-    return { dropdownEscape, dropdownActive, dropdownPicked, dropdownOutside };
+    return {
+      dropdownEscape,
+      dropdownActive,
+      dropdownPicked,
+      selectedAgain,
+      dropdownOutside,
+    };
   });
 
   // Searchable dropdown: opening moves focus into its search field; typing,
@@ -206,5 +231,35 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
     });
     await run.capture("kit-select");
     return { autoEscape, autoAccepted, autoCommitted };
+  });
+
+  await run.case("kit controlled popup rejection", async () => {
+    await step("rejectDropdownChanges");
+    await step("expectSelect", {
+      open: ["sel-dropdown/list"],
+      dropdown: [],
+      dropdownOpen: [],
+      dropdownText: "Aurora",
+    });
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await page.mouse.click(...(await selectAt("sel-dropdown/options/neon")));
+      await step("expectSelect", {
+        open: ["sel-dropdown/list"],
+        dropdown: Array(attempt).fill("neon"),
+        dropdownOpen: Array(attempt).fill(false),
+        dropdownText: "Aurora",
+      });
+    }
+    for (let attempt = 3; attempt <= 4; attempt++) {
+      await page.keyboard.press("Escape");
+      await step("expectSelect", {
+        open: ["sel-dropdown/list"],
+        dropdown: ["neon", "neon"],
+        dropdownOpen: Array(attempt).fill(false),
+      });
+    }
+    const image = await run.capture("kit-dropdown-controlled-rejection");
+    checkJoinedOutline(image, await step("selectBounds", "sel-dropdown"));
+    return { proposals: ["neon", "neon"], rejectedCloses: 4 };
   });
 });

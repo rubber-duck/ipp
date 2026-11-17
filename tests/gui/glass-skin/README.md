@@ -8,4 +8,6 @@ The [edge-quality scenario](scenarios/edge-quality.ts) captures real Glass circl
 
 Use the [optical preview](optical-material/README.md) with `?skin=production` to inspect actual controls under moving light and view. The [production scenario](scenarios/production-optics.ts) exercises that sheet through real input and captured frames, including connected dropdowns. [Chart scenarios](../../data/scenarios/plot-glass.ts) cover the corresponding native data and rendering paths.
 
+The `composite-selection` case exercises interaction and retheming. The `selection-contours` case starts a fresh World to check segment, tab and switch contours across both skins. Each runs on native GLES and worker WebGL.
+
 Run selected cases through `python tools/ipp.py regression`, or use `--suite gui-glass-skin` for the suite. [The suite registry](../../../tools/pipeline/suites.json) owns cases and prerequisites; [the testing policy](../../../docs/development/integration-testing.md) owns delivery evidence. Shared native labs support visual iteration, while maintained scenarios verify input, state, lifecycle and appearance across both Hosts.

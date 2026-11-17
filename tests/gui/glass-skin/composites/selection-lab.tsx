@@ -1,4 +1,7 @@
-import { exerciseGlassSelection } from "../scenarios/selection.js";
+import {
+  exerciseGlassSelection,
+  exerciseSelectionContours,
+} from "../scenarios/selection.js";
 import { defineClient } from "../../../../tools/shared-host/client.js";
 import { SpecimenSession } from "../../skin-lab/specimen-session.js";
 import { selectionSpecimen } from "./selection-specimen.js";
@@ -24,27 +27,33 @@ export default defineClient<SpecimenSession>({
         { width: number; height: number; pixels: Uint8Array<ArrayBuffer> }
       > = {};
       const records: object[] = [];
-      await exerciseGlassSelection(
-        context.host,
-        context.contract as unknown as Parameters<
-          typeof exerciseGlassSelection
-        >[1],
-        await context.font(),
-        context.present,
-        {
-          capture: async (frame) => {
-            images[frame.name] = {
-              width: frame.width,
-              height: frame.height,
-              pixels: Uint8Array.from(Buffer.from(frame.rgba, "base64")),
-            };
+      const font = await context.font();
+      for (const exercise of [
+        exerciseGlassSelection,
+        exerciseSelectionContours,
+      ]) {
+        await exercise(
+          context.host,
+          context.contract as unknown as Parameters<
+            typeof exerciseGlassSelection
+          >[1],
+          font,
+          context.present,
+          {
+            capture: async (frame) => {
+              images[frame.name] = {
+                width: frame.width,
+                height: frame.height,
+                pixels: Uint8Array.from(Buffer.from(frame.rgba, "base64")),
+              };
+            },
+            record: async (value) => {
+              records.push(value);
+              console.info(JSON.stringify(value));
+            },
           },
-          record: async (value) => {
-            records.push(value);
-            console.info(JSON.stringify(value));
-          },
-        },
-      );
+        );
+      }
       return { images, report: { records } };
     }
 

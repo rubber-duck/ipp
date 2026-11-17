@@ -6,6 +6,7 @@ import {
 } from "../layout.js";
 
 import { useEntityId } from "../../scope/identity.js";
+import { popupActivation } from "../overlays/activation.js";
 /**
  * An autocomplete: a text field with the application's suggestions in an
  * option list below it. The typed text is the field's value; suggestions
@@ -121,24 +122,26 @@ export function Autocomplete(props: AutocompleteProps) {
     if (!text.changed(event)) return;
     if (!accepted) overlay.setOpen(true);
   };
-  const accept = (key: string) => {
-    if (!overlay.open) return;
-    overlay.setOpen(false);
-    const suggestion = suggestions.find((option) => option.key === key);
-    if (suggestion) {
-      written.current = suggestion.label;
-      void text.handle.current
-        ?.action({ kind: "text", value: suggestion.label })
-        .then((outcome) => {
-          if (!outcome.ok && written.current === suggestion.label)
-            written.current = undefined;
-        })
-        .catch(() => {
-          if (written.current === suggestion.label) written.current = undefined;
-        });
-    }
-    onSelect?.(key);
-  };
+  const accept = popupActivation<string>({
+    overlay,
+    onActivate: (key) => {
+      const suggestion = suggestions.find((option) => option.key === key);
+      if (suggestion) {
+        written.current = suggestion.label;
+        void text.handle.current
+          ?.action({ kind: "text", value: suggestion.label })
+          .then((outcome) => {
+            if (!outcome.ok && written.current === suggestion.label)
+              written.current = undefined;
+          })
+          .catch(() => {
+            if (written.current === suggestion.label)
+              written.current = undefined;
+          });
+      }
+      onSelect?.(key);
+    },
+  });
   const commit = (event: GuiSubmitEvent) => {
     overlay.setOpen(false);
     onCommit?.(event.value);

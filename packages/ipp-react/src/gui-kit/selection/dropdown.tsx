@@ -1,5 +1,6 @@
 import { useGuiKitLayout, type GuiKitLayoutProps } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
+import { popupActivation } from "../overlays/activation.js";
 /**
  * A dropdown: a trigger showing the selected option's label, or a
  * placeholder, and the option list it opens below itself. The selected
@@ -12,8 +13,8 @@ import { useEntityId } from "../../scope/identity.js";
  * `onChange` reports the key once, unless it was already selected. Escape,
  * Tab, or a press outside the list and the trigger, which is swallowed,
  * closes it without a change. The arrows start from the selected option.
- * Letter keys do nothing: the runtime returns them unhandled to the
- * adapter's client only, so the kit has no typeahead.
+ * Letter keys do nothing: ordinary control routing does not forward
+ * printable key events to the kit, so it has no typeahead.
  *
  * The application owns the options and the selection (`value` or
  * `defaultValue`); the open state may be its own too (`open`).
@@ -73,13 +74,7 @@ export function Dropdown(props: DropdownProps) {
   const overlay = useOverlayOpen(state);
   const selection = useSelection(state);
   const selected = options.find((option) => option.key === selection.current);
-  // One pick for each opening: a press arriving once the list closed is
-  // dropped.
-  const pick = (key: string) => {
-    if (!overlay.open) return;
-    overlay.setOpen(false);
-    selection.select(key);
-  };
+  const pick = popupActivation({ overlay, onActivate: selection.select });
   return (
     <SelectTrigger
       id={id}

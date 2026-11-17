@@ -1,5 +1,6 @@
 import { useGuiKitLayout, LAYOUT_ROW, Strut } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
+import { popupActivation } from "../overlays/activation.js";
 /**
  * A searchable dropdown: a dropdown whose list sits under a search field on
  * its floating surface, the text input look with a leading magnifier. The trigger keeps showing the selection while the
@@ -101,11 +102,7 @@ export function SearchableDropdown(props: SearchableDropdownProps) {
   const attach = useControlRef(field, searchRef);
   const open = overlay.open;
 
-  const pick = (key: string) => {
-    if (!overlay.open) return;
-    overlay.setOpen(false);
-    selection.select(key);
-  };
+  const pick = popupActivation({ overlay, onActivate: selection.select });
   const search: GuiTextCommitListener = (event) => {
     if (event.value === query) return;
     setQuery(event.value);

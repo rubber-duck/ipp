@@ -37,6 +37,7 @@ import { GROUP_VERTICAL } from "../choice.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
 
 import type { OverlayOpen } from "./overlay.js";
+import { popupActivation } from "./activation.js";
 import { Separator } from "../separator.js";
 import { TextLine } from "../text.js";
 
@@ -118,13 +119,10 @@ export function Menu(props: MenuProps) {
   );
   // Separators span the rows' width between their half-inset margins.
   const separator = (layout?.width ?? g.width) - 4 * g.gap;
-  const activate = (key: string) => {
-    if (overlay) {
-      if (!overlay.open) return;
-      overlay.setOpen(false);
-    }
-    onSelect?.(key);
-  };
+  const activate = popupActivation<string>({
+    ...(overlay ? { overlay } : {}),
+    ...(onSelect ? { onActivate: onSelect } : {}),
+  });
   return (
     <>
       {measured.nodes}

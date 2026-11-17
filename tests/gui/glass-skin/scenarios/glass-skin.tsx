@@ -9,7 +9,10 @@ import { exerciseOpticalContext } from "./optical-context.js";
 import { exerciseOpticalComponents } from "./optical-components.js";
 import { exerciseGlassValues } from "./composite-values.js";
 import { exerciseGlassContainers } from "./containers.js";
-import { exerciseGlassSelection } from "./selection.js";
+import {
+  exerciseGlassSelection,
+  exerciseSelectionContours,
+} from "./selection.js";
 import { exerciseGlassOverlays } from "./overlays.js";
 import { exerciseGlassMaterialSharing } from "../composites/material-sharing.js";
 import type {
@@ -202,6 +205,7 @@ export async function glassSkin(
     | "material-sharing"
     | "composite-values"
     | "composite-containers"
+    | "selection-contours"
     | "composite-selection"
     | "composite-overlays",
 ) {
@@ -275,6 +279,10 @@ export async function glassSkin(
   }
   if (region === "composite-selection") {
     await exerciseGlassSelection(host, contract, font, present, environment);
+    return { region };
+  }
+  if (region === "selection-contours") {
+    await exerciseSelectionContours(host, contract, font, present, environment);
     return { region };
   }
   if (region === "composite-overlays") {

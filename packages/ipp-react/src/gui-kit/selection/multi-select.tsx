@@ -1,5 +1,6 @@
 import { useGuiKitLayout, type GuiKitLayoutProps } from "../layout.js";
 import { useEntityId } from "../../scope/identity.js";
+import { popupActivation } from "../overlays/activation.js";
 /**
  * A multi-select: a dropdown whose options toggle. The trigger summarises
  * the selection, the selected labels joined in option order while they fit
@@ -85,19 +86,21 @@ export function MultiSelect(props: MultiSelectProps) {
   });
   const current = new Set(keys);
   const selected = options.filter((option) => current.has(option.key));
-  // Every toggle while the list is open counts: it stays open.
-  const toggle = (key: string) => {
-    if (!overlay.open) return;
-    const before = new Set(latest.current);
-    const next = options
-      .filter((option) =>
-        option.key === key ? !before.has(key) : before.has(option.key),
-      )
-      .map((option) => option.key);
-    latest.current = next;
-    setOwn(next);
-    onChange?.(next);
-  };
+  const toggle = popupActivation<string>({
+    overlay,
+    closeOnActivate: false,
+    onActivate: (key) => {
+      const before = new Set(latest.current);
+      const next = options
+        .filter((option) =>
+          option.key === key ? !before.has(key) : before.has(option.key),
+        )
+        .map((option) => option.key);
+      latest.current = next;
+      setOwn(next);
+      onChange?.(next);
+    },
+  });
   const labels = selected.map((option) => option.label);
   const joined = labels.join(", ");
   const measured = useTextMeasurements([[joined, kit.typeSize("body")]]);

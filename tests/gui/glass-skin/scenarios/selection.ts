@@ -1,4 +1,6 @@
 import type { Client, HostClientBase } from "@ipp/client";
+import type { GlassKitContract } from "../../../../packages/ipp-react/src/gui-glass/kit-theme.js";
+import type { ThemeContract } from "../../skin-lab/theme.js";
 import { image } from "../../../../tools/shared-host/presentation.js";
 import { check } from "../../../harness/page/checks.js";
 import {
@@ -20,9 +22,25 @@ import { contourSpecimen } from "../composites/contour-specimen.js";
 import { switchSpecimen } from "../composites/switch-specimen.js";
 import { checkSwitchGeometry } from "../switch-geometry-oracle.js";
 
+async function saveCapture(
+  environment: GlassSkinEnvironment,
+  name: string,
+  frame: { width: number; height: number; pixels: Uint8Array },
+) {
+  let binary = "";
+  for (let i = 0; i < frame.pixels.length; i += 0x8000)
+    binary += String.fromCharCode(...frame.pixels.subarray(i, i + 0x8000));
+  await environment.capture({
+    name,
+    width: frame.width,
+    height: frame.height,
+    rgba: btoa(binary),
+  });
+}
+
 export async function exerciseGlassSelection(
   host: HostClientBase<Client>,
-  contract: Parameters<typeof selectionSpecimen>[0],
+  contract: GlassKitContract & ThemeContract,
   font: Uint8Array<ArrayBuffer>,
   present: Present,
   environment: GlassSkinEnvironment,
@@ -35,20 +53,6 @@ export async function exerciseGlassSelection(
     themes: {},
     world: "glass-selection-scenario",
   });
-  const save = async (
-    name: string,
-    frame: { width: number; height: number; pixels: Uint8Array },
-  ) => {
-    let binary = "";
-    for (let i = 0; i < frame.pixels.length; i += 0x8000)
-      binary += String.fromCharCode(...frame.pixels.subarray(i, i + 0x8000));
-    await environment.capture({
-      name,
-      width: frame.width,
-      height: frame.height,
-      rgba: btoa(binary),
-    });
-  };
   let known: Map<string, bigint>;
   let client: Client;
   const read = async (name: string) => {
@@ -103,7 +107,11 @@ export async function exerciseGlassSelection(
         await overlayVisible(client!, known.get("glass-dropdown/list")!),
         "Dropdown did not open",
       );
-      await save("selection-dropdown-open", image(await interaction.capture()));
+      await saveCapture(
+        environment,
+        "selection-dropdown-open",
+        image(await interaction.capture()),
+      );
       await interaction.input.send({ kind: "key", key: "escape" });
     });
     await session.interact(present, async (interaction) => {
@@ -113,7 +121,11 @@ export async function exerciseGlassSelection(
         (await read("glass-multi/options/amber"))?.fields.selected === true,
         "Multi-select did not toggle native option",
       );
-      await save("selection-multi-open", image(await interaction.capture()));
+      await saveCapture(
+        environment,
+        "selection-multi-open",
+        image(await interaction.capture()),
+      );
       await interaction.input.send({ kind: "key", key: "escape" });
     });
     await session.interact(present, async (interaction) => {
@@ -129,11 +141,15 @@ export async function exerciseGlassSelection(
         (await interaction.control("autocomplete").read()).text === "Amber",
         "Autocomplete lost committed native text",
       );
-      await save("selection-editing", image(await interaction.capture()));
+      await saveCapture(
+        environment,
+        "selection-editing",
+        image(await interaction.capture()),
+      );
     });
     const identities = await symbols(client!);
     const before = await session.capture(present);
-    await save("selection-cyan", before.image);
+    await saveCapture(environment, "selection-cyan", before.image);
     await session.update({
       specimen: selectionSpecimen(
         contract,
@@ -142,7 +158,7 @@ export async function exerciseGlassSelection(
       ),
     });
     const after = await session.capture(present);
-    await save("selection-violet-light", after.image);
+    await saveCapture(environment, "selection-violet-light", after.image);
     let changed = 0;
     for (let i = 0; i < before.image.pixels.length; i += 4) {
       let delta = 0;
@@ -165,9 +181,39 @@ export async function exerciseGlassSelection(
       dropdownEscape: true,
       nativeTextEdit: true,
     });
-    await session.update({ specimen: contourSpecimen(contract) });
+  } finally {
+    await session.close();
+  }
+}
+
+export async function exerciseSelectionContours(
+  host: HostClientBase<Client>,
+  contract: GlassKitContract & ThemeContract,
+  font: Uint8Array<ArrayBuffer>,
+  present: Present,
+  environment: GlassSkinEnvironment,
+) {
+  const session = await SpecimenSession.open({
+    host,
+    contract,
+    font,
+    specimen: contourSpecimen(contract),
+    themes: {},
+    world: "glass-selection-contours",
+  });
+  try {
+    // The second column declares its Glass resources under its own GuiKit ID.
+    const shader = await session.assetSettled("contour-kit-1/shader");
+    check(
+      shader.status === "loaded",
+      "Contour sheet Glass shader failed to load",
+    );
     const contours = await session.capture(present);
-    await save("selection-contours-both-skins", contours.image);
+    await saveCapture(
+      environment,
+      "selection-contours-both-skins",
+      contours.image,
+    );
     const pixel = (x: number, y: number) => {
       const offset =
         (Math.floor(y * 2) * contours.image.width + Math.floor(x * 2)) * 4;
@@ -246,7 +292,11 @@ export async function exerciseGlassSelection(
     });
     await session.update({ specimen: switchSpecimen(contract) });
     const switches = await session.capture(present);
-    await save("switch-contours-both-skins", switches.image);
+    await saveCapture(
+      environment,
+      "switch-contours-both-skins",
+      switches.image,
+    );
     checkSwitchGeometry(switches.image);
   } finally {
     await session.close();

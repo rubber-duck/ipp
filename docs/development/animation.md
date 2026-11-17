@@ -190,6 +190,48 @@ await client.controlAnimationController(controllerId, {
 
 Pause/play retain the motion law and velocity. Seek, restart, stop and play-at-speed clear it. A motion control is rejected during an active crossfade; a subsequent transition may blend away a moving source. Motion excludes discrete and structural drivers. Saved motion resumes at its saved sample after readiness, with no catch-up interval.
 
+## Interactive GUI authoring
+
+| Intent | IPP mechanism |
+| --- | --- |
+| Change hover, press, focus or checked appearance | Author the part’s appearance in the skin and its timing in `GuiThemeMotion` rows. |
+| Reverse an authored movement | Use `playAtSpeed` on the same controller to change direction at its current clip position. |
+| Switch between numeric, quaternion or pose clips | Crossfade on one controller. Interrupting the crossfade preserves the current composite contribution. |
+| Drag, fling or snap | Send ordered `hold`, `decay` or `spring` controls on a bounded numeric clip. The application chooses when to accept the gesture and where to snap. |
+| Repeat decoration or count down to dismissal | Use a Host-clock controller and define its reduced-motion and cleanup behavior. |
+
+UI SDK's panel and gesture helpers illustrate two ideas that also apply here. Move focus when departure starts, and estimate release velocity from timestamps captured with the input. In IPP, GUI resolves interaction state, skins supply appearance and timing, and AnimationSystem samples on Host time. DOM presence, CSS transition completion and a browser animation loop belong to the upstream implementation. [UI SDK motion guide](https://ui-sdk.dev/docs/core/behaviors/motion) · [Reviewed upstream source](https://github.com/vercel-labs/ui/tree/282f44729ce08282ef1dc37fa093b1997bbeb848/packages/core/src/foundation/motion)
+
+When a new interaction state interrupts a timed skin transition, the new transition starts at the current part sample. Editing the destination _within the same state_ keeps the original origin and elapsed time, so the next sample can change immediately. Skin reversals and interrupted crossfades preserve value continuity without promising velocity continuity. Spring and decay controls preserve the current velocity when the application omits it. The kit still defines some timings inside its composites, so a skin timing change only affects the transitions that read that row. [GUI motion](../../crates/ipp-core/src/world/systems/gui/motion/README.md) · [Row loops](../../packages/ipp-react/src/gui-kit/row-motion.tsx) · [Progress sweep](../../packages/ipp-react/src/gui-kit/feedback/progress-bar.tsx) · [Toast fade](../../packages/ipp-react/src/gui-kit/overlays/toast.tsx)
+
+### Presence, interaction and removal
+
+Closing a native overlay sets `GuiBehavior.visible` to false and removes it from layout, paint, hit testing and keyboard traversal. Keeping its React declaration mounted cannot preserve a closing frame. A skin's `exit` duration applies to leaving an interaction state such as pressed. The toast shows a different pattern. Its Host-clock countdown fades visible content and calls the application's dismissal handler on completion. Its close button calls the handler immediately. [Overlay contract](../architecture/gui.md#controls-and-composites) · [Toast countdown](../../packages/ipp-react/src/gui-kit/overlays/toast.tsx)
+
+For an application-owned panel that should remain visible during departure, leave its presentation gate open and `GuiBehavior.visible` true. At the start of the fade, set `GuiBehavior.enabled` to false on the departing subtree and move focus to an eligible destination outside it. A partially faded control can still receive input. Zero `CanvasStyle.opacity` on the target or an ancestor excludes it from routed hits and keyboard traversal. A transparent tint alone preserves hit eligibility. Neither chooses where focus should go. [Pointer routing tests](../../crates/ipp-core/src/services/gui_input/service_tests.rs) · [Keyboard traversal tests](../../crates/ipp-core/src/services/gui_input/router/keyboard_traversal_tests.rs)
+
+Keep the panel declaration mounted while it fades. Give each close attempt its own keyed exit controller and remove the panel only on completion of the current attempt. Invalidate that attempt on reopen or replacement. A delayed completion can then be rejected even if the panel has already started a second close. Define cleanup for a failed controller as well. Merely replacing the callback on a reused controller cannot distinguish those events. To dispose of the whole declaration tree, use `await root.render(null)` while the root is still mounted, then `await root.unmount()`. Unmount by itself releases subscriptions and sessions and leaves declared World objects in place. Closing a `PresentationGate` hides a branch and cuts off input while its simulation, including looping controllers, continues. [React declaration lifetimes](../architecture/authoring.md#react-declarations)
+
+For a fade-in, author a stored opacity of zero and a numeric clip that rises from zero to one. The controller adds the change from its reference sample. Stopping or removing it withdraws that contribution. To keep the endpoint continuously visible, leave the completed controller attached until the content leaves. When the controller must be released, await its stop or removal before writing the final opacity. The two requests can land in different Host frames, exposing the base opacity between them. Perform that handoff while the content is hidden if the intermediate frame would be visible, and coordinate other writers to the same field.
+
+### Gesture samples and units
+
+Record each position with a monotonic input timestamp before asynchronous routing or projection. Use a bounded history, discard duplicate or older timestamps, clear history on cancellation or a new gesture, and decay or zero a stale release velocity. Send motion controls once native input admits the gesture. The cockpit example estimates velocity from processing time, which includes delays between updates. [Cockpit carousel input](../../examples/demos/scenes/cockpit/carousel-input.ts)
+
+If one clip cursor unit spans `L` input pixels, a release at `v` pixels per millisecond becomes `1000 * v / L` cursor units per Host second, with the sign determined by the direction of the mapping. For nonlinear resistance, multiply input velocity by the mapping's local derivative. The native cursor clamps at its bounds and absorbs outward velocity. Elastic overscroll needs an authored mapping and enough clip range to show it.
+
+For a spring specified by its undamped period in seconds, use `frequency = 1 / period` in hertz and keep the damping ratio. IPP decay takes positive friction in inverse seconds. Its ideal unbounded remaining travel is `velocity / friction`. Convert units and account for bounds when adapting a per-millisecond projection or a pixel-based snap rule.
+
+### Reduced motion and settled work
+
+Choose who writes the reduced-motion preference for each World. If the application owns it, pass the initial `reducedMotion` prop to the World-owning `GuiKit` or `SkinProvider` before showing the UI and update it on changes. A browser owner can use `matchMedia("(prefers-reduced-motion: reduce)")` and remove its change listener on cleanup. An explicit `false` overwrites a previous native `true`. Removing a provider or withdrawing a prop that set `true` on a live root also sends `false`. If the Host or another client owns the preference, keep the World-owning provider’s _resolved_ setting undefined from its first render. An attached World inherits the enclosing React provider’s setting even when it omits the prop. If an ancestor supplies a value, use a separate authoring root without that context or coordinate with the same preference owner. Within the World, a nested provider can receive the owner’s value to control kit decorations locally without writing back to the World. [Skin provider](../../packages/ipp-react/src/gui/skin-provider.tsx)
+
+Enabling the World preference snaps native skin transitions to their destinations. The kit reads its React context to still decorative loops and to drop toast opacity at the end of the countdown. The bridge sends changes in one direction. A Host or another client can change the World preference while the kit keeps using its current prop. Query `inspectPage({ collection: "guiPreferences" })` to check the native value at a point in time. Applications choose the reduced-motion endpoint for their own controllers, including springs, and can preserve semantic feedback and countdowns independently. [Preference bridge](../../packages/ipp-react/src/gui/preferences.ts)
+
+Unchanged static and settled skin controls do zero per-frame motion work after preparation. Ordinary paused or completed controllers can still be sampled, and loops keep running. Use GUI motion counters for preparation and sampling, retained-renderer counters for rebuilds and uploads, and matched hardware for timing claims. [Core motion tests](../../crates/ipp-core/tests/gui_skin_motion.rs) · [Motion work counters](../../crates/ipp-core/src/world/systems/gui/motion/statistics.rs)
+
+The GUI motion scenario checks completed captures against Host-time bounds, including the first causally identified post-interruption capture. Missing a short transition leaves its timing unproven. Repeat the action to obtain a sample only if the capture missed the window. A captured discontinuity is a failure. Transport fixtures exercise signed playback and spring/decay controls. [GUI motion scenario](../../tests/gui/motion/README.md) · [Animation fixtures](../../tests/fixtures/animation.ts)
+
 ## Bounds and validation
 
 | Item | Limit/format |

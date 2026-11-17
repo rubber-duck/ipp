@@ -461,6 +461,8 @@ export async function propertyAnimationScenario(
       fixture.state(inspection, reverse).time === 0,
     "negative playback did not complete at the start endpoint",
   );
+  // Entity and controller inspection pages can come from different Host frames.
+  inspection = await fixture.inspect();
   check(
     fixture.value(inspection, reverseTarget, "Scalar", "value") === 42,
     "negative playback did not hold the start sample",
@@ -629,6 +631,7 @@ export async function propertyAnimationScenario(
     fixture.state(inspection, moving).time === 1.5,
     "spring did not snap exactly",
   );
+  inspection = await fixture.inspect();
   check(
     Math.abs(fixture.value(inspection, movingTarget, "Scalar", "value") - 25) <
       1e-4,

@@ -36,7 +36,9 @@ A World that does not select `AnimationSystem` records no keys and creates no ch
 
 ## Reduced motion
 
-[`GuiPreferences`](../gui_preferences.rs) is GUI System state: `reduced_motion` makes every transition immediate, and turning it on releases every transition under way to its destination. Hosts and clients change it with the `GuiPreferencesUpdate` System command, or the protocol's `GuiPreferencesUpdateCommand`, at the mutation boundary; the `GuiPreferences` System query reads it, as does the protocol's `guiPreferences` inspection collection, and the World saves it like other System state. The React kit's `GuiKit` sends its one reduced-motion setting as this preference and holds the kit's own spinners, pulses and toast fades still under the same setting.
+[`GuiPreferences`](../gui_preferences.rs) is GUI System state. Enabling `reduced_motion` snaps in-flight skin transitions to their destinations and makes subsequent skin transitions immediate. Hosts and clients set it through `GuiPreferencesUpdate` (protocol `GuiPreferencesUpdateCommand`) at the mutation boundary. The `GuiPreferences` System query and the protocol’s `guiPreferences` inspection collection read the current value. The World saves it with other System state.
+
+The World-owning React skin provider sends its `reducedMotion` setting to GUI. Kit decorations read the nearest provider’s setting. A preference change originating in the Host or another client affects native skin transitions independently of that React setting. Applications set the motion policy for their own controllers. [Interactive authoring guide](../../../../../../../docs/development/animation.md#reduced-motion-and-settled-work)
 
 ## Work
 

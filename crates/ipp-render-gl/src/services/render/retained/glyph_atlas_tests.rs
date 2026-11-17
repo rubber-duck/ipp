@@ -10,8 +10,8 @@ use super::super::shape_batches::GuiBatchRenderCache;
 use super::super::surface_paint::SurfacePaint;
 use super::{
     ATLAS_PAGE_SIZE, GlyphAtlas, GlyphAtlasLimits, GlyphBatchRenderCache, GlyphFrameWork, GlyphKey,
-    GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, MIN_POPULATES_PER_FRAME, POPULATE_RETRY_FRAMES,
-    RESOLUTION_BANDS, TextRun, select_resolution_band,
+    GlyphPopulationBudget, MAX_POPULATES_PER_FRAME, POPULATE_RETRY_FRAMES, RESOLUTION_BANDS,
+    TextRun, select_resolution_band,
 };
 use crate::services::render::statistics::RenderFrameWork;
 use crate::{RenderDevice, RenderError};
@@ -1384,28 +1384,17 @@ fn population_queue_is_bounded_per_frame_and_resumes_next_frame() {
 fn population_allowance_defers_the_rest_of_the_queue() {
     let (_, mut atlas, mut world) = setup();
     let style = style(1);
-    let ids: Vec<u32> = (100..140).collect();
-    let glyphs = glyphs(&ids);
+    let glyphs = glyphs(&[100, 101, 102, 103, 104]);
     let run = text_run(1, &style, &glyphs);
 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
-    assert_eq!(
-        world.populate_within(&mut atlas, 4, MIN_POPULATES_PER_FRAME),
-        32
-    );
-    assert_eq!(
-        world.cache.unpopulated_runs(run.entity, &atlas),
-        1,
-        "deferred entries leave the run waiting"
-    );
+    assert_eq!(world.populate_within(&mut atlas, 4, 3), 3);
+    assert_eq!(world.cache.unpopulated_runs(run.entity, &atlas), 1);
     assert!(!world.draw(&atlas, &run).0);
 
     world.publish(&mut atlas, &[(run, BAND_32_HEIGHT)], &[]);
-    assert_eq!(world.work.misses, 8, "deferred entries miss again");
-    assert_eq!(
-        world.populate_within(&mut atlas, 4, MIN_POPULATES_PER_FRAME),
-        8
-    );
+    assert_eq!(world.work.misses, 2, "deferred entries miss again");
+    assert_eq!(world.populate_within(&mut atlas, 4, 3), 2);
     assert!(world.draw(&atlas, &run).0);
 }
 
@@ -1413,25 +1402,38 @@ fn population_allowance_defers_the_rest_of_the_queue() {
 fn webgl_population_shares_raster_cost_across_outputs() {
     let mut budget = GlyphPopulationBudget::default();
     let mut work = GlyphFrameWork::default();
-    work.queue.extend((0..20).map(|id| key(id, 32)));
-    assert_eq!(budget.take_webgl_queue(&mut work).len(), 20);
-    work.populates = 20;
+    work.queue.extend((0..40).map(|id| key(id, 32)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 40);
+    work.populates = 40;
 
-    work.queue.extend((20..100).map(|id| key(id, 64)));
-    assert_eq!(budget.take_webgl_queue(&mut work).len(), 15);
-
-    work.clear();
-    work.queue.extend((0..80).map(|id| key(id, 64)));
-    assert_eq!(
-        budget.take_webgl_queue(&mut work).len(),
-        MIN_POPULATES_PER_FRAME
-    );
+    work.queue.extend((40..240).map(|id| key(id, 64)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 80);
 
     work.clear();
-    work.queue.extend((0..80).map(|id| key(id, 16)));
-    assert_eq!(budget.take_webgl_queue(&mut work).len(), 50);
+    work.queue.extend((0..240).map(|id| key(id, 16)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 200);
 
     work.clear();
+    budget.set_budget_ms(0.05);
+    work.queue.extend((0..20).map(|id| key(id, 64)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 2);
+    work.populates = 2;
+    work.queue.push(key(20, 32));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 1);
+
+    work.clear();
+    budget.set_budget_ms(f64::MIN_POSITIVE);
+    work.queue.extend((0..20).map(|id| key(id, 64)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 1);
+    work.failures = 1;
+    work.queue.push(key(20, 16));
+    assert!(budget.take_webgl_queue(&mut work).is_empty());
+
+    work.clear();
+    budget.set_budget_ms(0.0);
+    work.queue.push(key(0, 16));
+    assert!(budget.take_webgl_queue(&mut work).is_empty());
+
     budget.set_budget_ms(f64::INFINITY);
     work.queue.extend((0..600).map(|id| key(id, 64)));
     assert_eq!(
@@ -1442,7 +1444,7 @@ fn webgl_population_shares_raster_cost_across_outputs() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn population_budget_covers_glyphs_between_the_floor_and_the_cap() {
+fn native_population_budget_adapts_to_slow_and_fast_passes() {
     let mut budget = GlyphPopulationBudget::default();
 
     // Measured passes set the per-glyph cost: 0.01 ms per glyph fills 2 ms with 200.
@@ -1451,11 +1453,15 @@ fn population_budget_covers_glyphs_between_the_floor_and_the_cap() {
     }
     assert_eq!(budget.allowance(), 200);
 
-    // A slow platform still populates the floor; a fast one stops at the cap.
+    // A slow pass still allows progress. A fast one-glyph pass can recover the estimate.
     for _ in 0..32 {
-        budget.record(10, 10.0);
+        let count = budget.allowance().min(10);
+        budget.record(count, 3.0 * count as f64);
     }
-    assert_eq!(budget.allowance(), MIN_POPULATES_PER_FRAME);
+    assert_eq!(budget.allowance(), 1);
+    budget.record(1, 0.001);
+    budget.record(1, 0.001);
+    assert!(budget.allowance() > 1);
     for _ in 0..64 {
         budget.record(1000, 0.001);
     }
@@ -1465,8 +1471,10 @@ fn population_budget_covers_glyphs_between_the_floor_and_the_cap() {
     budget.record(2, 100.0);
     assert_eq!(budget.allowance(), MAX_POPULATES_PER_FRAME);
 
+    budget.set_budget_ms(f64::MIN_POSITIVE);
+    assert_eq!(budget.allowance(), 1);
     budget.set_budget_ms(0.0);
-    assert_eq!(budget.allowance(), MIN_POPULATES_PER_FRAME);
+    assert_eq!(budget.allowance(), 0);
     budget.set_budget_ms(f64::INFINITY);
     assert_eq!(budget.allowance(), MAX_POPULATES_PER_FRAME);
 }

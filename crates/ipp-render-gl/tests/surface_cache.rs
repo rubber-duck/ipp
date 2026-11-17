@@ -1774,24 +1774,25 @@ fn mixed_cached_and_direct_surfaces_keep_painter_order() {
 
 #[test]
 fn text_drawn_analytically_under_the_population_bound_refines_at_the_refresh_cap() {
-    let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
-    let ids: Vec<u32> = (0..budget + 8).collect();
+    let count = 9;
+    let ids: Vec<u32> = (0..count).collect();
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, entity) =
-        text_run_scene(&mut host, glyph_font(budget + 8, 1000, 1.0), &ids);
-    // Only the per-frame floor populates, so the first repaint defers glyphs.
-    renderer.set_glyph_population_budget_ms(0.0);
+        text_run_scene(&mut host, glyph_font(count, 1000, 1.0), &ids);
+    // A sub-glyph budget makes one entry of progress on the first repaint.
+    renderer.set_glyph_population_budget_ms(f64::MIN_POSITIVE);
     state.cache_limit.set(4096);
     cache_policy(&mut host, entity, Some(ALWAYS));
 
     // The first repaint populates up to the bound and draws the run analytically.
     let cold = frame(&mut renderer, &mut host, world_id, 0.1);
     assert_eq!(work(&cold), [1, 0, 0, 0, 1], "{cold:?}");
-    assert_eq!(cold.glyph_populates, budget);
+    assert_eq!(cold.glyph_populates, 1);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
     // The reused image keeps queueing its missing entries, which the next frame
     // populates without repainting.
+    renderer.set_glyph_population_budget_ms(f64::INFINITY);
     let populated = frame(&mut renderer, &mut host, world_id, 0.0);
     assert_eq!(work(&populated), [0, 1, 0, 0, 0], "{populated:?}");
     assert_eq!(populated.glyph_populates, 8);
@@ -1815,17 +1816,20 @@ fn text_drawn_analytically_under_the_population_bound_refines_at_the_refresh_cap
 fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     const ROWS: u32 = 4;
     const PER_ROW: u32 = 40;
+    const CACHED_GLYPHS: u32 = 3;
     const DT: f64 = 1.0 / 60.0;
     let busy_glyphs = ROWS * PER_ROW;
-    let budget = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
     let mut host = support::task_scheduler::host();
-    let (mut renderer, state, world_id, busy) =
-        text_run_scene(&mut host, glyph_font(busy_glyphs + 8, 1000, 1.0), &[0]);
-    renderer.set_glyph_population_budget_ms(0.0);
+    let (mut renderer, state, world_id, busy) = text_run_scene(
+        &mut host,
+        glyph_font(busy_glyphs + CACHED_GLYPHS, 1000, 1.0),
+        &[0],
+    );
+    renderer.set_glyph_population_budget_ms(f64::MIN_POSITIVE);
     state.cache_limit.set(4096);
 
-    // A direct Surface inside the first Camera target fills the frame's population
-    // queue before the later cached Canvas target can populate its own glyphs.
+    // The direct Surface keeps the shared queue saturated while the cached
+    // Surface catches up and waits for its refresh interval.
     canvas::apply(
         &mut host,
         busy.output.world().id(),
@@ -1905,7 +1909,7 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
         world_id,
         1.0,
         canvas::glyph_run(
-            &(busy_glyphs..busy_glyphs + 8).collect::<Vec<_>>(),
+            &(busy_glyphs..busy_glyphs + CACHED_GLYPHS).collect::<Vec<_>>(),
             [0.1, 0.1],
         ),
     );
@@ -1918,7 +1922,7 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     // The first repaint draws the cached text analytically behind a full queue.
     let cold = frame(&mut renderer, &mut host, world_id, DT);
     assert_eq!(work(&cold)[0], 1, "{cold:?}");
-    assert_eq!(cold.glyph_populates, budget);
+    assert_eq!(cold.glyph_populates, 1);
     let events = take_events(&state);
     assert_eq!(events, "GGGGEBGEFCC", "{cold:?}");
 
@@ -1928,21 +1932,21 @@ fn a_saturated_population_queue_refines_cached_text_only_at_the_refresh_cap() {
     let refined = loop {
         let stats = frame(&mut renderer, &mut host, world_id, DT);
         frames += 1;
-        assert!(stats.glyph_populates <= budget, "{stats:?}");
+        assert_eq!(stats.glyph_populates, 1, "{stats:?}");
+        assert!(stats.glyph_misses > stats.glyph_populates, "{stats:?}");
         let events = take_events(&state);
         if stats.surface_cache_repaints == 1 {
             break events;
         }
 
         assert_eq!(work(&stats), [0, 1, 0, 0, 0], "frame {frames}: {stats:?}");
-        assert!(frames < 30, "cached text never refined");
+        assert!(frames < 10, "cached text never refined");
     };
     assert_eq!(
-        frames,
-        busy_glyphs.div_ceil(budget) + 2,
-        "one frame after the queue reaches its glyphs, at the 10 Hz cap"
+        frames, 7,
+        "the first repaint is due after six 60 Hz intervals at the 10 Hz cap"
     );
-    assert_eq!(refined, "TEBTEFCC");
+    assert_eq!(refined, "GGGGEBTEFCC");
 }
 
 /// Exercise image projection explicitly; uncached coincident curves are analytic.

@@ -910,27 +910,24 @@ fn cold_glyph_population_binds_each_atlas_page_once_and_restores_once() {
 
 #[test]
 fn population_budget_defers_misses_and_resumes_next_frame() {
-    let floor = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32;
-    let ids: Vec<u32> = (0..floor + 8).collect();
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) =
-        text_run_scene(&mut host, glyph_font(floor + 8, 1000, 1.0), &ids);
+        text_run_scene(&mut host, glyph_font(3, 1000, 1.0), &[0, 1, 2]);
     renderer.set_glyph_population_budget_ms(0.0);
     let mut world = host.world_mut(world_id).unwrap();
 
-    // Without time beyond the floor, population stops there; the incomplete run
-    // stays analytic this frame.
-    let first = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
-    assert_eq!(first.glyph_misses, floor + 8, "{first:?}");
-    assert_eq!(first.glyph_populates, floor);
-    assert_eq!(first.gui_batches, 0);
+    let paused = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
+    assert_eq!((paused.glyph_misses, paused.glyph_populates), (3, 0));
+    assert_eq!(paused.gui_batches, 0);
     assert_eq!(state.analytic_glyph_draws.get(), 1);
 
-    // The next frame populates the remainder and switches the run to the atlas.
-    let second = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
-    assert_eq!((second.glyph_misses, second.glyph_populates), (8, 8));
-    assert_eq!(second.gui_batches, 1);
-    assert_eq!(state.analytic_glyph_draws.get(), 1);
+    renderer.set_glyph_population_budget_ms(f64::MIN_POSITIVE);
+    for missing in [3, 2, 1] {
+        let frame = present_world!(render_frame, &mut renderer, host, world, 100, 100).unwrap();
+        assert_eq!((frame.glyph_misses, frame.glyph_populates), (missing, 1));
+        assert_eq!(frame.gui_batches, u32::from(missing == 1));
+    }
+    assert_eq!(state.analytic_glyph_draws.get(), 3);
 
     let warm = present_world!(finish; render_frame, &mut renderer, host, world, 100, 100).unwrap();
     assert_eq!((warm.glyph_misses, warm.glyph_populates), (0, 0));
@@ -939,8 +936,7 @@ fn population_budget_defers_misses_and_resumes_next_frame() {
 
 #[test]
 fn cold_text_within_the_time_budget_reaches_the_atlas_in_one_frame() {
-    // More glyphs than the per-frame floor; the scene's Surface shows up to 50.
-    let count = ipp_render_gl::GLYPH_MIN_POPULATES_PER_FRAME as u32 + 16;
+    let count = 48;
     let ids: Vec<u32> = (0..count).collect();
     let mut host = support::task_scheduler::host();
     let (mut renderer, state, world_id, _) =

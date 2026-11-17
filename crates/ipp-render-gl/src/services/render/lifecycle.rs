@@ -451,13 +451,9 @@ impl<D: RenderDevice> RenderService<D> {
         self.glyph_atlas.set_limits(limits);
     }
 
-    /// Bound the time one frame spends populating glyph atlas entries beyond
-    /// [`super::retained::glyph_atlas::MIN_POPULATES_PER_FRAME`], in milliseconds.
-    ///
-    /// A testing override: the renderer default is
-    /// [`super::retained::glyph_atlas::DEFAULT_POPULATE_BUDGET_MS`]. Zero populates only
-    /// that floor per frame; an infinite budget populates up to
-    /// [`super::retained::glyph_atlas::MAX_POPULATES_PER_FRAME`].
+    /// Set the glyph population time budget in milliseconds. Zero pauses new
+    /// entries. A positive budget permits progress one glyph at a time, and an
+    /// infinite budget permits up to the per-frame cap.
     #[cfg(any(test, feature = "instrumentation"))]
     pub fn set_glyph_population_budget_ms(&mut self, budget_ms: f64) {
         self.glyph_population.set_budget_ms(budget_ms);

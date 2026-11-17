@@ -59,10 +59,8 @@ pub struct RenderStatistics {
     /// back-off defers to a later frame.
     pub glyph_misses: u32,
     /// Glyph atlas entries rasterized during this submission, before the main pass.
-    /// A frame populates at least [`crate::GLYPH_MIN_POPULATES_PER_FRAME`] missing
-    /// entries, then as many as the population time budget covers; later entries
-    /// count as misses and their text stays analytic until a following frame
-    /// populates them.
+    /// Entries deferred by the shared time budget count as misses. Their runs
+    /// draw analytically until coverage is ready.
     pub glyph_populates: u32,
     /// Recoverable glyph atlas allocation or rasterization failures during this
     /// submission. Each glyph backs off and its text uses analytic glyphs meanwhile.

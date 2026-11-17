@@ -1,3 +1,4 @@
+import { verifyHardwareRenderer } from "#ipp-browser-options";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
@@ -38,7 +39,7 @@ import {
  * this environment knows the arrangement; the scenario assertions do not.
  */
 export type RetainedGuiArrangement =
-  | { readonly kind: "worker" }
+  | { readonly kind: "worker"; readonly requireHardware?: boolean }
   | { readonly kind: "native-gles"; readonly eglDirectory: string };
 
 /**
@@ -144,6 +145,10 @@ export async function runRetainedGui(
               label,
               { next },
             ]);
+            if (arrangement.kind === "worker" && arrangement.requireHardware)
+              verifyHardwareRenderer(
+                result.statistics?.device?.unmaskedRenderer,
+              );
             // Keep pixels for cross-build comparison and record the artifact path;
             // PNG data would exhaust the event log.
             await env.execute(`write ${label}.png`, [label], async () => {

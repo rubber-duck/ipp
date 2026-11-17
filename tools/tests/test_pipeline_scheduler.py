@@ -237,8 +237,6 @@ class SchedulerTests(Fixture):
 
 
 class BrowserDeviceTests(Fixture):
-    PROBE = "import os; print(os.environ.get('IPP_BROWSER_ANGLE'))"
-
     def test_software_removes_the_ambient_device_and_hardware_sets_it(self):
         with patch.dict(os.environ, {"IPP_BROWSER_ANGLE": "vulkan"}):
             for device, expected in (
@@ -321,22 +319,32 @@ class BrowserDeviceTests(Fixture):
         self.assertEqual(manifest["environmentSelection"]["browserDevice"], "gl-egl")
 
     def test_preflight_probe_sees_the_selected_device(self):
-        with patch.dict(os.environ, {"IPP_BROWSER_ANGLE": "vulkan"}):
-            command = [sys.executable, "-c", self.PROBE]
-            self.assertEqual(
-                probe(command, environment=device_environment("software")),
-                "None",
-            )
-            self.assertEqual(
-                probe(command, environment=device_environment("gl-egl")),
-                "gl-egl",
-            )
+        with patch.dict(
+            os.environ, {"IPP_BROWSER_ANGLE": "vulkan", "IPP_BROWSER_SOFTWARE": "1"}
+        ):
+            command = [
+                sys.executable,
+                "-c",
+                "import os; print(os.getenv('IPP_BROWSER_ANGLE'), os.getenv('IPP_BROWSER_SOFTWARE'))",
+            ]
+            for device, expected in (
+                ("software", "None 1"),
+                ("gl-egl", "gl-egl None"),
+                (None, "None None"),
+            ):
+                with self.subTest(device=device):
+                    self.assertEqual(
+                        probe(command, environment=device_environment(device)), expected
+                    )
         with patch("pipeline.runner.inspect", return_value=[]) as inspect:
             task = self.device_task(requirements=("browser",))
             selected = Plan("test", (task.id,), (task,))
             with redirect_stderr(io.StringIO()):
                 run_plan(selected, root=self.root, browser_device="vulkan")
-        self.assertEqual(inspect.call_args.args[3], {"IPP_BROWSER_ANGLE": "vulkan"})
+        self.assertEqual(
+            inspect.call_args.args[3],
+            {"IPP_BROWSER_ANGLE": "vulkan", "IPP_BROWSER_SOFTWARE": None},
+        )
 
     def test_retry_inherits_the_device_unless_hardware_overrides_it(self):
         report = self.root / "summary.json"

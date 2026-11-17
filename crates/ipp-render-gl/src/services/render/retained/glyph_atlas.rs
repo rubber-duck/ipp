@@ -40,26 +40,20 @@ pub const ATLAS_PAGE_SIZE: u32 = 512;
 /// Bytes per atlas texel: pages store single-channel R8 coverage.
 pub const ATLAS_BYTES_PER_TEXEL: usize = 1;
 
-/// Glyph coverage entries a frame populates whenever that many are missing, however
-/// long they take.
-pub const MIN_POPULATES_PER_FRAME: usize = 32;
-
 /// Glyph coverage entries one frame populates at most; later misses wait a frame.
 pub const MAX_POPULATES_PER_FRAME: usize = 512;
 
-/// Default time one frame may spend populating glyphs beyond
-/// [`MIN_POPULATES_PER_FRAME`], in milliseconds.
+/// Target time for glyph population across all outputs in a Host frame, in milliseconds.
 pub const DEFAULT_POPULATE_BUDGET_MS: f64 = 2.0;
 
 /// Native startup estimate, refined from measured passes during rendering.
 #[cfg(not(target_arch = "wasm32"))]
 const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
 
-/// Estimated cost through the 32 px band, calibrated with GPU timer queries on
-/// Metal and SwiftShader. Larger bands use two units per entry. See
-/// tests/performance/retained-gui.md for the measured range and startup cost.
+/// WebGL cost through the 32 px band, calibrated with hardware GPU timer queries.
+/// Larger bands cost two units. See tests/performance/retained-gui.md.
 #[cfg(any(test, target_arch = "wasm32"))]
-const WEBGL_POPULATE_MS_PER_UNIT: f64 = 0.04;
+const WEBGL_POPULATE_MS_PER_UNIT: f64 = 0.01;
 
 /// Host frames a glyph waits after its first failed population.
 pub const POPULATE_RETRY_FRAMES: u64 = 4;
@@ -734,11 +728,8 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 
 /// Per-frame glyph population allowance from a time budget and a per-glyph cost.
 ///
-/// Each frame populates at least [`MIN_POPULATES_PER_FRAME`] missing entries and at
-/// most [`MAX_POPULATES_PER_FRAME`], and between those as many as the budget covers at
-/// the estimated cost. Where the platform has a clock, measured population passes
-/// refine the estimate, so cold text reaches the atlas in one frame when the budget
-/// allows.
+/// A positive budget admits one missing entry even when its estimated cost
+/// exceeds the entire budget. A zero budget leaves all missing glyphs analytic.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphPopulationBudget {
     budget_ms: f64,
@@ -761,8 +752,7 @@ impl GlyphPopulationBudget {
     #[cfg(not(target_arch = "wasm32"))]
     const MIN_SAMPLE_GLYPHS: usize = 8;
 
-    /// Replace the time budget; zero populates only the floor, and an infinite or
-    /// non-finite budget populates up to the cap.
+    /// Zero pauses population. An unbounded budget admits up to the per-frame cap.
     #[cfg(any(test, feature = "instrumentation"))]
     pub fn set_budget_ms(&mut self, budget_ms: f64) {
         self.budget_ms = if budget_ms.is_nan() {
@@ -800,7 +790,8 @@ impl GlyphPopulationBudget {
             } else {
                 1
             };
-            if used + allowed >= MIN_POPULATES_PER_FRAME && frame.webgl_units + cost > units {
+            let first = frame.webgl_units == 0 && self.budget_ms > 0.0;
+            if !first && frame.webgl_units + cost > units {
                 break;
             }
 
@@ -813,18 +804,17 @@ impl GlyphPopulationBudget {
     /// Entries this frame may populate at the measured native cost.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn allowance(&self) -> usize {
-        let covered = self.budget_ms / self.ms_per_glyph;
-        if covered >= MAX_POPULATES_PER_FRAME as f64 {
-            return MAX_POPULATES_PER_FRAME;
-        }
-
-        (covered as usize).clamp(MIN_POPULATES_PER_FRAME, MAX_POPULATES_PER_FRAME)
+        let covered = (self.budget_ms / self.ms_per_glyph) as usize;
+        covered.clamp(usize::from(self.budget_ms > 0.0), MAX_POPULATES_PER_FRAME)
     }
 
     /// Fold one measured population pass into the per-glyph estimate.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn record(&mut self, glyphs: usize, elapsed_ms: f64) {
-        if glyphs < Self::MIN_SAMPLE_GLYPHS || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
+        // Keep adapting when a slow pass reduced the entire allowance below
+        // the usual sample size. Short runs on an otherwise idle frame are noisy.
+        let minimum_sample = self.allowance().clamp(1, Self::MIN_SAMPLE_GLYPHS);
+        if glyphs < minimum_sample || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
             return;
         }
 

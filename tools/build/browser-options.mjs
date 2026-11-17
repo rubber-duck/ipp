@@ -69,7 +69,13 @@ export function browserLaunchOptions(
   if (!angle)
     return {
       ...base,
-      args: [...args, ...(rendering ? ["--enable-unsafe-swiftshader"] : [])],
+      args: [
+        ...args,
+        ...(rendering ? ["--enable-unsafe-swiftshader"] : []),
+        ...(rendering && process.env.IPP_BROWSER_SOFTWARE === "1"
+          ? ["--use-angle=swiftshader"]
+          : []),
+      ],
     };
   if (angle !== "vulkan" && angle !== "gl-egl" && angle !== "metal")
     throw new Error("IPP_BROWSER_ANGLE must be vulkan, gl-egl or metal");

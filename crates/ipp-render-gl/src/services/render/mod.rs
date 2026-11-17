@@ -44,9 +44,7 @@ pub use device::{PlatformRenderDevice, RenderDevice, ViewportLimits};
 /// operations; device-level hosts generate box records through these.
 pub use retained::box_records::generate_box_records as generate_gui_box_records;
 #[cfg(any(test, feature = "instrumentation"))]
-pub use retained::glyph_atlas::{
-    GlyphAtlasLimits, MIN_POPULATES_PER_FRAME as GLYPH_MIN_POPULATES_PER_FRAME,
-};
+pub use retained::glyph_atlas::GlyphAtlasLimits;
 pub use retained::records::{GuiGlyphRecord, GuiRecord, GuiRecordKind, GuiShapeRecord};
 pub use statistics::RenderFrameSummary;
 pub use statistics::RenderStatistics;

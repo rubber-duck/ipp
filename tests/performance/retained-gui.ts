@@ -18,4 +18,5 @@ await runRetainedGui(
   flags.includes("--surface-cache")
     ? { surfaceCache: BENCHMARK_SURFACE_CACHE_POLICY }
     : {},
+  { kind: "worker", requireHardware: true },
 );

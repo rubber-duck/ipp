@@ -37,7 +37,10 @@ def device_environment(device: str | None) -> dict[str, str | None]:
     """The pipeline, not the caller's shell, selects every child's browser device."""
     if device is not None and device not in BROWSER_DEVICES:
         raise ValueError(f"Unknown browser device: {device}")
-    return {"IPP_BROWSER_ANGLE": None if device in (None, "software") else device}
+    return {
+        "IPP_BROWSER_ANGLE": device if device in HARDWARE_DEVICES else None,
+        "IPP_BROWSER_SOFTWARE": "1" if device == "software" else None,
+    }
 
 
 @dataclass(frozen=True)

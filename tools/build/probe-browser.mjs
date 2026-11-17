@@ -21,6 +21,13 @@ try {
   });
   if (process.env.IPP_BROWSER_ANGLE)
     verifyHardwareRenderer(graphics.unmaskedRenderer);
+  else if (
+    process.env.IPP_BROWSER_SOFTWARE === "1" &&
+    !/swiftshader/i.test(graphics.unmaskedRenderer ?? "")
+  )
+    throw new Error(
+      `SwiftShader required; received ${graphics.unmaskedRenderer}`,
+    );
   console.log(
     JSON.stringify({ browser: browser.version(), options, ...graphics }),
   );

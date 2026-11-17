@@ -96,7 +96,11 @@ try {
           read: (uri) => `http://127.0.0.1:${address.port}/${assetName(uri)}`,
           publishAnimation: publish,
         },
-        { symbolicId: "stress", clipsOnly: true },
+        {
+          symbolicId: "stress",
+          clipsOnly: true,
+          additionalSystems: ["ipp.constraints"],
+        },
       );
       const graph = await host.loadWorld(imported.bytes);
       const client = await host.openWorld(graph.root);

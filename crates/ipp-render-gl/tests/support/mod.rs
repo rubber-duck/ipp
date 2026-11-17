@@ -53,6 +53,7 @@ pub struct DeviceState {
     pub fail_frame_end: RefCell<Option<RenderError>>,
     pub context_lost: Cell<bool>,
     pub surface_path_attempts: Cell<u32>,
+    pub fail_surface_path: Cell<bool>,
     pub surface_double_sided: Cell<bool>,
     pub surface_state_changes: RefCell<Vec<bool>>,
     pub fail_surface_draw: Cell<bool>,
@@ -371,6 +372,8 @@ impl RenderDevice for TestDevice {
             .set(self.0.surface_path_attempts.get() + 1);
         if self.0.context_lost.get() {
             Err(RenderError::ContextLost)
+        } else if self.0.fail_surface_path.get() {
+            Err(RenderError::RenderDevice("curve allocation failed".into()))
         } else {
             Ok(())
         }

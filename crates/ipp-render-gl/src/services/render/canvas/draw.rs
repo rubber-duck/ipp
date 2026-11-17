@@ -258,6 +258,35 @@ impl<D: RenderDevice> RenderService<D> {
         result.and(restored)
     }
 
+    /// Both a direct draw and a cache's deferred coverage pass read these outlines.
+    pub(in crate::services::render) fn prepare_canvas_font_curves(
+        &mut self,
+        scene: &CanvasScene<'_>,
+    ) -> Result<(), RenderError> {
+        let (revision, demand) = self
+            .font_curve_demand
+            .entry(scene.canvas.selection)
+            .or_insert_with(|| (0, super::super::assets::font_curves::FontCurveDemand::new()));
+        demand.publish(
+            scene
+                .canvas
+                .entries
+                .iter()
+                .filter_map(|entry| match entry.as_ref() {
+                    CanvasPaintEntry::Primitive {
+                        primitive,
+                        ..
+                    } => Some(primitive),
+                    _ => None,
+                }),
+            |key| scene.resource(key),
+            *revision == scene.canvas.paint_revision,
+            self.glyph_atlas.frame(),
+        )?;
+        *revision = scene.canvas.paint_revision;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn prepare_canvas_frame<'a>(
         &mut self,
@@ -283,6 +312,7 @@ impl<D: RenderDevice> RenderService<D> {
                 clip,
                 opacity,
             );
+        self.prepare_canvas_font_curves(&scene)?;
         if self.analytic_surface.is_none() {
             self.prepare_glyph_demand(&scene, mvp, layering, viewport, clip, paint);
             self.populate_glyph_misses(&scene)?;
@@ -398,14 +428,30 @@ impl<D: RenderDevice> RenderService<D> {
                 }
 
                 let unit = *font_size / data.font.units_per_em() as f32;
-                let Some(path) = data.path.as_ref() else {
+                let Some(atlas) = data.curves.borrow().atlas.clone() else {
                     // A font without curves has no path; one whose GPU
                     // data was released is not resident yet.
-                    if data.graphics_ready() == Some(false) {
+                    if data.graphics_ready() == Some(false) || data.curves.borrow().failed() {
+                        stats.failed_draw();
+                        self.surface_missing_draws += 1;
                         self.surface_missing.push(*font);
                     }
                     return Ok(());
                 };
+                if data.curves.borrow().failed()
+                    && glyphs.iter().any(|glyph| {
+                        !atlas.ranges.contains_key(&glyph.glyph_id)
+                            && data
+                                .font
+                                .glyph(glyph.glyph_id)
+                                .is_some_and(|glyph| !glyph.contours.is_empty())
+                    })
+                {
+                    stats.failed_draw();
+                    self.surface_missing_draws += 1;
+                    self.surface_missing.push(*font);
+                }
+
                 if self.surface_instance_program.is_none() {
                     self.surface_instance_program = Some(self.device.borrow_mut().create_program(
                         crate::services::render::embedded_shader!("shaders/surface_instanced.vert"),
@@ -418,18 +464,21 @@ impl<D: RenderDevice> RenderService<D> {
                     style,
                     clip,
                     font_key: *font,
+                    layout: atlas.generation,
                     font_size: *font_size,
                     glyphs,
                 };
                 let build = |instances: &mut Vec<super::super::device::SurfacePathInstance>| {
                     for glyph in glyphs.iter() {
-                        let Some(&range) = data.ranges.get(glyph.glyph_id as usize) else {
+                        let Some(&range) = atlas.ranges.get(&glyph.glyph_id) else {
                             continue;
                         };
                         if range.curve_range[1] == 0 {
                             continue;
                         }
-                        let bounds = data.glyph_bounds[glyph.glyph_id as usize];
+                        let bounds = data
+                            .glyph_bounds(glyph.glyph_id)
+                            .expect("packed glyph bounds");
                         if !super::super::retained::glyph_atlas::glyph_intersects_clip(
                             style, glyph, bounds, unit, clip,
                         ) {
@@ -473,7 +522,16 @@ impl<D: RenderDevice> RenderService<D> {
                     &mut *self.device.borrow_mut(),
                     program,
                 )?;
-                cache.draw_run(program, path, &run, paint, mvp, instances, build, stats)?;
+                cache.draw_run(
+                    program,
+                    atlas.path(),
+                    &run,
+                    paint,
+                    mvp,
+                    instances,
+                    build,
+                    stats,
+                )?;
             }
             CanvasPrimitive::Path {
                 path,
@@ -1107,10 +1165,10 @@ impl<D: RenderDevice> RenderService<D> {
                 (viewport.width, viewport.height),
             );
             let bounds = |glyph_id: u32| {
-                data.ranges
-                    .get(glyph_id as usize)
-                    .filter(|range| range.curve_range[1] != 0)
-                    .and_then(|_| data.glyph_bounds.get(glyph_id as usize).copied())
+                data.font
+                    .glyph(glyph_id)
+                    .filter(|glyph| !glyph.contours.is_empty())
+                    .and_then(|_| data.glyph_bounds(glyph_id))
             };
             cache.publish_run(
                 atlas,
@@ -1136,11 +1194,7 @@ impl<D: RenderDevice> RenderService<D> {
         &mut self,
         scene: &CanvasScene<'_>,
     ) -> Result<(), RenderError> {
-        let queue = self.glyph_frame.take_queue(
-            self.glyph_population
-                .allowance()
-                .saturating_sub((self.glyph_frame.populates + self.glyph_frame.failures) as usize),
-        );
+        let queue = self.glyph_population.take_queue(&mut self.glyph_frame);
         if queue.is_empty() {
             self.glyph_frame.restore_queue(queue);
             return Ok(());
@@ -1173,10 +1227,10 @@ impl<D: RenderDevice> RenderService<D> {
             None,
         );
 
-        struct PlannedGlyph<'a, P> {
+        struct PlannedGlyph<D: RenderDevice> {
             key: super::super::retained::glyph_atlas::GlyphKey,
             page: usize,
-            path: &'a P,
+            atlas: std::rc::Rc<super::super::assets::font_curves::FontCurveAtlas<D>>,
             range: super::super::device::SurfacePathDescriptor,
             bounds: [f32; 4],
             placement: [f32; 4],
@@ -1204,10 +1258,12 @@ impl<D: RenderDevice> RenderService<D> {
             else {
                 continue;
             };
-            let (Some(path), Some(&range), Some(&bounds)) = (
-                data.path.as_ref(),
-                data.ranges.get(key.glyph_id as usize),
-                data.glyph_bounds.get(key.glyph_id as usize),
+            let Some(atlas) = data.curves.borrow().atlas.clone() else {
+                continue;
+            };
+            let (Some(&range), Some(bounds)) = (
+                atlas.ranges.get(&key.glyph_id),
+                data.glyph_bounds(key.glyph_id),
             ) else {
                 continue;
             };
@@ -1231,7 +1287,7 @@ impl<D: RenderDevice> RenderService<D> {
                 Ok(([slot_x, slot_y], page, _)) => planned.push(PlannedGlyph {
                     key,
                     page,
-                    path,
+                    atlas,
                     range,
                     bounds,
                     placement: [
@@ -1321,7 +1377,7 @@ impl<D: RenderDevice> RenderService<D> {
                 )?;
                 self.device.borrow_mut().draw_surface_path(
                     program,
-                    glyph.path,
+                    glyph.atlas.path(),
                     &glyph.bounds,
                     glyph.range,
                     &atlas_mvp,

@@ -66,6 +66,7 @@ impl<D: RenderDevice> RenderService<D> {
             projected_scratch: Default::default(),
             glyph_atlas: super::retained::glyph_atlas::GlyphAtlas::new(device.clone()),
             glyph_batch_cache: BTreeMap::new(),
+            font_curve_demand: BTreeMap::new(),
             glyph_frame: Default::default(),
             glyph_population: Default::default(),
             surface_paint: BTreeMap::new(),
@@ -325,6 +326,8 @@ impl<D: RenderDevice> RenderService<D> {
             .retain(|selection, _| selection.world().id() != world);
         self.plot_label_layouts
             .retain(|selection, _| selection.world().id() != world);
+        self.plot_plane_caches
+            .retain(|(owner, _, _), _| owner.id() != world);
         self.forget_surface_caches(world);
         self.forget_projected_world(world);
         {
@@ -350,6 +353,8 @@ impl<D: RenderDevice> RenderService<D> {
             .retain(|output, _| output.world().id() != world);
         self.canvas_paint_fallbacks
             .retain(|(output, _), _| output.world().id() != world);
+        self.font_curve_demand
+            .retain(|output, _| output.world().id() != world);
         self.glyph_batch_cache.retain(|output, cache| {
             if output.world().id() == world {
                 cache.release_demand(&mut self.glyph_atlas);
@@ -374,6 +379,8 @@ impl<D: RenderDevice> RenderService<D> {
             .retain(|selection, _| outputs.contains(selection));
         self.canvas_paint_fallbacks
             .retain(|(selection, _), _| outputs.contains(selection));
+        self.font_curve_demand
+            .retain(|selection, _| outputs.contains(selection));
         self.glyph_batch_cache.retain(|selection, cache| {
             let live = outputs.contains(selection);
             if !live {
@@ -483,6 +490,7 @@ impl<D: RenderDevice> Drop for RenderService<D> {
         }
         self.gui_batch_cache.clear();
         self.analytic_glyphs.clear();
+        self.font_curve_demand.clear();
         self.clear_shadows();
     }
 }

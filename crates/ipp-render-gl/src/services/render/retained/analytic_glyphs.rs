@@ -40,6 +40,8 @@ pub struct AnalyticGlyphRun<'a> {
     pub clip: CanvasClip,
     /// Ready font asset incarnation; its curves and bounds are immutable.
     pub font_key: AssetKey,
+    /// Identity of the packed font descriptors used by the instance stream.
+    pub layout: u64,
     /// Metres per em.
     pub font_size: f32,
     /// Positioned glyphs in painter order.
@@ -82,6 +84,7 @@ struct RetainedAnalyticRun<D: RenderDevice> {
     /// `None` while the run has no visible instance.
     stream: Option<D::SurfaceInstances>,
     hash: u64,
+    layout: u64,
     /// Surface paint revision `hash` was computed under; zero when unknown.
     revision: u64,
     instances: u32,
@@ -142,6 +145,9 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
     ) -> Result<(), RenderError> {
         let key = (run.entity, run.style.identity);
         let current = self.runs.get(&key).and_then(|retained| {
+            if retained.layout != run.layout {
+                return None;
+            }
             if paint.reuses(retained.revision) {
                 return Some(retained.hash);
             }
@@ -162,6 +168,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
 
         let retained = self.runs.get_mut(&key).expect("retained analytic run");
         retained.hash = hash;
+        retained.layout = run.layout;
         retained.revision = paint.revision;
         retained.seen = self.frame;
 
@@ -194,6 +201,7 @@ impl<D: RenderDevice> AnalyticGlyphCache<D> {
             stream: None,
             hash,
             revision: 0,
+            layout: 0,
             instances: 0,
             bytes: 0,
             seen: self.frame,

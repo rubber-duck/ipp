@@ -1,6 +1,6 @@
 //! Renderer-owned packing for shared quadratic contours.
 //!
-//! One packed atlas holds every path of a font or drawing in two textures that
+//! One packed atlas holds the demanded glyphs of a font or every path of a drawing in two textures that
 //! the analytic curve shader (`shaders/surface.frag`) reads with `texelFetch`.
 //!
 //! **Curve texels** hold `[p1.x, p1.y, p2.x, p2.y]` for one quadratic segment

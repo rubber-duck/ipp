@@ -221,6 +221,7 @@ fn run<'a>(
     glyphs: &'a [CanvasGlyph],
 ) -> AnalyticGlyphRun<'a> {
     AnalyticGlyphRun {
+        layout: 1,
         entity: EntityId::from_bits(entity),
         style,
         clip: [0.0, 0.0, 10.0, 10.0],

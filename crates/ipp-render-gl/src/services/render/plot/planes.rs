@@ -22,6 +22,7 @@ pub(in crate::services::render) struct PlotPlaneCache<D: RenderDevice> {
     pub source: Weak<PlotPreparedGeometry>,
     pub boxes: GuiBatchRenderCache<D>,
     pub glyphs: AnalyticGlyphCache<D>,
+    font_curves: super::super::assets::font_curves::FontCurveDemand<D>,
     presentation: Option<super::super::canvas::presentation::CanvasPresentation>,
 }
 
@@ -68,6 +69,7 @@ impl<D: RenderDevice> RenderService<D> {
                 presentation: None,
                 boxes: GuiBatchRenderCache::new(device.clone()),
                 glyphs: AnalyticGlyphCache::new(device.clone()),
+                font_curves: super::super::assets::font_curves::FontCurveDemand::new(),
             });
         let mut paint = SurfacePaint {
             revision: 1,
@@ -133,6 +135,12 @@ impl<D: RenderDevice> RenderService<D> {
         } else {
             &plane.plane.primitives
         };
+        cache.font_curves.publish(
+            primitives.iter(),
+            |key| scene.host.publication_resource(plane.publication, key),
+            paint.reusable,
+            self.glyph_atlas.frame(),
+        )?;
         let ranges = &mut scratch.ranges;
         ranges.clear();
         for primitive in primitives {

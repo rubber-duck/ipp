@@ -3,10 +3,8 @@
 use std::any::Any;
 
 use ipp_core::services::asset_management::{
-    Asset, AssetLoadFailure, AssetLoader, AsyncAssetLoader,
-    formats::drawing::DrawingAsset,
+    Asset, AssetLoadFailure, AssetLoader, AsyncAssetLoader, formats::drawing::DrawingAsset,
     formats::font::FontAsset,
-    formats::quadratic::{QuadraticContour, QuadraticSegment},
 };
 
 use super::super::statistics::RenderUploadCounter;
@@ -15,14 +13,16 @@ use super::{loaders::SharedRenderDevice, paths};
 use crate::RenderDevice;
 
 pub(in crate::services::render) struct GlFontData<D: RenderDevice> {
-    pub font: FontAsset,
-    asset_lease: RenderAssetLease,
-    pub path: Option<D::SurfacePath>,
-    pub ranges: Vec<super::super::device::SurfacePathDescriptor>,
-    pub glyph_bounds: Vec<[f32; 4]>,
-    device: SharedRenderDevice<D>,
-    gpu_bytes: usize,
-    graphics_prepared: bool,
+    pub font: std::rc::Rc<FontAsset>,
+    pub curves: std::rc::Rc<std::cell::RefCell<super::font_curves::FontCurves<D>>>,
+    pub(super) graphics_prepared: bool,
+}
+
+impl<D: RenderDevice> GlFontData<D> {
+    pub fn glyph_bounds(&self, id: u32) -> Option<[f32; 4]> {
+        let [left, bottom, right, top] = self.font.glyph(id)?.bounds;
+        Some([left, -top, right, -bottom])
+    }
 }
 
 impl<D: RenderDevice> Asset for GlFontData<D> {
@@ -31,7 +31,7 @@ impl<D: RenderDevice> Asset for GlFontData<D> {
     }
 
     fn decoded(&self) -> &dyn Any {
-        &self.font
+        self.font.as_ref()
     }
 
     fn graphics_ready(&self) -> Option<bool> {
@@ -39,21 +39,15 @@ impl<D: RenderDevice> Asset for GlFontData<D> {
     }
 
     fn graphics_bytes(&self) -> Option<usize> {
-        Some(self.gpu_bytes)
+        Some(self.curves.borrow().bytes())
     }
 
     fn resident_bytes(&self) -> usize {
-        self.font.resident_bytes() + self.gpu_bytes
+        self.font.resident_bytes() + self.curves.borrow().bytes()
     }
 
     fn invalidate_graphics(&mut self) {
-        let mut device = self.device.borrow_mut();
-        if let Some(path) = self.path.take()
-            && self.asset_lease.is_current()
-        {
-            device.delete_surface_path(path);
-        }
-        self.gpu_bytes = 0;
+        self.curves.borrow_mut().invalidate();
         self.graphics_prepared = false;
     }
 }
@@ -120,104 +114,52 @@ pub(in crate::services::render) fn font_loader<D: RenderDevice>(
     context: RenderAssetContext,
 ) -> impl AssetLoader<Data = GlFontData<D>> {
     AsyncAssetLoader::new(move |mut reader| async move {
-        let font = FontAsset::decode_reader(&mut *reader).await?;
-        let mut normalized = Vec::new();
-        let mut glyph_bounds = Vec::new();
-        let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
-        for glyph in font.glyphs() {
-            normalized.push(normalize_glyph_contours_async(&glyph.contours).await);
-            let bounds = glyph.bounds;
-            glyph_bounds.push([bounds[0], -bounds[3], bounds[2], -bounds[1]]);
-            budget.advance(0).await;
-        }
-        let atlas = paths::pack_surface_paths_async(
-            glyph_bounds
-                .iter()
-                .zip(&normalized)
-                .map(|(&bounds, contours)| (bounds, contours.as_slice())),
-        )
-        .await;
-        let bytes = atlas.texels.byte_len();
+        let font = std::rc::Rc::new(FontAsset::decode_reader(&mut *reader).await?);
+        let has_curves = font.glyphs().iter().any(|glyph| !glyph.contours.is_empty());
+        let empty = super::font_curves::empty_texels();
         loop {
-            let asset_lease = if atlas.texels.curves.is_empty() {
-                context.lease()
-            } else {
+            let lease = if has_curves {
                 context.wait().await
-            };
-            let result = if atlas.texels.curves.is_empty() {
-                Ok(None)
             } else {
-                device
-                    .borrow_mut()
-                    .create_surface_path(&atlas.texels)
-                    .map(Some)
+                context.lease()
+            };
+            let result = if has_curves {
+                device.borrow_mut().create_surface_path(&empty).map(Some)
+            } else {
+                Ok(None)
             };
             if matches!(result, Err(crate::RenderError::ContextLost)) {
                 context.set_active(false);
                 continue;
             }
-            match result {
+            let (path, failure) = match result {
                 Ok(path) => {
-                    uploads.add(bytes);
-                    return Ok(GlFontData {
-                        font,
-                        asset_lease,
+                    if path.is_some() {
+                        uploads.add(empty.byte_len());
+                    }
+                    (path, None)
+                }
+                Err(error) => (None, Some(error)),
+            };
+            let data = GlFontData {
+                font: font.clone(),
+                graphics_prepared: failure.is_none(),
+                curves: std::rc::Rc::new(std::cell::RefCell::new(
+                    super::font_curves::FontCurves::new(
+                        std::rc::Rc::downgrade(&font),
+                        device.clone(),
+                        lease,
+                        uploads.clone(),
                         path,
-                        ranges: atlas.descriptors,
-                        glyph_bounds,
-                        device,
-                        gpu_bytes: bytes,
-                        graphics_prepared: true,
-                    });
-                }
-                Err(error) => {
-                    return Err(AssetLoadFailure::with_decoded(
-                        error.to_string(),
-                        GlFontData {
-                            font,
-                            asset_lease,
-                            path: None,
-                            ranges: atlas.descriptors,
-                            glyph_bounds,
-                            device,
-                            gpu_bytes: 0,
-                            graphics_prepared: false,
-                        },
-                    ));
-                }
-            }
+                    ),
+                )),
+            };
+            return match failure {
+                Some(error) => Err(AssetLoadFailure::with_decoded(error.to_string(), data)),
+                None => Ok(data),
+            };
         }
     })
-}
-
-async fn normalize_glyph_contours_async(contours: &[QuadraticContour]) -> Vec<QuadraticContour> {
-    let mut output = Vec::with_capacity(contours.len());
-    let mut budget = ipp_core::services::asset_management::decode::DecodeBudget::default();
-    for contour in contours {
-        let mut segments = Vec::with_capacity(contour.segments.len());
-        for segment in &contour.segments {
-            segments.push(match *segment {
-                QuadraticSegment::Line {
-                    to,
-                } => QuadraticSegment::Line {
-                    to: [to[0], -to[1]],
-                },
-                QuadraticSegment::Quadratic {
-                    control,
-                    to,
-                } => QuadraticSegment::Quadratic {
-                    control: [control[0], -control[1]],
-                    to: [to[0], -to[1]],
-                },
-            });
-            budget.advance(0).await;
-        }
-        output.push(QuadraticContour {
-            start: [contour.start[0], -contour.start[1]],
-            segments,
-        });
-    }
-    output
 }
 
 pub(in crate::services::render) fn drawing_loader<D: RenderDevice>(

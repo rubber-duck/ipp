@@ -4,6 +4,7 @@
 pub(super) mod context;
 pub(super) mod export;
 mod fills;
+pub(super) mod font_curves;
 pub(super) mod generated_meshes;
 pub(super) mod generated_paths;
 pub(super) mod loaders;

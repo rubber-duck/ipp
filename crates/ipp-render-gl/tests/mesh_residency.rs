@@ -1236,3 +1236,76 @@ fn analytic_text_streams_release_with_their_surface_world_and_context() {
     other.forget_world(other_surface.output.world().id());
     assert_eq!(other_state.live_analytic_streams.get(), 0);
 }
+
+#[test]
+fn font_curves_share_demand_across_worlds_and_recover_only_live_glyphs() {
+    use ipp_core::services::asset_management::{AssetSource, formats::font::FONT_TYPE};
+
+    let font = glyph_font(256, 1000, 1.0);
+    let mut host = support::task_scheduler::host();
+    let (mut renderer, state, world, first) = text_run_scene(&mut host, font.clone(), &[230]);
+    let key = host
+        .asset_resources()
+        .find(&AssetSource {
+            kind: FONT_TYPE,
+            uri: "fixture:///font.ippf".into(),
+            variant: 0,
+        })
+        .unwrap();
+    let bytes = |host: &ipp_core::HostRuntime| {
+        host.asset_resources()
+            .get(key)
+            .unwrap()
+            .graphics_bytes()
+            .unwrap()
+    };
+
+    let viewport = ANALYTIC_VIEWPORT;
+    canvas::set_viewport(&mut host, world, viewport, viewport);
+    let empty = bytes(&host);
+    render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    let one = bytes(&host);
+    assert!(one > empty);
+    assert_eq!(state.analytic_glyph_uploads.get(), 1);
+
+    let second = canvas::CanvasSurface::new(
+        &mut host,
+        world,
+        0.0,
+        canvas::glyph_run(&[2, 230, 230], [0.5, 0.5]),
+    );
+    resolve_text(&mut host, world, &font);
+    // A failed expansion leaves the first World drawable. The missing glyph
+    // is reported and retried even if neither World changes its paint.
+    state.fail_surface_path.set(true);
+    let partial = render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    assert!(partial.failed_draw_calls > 0);
+    assert_eq!(bytes(&host), one);
+    state.fail_surface_path.set(false);
+    for _ in 0..4 {
+        render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    }
+    let both = render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    assert_eq!(both.failed_draw_calls, 0);
+    assert_eq!(bytes(&host), 2 * one);
+    let remapped = state.analytic_glyph_uploads.get();
+    assert!(
+        remapped >= 3,
+        "the original high glyph needs its new offset"
+    );
+    render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    assert_eq!(state.analytic_glyph_uploads.get(), remapped);
+
+    renderer.forget_world(second.output.world().id());
+    assert!(host.destroy_world(second.output.world().id()));
+    assert_eq!(bytes(&host), one);
+
+    recover_context(&mut renderer, &mut host, world, &font);
+    assert_eq!(bytes(&host), empty);
+    let recovered = render_frame(&mut renderer, &mut host, world, viewport, viewport).unwrap();
+    assert_eq!(recovered.failed_draw_calls, 0);
+    assert_eq!(bytes(&host), one);
+
+    renderer.forget_world(first.output.world().id());
+    assert_eq!(bytes(&host), 0);
+}

@@ -161,6 +161,8 @@ pub struct RenderService<D: RenderDevice> {
     pub(super) gui_batch_cache:
         BTreeMap<ipp_core::OutputRef, super::retained::shape_batches::GuiBatchRenderCache<D>>,
     pub(super) glyph_atlas: super::retained::glyph_atlas::GlyphAtlas<D>,
+    pub(super) font_curve_demand:
+        BTreeMap<ipp_core::OutputRef, (u64, super::assets::font_curves::FontCurveDemand<D>)>,
     pub(super) glyph_batch_cache:
         BTreeMap<ipp_core::OutputRef, super::retained::glyph_atlas::GlyphBatchRenderCache>,
     /// Painter-order work of the Surface being submitted.

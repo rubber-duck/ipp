@@ -1410,6 +1410,38 @@ fn population_allowance_defers_the_rest_of_the_queue() {
 }
 
 #[test]
+fn webgl_population_shares_raster_cost_across_outputs() {
+    let mut budget = GlyphPopulationBudget::default();
+    let mut work = GlyphFrameWork::default();
+    work.queue.extend((0..20).map(|id| key(id, 32)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 20);
+    work.populates = 20;
+
+    work.queue.extend((20..100).map(|id| key(id, 64)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 15);
+
+    work.clear();
+    work.queue.extend((0..80).map(|id| key(id, 64)));
+    assert_eq!(
+        budget.take_webgl_queue(&mut work).len(),
+        MIN_POPULATES_PER_FRAME
+    );
+
+    work.clear();
+    work.queue.extend((0..80).map(|id| key(id, 16)));
+    assert_eq!(budget.take_webgl_queue(&mut work).len(), 50);
+
+    work.clear();
+    budget.set_budget_ms(f64::INFINITY);
+    work.queue.extend((0..600).map(|id| key(id, 64)));
+    assert_eq!(
+        budget.take_webgl_queue(&mut work).len(),
+        MAX_POPULATES_PER_FRAME
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
 fn population_budget_covers_glyphs_between_the_floor_and_the_cap() {
     let mut budget = GlyphPopulationBudget::default();
 

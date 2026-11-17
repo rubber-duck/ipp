@@ -8,6 +8,7 @@ import { basename, resolve, join, relative } from "node:path";
 import { runBrowserEnvironment } from "../harness/browser.js";
 import { applicationEnvironment } from "../gallery/drivers/browser-application.js";
 import { invoke } from "../harness/page-calls.js";
+import { observeNativeParticles } from "./scenarios/native-particles.js";
 import { writeDataUrl } from "../harness/evidence.js";
 import {
   sampleWorkerAllocations,
@@ -206,6 +207,19 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
         join(environment.evidence.directory, "measurements.json"),
         JSON.stringify(rows[0], null, 2),
       );
+      // The held timing and allocation windows are complete. Verify finite
+      // emission independently before starting any moving-camera measurements.
+      const { nativePresent, nativeCleared, nativeDifference } =
+        await observeNativeParticles(call, capture, hidden);
+      console.log(
+        `Stress native instances verified: ${nativePresent.triangles - nativeCleared.triangles} additional triangles`,
+      );
+      await environment.evidence.writeJson("native-particles.json", {
+        nativePresent,
+        nativeCleared,
+        nativeDifference,
+      });
+      await call("restartNative");
       if (fixture.cubes <= 64) {
         assert.ok(
           Number(allocation.allocations.calls) / allocation.frames.length <=
@@ -391,26 +405,6 @@ test("Blender stress benchmark covers deformation, materials, constraints, geome
       await call("pause");
       const movingFrame = await capture("moving");
       const movingProbes = await call("probes", names);
-      // Camera motion and culling change the rest of the draw count. Compare
-      // native instances in one fixed closeup while every clock is paused.
-      const particleCamera = await call<bigint>("particleView");
-      const nativePresent = await capture("native-present");
-      await call("restartNative");
-      const nativeCleared = await capture("native-cleared");
-      const nativeDifference = await call<{ changedPixels: number }>(
-        "difference",
-        "native-present",
-        "native-cleared",
-      );
-      assert.ok(
-        nativePresent.triangles > nativeCleared.triangles + 24 &&
-          nativeDifference.changedPixels > 100,
-        "native particles did not add visible instances",
-      );
-      await call("closeDetailView", particleCamera);
-      console.log(
-        `Stress native instances verified: ${nativePresent.triangles - nativeCleared.triangles} additional triangles`,
-      );
       const rig = await call<{ controller: bigint; camera: bigint }>(
         "rigCloseup",
       );

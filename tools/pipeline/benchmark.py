@@ -564,6 +564,8 @@ def browser_scene(config: dict, directory: Path, bundle: Path, output: Path) -> 
                 "--world",
                 "benchmark.ipp",
                 "--clips-only",
+                "--system",
+                "ipp.constraints",
             ],
             env=env,
             timeout=3600,

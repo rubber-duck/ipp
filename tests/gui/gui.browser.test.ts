@@ -622,7 +622,7 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
       );
 
       await env.page.evaluate(() => navigator.clipboard.writeText("-clip-"));
-      await env.page.keyboard.press("Control+V");
+      await env.page.keyboard.press("ControlOrMeta+V");
       await waitForObservation(
         (value) => value.text === "aX世-clip-b",
         "clipboard paste did not commit",
@@ -635,7 +635,7 @@ test("mounted IppCanvas owns trusted text, IME, selection and clipboard lifecycl
         textarea.setSelectionRange(0, 1, "forward");
         textarea.dispatchEvent(new Event("select", { bubbles: true }));
       });
-      await env.page.keyboard.press("Control+C");
+      await env.page.keyboard.press("ControlOrMeta+C");
       assert.equal(
         await env.page.evaluate(() => navigator.clipboard.readText()),
         "a",

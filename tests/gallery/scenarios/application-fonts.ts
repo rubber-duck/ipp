@@ -12,8 +12,9 @@ export interface ApplicationFontsDriver {
 
 /** The same physical dropdown scenario runs through native GLES and browser WASM. */
 export async function exerciseApplicationFonts(driver: ApplicationFontsDriver) {
-  await driver.press("demo-display");
+  // Font metrics must settle before the first physical click targets the toolbar.
   const mono = await driver.fonts();
+  await driver.press("demo-display");
   assert.equal(mono.options.font, "shure-tech-mono");
   await driver.capture("mono-display");
   await driver.press("demo-font-picker", "demo-font-picker/options/noto-sans");

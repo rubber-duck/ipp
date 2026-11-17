@@ -51,14 +51,15 @@ pub const MAX_POPULATES_PER_FRAME: usize = 512;
 /// [`MIN_POPULATES_PER_FRAME`], in milliseconds.
 pub const DEFAULT_POPULATE_BUDGET_MS: f64 = 2.0;
 
-/// Estimated population cost per glyph, in milliseconds, before a measurement and on
-/// platforms without a clock. Native population measures its own passes; WebGL draws
-/// are queued to another process, so its estimate stays fixed. Both are calibrated
-/// from cold terminal and dashboard populations (see `RenderStatistics::glyph_populates`).
+/// Native startup estimate, refined from measured passes during rendering.
 #[cfg(not(target_arch = "wasm32"))]
 const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.005;
-#[cfg(target_arch = "wasm32")]
-const ESTIMATED_POPULATE_MS_PER_GLYPH: f64 = 0.02;
+
+/// Estimated cost through the 32 px band, calibrated with GPU timer queries on
+/// Metal and SwiftShader. Larger bands use two units per entry. See
+/// tests/performance/retained-gui.md for the measured range and startup cost.
+#[cfg(any(test, target_arch = "wasm32"))]
+const WEBGL_POPULATE_MS_PER_UNIT: f64 = 0.04;
 
 /// Host frames a glyph waits after its first failed population.
 pub const POPULATE_RETRY_FRAMES: u64 = 4;
@@ -422,6 +423,11 @@ impl<D: RenderDevice> GlyphAtlas<D> {
         }
     }
 
+    /// Current Host frame for shared font allocation retries.
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
     /// Start one Host frame before any World publishes demand in it.
     ///
     /// Advances the back-off and idle clocks once, however many Worlds publish in the
@@ -736,6 +742,7 @@ impl<D: RenderDevice> GlyphAtlas<D> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct GlyphPopulationBudget {
     budget_ms: f64,
+    #[cfg(not(target_arch = "wasm32"))]
     ms_per_glyph: f64,
 }
 
@@ -743,6 +750,7 @@ impl Default for GlyphPopulationBudget {
     fn default() -> Self {
         Self {
             budget_ms: DEFAULT_POPULATE_BUDGET_MS,
+            #[cfg(not(target_arch = "wasm32"))]
             ms_per_glyph: ESTIMATED_POPULATE_MS_PER_GLYPH,
         }
     }
@@ -750,7 +758,7 @@ impl Default for GlyphPopulationBudget {
 
 impl GlyphPopulationBudget {
     /// Samples smaller than this many glyphs are dominated by fixed pass costs.
-    #[cfg(any(test, not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     const MIN_SAMPLE_GLYPHS: usize = 8;
 
     /// Replace the time budget; zero populates only the floor, and an infinite or
@@ -764,7 +772,46 @@ impl GlyphPopulationBudget {
         };
     }
 
-    /// Entries this frame may populate.
+    /// Select work from the shared frame queue before any output starts a pass.
+    pub fn take_queue(&self, frame: &mut GlyphFrameWork) -> Vec<GlyphKey> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.take_webgl_queue(frame)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let used = (frame.populates + frame.failures) as usize;
+            frame.take_queue(self.allowance().saturating_sub(used))
+        }
+    }
+
+    #[cfg(any(test, target_arch = "wasm32"))]
+    fn take_webgl_queue(&self, frame: &mut GlyphFrameWork) -> Vec<GlyphKey> {
+        let units = (self.budget_ms / WEBGL_POPULATE_MS_PER_UNIT) as usize;
+        let used = (frame.populates + frame.failures) as usize;
+        let mut allowed = 0;
+        for key in frame
+            .queue
+            .iter()
+            .take(MAX_POPULATES_PER_FRAME.saturating_sub(used))
+        {
+            let cost = if key.resolution_band > 32 {
+                2
+            } else {
+                1
+            };
+            if used + allowed >= MIN_POPULATES_PER_FRAME && frame.webgl_units + cost > units {
+                break;
+            }
+
+            frame.webgl_units += cost;
+            allowed += 1;
+        }
+        frame.take_queue(allowed)
+    }
+
+    /// Entries this frame may populate at the measured native cost.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn allowance(&self) -> usize {
         let covered = self.budget_ms / self.ms_per_glyph;
         if covered >= MAX_POPULATES_PER_FRAME as f64 {
@@ -775,7 +822,7 @@ impl GlyphPopulationBudget {
     }
 
     /// Fold one measured population pass into the per-glyph estimate.
-    #[cfg(any(test, not(target_arch = "wasm32")))]
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn record(&mut self, glyphs: usize, elapsed_ms: f64) {
         if glyphs < Self::MIN_SAMPLE_GLYPHS || !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
             return;
@@ -789,6 +836,8 @@ impl GlyphPopulationBudget {
 /// Glyph atlas work one World frame found and performed.
 #[derive(Debug, Default)]
 pub struct GlyphFrameWork {
+    #[cfg(any(test, target_arch = "wasm32"))]
+    webgl_units: usize,
     queue: Vec<GlyphKey>,
     missing: BTreeSet<GlyphKey>,
     /// Distinct demanded entries found missing, including deferred ones.
@@ -806,6 +855,10 @@ impl GlyphFrameWork {
     pub fn clear(&mut self) {
         self.queue.clear();
         self.missing.clear();
+        #[cfg(any(test, target_arch = "wasm32"))]
+        {
+            self.webgl_units = 0;
+        }
         self.misses = 0;
         self.populates = 0;
         self.failures = 0;

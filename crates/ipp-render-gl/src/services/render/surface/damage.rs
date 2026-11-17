@@ -234,7 +234,7 @@ fn bounds<D: RenderDevice>(scene: &CanvasScene<'_>, entry: &CanvasPaintEntry) ->
             let unit = *font_size / data.font.units_per_em() as f32;
             let mut rect = None;
             for glyph in glyphs.iter() {
-                let Some(b) = data.glyph_bounds.get(glyph.glyph_id as usize) else {
+                let Some(b) = data.glyph_bounds(glyph.glyph_id) else {
                     return scene.root_clip();
                 };
                 union(

@@ -149,6 +149,9 @@ impl<D: RenderDevice> RenderService<D> {
 
         for (selection, publication, request) in requests {
             let scene = CanvasScene::new(host, *selection, *publication)?;
+            if request.visible {
+                self.prepare_canvas_font_curves(&scene)?;
+            }
             if request.visible
                 && let Some(cache) = self.glyph_batch_cache.get_mut(selection)
             {

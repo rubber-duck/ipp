@@ -295,7 +295,11 @@ impl GuiLocalState {
             Some(basis) => input.numeric && *input.formatted() == **basis,
             None => !input.numeric && Arc::ptr_eq(&input.text, &native.state.text),
         };
-        if unchanged {
+        if unchanged
+            && native.state.multiline == input.multiline
+            && native.state.read_only == input.read_only
+            && native.state.purpose == input.purpose
+        {
             if native.state.masked != input.masked {
                 self.native_text
                     .as_mut()

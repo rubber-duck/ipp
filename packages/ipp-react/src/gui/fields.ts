@@ -21,6 +21,7 @@ export const guiComponentContract = {
     },
   },
   GuiVirtualItem: { host: "ipp-gui-virtual-item", fields: { index: "number" } },
+  CanvasBounds: { host: "ipp-canvas-bounds", fields: {} },
   CanvasStyle: {
     host: "ipp-canvas-style",
     fields: {
@@ -111,6 +112,7 @@ export const guiComponentContract = {
       clip: "boolean",
       fit_width: "boolean",
       fit_height: "boolean",
+      height_fraction: "number",
       padding_top: "number",
       padding_right: "number",
       padding_bottom: "number",
@@ -131,9 +133,18 @@ export const guiComponentContract = {
       join_anchor: "boolean",
     },
   },
+  GuiMeter: {
+    host: "ipp-gui-meter",
+    fields: { min: "number", max: "number", value: "number" },
+  },
   GuiGroup: {
     host: "ipp-gui-group",
-    fields: { axis: "number", selection: "number" },
+    fields: {
+      axis: "number",
+      selection: "number",
+      typeahead: "boolean",
+      activate_cross_axis: "boolean",
+    },
   },
   GuiBehavior: {
     host: "ipp-gui-behavior",
@@ -143,6 +154,11 @@ export const guiComponentContract = {
       focus_scope: "boolean",
       focusable: "boolean",
       semantic_label: "string",
+      semantic_description: "string",
+      semantic_error: "string",
+      semantic_required: "boolean",
+      semantic_invalid: "boolean",
+      label_for: "string",
     },
   },
   GuiFont: {
@@ -220,6 +236,11 @@ export const guiComponentContract = {
     fields: {
       placeholder: "string",
       text: "string",
+      multiline: "boolean",
+      read_only: "boolean",
+      purpose: "number",
+      code_length: "number",
+      code_characters: "string",
       masked: "boolean",
       numeric: "boolean",
       value: "number",

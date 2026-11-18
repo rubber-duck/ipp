@@ -13,6 +13,7 @@ declare global {
       metadata: object,
     ): Promise<void>;
     recordAgentEvidence(value: object): Promise<void>;
+    chooseAgentFile(selector: string): Promise<void>;
   }
 }
 
@@ -60,6 +61,20 @@ for (const mode of ["native", "browser"] as const) {
               },
             );
             await environment.page.exposeFunction(
+              "chooseAgentFile",
+              async (selector: string) => {
+                const [dialog] = await Promise.all([
+                  environment.page.waitForEvent("filechooser"),
+                  environment.page.locator(selector).click(),
+                ]);
+                await dialog.setFiles({
+                  name: "notes.txt",
+                  mimeType: "text/plain",
+                  buffer: Buffer.from("fixture"),
+                });
+              },
+            );
+            await environment.page.exposeFunction(
               "recordAgentEvidence",
               (value: object) => environment.evidence.record("agent", value),
             );
@@ -70,6 +85,8 @@ for (const mode of ["native", "browser"] as const) {
                     `${urls.origin}/target/gui-agents/driver.js`
                   );
                   return driver.runAgentActions(urls, endpoint, {
+                    chooseBrowserFile: (selector: string) =>
+                      window.chooseAgentFile(selector),
                     capture: (
                       name: string,
                       frame: { pixels: ArrayBuffer } & object,

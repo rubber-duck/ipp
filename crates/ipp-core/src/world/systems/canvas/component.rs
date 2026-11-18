@@ -131,9 +131,9 @@ impl ComponentLifecycle for CanvasStyle {
     }
 }
 
-/// Evaluated Canvas-local logical bounds of one laid-out entity, after visual
-/// transforms and scrolling. The Canvas System writes them each pass for every
-/// entity GUI layout places; GUI controls and Canvas leaves require them.
+/// Evaluated geometry for an entity opting into bounds, including GUI controls
+/// and Canvas leaves. The Canvas System publishes the transformed canvas box,
+/// the local size before visual transforms, and the signed scale between them.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, SchemaComponent)]
 pub struct CanvasBounds {
@@ -143,8 +143,16 @@ pub struct CanvasBounds {
     pub y: f32,
     /// Logical width.
     pub width: f32,
-    /// Logical height.
+    /// Canvas-local logical height after visual transforms.
     pub height: f32,
+    /// Allocated layout width, or measured width for raw text, in entity-local units.
+    pub local_width: f32,
+    /// Allocated layout height, or measured height for raw text, in entity-local units.
+    pub local_height: f32,
+    /// Signed canvas units per entity-local unit along X.
+    pub scale_x: f32,
+    /// Signed canvas units per entity-local unit along Y.
+    pub scale_y: f32,
 }
 
 impl ComponentLifecycle for CanvasBounds {
@@ -153,8 +161,11 @@ impl ComponentLifecycle for CanvasBounds {
     }
 
     fn validate(&self) -> Result<(), ErrorReason> {
-        if [self.x, self.y].iter().all(|value| value.is_finite()) {
-            nonnegative(&[self.width, self.height])
+        if [self.x, self.y, self.scale_x, self.scale_y]
+            .iter()
+            .all(|value| value.is_finite())
+        {
+            nonnegative(&[self.width, self.height, self.local_width, self.local_height])
         } else {
             Err(ErrorReason::InvalidValue)
         }

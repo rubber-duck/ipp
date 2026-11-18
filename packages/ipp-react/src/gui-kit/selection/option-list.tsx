@@ -58,6 +58,8 @@ export interface OptionListProps extends GuiKitLayoutProps {
   /** Symbolic id of the list; rows extend it with their keys. */
   readonly id?: string;
   readonly options: readonly SelectOption[];
+  /** Accessible name of the collection. */
+  readonly label?: string;
   /** Keys of the selected options, shown with `mark`. */
   readonly selected?: readonly string[];
   /** The selected row's bar and tint by default. */
@@ -68,6 +70,8 @@ export interface OptionListProps extends GuiKitLayoutProps {
   readonly emptyLabel?: string;
   /** Show the loading row after the options, with this text. */
   readonly loading?: string;
+  /** Standalone rows take focus; popup rows leave focus on the invoker. */
+  readonly focusMode?: "rows" | "invoker";
   /** Rows shown before the list scrolls; six by default. */
   readonly maxRows?: number;
 }
@@ -100,12 +104,14 @@ export function OptionList(props: OptionListProps) {
     id: providedId,
     layer = 0,
     options,
+    label,
     selected = [],
     mark = "selected",
     onPick,
     emptyLabel = "No options",
     loading,
     maxRows = OPTION_LIST_ROWS,
+    focusMode = "invoker",
     layout,
   } = useGuiKitLayout(props);
   const id = useEntityId(providedId);
@@ -124,6 +130,7 @@ export function OptionList(props: OptionListProps) {
       <Style layer={layer} />
       <KitLayout kind={LAYOUT_STACK} height={g.height} {...layout} />
       <Skin theme={kit.theme("gridBody")} />
+      {label !== undefined && <Behavior semantic_label={label} />}
       <ScrollView
         bar_thickness={scrolling ? g.bar : 0}
         bar_inset={g.bar}
@@ -140,13 +147,14 @@ export function OptionList(props: OptionListProps) {
             padding_left={g.gap}
             padding_right={scrolling ? 3 * g.bar : g.gap}
           />
-          <Group axis={GROUP_VERTICAL} />
+          <Group axis={GROUP_VERTICAL} typeahead />
           <Children>
             {options.map((option) => (
               <OptionRow
                 key={option.key}
                 id={`${id}/${option.key}`}
                 option={option}
+                focusable={focusMode === "rows"}
                 mark={mark}
                 selected={chosen.has(option.key)}
                 onPress={() => onPick?.(option.key)}
@@ -180,12 +188,14 @@ export function OptionList(props: OptionListProps) {
 function OptionRow({
   id: providedId,
   option,
+  focusable,
   mark,
   selected,
   onPress,
 }: {
   readonly id: string;
   readonly option: SelectOption;
+  readonly focusable: boolean;
   readonly mark: OptionListMark;
   readonly selected: boolean;
   readonly onPress: () => void;
@@ -209,7 +219,7 @@ function OptionRow({
         theme={kit.theme(mark === "check" ? "optionCheckRow" : "menuRow")}
       />
       <Behavior
-        focusable={false}
+        focusable={focusable}
         enabled={!option.disabled}
         semantic_label={option.label}
       />

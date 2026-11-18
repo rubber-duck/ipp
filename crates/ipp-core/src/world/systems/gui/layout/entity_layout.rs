@@ -312,8 +312,8 @@ impl GuiEntityLayoutState {
             .as_ref()
             .and_then(|view| view.control_labels.get(&entity));
         match (current, previous) {
-            (Some((text, axis, steps, masked)), Some(previous)) => {
-                !previous.measures(&text, axis, steps, masked)
+            (Some((text, axis, steps, masked, multiline)), Some(previous)) => {
+                !previous.measures(&text, axis, steps, masked, multiline)
                     || previous.metrics
                         != super::super::presentation::GuiMetrics::resolve(
                             context.world,

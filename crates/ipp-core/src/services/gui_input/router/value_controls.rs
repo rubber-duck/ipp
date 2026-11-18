@@ -26,16 +26,20 @@ impl GuiInputRouter {
             .as_ref()
             .ok_or(GuiInputError::Unavailable)?;
         let point = local_point(host, query, target, point)?;
-        let offset = crate::systems::gui::local::controls::text_edit::caret_offset_at_x(
-            layout,
-            (point[0] - origin[0]) / layout.font_size,
-        );
+        let (offset, upstream) =
+            crate::systems::gui::local::controls::text_edit::caret_offset_at_point(
+                layout,
+                [
+                    (point[0] - origin[0]) / layout.font_size,
+                    (point[1] - origin[1]) / layout.font_size,
+                ],
+            );
         let input = self.input(host, context, target, delivery)?;
         enqueue(
             host,
             context.queue_owner,
             target.control.record.target,
-            GuiLocalCommand::text_caret(input, offset, extend)?,
+            GuiLocalCommand::text_caret(input, offset, extend, upstream)?,
         )
     }
 

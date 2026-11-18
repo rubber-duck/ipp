@@ -229,7 +229,13 @@ function readGuiClientInput(reader: Reader): GuiClientInput {
     }
     case WIRE.GUI_CLIENT_INPUT_TEXT: {
       const text = reader.string(GUI_CLIENT_TEXT_BYTES);
-      return { kind: "text", text, paste: reader.boolean() };
+      const paste = reader.boolean();
+      if (!reader.boolean()) return { kind: "text", text, paste };
+      if (!paste) return fail("structured client paste");
+      const structured = reader.string(
+        GUI_CLIENT_TEXT_BYTES - new TextEncoder().encode(text).length,
+      );
+      return { kind: "text", text, paste, structured };
     }
     case WIRE.GUI_CLIENT_INPUT_POINTER: {
       const pointer = reader.u64();

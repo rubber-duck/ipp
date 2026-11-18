@@ -115,6 +115,31 @@ impl GuiSystem {
         let group = ancestors[index];
         Some(super::presentation::GuiGroupItem {
             group,
+            initial: value
+                .typeahead
+                .then(|| {
+                    let index = control.target.entity.index() as usize;
+                    let label = world
+                        .components
+                        .gui_behavior(index)
+                        .map(|behavior| behavior.semantic_label.as_ref())
+                        .filter(|label| !label.is_empty())
+                        .or_else(|| {
+                            world
+                                .components
+                                .gui_button(index)
+                                .map(|button| button.label.as_ref())
+                        })
+                        .or_else(|| {
+                            world
+                                .components
+                                .gui_checkbox(index)
+                                .map(|checkbox| checkbox.label.as_ref())
+                        });
+                    label?.trim_start().chars().next()
+                })
+                .flatten(),
+            activate_cross_axis: value.activate_cross_axis,
             axis: value.axis,
             selection: value.selection,
             selected: control.kind == super::local::GuiControlKind::Button
@@ -250,6 +275,7 @@ impl SystemFactory for GuiSystemFactory {
                 ComponentValue::GUI_METRICS,
                 ComponentValue::GUI_VIRTUAL_ITEM,
                 ComponentValue::GUI_GROUP,
+                ComponentValue::GUI_METER,
             ],
             [crate::systems::WorldOperation::Gui],
         );

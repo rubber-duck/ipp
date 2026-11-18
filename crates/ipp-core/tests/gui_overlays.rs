@@ -793,8 +793,14 @@ fn overlays_raise_without_a_style_offset_and_validate_mode_and_band() {
         assert_eq!(outcome.result.is_ok(), accepted, "{band}: {outcome:?}");
     }
 
-    // The four modes are manual, light, modal and hint; others are refused.
-    for (mode, accepted) in [(1, true), (3, true), (4, false)] {
+    for (mode, accepted) in [
+        (GuiOverlay::MODE_MANUAL, true),
+        (GuiOverlay::MODE_LIGHT, true),
+        (GuiOverlay::MODE_MODAL, true),
+        (GuiOverlay::MODE_HINT, true),
+        (GuiOverlay::MODE_HOVER_CARD, true),
+        (GuiOverlay::MODE_HOVER_CARD + 1, false),
+    ] {
         let outcome = panel.set(
             list,
             ComponentValue::GUI_OVERLAY,

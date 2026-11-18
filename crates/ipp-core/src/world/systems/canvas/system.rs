@@ -302,7 +302,7 @@ impl System for CanvasSystem {
 
     fn update(&mut self, context: &mut SystemUpdateContext<'_, '_>) {
         self.evaluate(&mut context.world);
-        for (entity, [x, y, width, height]) in std::mem::take(&mut self.state.bounds) {
+        for (entity, bounds) in std::mem::take(&mut self.state.bounds) {
             let Some(current) = context
                 .world
                 .world
@@ -310,12 +310,6 @@ impl System for CanvasSystem {
                 .canvas_bounds_mut(entity.index() as usize)
             else {
                 continue;
-            };
-            let bounds = super::CanvasBounds {
-                x,
-                y,
-                width,
-                height,
             };
             if *current != bounds {
                 *current = bounds;

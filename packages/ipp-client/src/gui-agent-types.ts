@@ -20,7 +20,8 @@ export type GuiAgentKind =
   | "scrollView"
   | "virtualList"
   | "inputTarget"
-  | "group";
+  | "group"
+  | "meter";
 
 export interface GuiAgentControl {
   /** Opaque reference scoped to this adapter and exact runtime lifetime. */
@@ -32,6 +33,14 @@ export interface GuiAgentControl {
   kind: GuiAgentKind;
   label: string;
   parent: string | null;
+  /** Authored field associations and validation information. */
+  semantics?: {
+    description: string;
+    error: string;
+    required: boolean;
+    invalid: boolean;
+    labelFor: string | null;
+  };
   /** Nearest observed native group, not an inferred application composite. */
   group: string | null;
   tick: string;

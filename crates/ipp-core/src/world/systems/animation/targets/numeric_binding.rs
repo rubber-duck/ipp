@@ -25,6 +25,8 @@ pub(in crate::world::systems::animation) fn bind_frozen_f32(
     }
     let index = identity.entity.index() as usize;
     let base = match property.component {
+        ComponentValue::CANVAS_STYLE => storage.canvas_style_ptr(index)?.cast::<u8>(),
+        ComponentValue::GUI_LAYOUT => storage.gui_layout_ptr(index)?.cast::<u8>(),
         ComponentValue::SCALAR => storage.scalar_ptr(index)?.cast::<u8>(),
         ComponentValue::FLAT_SURFACE => storage.flat_surface_ptr(index)?.cast::<u8>(),
         ComponentValue::CYLINDER_SURFACE => storage.cylinder_surface_ptr(index)?.cast::<u8>(),

@@ -66,6 +66,7 @@ ipp_schema_derive::component_registry! {
         PresentationGate = 58,
         GuiInputTarget = 59,
         CanvasHtml = 60,
+        GuiMeter = 61,
         BufferDataSourceBinding = 100,
         StreamingDataSourceBinding = 101,
         PlotFrame2d = 103,

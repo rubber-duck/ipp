@@ -76,11 +76,12 @@ fn light_canvases(host: &HostRuntime, view: ViewDescriptor) -> Vec<OverlayCanvas
             .chunk(CanvasSystem::ID)
             .and_then(|chunk| chunk.data::<GuiCanvasPublication>());
         for canvas in gui.into_iter().flat_map(|gui| gui.views.values()) {
-            if canvas
-                .overlays
-                .iter()
-                .any(|overlay| overlay.mode == GuiOverlay::MODE_LIGHT)
-            {
+            if canvas.overlays.iter().any(|overlay| {
+                matches!(
+                    overlay.mode,
+                    GuiOverlay::MODE_LIGHT | GuiOverlay::MODE_HOVER_CARD
+                )
+            }) {
                 found.push(OverlayCanvas {
                     path: path.clone(),
                     publication: publication.id,
@@ -227,14 +228,16 @@ impl GuiInputRouter {
             for overlay in canvas.view.overlays.iter().rev() {
                 match overlay.mode {
                     GuiOverlay::MODE_MODAL => break,
-                    GuiOverlay::MODE_LIGHT
+                    GuiOverlay::MODE_LIGHT | GuiOverlay::MODE_HOVER_CARD
                         if ancestry
                             .as_deref()
                             .is_some_and(|ancestry| overlay.holds(ancestry)) =>
                     {
                         break;
                     }
-                    GuiOverlay::MODE_LIGHT => closing.push(overlay.target),
+                    GuiOverlay::MODE_LIGHT | GuiOverlay::MODE_HOVER_CARD => {
+                        closing.push(overlay.target)
+                    }
                     _ => {}
                 }
             }

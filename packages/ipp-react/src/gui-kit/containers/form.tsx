@@ -4,6 +4,8 @@ import { useEntityId } from "../../scope/identity.js";
 import { useGuiKit } from "../kit.js";
 import { Column, type ContainerProps } from "../layout.js";
 import type { GuiKitSpace } from "../spacing.js";
+import type { GuiControlHandle } from "../../gui/control-ref.js";
+import { Label } from "./label.js";
 import { TextLine } from "../text.js";
 
 const FormContext = createContext(false);
@@ -30,6 +32,10 @@ export interface FieldProps extends ContainerProps {
   readonly description?: string | undefined;
   readonly error?: string | undefined;
   readonly disabled?: boolean;
+  readonly target?: GuiControlHandle | null;
+  readonly required?: boolean;
+  readonly invalid?: boolean;
+  readonly activation?: "focus" | "press" | "toggle";
 }
 
 /** An optional caption and helper around a control; no outside margins. */
@@ -39,6 +45,10 @@ export function Field({
   description,
   error,
   disabled = false,
+  target,
+  activation = "focus",
+  required = false,
+  invalid = !!error,
   children,
   ...layout
 }: FieldProps) {
@@ -46,12 +56,32 @@ export function Field({
   const kit = useGuiKit();
   return (
     <Form id={id} {...layout} gap={layout.gap ?? kit.spacing.label}>
-      {label !== undefined && (
-        <TextLine
+      {target !== undefined &&
+      (label !== undefined ||
+        !!description ||
+        !!error ||
+        required ||
+        invalid) ? (
+        <Label
           id={`${id}/label`}
-          text={label}
-          tone={disabled ? "neutral" : "accent"}
+          text={label ?? ""}
+          {...(label ? {} : { height: 0, clip: true })}
+          target={target}
+          activation={activation}
+          disabled={disabled}
+          required={required}
+          invalid={invalid}
+          description={description}
+          error={error}
         />
+      ) : (
+        label !== undefined && (
+          <TextLine
+            id={`${id}/label`}
+            text={label}
+            tone={disabled ? "neutral" : "accent"}
+          />
+        )
       )}
       {children}
       {description !== undefined && (

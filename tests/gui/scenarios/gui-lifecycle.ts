@@ -727,6 +727,7 @@ export async function exerciseGuiLifecycle(
       clip: false,
       fit_width: false,
       fit_height: false,
+      height_fraction: 1,
     } as const;
     const denseStyle = {
       x: 0,

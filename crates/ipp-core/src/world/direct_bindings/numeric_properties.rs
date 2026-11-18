@@ -41,6 +41,9 @@ pub(in crate::world) fn range(component: u16, offset: u32) -> Option<NumericProp
     }
 
     match component {
+        ComponentValue::CANVAS_STYLE if fields!(CanvasStyle; x, y) => Some(Finite),
+        ComponentValue::GUI_LAYOUT if fields!(GuiLayout; height_fraction) => Some(Unit),
+        ComponentValue::GUI_LAYOUT if fields!(GuiLayout; width, height) => Some(Nonnegative),
         ComponentValue::LINEAR_DRIVER if fields!(LinearDriver; scale, bias) => Some(Finite),
         ComponentValue::BOUNDING_GEOMETRY => {
             if fields!(BoundingGeometry; stroke) {

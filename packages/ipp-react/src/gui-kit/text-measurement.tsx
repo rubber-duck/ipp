@@ -90,8 +90,8 @@ function TextMeasurement({
   readonly report: (width: number | undefined) => void;
 }) {
   const id = useEntityId();
-  const width = useField(id, "CanvasBounds", "width");
-  const height = useField(id, "CanvasBounds", "height");
+  const width = useField(id, "CanvasBounds", "local_width");
+  const height = useField(id, "CanvasBounds", "local_height");
   if (width.status === "failed" || height.status === "failed")
     throw (
       width.error ??

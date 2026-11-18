@@ -8,6 +8,11 @@ import {
 } from "../components.js";
 import type { GuiVisibleChangeListener } from "./callbacks.js";
 
+/** Opt a plain layout entity into Canvas-owned bounds publication. */
+export function Bounds() {
+  return createElement(componentContract.CanvasBounds.host);
+}
+
 export type StyleProps = ComponentProps & ComponentFields<"CanvasStyle">;
 
 export function Style(props: StyleProps) {
@@ -120,6 +125,12 @@ export function Behavior(props: BehaviorProps) {
  * `axis` horizontal 0, vertical 1 (default) or both 2; `selection` none 0
  * (default), single 1 or follow 2, kept in the items' `selected` fields.
  */
+export function Measurement(
+  props: ComponentProps & ComponentFields<"GuiMeter">,
+) {
+  return createElement(componentContract.GuiMeter.host, props);
+}
+
 export type GroupProps = ComponentProps & ComponentFields<"GuiGroup">;
 
 export function Group(props: GroupProps) {
@@ -128,6 +139,9 @@ export function Group(props: GroupProps) {
 
 export type InputTargetProps = ComponentProps &
   ComponentFields<"GuiInputTarget"> & {
+    onInteractionChange?:
+      | import("./callbacks.js").GuiInteractionListener
+      | undefined;
     ref?: import("./control-ref.js").GuiControlRef;
   };
 

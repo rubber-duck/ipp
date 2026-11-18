@@ -14,6 +14,7 @@ import {
 } from "./ime.js";
 import {
   CLIPBOARD_TEXT_MAX_BYTES,
+  TOKEN_DOCUMENT_CLIPBOARD_TYPE,
   copyFocusedTextToClipboard,
   pasteClipboardToFocusedInput,
   resolveClipboardReader,
@@ -66,6 +67,11 @@ export interface TextBridgeCommitted {
   readonly composing?: boolean;
   /** Mask native presentation while preserving the editable Unicode buffer. */
   readonly masked?: boolean;
+  readonly multiline?: boolean;
+  readonly readOnly?: boolean;
+  readonly purpose?: GuiNativeTextState["purpose"];
+  readonly form?: string;
+  readonly name?: string;
   /** The native buffer captures input without an editable core value. */
   readonly clientInput?: boolean;
   /** Runtime fence stamped on edits made against this text. */
@@ -82,6 +88,8 @@ export function stampTextFence(
   switch (command.kind) {
     case "clientInput":
     case "text":
+    case "navigate":
+    case "replaceRange":
     case "selection":
     case "composition":
     case "commitComposition":
@@ -276,6 +284,9 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
     left.fence.generation === right.fence.generation &&
     left.text === right.text &&
     left.masked === right.masked &&
+    left.multiline === right.multiline &&
+    left.readOnly === right.readOnly &&
+    left.purpose === right.purpose &&
     left.selectionStart === right.selectionStart &&
     left.selectionEnd === right.selectionEnd &&
     left.composition?.text === right.composition?.text &&
@@ -307,12 +318,18 @@ export function createTextBridgeModel(session: bigint): TextBridgeModel {
             start + clampUtf8Offset(composition.text, composition.caretStart),
           composing: true,
           masked: current.masked,
+          ...(current.multiline ? { multiline: true } : {}),
+          ...(current.readOnly ? { readOnly: true } : {}),
+          ...(current.purpose ? { purpose: current.purpose } : {}),
           fence: textFenceOf(current),
         };
       }
       return {
         text: current.text,
         masked: current.masked,
+        ...(current.multiline ? { multiline: true } : {}),
+        ...(current.readOnly ? { readOnly: true } : {}),
+        ...(current.purpose ? { purpose: current.purpose } : {}),
         ...(current.clientInput ? { clientInput: true } : {}),
         caretUtf8: clampUtf8Offset(current.text, current.selectionEnd),
         anchorUtf8: clampUtf8Offset(current.text, current.selectionStart),
@@ -456,6 +473,17 @@ export function attachTextBridge(
     ) {
       return;
     }
+    if (
+      event.inputType === "insertLineBreak" ||
+      event.inputType === "insertParagraph"
+    ) {
+      send(
+        readCommitted?.()?.multiline
+          ? { kind: "multilineKey", key: "enter" }
+          : { kind: "key", key: "enter" },
+      );
+      return;
+    }
     if (typeof event.data === "string" && event.data.length > 0) {
       send({ kind: "text", text: event.data });
       return;
@@ -523,6 +551,43 @@ export function attachTextBridge(
       event.preventDefault();
       send({ kind: "key", key: "selectAll" });
       return;
+    }
+    if (readCommitted?.()?.multiline && !event.altKey) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        send(
+          event.ctrlKey || event.metaKey
+            ? { kind: "key", key: "enter" }
+            : { kind: "multilineKey", key: "enter" },
+        );
+        return;
+      }
+      if (
+        (event.key === "ArrowUp" || event.key === "ArrowDown") &&
+        !event.ctrlKey &&
+        !event.metaKey
+      ) {
+        event.preventDefault();
+        send({
+          kind: "multilineKey",
+          key: event.key === "ArrowUp" ? "up" : "down",
+          shift: event.shiftKey,
+        });
+        return;
+      }
+      const move = (
+        {
+          ArrowLeft: "left",
+          ArrowRight: "right",
+          Home: "home",
+          End: "end",
+        } as const
+      )[event.key as "ArrowLeft" | "ArrowRight" | "Home" | "End"];
+      if (move && !event.ctrlKey && !event.metaKey) {
+        event.preventDefault();
+        send({ kind: "navigate", direction: move, extend: event.shiftKey });
+        return;
+      }
     }
     if (event.ctrlKey || event.metaKey || event.altKey) return;
     const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
@@ -610,19 +675,31 @@ export function attachTextBridge(
     const transfer = event.clipboardData;
     if (transfer !== null) {
       const text = transfer.getData("text/plain");
-      if (text.length === 0) return;
-      if (utf8ByteLength(text) > CLIPBOARD_TEXT_MAX_BYTES) {
+      const committed = readCommitted?.();
+      const structured = committed?.clientInput
+        ? transfer.getData(TOKEN_DOCUMENT_CLIPBOARD_TYPE)
+        : "";
+      if (!text && !structured) return;
+      if (
+        utf8ByteLength(text) + utf8ByteLength(structured) >
+        CLIPBOARD_TEXT_MAX_BYTES
+      ) {
         report(new Error("Clipboard text exceeds the ingress bound"));
         return;
       }
       send(
-        readCommitted?.()?.clientInput
+        committed?.clientInput
           ? stampTextFence(
               {
                 kind: "clientInput",
-                input: { kind: "text", text, paste: true },
+                input: {
+                  kind: "text",
+                  text,
+                  paste: true,
+                  ...(structured ? { structured } : {}),
+                },
               },
-              readCommitted?.()?.fence,
+              committed.fence,
             )
           : { kind: "text", text },
       );
@@ -703,6 +780,20 @@ export function attachTextBridge(
   // surface here rather than on the element alone.
   document.addEventListener("selectionchange", onSelect);
 
+  const clearBuffer = () => {
+    area.readOnly = false;
+    area.autocomplete = "off";
+    area.removeAttribute("form");
+    area.removeAttribute("name");
+    withSuppressedSelection(() => {
+      if (document.activeElement === area) area.blur();
+    });
+    lastSentSelection = null;
+    withSuppressedSelection(() => {
+      area.value = "";
+      area.style.removeProperty("-webkit-text-security");
+    });
+  };
   return {
     element: area,
     invalidate(): void {
@@ -717,16 +808,15 @@ export function attachTextBridge(
       const committed = readCommitted();
       tokenAtSync = getFocusToken?.() ?? null;
       if (committed === null) {
-        withSuppressedSelection(() => {
-          if (document.activeElement === area) area.blur();
-        });
-        lastSentSelection = null;
-        withSuppressedSelection(() => {
-          area.value = "";
-          area.style.removeProperty("-webkit-text-security");
-        });
+        clearBuffer();
         return true;
       }
+      area.readOnly = committed.readOnly ?? false;
+      area.autocomplete = committed.purpose ?? "off";
+      if (committed.form) area.setAttribute("form", committed.form);
+      else area.removeAttribute("form");
+      if (committed.name) area.setAttribute("name", committed.name);
+      else area.removeAttribute("name");
       const anchorBytes = committed.anchorUtf8 ?? committed.caretUtf8;
       lastSentSelection = {
         start: anchorBytes,
@@ -790,6 +880,7 @@ export function attachTextBridge(
       if (disposed) return;
       ime.blur();
       disposed = true;
+      clearBuffer();
       area.removeEventListener("beforeinput", onBeforeInput as EventListener);
       area.removeEventListener("keydown", onKeyDown as EventListener);
       area.removeEventListener("keyup", onKeyUp as EventListener);

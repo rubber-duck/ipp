@@ -26,6 +26,7 @@ import { createElement as h, type ReactNode } from "react";
 import type { SystemCommand } from "@ipp/client";
 import { Children, Entity, createRoot } from "../src/index.js";
 import {
+  createGuiPreferences,
   GUI_KIT_ICONS,
   GuiKit,
   Form,
@@ -57,6 +58,18 @@ import {
   skinRows,
   ring,
 } from "./gui-kit-support.js";
+
+test("malformed saved motion modes retain the configured preference", () => {
+  const defaults = { skin: "default", reducedMotion: "reduce" } as const;
+  const skins = { default: skinFixture() };
+  for (const mode of [["full"], ["reduce"], {}, null, true]) {
+    const prefs = createGuiPreferences(defaults, skins, {
+      read: () => ({ skin: "default", reducedMotion: mode }),
+      write: () => {},
+    });
+    assert.deepEqual(prefs.get(), defaults);
+  }
+});
 
 test("GuiKit declares the kit's themes once per World as top-level theme entities", async () => {
   const world = new KitWorld();
@@ -200,15 +213,14 @@ test("the World's GuiKit sends its reduced motion once per change; nested kits s
   await root.render(kit(false));
   assert.deepEqual(world.commands, sent);
 
-  // Like the themes, a preference the kit turned on goes with the setting or
-  // the kit, while unmounting the root leaves both.
+  // Relinquishing the preference writer preserves the committed World setting.
   await root.render(kit(true));
   await root.render(kit());
-  sent.push(preference(true), preference(false));
+  sent.push(preference(true));
   assert.deepEqual(world.commands, sent);
   await root.render(kit(true));
   await root.render(h(Entity, { id: "bare" }));
-  sent.push(preference(true), preference(false));
+  sent.push(preference(true));
   assert.deepEqual(world.commands, sent);
   assert.equal(world.entities.has("ipp-kit/theme/container"), false);
   await root.render(kit(true));

@@ -51,6 +51,7 @@ export interface MenuItem {
   /** Amber for a destructive command: its row, label and icon. */
   readonly tone?: "amber";
   readonly disabled?: boolean;
+  readonly selected?: boolean;
   /** A thin separator above the item, beginning a new group of commands. */
   readonly separator?: boolean;
 }
@@ -139,7 +140,7 @@ export function Menu(props: MenuProps) {
           padding_bottom={g.gap}
           {...layout}
         />
-        <Group axis={GROUP_VERTICAL} />
+        <Group axis={GROUP_VERTICAL} typeahead />
         <Children>
           {items.map((item, index) => (
             <MenuRow
@@ -209,7 +210,7 @@ function MenuRow({
           enabled={!item.disabled}
           semantic_label={item.label}
         />
-        <Button label="" onPress={onPress} />
+        <Button label="" selected={item.selected ?? false} onPress={onPress} />
         <Children>
           <Strut id={`${id}/strut`} height={kit.unit(t.row)} />
           {icons && (

@@ -64,7 +64,7 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
     await step("expectSelect", { open: list });
     await page.keyboard.press("ArrowDown");
     await step("expectSelect", { active: "sel-dropdown/options/aurora" });
-    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("n");
     const dropdownActive = await step("expectSelect", {
       active: "sel-dropdown/options/neon",
       focus: "sel-dropdown",
@@ -233,7 +233,51 @@ compositeTests<typeof prepare>("kit-select", { budget: 60 }, async (run) => {
     return { autoEscape, autoAccepted, autoCommitted };
   });
 
+  await run.case(
+    "standalone listbox navigation and independent selection",
+    async () => {
+      await page.mouse.click(...(await selectAt("standalone/aurora")));
+      await step("expectSelect", {
+        listbox: [["aurora"]],
+        focus: "standalone/aurora",
+      });
+      await page.keyboard.press("p");
+      await step("expectSelect", {
+        listbox: [["aurora"]],
+        focus: "standalone/pulse",
+      });
+      await page.keyboard.press("a");
+      await step("expectSelect", { focus: "standalone/aurora" });
+      await page.keyboard.press("ArrowDown");
+      await step("expectSelect", { focus: "standalone/neon" });
+      await page.keyboard.press("Space");
+      const selected = await step("expectSelect", {
+        listbox: [["aurora"], ["aurora", "neon"]],
+      });
+      const identity = await step("selectIdentity", "standalone/neon");
+      await step("replaceStandalone", false);
+      check(
+        (await step("selectIdentity", "standalone/neon")) === identity,
+        "Reordered options keep their exact entity",
+      );
+      await page.keyboard.press("n");
+      await step("expectSelect", { focus: "standalone/second-neon" });
+      await page.keyboard.press("n");
+      await step("expectSelect", { focus: "standalone/neon" });
+      await page.keyboard.press("End");
+      await step("expectSelect", { focus: "standalone/aurora" });
+      await run.capture("standalone-listbox");
+      await step("replaceStandalone", true);
+      await step("expectSelect", { focus: null });
+      return { selected: selected.listbox, focus: selected.focus };
+    },
+  );
+
   await run.case("kit controlled popup rejection", async () => {
+    // The preceding removal deliberately cleared focus. Give Escape a live
+    // keyboard context before the application mounts its controlled popup.
+    await page.mouse.click(...(await selectAt("sel-beneath")));
+    await step("expectSelect", { focus: "sel-beneath" });
     await step("rejectDropdownChanges");
     await step("expectSelect", {
       open: ["sel-dropdown/list"],

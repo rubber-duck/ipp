@@ -240,6 +240,39 @@ fn finite_width_wraps_at_spaces_and_consumes_them() {
 }
 
 #[test]
+fn overflow_spaces_and_shared_wrap_edges_keep_editing_positions() {
+    let font = test_font();
+    let wrap = |text: &str| {
+        measured(&request(
+            text,
+            ready(&font),
+            TextLinePolicy::Multiline,
+            TextMaxWidth::Ems(1.201),
+        ))
+    };
+    for text in ["AA   VV", "AA   "] {
+        let layout = wrap(text);
+        assert!(
+            layout
+                .grapheme_boundaries
+                .iter()
+                .all(|&offset| layout.caret_position(offset).is_some())
+        );
+        assert_pair(layout.caret_position(3).unwrap().position, [1.2, 0.0]);
+        assert_eq!(layout.line_caret_end(0), 5);
+    }
+
+    let hard = wrap("AAAA");
+    assert_eq!(hard.line_caret_end(0), 2);
+    assert_pair(hard.caret_position(2).unwrap().position, [0.0, 1.2]);
+    assert_pair(
+        hard.caret_with_affinity(2, true).unwrap().position,
+        [1.2, 0.0],
+    );
+    assert_eq!(wrap("AA\r\nVV").line_caret_end(0), 2);
+}
+
+#[test]
 fn narrow_words_hard_break_between_scalars() {
     let font = test_font();
     let layout = measured(&request(

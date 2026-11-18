@@ -45,6 +45,8 @@ pub(in crate::world::systems) struct GuiControlLabel {
     steps: bool,
     /// Whether this layout measures mask glyphs using source text offsets.
     masked: bool,
+    multiline: bool,
+    wrap_width: TextMaxWidth,
     /// Content box `[x, y, width, height]` in control-local logical units.
     pub content: [f32; 4],
     /// The control's laid-out size.
@@ -71,11 +73,13 @@ impl GuiControlLabel {
         axis: usize,
         steps: bool,
         masked: bool,
+        multiline: bool,
     ) -> bool {
         same_text(&self.text, text)
             && self.axis == axis
             && self.steps == steps
             && self.masked == masked
+            && self.multiline == multiline
     }
 
     /// Record the content box of a control of `size` with `padding`
@@ -123,6 +127,22 @@ impl GuiControlLabel {
         }
     }
 
+    /// Multiline fields follow their caret within the clipped content box.
+    pub(in crate::world::systems) fn text_origin(
+        &self,
+        native: Option<&super::super::local::GuiNativeTextState>,
+    ) -> [f32; 2] {
+        if !self.multiline {
+            return self.origin();
+        }
+        let [x, y, _, height] = self.content;
+        let caret = native.and_then(|native| native.caret(self.layout.as_ref()?));
+        let reveal = caret.map_or(0.0, |caret| {
+            ((caret.position[1] + caret.height) * self.font_size - height).max(0.0)
+        });
+        [x + self.metrics.label_inset, y - reveal]
+    }
+
     /// Whether a checkbox shows a label beside its box.
     fn labelled(&self) -> bool {
         !self.text.is_empty()
@@ -153,7 +173,7 @@ pub(in crate::world::systems::gui) fn label_inputs(
     context: &SystemRuntimeAccess<'_>,
     gui: &GuiSystem,
     entity: EntityId,
-) -> Option<(Arc<str>, usize, bool, bool)> {
+) -> Option<(Arc<str>, usize, bool, bool, bool)> {
     let world = &*context.world;
     let control = entity_control(world, &world.state, entity)?;
     Some((
@@ -161,6 +181,11 @@ pub(in crate::world::systems::gui) fn label_inputs(
         control_axis(world, entity, control.kind),
         control_steps(world, entity, control.kind),
         control_masked(world, gui, control.target, control.kind),
+        control.kind == GuiControlKind::TextInput
+            && world
+                .components
+                .gui_text_input(entity.index() as usize)
+                .is_some_and(|input| input.multiline),
     ))
 }
 
@@ -262,6 +287,7 @@ pub(in crate::world::systems::gui) fn measure_control(
     entity: EntityId,
     typography: Option<&GuiFont>,
     previous: Option<&GuiControlLabel>,
+    max_width: f32,
 ) -> Option<(GuiControlLabel, bool)> {
     let world = &*context.world;
     let control = entity_control(world, &world.state, entity)?;
@@ -272,6 +298,16 @@ pub(in crate::world::systems::gui) fn measure_control(
     let masked = control_masked(world, gui, target, kind);
     let font_size = typography.map_or(super::GUI_DEFAULT_FONT_SIZE, |font| font.font_size);
     let metrics = GuiMetrics::resolve(world, entity, font_size);
+    let multiline = kind == GuiControlKind::TextInput
+        && world
+            .components
+            .gui_text_input(entity.index() as usize)
+            .is_some_and(|input| input.multiline);
+    let wrap_width = if multiline && max_width.is_finite() {
+        TextMaxWidth::Ems(((max_width - 2.0 * metrics.label_inset) / font_size).max(f32::EPSILON))
+    } else {
+        TextMaxWidth::Unbounded
+    };
     let assets = context.asset_resources();
     let font = typography
         .filter(|font| !font.source.is_empty())
@@ -288,7 +324,8 @@ pub(in crate::world::systems::gui) fn measure_control(
         });
     if let Some(previous) = previous.filter(|previous| {
         previous.target == target
-            && previous.measures(&text, axis, steps, masked)
+            && previous.measures(&text, axis, steps, masked, multiline)
+            && previous.wrap_width == wrap_width
             && previous.font == font
             && previous.font_size == font_size
             && previous.metrics == metrics
@@ -307,8 +344,12 @@ pub(in crate::world::systems::gui) fn measure_control(
                 font: assets.get_typed::<FontAsset>(key)?,
             },
             font_size,
-            TextLinePolicy::SingleLine,
-            TextMaxWidth::Unbounded,
+            if multiline {
+                TextLinePolicy::Multiline
+            } else {
+                TextLinePolicy::SingleLine
+            },
+            wrap_width,
         )
         .ok()?;
         let TextOutcome::Measured(mut layout) = measure_text(&request) else {
@@ -393,6 +434,8 @@ pub(in crate::world::systems::gui) fn measure_control(
             axis,
             steps,
             masked,
+            multiline,
+            wrap_width,
             content: [0.0; 4],
             size: [0.0; 2],
         },

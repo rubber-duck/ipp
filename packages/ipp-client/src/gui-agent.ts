@@ -26,13 +26,25 @@ const nativeKinds: Readonly<Record<string, GuiAgentKind>> = {
   GuiColor: "color",
   GuiInputTarget: "inputTarget",
   GuiGroup: "group",
+  GuiMeter: "meter",
 };
 
 const stateFields: Record<GuiAgentKind, readonly string[]> = {
   button: ["selected"],
   checkbox: ["checked"],
   slider: ["value", "upper", "range", "min", "max", "step", "axis"],
-  textInput: ["text", "masked", "numeric", "value", "min", "max", "step"],
+  textInput: [
+    "text",
+    "masked",
+    "read_only",
+    "multiline",
+    "purpose",
+    "numeric",
+    "value",
+    "min",
+    "max",
+    "step",
+  ],
   color: ["hue", "saturation", "value", "alpha", "alpha_rail"],
   scrollView: ["offset_x", "offset_y", "capacity_x", "capacity_y"],
   virtualList: [
@@ -45,6 +57,7 @@ const stateFields: Record<GuiAgentKind, readonly string[]> = {
     "range_last",
   ],
   group: ["axis", "selection"],
+  meter: ["min", "max", "value"],
   inputTarget: [],
 };
 
@@ -64,7 +77,9 @@ function actions(
     case "slider":
       return ["scalar"];
     case "textInput":
-      return [state.numeric ? "scalar" : "text", "submit"];
+      return state.read_only
+        ? ["submit"]
+        : [state.numeric ? "scalar" : "text", "submit"];
     case "color":
       return ["color"];
     case "scrollView":
@@ -72,6 +87,7 @@ function actions(
     case "virtualList":
       return ["scrollTo", "scrollBy", "scrollToIndex"];
     case "inputTarget":
+    case "meter":
     case "group":
       return [];
   }
@@ -274,7 +290,12 @@ export function createGuiAgent(
           )
             state[name] = value;
         }
-        if (state.masked) {
+        if (
+          state.masked ||
+          state.purpose === 1 ||
+          state.purpose === 2 ||
+          state.purpose === 3
+        ) {
           state.text = null;
           state.value = null;
         }
@@ -284,7 +305,7 @@ export function createGuiAgent(
         const visible = behavior ? behavior.effective_visible === true : null;
         const available = behavior ? behavior.available === true : null;
         const focusParts =
-          kind === "group" || behavior?.focusable !== true
+          kind === "group" || kind === "meter" || behavior?.focusable !== true
             ? []
             : Array.from(
                 {
@@ -300,7 +321,7 @@ export function createGuiAgent(
                 (_, index) => index,
               );
         const supported =
-          kind === "group"
+          kind === "group" || kind === "meter"
             ? []
             : [
                 ...actions(kind, state),
@@ -320,6 +341,24 @@ export function createGuiAgent(
           incarnation: String(lifetime.incarnation),
           kind,
           label: String(label),
+          ...(behavior &&
+          (behavior.semantic_description ||
+            behavior.semantic_error ||
+            behavior.semantic_required ||
+            behavior.semantic_invalid ||
+            behavior.label_for)
+            ? {
+                semantics: {
+                  description: String(behavior.semantic_description || ""),
+                  error: String(behavior.semantic_error || ""),
+                  required: behavior.semantic_required === true,
+                  invalid: behavior.semantic_invalid === true,
+                  labelFor: behavior.label_for
+                    ? String(behavior.label_for)
+                    : null,
+                },
+              }
+            : {}),
           parent:
             current.entity.link.parent === null
               ? null
@@ -334,8 +373,49 @@ export function createGuiAgent(
           state,
         });
       }
+      const ordered = guiAgentGroupItems(tree, controls, kinds, observation);
+      const byAddress = new Map(
+        ordered.map((row) => [
+          [
+            world.id,
+            world.incarnation,
+            row.entity,
+            row.component,
+            row.incarnation,
+          ].join("/"),
+          row,
+        ]),
+      );
+      const names = new Map<GuiAgentControl, string[]>();
+      for (const label of ordered) {
+        const fields = label.semantics;
+        if (!fields?.labelFor) continue;
+        const bound = byAddress.get(fields.labelFor);
+        if (!bound) {
+          fields.labelFor = null;
+          continue;
+        }
+        const name = entities
+          .get(BigInt(label.entity))
+          ?.entity.components.find((c) => c.component === label.component)
+          ?.fields.label;
+        if (typeof name === "string" && name) {
+          const labels = names.get(bound) ?? [];
+          if (!labels.includes(name)) labels.push(name);
+          names.set(bound, labels);
+        }
+        const prior = bound.semantics;
+        bound.semantics = {
+          description: prior?.description || fields.description,
+          error: prior?.error || fields.error,
+          required: !!prior?.required || fields.required,
+          invalid: !!prior?.invalid || fields.invalid,
+          labelFor: prior?.labelFor ?? null,
+        };
+      }
+      for (const [row, labels] of names) row.label = labels.join(" ");
       return {
-        controls: guiAgentGroupItems(tree, controls, kinds, observation),
+        controls: ordered,
         observations: [observation],
       };
     } catch (error) {

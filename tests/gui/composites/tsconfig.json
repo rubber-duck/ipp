@@ -1,5 +1,5 @@
 {
   "extends": "../../../tsconfig.json",
   "compilerOptions": { "noEmit": true },
-  "include": ["*.ts", "pages/*.ts", "support/*.ts"]
+  "include": ["*.ts", "pages/*.ts", "pages/*.tsx", "support/*.ts"]
 }

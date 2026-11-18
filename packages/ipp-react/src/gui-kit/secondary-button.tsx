@@ -34,6 +34,7 @@ export interface SecondaryButtonProps
   readonly onPress?: GuiPressListener;
   readonly ref?: GuiControlRef;
   readonly disabled?: boolean;
+  readonly focusable?: boolean;
   /** The amber variant, for a destructive action. */
   readonly amber?: boolean;
 }
@@ -46,6 +47,7 @@ export function SecondaryButton(props: SecondaryButtonProps) {
     onPress,
     ref,
     disabled = false,
+    focusable = true,
     amber = false,
     layout,
     onFocusChange,
@@ -72,7 +74,7 @@ export function SecondaryButton(props: SecondaryButtonProps) {
       <Skin
         theme={kit.theme(amber ? "secondarySmallAmber" : "secondarySmall")}
       />
-      {disabled && <Behavior enabled={false} />}
+      <Behavior enabled={!disabled} focusable={focusable} />
       <Button
         label={label}
         {...(onFocusChange ? { onFocusChange } : {})}

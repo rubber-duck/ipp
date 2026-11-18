@@ -32,7 +32,9 @@ impl AnimationNumericOutput {
         ComponentValue::supports_dynamic_properties(component)
             || matches!(
                 component,
-                ComponentValue::CUSTOM_MATERIAL
+                ComponentValue::CANVAS_STYLE
+                    | ComponentValue::GUI_LAYOUT
+                    | ComponentValue::CUSTOM_MATERIAL
                     | ComponentValue::LINEAR_DRIVER
                     | ComponentValue::BOUNDING_GEOMETRY
                     | ComponentValue::PICKING_GEOMETRY
@@ -48,12 +50,17 @@ impl AnimationNumericOutput {
         (entity, component): (EntityId, u16),
         offsets: &[u32],
     ) -> Option<Self> {
-        if ComponentValue::supports_dynamic_properties(component)
-            && !offsets.is_empty()
+        let dynamic = ComponentValue::supports_dynamic_properties(component)
             && offsets
                 .iter()
-                .all(|offset| crate::components::dynamic_properties::is_dynamic_field(*offset))
-        {
+                .all(|offset| crate::components::dynamic_properties::is_dynamic_field(*offset));
+        let gui = matches!(
+            component,
+            ComponentValue::CANVAS_STYLE | ComponentValue::GUI_LAYOUT
+        ) && offsets.iter().all(|offset| {
+            crate::world::direct_bindings::numeric_properties::range(component, *offset).is_some()
+        });
+        if !offsets.is_empty() && (dynamic || gui) {
             // SAFETY: Controller lifecycle revokes compiled destinations before
             // any selected descriptor or occupied component incarnation departs.
             if let Some(output) = unsafe {

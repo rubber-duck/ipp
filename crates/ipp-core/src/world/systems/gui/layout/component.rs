@@ -56,6 +56,8 @@ pub struct GuiLayout {
     pub fit_width: bool,
     /// Fit measured content and padding when height is automatic, within its bounds.
     pub fit_height: bool,
+    /// Visible fraction of the settled height. Children keep their natural size.
+    pub height_fraction: f32,
 }
 
 impl Default for GuiLayout {
@@ -84,6 +86,7 @@ impl Default for GuiLayout {
             clip: false,
             fit_width: false,
             fit_height: false,
+            height_fraction: 1.0,
         }
     }
 }
@@ -146,6 +149,9 @@ impl GuiLayout {
 ///   control is hovered or holds visible focus, and closes it after a grace
 ///   when that ends, when the parent is pressed or on Escape. It is inert to
 ///   the pointer and never takes focus.
+/// - hover card: the same delay and grace keep an interactive preview open
+///   across its trigger and content. Opening preserves focus; its controls
+///   participate in ordinary focus traversal and physical input.
 ///
 /// When a light or modal overlay holding a focusable control opens, focus
 /// moves to its first one and closing it returns focus to the control focused
@@ -212,6 +218,9 @@ impl GuiOverlay {
 
     /// `mode`: hovering or visibly focusing its parent opens it.
     pub const MODE_HINT: u32 = 3;
+
+    /// Delayed interactive preview. Hover or visible focus opens it without taking focus.
+    pub const MODE_HOVER_CARD: u32 = 4;
 }
 
 impl ComponentLifecycle for GuiOverlay {
@@ -226,7 +235,7 @@ impl ComponentLifecycle for GuiOverlay {
     fn validate(&self) -> Result<(), ErrorReason> {
         if self.side > Self::SIDE_CENTRE
             || self.align > Self::ALIGN_STRETCH
-            || self.mode > Self::MODE_HINT
+            || self.mode > Self::MODE_HOVER_CARD
             || !(Self::BAND_POPUP..=Self::BAND_NOTIFICATION).contains(&self.band)
         {
             Err(ErrorReason::InvalidValue)
@@ -242,6 +251,7 @@ impl ComponentLifecycle for GuiLayout {
         let lengths = [self.min_width, self.min_height, self.flex, self.gap];
         let aligns = [self.align_x, self.align_y, self.align_items];
         if self.kind > 6
+            || !(0.0..=1.0).contains(&self.height_fraction)
             || optional
                 .iter()
                 .any(|value| !value.is_finite() || (*value < 0.0 && *value != -1.0))

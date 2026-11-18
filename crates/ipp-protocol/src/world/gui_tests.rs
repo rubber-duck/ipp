@@ -392,6 +392,7 @@ fn client_input_codec_preserves_unicode_and_rejects_malformed_values() {
         GuiClientInput::Text {
             text: "a😀\n\t".into(),
             paste: true,
+            structured: Some("文".into()),
         },
         GuiClientInput::Key {
             key: "F12".into(),
@@ -431,6 +432,17 @@ fn client_input_codec_preserves_unicode_and_rejects_malformed_values() {
             );
         }
     }
+    for (paste, text) in [(false, String::new()), (true, "x".repeat(65536))] {
+        assert!(
+            Writer::new(Vec::new())
+                .gui_client_input(&GuiClientInput::Text {
+                    text: text.into(),
+                    paste,
+                    structured: Some("x".into()),
+                })
+                .is_err()
+        );
+    }
     // Text tag, one byte, invalid UTF-8, then the paste flag.
     assert!(
         Reader {
@@ -444,7 +456,8 @@ fn client_input_codec_preserves_unicode_and_rejects_malformed_values() {
         Writer::new(Vec::new())
             .gui_client_input(&GuiClientInput::Text {
                 text: "x".repeat(65537).into(),
-                paste: false
+                paste: false,
+                structured: None,
             })
             .is_err()
     );

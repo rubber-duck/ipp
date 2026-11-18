@@ -1723,6 +1723,7 @@ async function kitReducedMotion(
   const client = await host.openWorld(created.reference);
   const evidence: object[] = [];
   const errors: Error[] = [];
+  let external: MotionClient | undefined;
   let completed = false;
   let probe: MotionProbe | undefined;
   let root: ReactWorldRoot | undefined;
@@ -1773,7 +1774,7 @@ async function kitReducedMotion(
       onError: (error) => errors.push(error),
     });
     root = kitRoot;
-    const declare = async (reducedMotion: boolean) => {
+    const declare = async (reducedMotion?: boolean) => {
       await kitRoot.render(
         h(
           GuiKit,
@@ -1782,7 +1783,7 @@ async function kitReducedMotion(
             skin: cybertronSkin(contract),
             font: font.source,
             fontSize: KIT_FONT,
-            reducedMotion,
+            ...(reducedMotion === undefined ? {} : { reducedMotion }),
           },
           h(
             Entity,
@@ -1832,8 +1833,13 @@ async function kitReducedMotion(
       );
     };
 
-    // On: the root kit sends the preference with its first declarations.
-    await declare(true);
+    external = await host.openWorld(created.reference);
+    external.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: true,
+    });
+    await preference(true);
+    await declare();
     const onTick = await preference(true);
     await controllers(0);
     probe = await presentMotionProbe(
@@ -1924,10 +1930,18 @@ async function kitReducedMotion(
       linear,
       () => send({ kind: "pointerMove", at: OVER_BUTTON }),
     );
+    external.sendCommand({
+      type: "GuiPreferencesUpdateCommand",
+      reducedMotion: true,
+    });
+    await preference(true);
+    await controllers(0);
+    await record({ label: "external-preference-stops-an-active-spinner" });
     completed = true;
     return { world: created.reference, evidence };
   } finally {
     await probe?.close();
+    await external?.close();
     // Unmounting the root leaves its declarations and the preference to the
     // World, which goes with them.
     const cleanup = [

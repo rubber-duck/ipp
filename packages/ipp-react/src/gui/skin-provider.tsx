@@ -10,7 +10,10 @@ import {
 import type { AssetReference } from "../assets/declarations.js";
 import { AttachmentContext } from "../composition/attached-world.js";
 import type { GuiKitAppearance, GuiKitContract } from "../gui-kit/kit.js";
-import { useReducedMotionPreference } from "./preferences.js";
+import {
+  useReducedMotionPreference,
+  useWorldReducedMotion,
+} from "./preferences.js";
 import { useSkinSelection } from "./skin-selection.js";
 import { SkinThemes, skinAppearance } from "./skin.js";
 import { Resources } from "../resources.js";
@@ -94,6 +97,10 @@ export function SkinProvider({
         : appearance,
     [activeSkin, skin, scopeId, appearance],
   );
+  const declares = outer?.container !== container;
+  const observedMotion = useWorldReducedMotion(
+    declares ? world?.client : undefined,
+  );
   const resolved = {
     contract:
       contract ??
@@ -102,7 +109,7 @@ export function SkinProvider({
     font: font ?? outer?.font,
     iconFont: iconFont ?? outer?.iconFont ?? font ?? outer?.font,
     fontSize: fontSize ?? outer?.fontSize,
-    reducedMotion: reducedMotion ?? outer?.reducedMotion,
+    reducedMotion: observedMotion ?? reducedMotion ?? outer?.reducedMotion,
     appearance:
       selected ??
       (outer?.container === container ? outer.appearance : undefined),
@@ -118,7 +125,6 @@ export function SkinProvider({
     );
   if (!(resolved.fontSize > 0) || !Number.isFinite(resolved.fontSize))
     throw new RangeError("SkinProvider fontSize must be positive and finite");
-  const declares = outer?.container !== container;
   const emptyParts = useMemo(
     () =>
       resolved.contract!.GuiSkin.encodeParts({ nextSlot: 0, rows: new Map() }),
@@ -148,7 +154,8 @@ export function SkinProvider({
   );
   useReducedMotionPreference(
     declares ? container?.commits : undefined,
-    resolved.reducedMotion,
+    reducedMotion ?? (declares ? outer?.reducedMotion : undefined),
+    world?.client,
   );
   return createElement(
     GuiSkinContext,

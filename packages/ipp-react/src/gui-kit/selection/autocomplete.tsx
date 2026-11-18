@@ -54,6 +54,8 @@ export interface AutocompleteProps extends GuiKitLayoutProps {
   readonly id?: string;
   /** The application's suggestions for the current text. */
   readonly suggestions: readonly SelectOption[];
+  /** Committed input text after choosing an option, defaulting to its label. */
+  readonly acceptedText?: (option: SelectOption) => string;
   /** The field's text changed: typed, or an accepted suggestion's label. */
   readonly onInputChange?: (text: string) => void;
   /** A suggestion was accepted: its key. */
@@ -81,6 +83,7 @@ export function Autocomplete(props: AutocompleteProps) {
     id: providedId,
     layer = 0,
     suggestions,
+    acceptedText,
     onInputChange,
     onSelect,
     onCommit,
@@ -126,19 +129,18 @@ export function Autocomplete(props: AutocompleteProps) {
     overlay,
     onActivate: (key) => {
       const suggestion = suggestions.find((option) => option.key === key);
-      if (suggestion) {
-        written.current = suggestion.label;
-        void text.handle.current
-          ?.action({ kind: "text", value: suggestion.label })
-          .then((outcome) => {
-            if (!outcome.ok && written.current === suggestion.label)
-              written.current = undefined;
-          })
-          .catch(() => {
-            if (written.current === suggestion.label)
-              written.current = undefined;
-          });
-      }
+      if (!suggestion || suggestion.disabled) return;
+      const next = acceptedText?.(suggestion) ?? suggestion.label;
+      written.current = next;
+      void text.handle.current
+        ?.action({ kind: "text", value: next })
+        .then((outcome) => {
+          if (!outcome.ok && written.current === next)
+            written.current = undefined;
+        })
+        .catch(() => {
+          if (written.current === next) written.current = undefined;
+        });
       onSelect?.(key);
     },
   });

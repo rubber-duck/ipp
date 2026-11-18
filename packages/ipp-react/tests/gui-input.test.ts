@@ -842,6 +842,10 @@ test("native edit queue uses preceding ACK state and external changes cancel pen
     },
     "terminal",
   );
+  state.input.observeText({
+    ...state.input.nativeText!,
+    caretBounds: [15, 2, 0, 12],
+  });
   state.edit(async () => applied);
   release(applied);
   await flush();

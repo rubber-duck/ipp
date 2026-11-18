@@ -77,6 +77,8 @@ export interface NumericStepperProps extends GuiKitLayoutProps {
   readonly onChange?: ValueChangeHandler<number>;
   /** Keep the number and look but refuse input; every text turns neutral. */
   readonly disabled?: boolean;
+  /** Keep focus, selection and submission while refusing user edits and steps. */
+  readonly readOnly?: boolean;
   /** The range's ends after the caption; shown by default when both are given. */
   readonly bounds?: boolean;
   /** Keep validation room while valid; omitted forms fit only visible content. */
@@ -108,6 +110,7 @@ export function NumericStepper(props: NumericStepperProps) {
     defaultValue,
     onChange,
     disabled = false,
+    readOnly = false,
     bounds = true,
     reserveErrorSpace = false,
     stepParts = true,
@@ -234,6 +237,7 @@ export function NumericStepper(props: NumericStepperProps) {
               )}
               <TextInput
                 numeric
+                read_only={readOnly}
                 value={state.control.value}
                 {...(min === undefined ? {} : { min })}
                 {...(max === undefined ? {} : { max })}

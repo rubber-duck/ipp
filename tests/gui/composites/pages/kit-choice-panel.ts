@@ -10,6 +10,8 @@ import {
 import { Layout } from "../../../../packages/ipp-react/src/gui.js";
 import {
   GuiKit,
+  Button,
+  Toolbar,
   RadioGroup,
   Tabs,
   TextLine,
@@ -124,6 +126,13 @@ export function kitChoicePanel(origin: readonly [number, number]) {
                 ref: tree,
                 layout: { flex: 1, margin_top: MARGIN },
               }),
+              h(
+                Toolbar,
+                { id: "tools", label: "Actions" },
+                h(Button, { id: "tools/add", label: "Add" }),
+                h(Button, { id: "tools/skip", label: "Skip", disabled: true }),
+                h(Button, { id: "tools/edit", label: "Edit" }),
+              ),
             ),
           ),
         ),

@@ -206,10 +206,18 @@ impl Reader<'_> {
                     GUI_PHYSICAL_EVENT_KEY => GuiPhysicalInput::Key {
                         key: {
                             let key_tag = reader.u8()?;
-                            KEYS.iter()
-                                .find(|(tag, _)| *tag == key_tag)
-                                .ok_or(ProtocolError::Malformed("physical key"))?
-                                .1
+                            if key_tag == GUI_PHYSICAL_KEY_CHARACTER {
+                                GuiPhysicalKey::Character(
+                                    char::from_u32(reader.u32()?)
+                                        .filter(|value| value.is_alphanumeric())
+                                        .ok_or(ProtocolError::Malformed("typeahead character"))?,
+                                )
+                            } else {
+                                KEYS.iter()
+                                    .find(|(tag, _)| *tag == key_tag)
+                                    .ok_or(ProtocolError::Malformed("physical key"))?
+                                    .1
+                            }
                         },
                         shift: reader.boolean()?,
                     },
@@ -449,11 +457,19 @@ impl Writer {
                             shift,
                         } => {
                             writer.u8(GUI_PHYSICAL_EVENT_KEY)?;
-                            writer.u8(KEYS
-                                .iter()
-                                .find(|(_, candidate)| candidate == key)
-                                .ok_or(ProtocolError::Malformed("physical key"))?
-                                .0)?;
+                            if let GuiPhysicalKey::Character(value) = key {
+                                if !value.is_alphanumeric() {
+                                    return Err(ProtocolError::Malformed("typeahead character"));
+                                }
+                                writer.u8(GUI_PHYSICAL_KEY_CHARACTER)?;
+                                writer.u32(*value as u32)?;
+                            } else {
+                                writer.u8(KEYS
+                                    .iter()
+                                    .find(|(_, candidate)| candidate == key)
+                                    .ok_or(ProtocolError::Malformed("physical key"))?
+                                    .0)?;
+                            }
                             writer.u8(u8::from(*shift))?;
                         }
                         GuiPhysicalInput::Blur => writer.u8(GUI_PHYSICAL_EVENT_BLUR)?,
@@ -575,6 +591,14 @@ impl Reader<'_> {
     fn native_edit(&mut self) -> Result<GuiTextEdit, ProtocolError> {
         Ok(match self.u8()? {
             GUI_NATIVE_EDIT_INSERT => GuiTextEdit::Insert(self.text()?),
+            GUI_NATIVE_EDIT_NAVIGATE => GuiTextEdit::Navigate {
+                direction: self.u8()?,
+                extend: self.boolean()?,
+            },
+            GUI_NATIVE_EDIT_REPLACE_RANGE => GuiTextEdit::ReplaceRange {
+                range: [self.u32()?, self.u32()?],
+                text: self.text()?,
+            },
             GUI_NATIVE_EDIT_SELECTION => GuiTextEdit::Selection([self.u32()?, self.u32()?]),
             GUI_NATIVE_EDIT_COMPOSE => GuiTextEdit::Compose(GuiTextComposition {
                 text: self.text()?,
@@ -600,6 +624,23 @@ impl Writer {
         match edit {
             GuiTextEdit::Insert(text) => {
                 self.u8(GUI_NATIVE_EDIT_INSERT)?;
+                self.string(text)
+            }
+            GuiTextEdit::Navigate {
+                direction,
+                extend,
+            } => {
+                self.u8(GUI_NATIVE_EDIT_NAVIGATE)?;
+                self.u8(*direction)?;
+                self.u8(u8::from(*extend))
+            }
+            GuiTextEdit::ReplaceRange {
+                range,
+                text,
+            } => {
+                self.u8(GUI_NATIVE_EDIT_REPLACE_RANGE)?;
+                self.u32(range[0])?;
+                self.u32(range[1])?;
                 self.string(text)
             }
             GuiTextEdit::Selection(selection) => {
@@ -642,6 +683,15 @@ impl Writer {
             self.string(&composition.text)?;
             self.u32(composition.selection[0])?;
             self.u32(composition.selection[1])?;
+        }
+        self.u8(u8::from(state.multiline))?;
+        self.u8(u8::from(state.read_only))?;
+        self.u8(state.purpose as u8)?;
+        self.u8(u8::from(state.caret_bounds.is_some()))?;
+        if let Some(bounds) = state.caret_bounds {
+            for value in bounds {
+                self.f32(value)?;
+            }
         }
         Ok(())
     }

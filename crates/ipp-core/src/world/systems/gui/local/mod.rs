@@ -44,7 +44,7 @@ pub(in crate::world::systems::gui) use component::CONTROL_COMPONENTS;
 pub use component::{
     GUI_GROUP_BOTH, GUI_GROUP_HORIZONTAL, GUI_GROUP_SELECT_FOLLOW, GUI_GROUP_SELECT_NONE,
     GUI_GROUP_SELECT_SINGLE, GUI_GROUP_VERTICAL, GUI_SLIDER_DIAL, GuiBehavior, GuiButton,
-    GuiCheckbox, GuiColor, GuiGroup, GuiSlider, GuiTextInput, MAX_GUI_NUMBER_PRECISION,
+    GuiCheckbox, GuiColor, GuiGroup, GuiMeter, GuiSlider, GuiTextInput, MAX_GUI_NUMBER_PRECISION,
     MAX_GUI_TEXT_BYTES,
 };
 pub use composites::GuiOverlayCommand;

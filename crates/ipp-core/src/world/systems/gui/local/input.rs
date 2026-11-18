@@ -51,6 +51,8 @@ pub enum GuiClientInput {
         text: Arc<str>,
         /// Clipboard paste, distinct from typing for bracketed-paste encoding.
         paste: bool,
+        /// Optional application clipboard representation captured in the same gesture.
+        structured: Option<Arc<str>>,
     },
     /// Pointer phases: down 0, move 1, up 2, cancel 3; buttons: primary 0,
     /// secondary 1, auxiliary 2, no button 3.
@@ -84,8 +86,11 @@ impl GuiClientInput {
             } => key.len() + code.len(),
             Self::Text {
                 text,
+                structured,
                 ..
-            } => text.len(),
+            } => text
+                .len()
+                .saturating_add(structured.as_ref().map_or(0, |value| value.len())),
             _ => 0,
         }
     }
@@ -106,9 +111,13 @@ impl GuiClientInput {
                     && modifiers & !GUI_CLIENT_MODIFIERS == 0
             }
             Self::Text {
-                text,
+                paste,
+                structured,
                 ..
-            } => text.len() <= GUI_CLIENT_TEXT_MAX_BYTES,
+            } => {
+                self.retained_bytes() <= GUI_CLIENT_TEXT_MAX_BYTES
+                    && (structured.is_none() || *paste)
+            }
             Self::Pointer {
                 phase,
                 button,

@@ -21,3 +21,8 @@ export type {
 } from "./canvas/ipp-canvas.js";
 export { World, useIppCanvas } from "./canvas/scope.js";
 export type { WorldProps } from "./canvas/scope.js";
+export {
+  browserGuiFileAdapter,
+  type BrowserGuiFile,
+  type BrowserGuiFileOptions,
+} from "./gui/platform/file-input.js";

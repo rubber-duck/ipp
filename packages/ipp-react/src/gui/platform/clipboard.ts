@@ -49,6 +49,10 @@ export type ClipboardPermissionState =
  * checked by `tools/check_repo.py`); core may cap text further. */
 export const CLIPBOARD_TEXT_MAX_BYTES = 65536;
 
+/** Custom clipboard format carrying an application-validated token document. */
+export const TOKEN_DOCUMENT_CLIPBOARD_TYPE =
+  "application/vnd.ipp.token-document+json";
+
 function globalNavigator(): unknown {
   return (globalThis as { navigator?: unknown }).navigator;
 }

@@ -291,6 +291,8 @@ fn dropdown() -> Dropdown {
         vec![Command::insert_value(
             EntityRef::Handle(list),
             ComponentValue::GuiGroup(GuiGroup {
+                typeahead: false,
+                activate_cross_axis: false,
                 axis: GUI_GROUP_VERTICAL,
                 selection: GUI_GROUP_SELECT_NONE,
             }),
@@ -1066,6 +1068,10 @@ struct Hints {
 }
 
 fn hints() -> Hints {
+    hints_with_mode(GuiOverlay::MODE_HINT)
+}
+
+fn hints_with_mode(mode: u32) -> Hints {
     let mut scene = Scene::new();
     let row = scene.row(scene.root, 10.0);
     let narrow = |scene: &mut Scene, parent| {
@@ -1080,13 +1086,7 @@ fn hints() -> Hints {
     let help = narrow(&mut scene, row);
     let covered = scene.button(row, true);
     let second = narrow(&mut scene, row);
-    let tip = scene.overlay(
-        Some(help),
-        GuiOverlay::MODE_HINT,
-        RIGHT,
-        1,
-        sized(ROW, 4.0, 1.0),
-    );
+    let tip = scene.overlay(Some(help), mode, RIGHT, 1, sized(ROW, 4.0, 1.0));
     let tip_button = scene.button(tip, true);
     let second_tip = scene.overlay(
         Some(second),
@@ -1104,6 +1104,30 @@ fn hints() -> Hints {
         tip_button,
         second_tip,
     }
+}
+
+#[test]
+fn an_interactive_hover_card_keeps_pointer_focus_and_escape_returns_to_its_trigger() {
+    let mut hints = hints_with_mode(GuiOverlay::MODE_HOVER_CARD);
+    let scene = &mut hints.scene;
+    let help = scene.at(hints.help, [0.5, 0.5]);
+    scene.hover(help);
+    scene.advance(1, 0.4);
+    assert!(scene.is_open(hints.tip));
+
+    let inside = scene.at(hints.tip_button, [0.5, 0.5]);
+    scene.hover(inside);
+    scene.advance(3, 0.1);
+    assert!(scene.is_open(hints.tip));
+    scene.click(inside);
+    assert_eq!(scene.focus(), Some((hints.tip_button, false)));
+    scene.advance(4, 0.25);
+    assert!(scene.is_open(hints.tip));
+
+    scene.key(Escape);
+    assert!(!scene.is_open(hints.tip));
+    assert_eq!(scene.focus().map(|(entity, _)| entity), Some(hints.help));
+    hints.scene.finish();
 }
 
 /// Whether the scene's GUI System has overlay or hint work for its next frame.

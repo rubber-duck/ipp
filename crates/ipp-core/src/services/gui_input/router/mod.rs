@@ -144,6 +144,7 @@ pub enum GuiPhysicalButton {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(missing_docs)]
 pub enum GuiPhysicalKey {
+    Character(char),
     Tab,
     BackTab,
     Enter,

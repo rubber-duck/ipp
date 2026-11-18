@@ -420,13 +420,17 @@ impl Evaluator<'_, '_> {
         if let Some(label) = self.view.control_labels.get_mut(&entity) {
             label.place(size, padding);
         }
+        // A disclosure clips a fraction of the complete box without feeding its
+        // animated height back into the measurement or arrangement of children.
+        size[1] *= style.height_fraction;
+
         self.view.placements.insert(
             entity,
             GuiEntityLayout {
                 origin: [0.0; 2],
                 size,
                 content_offset: [padding[3], padding[0]],
-                clip: style.clip || scrolling.is_some(),
+                clip: style.clip || style.height_fraction < 1.0 || scrolling.is_some(),
                 available,
             },
         );
@@ -611,6 +615,7 @@ impl Evaluator<'_, '_> {
                         .and_then(|owner| world.components.gui_font(owner.index() as usize)),
                     self.previous
                         .and_then(|view| view.control_labels.get(&entity)),
+                    max_width,
                 )
         {
             size = [

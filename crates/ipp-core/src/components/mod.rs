@@ -55,8 +55,8 @@ pub use crate::systems::canvas::{
 
 pub use crate::systems::gui::layout::{GuiLayout, GuiOverlay};
 pub use crate::systems::gui::local::{
-    GuiBehavior, GuiButton, GuiCheckbox, GuiColor, GuiGroup, GuiInputTarget, GuiScrollView,
-    GuiSlider, GuiTextInput, GuiVirtualItem, GuiVirtualList,
+    GuiBehavior, GuiButton, GuiCheckbox, GuiColor, GuiGroup, GuiInputTarget, GuiMeter,
+    GuiScrollView, GuiSlider, GuiTextInput, GuiVirtualItem, GuiVirtualList,
 };
 pub use crate::systems::gui::motion::GuiThemeMotion;
 pub use crate::systems::gui::presentation::{GuiFont, GuiMetrics, GuiSkin, GuiTheme};

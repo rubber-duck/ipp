@@ -953,7 +953,7 @@ test("Tabs: a More menu while the strip overflows selects a tab and scrolls it i
   assert.deepEqual(changes, ["overview"]);
 });
 
-test("selection looks: the trigger's open edge, its chevrons and the check mark of options that toggle", async () => {
+test("selection looks: the trigger's open edge, its chevrons and the check mark of options that toggle", async (context) => {
   // A contract whose button look has a hover edge, which the trigger's open
   // look reuses.
   const edge = {
@@ -965,6 +965,7 @@ test("selection looks: the trigger's open edge, its chevrons and the check mark 
   const base = contract();
   const world = new KitWorld();
   const root = createRoot(world);
+  context.after(() => root.unmount());
   await root.render(
     h(
       GuiKit,

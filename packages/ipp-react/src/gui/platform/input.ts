@@ -35,6 +35,7 @@ export type BrowserGuiInputCommand = (
       >;
     }
   | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
+  | { kind: "multilineKey"; key: "enter" | "up" | "down"; shift?: boolean }
   | { kind: "blur" }
 ) & { readonly fence?: GuiTextFence };
 export interface GuiInputSink {
@@ -55,6 +56,10 @@ const routedKeys: ReadonlySet<string> = new Set([
 
 export interface CanvasGuiInputOptions extends GuiPhysicalContextOptions {
   readonly unhandledInputGate?: GuiUnhandledInputGate;
+  /** Opt one exact focused input into an application HTML form. */
+  readonly textForm?: (
+    target: import("@ipp/client").GuiTarget,
+  ) => { form?: string; name?: string } | undefined;
   /**
    * GUI logical units one wheel notch scrolls; finite and positive,
    * {@link DEFAULT_GUI_WHEEL_STEP} by default or when invalid. See
@@ -231,6 +236,15 @@ export function attachCanvasGuiInput(
           continue;
         }
         if (command.kind === "clientInput") continue;
+        if (command.kind === "multilineKey") {
+          if (clientState?.multiline)
+            await context.send({
+              kind: "key",
+              key: command.key,
+              ...(command.shift ? { shift: true } : {}),
+            });
+          continue;
+        }
         if (
           command.kind === "blur" ||
           (command.kind === "key" && routedKeys.has(command.key))
@@ -264,7 +278,10 @@ export function attachCanvasGuiInput(
       const payload = command.kind === "clientInput" ? command.input : command;
       const bytes =
         payload.kind === "text" || payload.kind === "composition"
-          ? new TextEncoder().encode(payload.text).length
+          ? new TextEncoder().encode(payload.text).length +
+            ("structured" in payload
+              ? new TextEncoder().encode(payload.structured).length
+              : 0)
           : 128;
       if (
         nativePending.length >= (context.nativeText?.clientInput ? 1024 : 32) ||
@@ -280,12 +297,23 @@ export function attachCanvasGuiInput(
     onError: report,
     retainFocus: (target) => htmlInput?.contains(target) ?? false,
     getFocusToken: model.token,
-    readCommitted: model.committed,
+    readCommitted: () => {
+      if (htmlInput) return null;
+      const committed = model.committed();
+      return committed?.fence && !committed.clientInput && options.textForm
+        ? { ...committed, ...options.textForm(committed.fence.target) }
+        : committed;
+    },
     onLocalSelection: (selection) =>
       model.noteLocalSelection(selection.start, selection.end),
   });
   const textSubscription = context.onText((state, origin) => {
-    if (origin === "notification") {
+    const before = model.token();
+    const changed = model.observe(state);
+    // Layout publications can move the caret at the same edit generation.
+    // They must not discard queued keystrokes or interrupt an active IME.
+    if (!changed) return;
+    if (origin === "notification" && model.token() !== before) {
       epoch += 1;
       clientComposition = "";
       nativePending.length = 0;
@@ -298,14 +326,13 @@ export function attachCanvasGuiInput(
     if (htmlInput !== nextHtmlInput) htmlInput?.deactivate();
     htmlInput = nextHtmlInput;
     const ownedFocus = document.activeElement === bridge.element;
-    model.observe(state);
+    bridge.syncFromCore();
     if (htmlInput) {
       htmlInput.activate(() => {
         void context.send({ kind: "blur" }).catch(report);
       });
       return;
     }
-    bridge.syncFromCore();
     if (state && document.hasFocus())
       bridge.element.focus({ preventScroll: true });
     else if (ownedFocus && !context.isClosed && document.hasFocus())
@@ -658,7 +685,14 @@ export function attachCanvasGuiInput(
     if (event.isComposing || event.ctrlKey || event.metaKey || event.altKey)
       return;
     const key = keyboardKeyToGuiKey(event.key, event.shiftKey);
-    if (!key || key === "backspace" || key === "delete") return;
+    if (!key) {
+      if (/^[\p{Alphabetic}\p{Number}]$/u.test(event.key)) {
+        send({ kind: "typeahead", character: event.key });
+        event.preventDefault();
+      }
+      return;
+    }
+    if (key === "backspace" || key === "delete") return;
     send({ kind: "key", key, ...(event.shiftKey ? { shift: true } : {}) });
     event.preventDefault();
   };

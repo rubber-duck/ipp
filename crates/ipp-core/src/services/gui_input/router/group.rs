@@ -39,6 +39,7 @@ use std::sync::Arc;
 /// Where an arrow, Home or End moves among a group's items.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum GroupMove {
+    Initial(char),
     Previous,
     Next,
     First,
@@ -52,6 +53,7 @@ impl GroupMove {
         let horizontal = axis != GUI_GROUP_VERTICAL;
         let vertical = axis != GUI_GROUP_HORIZONTAL;
         Some(match key {
+            GuiPhysicalKey::Character(value) if !text => Self::Initial(value),
             GuiPhysicalKey::Left if horizontal && !text => Self::Previous,
             GuiPhysicalKey::Right if horizontal && !text => Self::Next,
             GuiPhysicalKey::Up if vertical => Self::Previous,
@@ -65,9 +67,24 @@ impl GroupMove {
     /// The index this move reaches among `count` items from `current`,
     /// stopping at the ends. Without a current item a step starts at `start`,
     /// the selected item, or else at the end it moves from.
-    fn index(self, count: usize, current: Option<usize>, start: Option<usize>) -> Option<usize> {
+    fn index(
+        self,
+        count: usize,
+        current: Option<usize>,
+        start: Option<usize>,
+        initial: impl Fn(usize) -> Option<char>,
+    ) -> Option<usize> {
         let last = count.checked_sub(1)?;
         Some(match (self, current) {
+            (Self::Initial(value), current) => {
+                let first = current.map_or(0, |index| (index + 1) % count);
+                (0..count)
+                    .map(|offset| (first + offset) % count)
+                    .find(|&index| {
+                        initial(index)
+                            .is_some_and(|initial| initial.to_lowercase().eq(value.to_lowercase()))
+                    })?
+            }
             (Self::First, _) => 0,
             (Self::Last, _) => last,
             (Self::Previous, Some(index)) => index.saturating_sub(1),
@@ -248,9 +265,11 @@ impl GuiInputRouter {
             let membership = items[0].group.expect("group item");
             if !slider && let Some(step) = GroupMove::of(key, membership.axis, text) {
                 let start = items.iter().position(|item| selected(item));
-                let index = step
-                    .index(items.len(), current, start)
-                    .expect("a driven group has an item");
+                let Some(index) = step.index(items.len(), current, start, |index| {
+                    items[index].group.and_then(|item| item.initial)
+                }) else {
+                    return Ok(None);
+                };
                 let item = target(items[index]);
                 if current != Some(index) {
                     let input = self.input(host, context, &item, delivery)?;
@@ -279,6 +298,26 @@ impl GuiInputRouter {
         let Some(membership) = focus.control.group else {
             return Ok(None);
         };
+        if membership.activate_cross_axis
+            && kind == GuiControlKind::Button
+            && matches!(
+                (membership.axis, key),
+                (
+                    GUI_GROUP_HORIZONTAL,
+                    GuiPhysicalKey::Up | GuiPhysicalKey::Down
+                ) | (
+                    GUI_GROUP_VERTICAL,
+                    GuiPhysicalKey::Left | GuiPhysicalKey::Right
+                )
+            )
+        {
+            if !selected(&focus.control) {
+                self.action(host, context, focus, GuiLocalAction::Press, delivery)?;
+            }
+            return Ok(Some(GuiRoutingDisposition::Routed {
+                target: focus.control.record.target,
+            }));
+        }
         let Some(step) = GroupMove::of(key, membership.axis, text) else {
             return Ok(None);
         };
@@ -287,10 +326,10 @@ impl GuiInputRouter {
             .iter()
             .position(|item| item.record.target == focus.control.record.target);
         let start = items.iter().position(|item| selected(item));
-        let Some(index) = step.index(items.len(), current, start) else {
-            return Ok(Some(GuiRoutingDisposition::Routed {
-                target: focus.control.record.target,
-            }));
+        let Some(index) = step.index(items.len(), current, start, |index| {
+            items[index].group.and_then(|item| item.initial)
+        }) else {
+            return Ok(None);
         };
         let item = target(items[index]);
         if current != Some(index) {
@@ -342,13 +381,23 @@ mod tests {
     #[test]
     fn moves_stop_at_the_ends_and_start_at_the_selected_item() {
         use GroupMove::*;
-        assert_eq!(Next.index(3, Some(2), None), Some(2));
-        assert_eq!(Previous.index(3, Some(0), None), Some(0));
-        assert_eq!(Next.index(3, None, Some(1)), Some(1));
-        assert_eq!(Previous.index(3, None, None), Some(2));
-        assert_eq!(Next.index(3, None, None), Some(0));
-        assert_eq!(First.index(3, Some(2), Some(1)), Some(0));
-        assert_eq!(Last.index(3, None, Some(0)), Some(2));
-        assert_eq!(Next.index(0, None, None), None);
+        assert_eq!(Next.index(3, Some(2), None, |_| None), Some(2));
+        assert_eq!(Previous.index(3, Some(0), None, |_| None), Some(0));
+        assert_eq!(Next.index(3, None, Some(1), |_| None), Some(1));
+        assert_eq!(Previous.index(3, None, None, |_| None), Some(2));
+        assert_eq!(Next.index(3, None, None, |_| None), Some(0));
+        assert_eq!(First.index(3, Some(2), Some(1), |_| None), Some(0));
+        assert_eq!(Last.index(3, None, Some(0), |_| None), Some(2));
+        assert_eq!(Next.index(0, None, None, |_| None), None);
+    }
+    #[test]
+    fn initials_cycle_past_absent_labels_and_wrap_without_changing_selection() {
+        let labels = [Some('Å'), None, Some('B'), Some('å')];
+        let find = |current, letter| {
+            GroupMove::Initial(letter).index(labels.len(), current, None, |index| labels[index])
+        };
+        assert_eq!(find(Some(0), 'å'), Some(3));
+        assert_eq!(find(Some(3), 'Å'), Some(0));
+        assert_eq!(find(None, 'z'), None);
     }
 }

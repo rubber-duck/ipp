@@ -103,6 +103,8 @@ fn group(
         world,
         vec![
             ComponentValue::GuiGroup(GuiGroup {
+                typeahead: false,
+                activate_cross_axis: false,
                 axis,
                 selection,
             }),
@@ -671,6 +673,8 @@ fn option_list_of(selection: u32, selected: Option<usize>, of_trigger: bool) -> 
         world,
         vec![
             ComponentValue::GuiGroup(GuiGroup {
+                typeahead: false,
+                activate_cross_axis: false,
                 axis: GUI_GROUP_VERTICAL,
                 selection,
             }),

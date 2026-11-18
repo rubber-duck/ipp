@@ -482,7 +482,7 @@ pub(in crate::world::systems) fn control_paint(
         && let Some(label) = label
         && let Some(layout) = &label.layout
     {
-        let origin = label.origin();
+        let origin = label.text_origin(Some(native));
         let selection = native.display_selection();
         let appearance = resolve(GuiPrimitivePart::Selection);
         for rect in layout.selection_rects(selection[0], selection[1]) {
@@ -491,7 +491,7 @@ pub(in crate::world::systems) fn control_paint(
             rect[1] += origin[1];
             primitives.extend(paint_shape(CanvasPart::Selection, rect, &appearance));
         }
-        if let Some(caret) = layout.caret_position(selection[1]) {
+        if let Some(caret) = native.caret(layout) {
             let appearance = resolve(GuiPrimitivePart::Caret);
             primitives.extend(paint_shape(
                 CanvasPart::Caret,
@@ -531,7 +531,12 @@ pub(in crate::world::systems) fn control_paint(
         }) = &label.geometry
     {
         let appearance = resolve(GuiPrimitivePart::Label);
-        let mut label_style = part_style(style, CanvasPart::Label, label.origin(), &appearance);
+        let mut label_style = part_style(
+            style,
+            CanvasPart::Label,
+            label.text_origin(native),
+            &appearance,
+        );
         let color = appearance.color.unwrap_or([1.0; 4]);
         for (channel, tint) in label_style.color.iter_mut().zip(color) {
             *channel *= tint;

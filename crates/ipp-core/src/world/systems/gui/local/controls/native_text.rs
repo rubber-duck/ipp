@@ -1,5 +1,5 @@
 use crate::services::gui_input::{GuiInputError, GuiInputSession};
-use crate::systems::gui::local::component::single_line_text;
+use crate::systems::gui::local::component::validate_edit_text;
 use crate::systems::gui::local::{
     GuiEntityTarget, GuiLocalActionError, GuiLocalCommand, GuiLocalEffect, GuiLocalEffectKind,
     GuiTextInput,
@@ -40,6 +40,16 @@ pub struct GuiNativeTextState {
     pub text: Arc<str>,
     /// Whether the native adapter presents the text as masked.
     pub masked: bool,
+    /// Multiline plain editing is active.
+    pub multiline: bool,
+    /// Refuse mutations while preserving selection.
+    pub read_only: bool,
+    /// Platform input purpose, matching GuiTextInput.
+    pub purpose: u32,
+    /// Canvas-local measured caret box in logical units.
+    pub caret_bounds: Option<[f32; 4]>,
+    /// Place a shared wrap offset at the end of the preceding visual line. The platform receives the resulting caret box.
+    pub caret_upstream: bool,
     /// Native buffer captures committed input for a client, without editable core text.
     pub client_input: bool,
     /// UTF-8 anchor and caret in `text`.
@@ -48,11 +58,20 @@ pub struct GuiNativeTextState {
     pub composition: Option<Arc<GuiTextComposition>>,
 }
 
-/// Single-line native editing operations; the receiver owns all text and offsets.
+/// Native plain-text edits. Selection and range offsets are UTF-8 bytes.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum GuiTextEdit {
     Insert(Arc<str>),
+    Navigate {
+        /// Visual Up, Down, Home, End (0–3) or one grapheme Left, Right (4–5).
+        direction: u8,
+        extend: bool,
+    },
+    ReplaceRange {
+        range: [u32; 2],
+        text: Arc<str>,
+    },
     Selection([u32; 2]),
     Compose(GuiTextComposition),
     CommitComposition,
@@ -71,7 +90,11 @@ impl GuiTextEdit {
     /// Owned string capacity while this command awaits its existing ingress boundary.
     pub fn retained_bytes(&self) -> usize {
         match self {
-            Self::Insert(text) => text.len(),
+            Self::Insert(text)
+            | Self::ReplaceRange {
+                text,
+                ..
+            } => text.len(),
             Self::Compose(composition) => composition.text.len(),
             _ => 0,
         }
@@ -146,7 +169,7 @@ impl GuiNativeText {
         binding: crate::systems::gui::observations::GuiObservationSubscriptionId,
         generation: u64,
     ) -> Self {
-        let mut state = Self::state(target, Arc::default(), generation, false);
+        let mut state = Self::state(target, Arc::default(), generation, None);
         state.client_input = true;
         Self {
             state,
@@ -170,7 +193,7 @@ impl GuiNativeText {
         target: GuiEntityTarget,
         text: Arc<str>,
         generation: u64,
-        masked: bool,
+        input: Option<&GuiTextInput>,
     ) -> GuiNativeTextState {
         GuiNativeTextState {
             fence: GuiTextFence {
@@ -180,8 +203,13 @@ impl GuiNativeText {
             selection: [text.len() as u32; 2],
             text,
             composition: None,
-            masked,
+            masked: input.is_some_and(|input| input.masked),
             client_input: false,
+            multiline: input.is_some_and(|input| input.multiline),
+            read_only: input.is_some_and(|input| input.read_only),
+            purpose: input.map_or(0, |input| input.purpose),
+            caret_bounds: None,
+            caret_upstream: false,
         }
     }
 
@@ -198,7 +226,7 @@ impl GuiNativeText {
             target,
             basis.clone().unwrap_or_else(|| input.text.clone()),
             generation,
-            input.masked,
+            Some(input),
         );
         GuiNativeText {
             state,
@@ -224,6 +252,10 @@ impl GuiNativeTextState {
         } else {
             self.text.clone()
         }
+    }
+
+    pub(crate) fn caret(&self, layout: &crate::text::TextLayout) -> Option<crate::text::TextCaret> {
+        layout.caret_with_affinity(self.display_selection()[1], self.caret_upstream)
     }
 
     pub(crate) fn display_selection(&self) -> [u32; 2] {
@@ -256,6 +288,7 @@ impl GuiLocalState {
         command: &GuiLocalCommand,
         control: super::identity::GuiControl,
         text: Arc<str>,
+        input: &GuiTextInput,
         fence: GuiTextFence,
         edit: &GuiTextEdit,
         tick: u64,
@@ -275,13 +308,91 @@ impl GuiLocalState {
             return Err(GuiInputError::Unavailable);
         }
         let mut state = native.state.clone();
+        if !matches!(edit, GuiTextEdit::Submit) {
+            use crate::systems::gui::local::command::GuiLocalOperation;
+            state.caret_upstream = matches!(
+                command.operation,
+                GuiLocalOperation::Text {
+                    upstream: true,
+                    ..
+                } | GuiLocalOperation::TextCaret {
+                    upstream: true,
+                    ..
+                }
+            );
+        }
         let [anchor, caret] = state.selection;
+        if state.read_only
+            && matches!(
+                edit,
+                GuiTextEdit::Insert(_)
+                    | GuiTextEdit::ReplaceRange { .. }
+                    | GuiTextEdit::Compose(_)
+                    | GuiTextEdit::CommitComposition
+                    | GuiTextEdit::Backspace
+                    | GuiTextEdit::Delete
+            )
+        {
+            return Err(GuiInputError::Local(GuiLocalActionError::Unavailable));
+        }
+        let insert = |start: u32, end: u32, value: &str| {
+            if input.code_length == 0 {
+                return text_edit::insert_at(&text, start, end, value);
+            }
+            let retained = text.len() - start.abs_diff(end) as usize;
+            let room = (input.code_length as usize).saturating_sub(retained);
+            let filtered: String = value
+                .chars()
+                .filter(|c| input.code_characters.contains(*c))
+                .take(room)
+                .collect();
+            text_edit::insert_at(&text, start, end, &filtered)
+        };
         let mut edited = None;
         match edit {
             GuiTextEdit::Insert(payload) => {
-                single_line_text(payload).map_err(|_| invalid)?;
-                edited = Some(text_edit::insert_at(&text, anchor, caret, payload));
+                validate_edit_text(payload, state.multiline).map_err(|_| invalid)?;
+                edited = Some(insert(anchor, caret, payload));
                 state.composition = None;
+            }
+            GuiTextEdit::Navigate {
+                direction: direction @ (4 | 5),
+                extend,
+            } if state.multiline && state.composition.is_none() => {
+                let next = match (*direction, *extend || anchor == caret) {
+                    (4, true) => text_edit::prev_boundary(&text, caret).unwrap_or(0),
+                    (4, false) => anchor.min(caret),
+                    (_, true) => {
+                        text_edit::next_boundary(&text, caret).unwrap_or(text.len() as u32)
+                    }
+                    (_, false) => anchor.max(caret),
+                };
+                state.selection = [
+                    if *extend {
+                        anchor
+                    } else {
+                        next
+                    },
+                    next,
+                ];
+            }
+            // Vertical movement needs the completed line geometry from the router.
+            GuiTextEdit::Navigate {
+                ..
+            } => return Err(invalid),
+            GuiTextEdit::ReplaceRange {
+                range: [start, end],
+                text: replacement,
+            } => {
+                validate_edit_text(replacement, state.multiline).map_err(|_| invalid)?;
+                if state.composition.is_some()
+                    || start > end
+                    || !text_edit::is_boundary(&text, *start)
+                    || !text_edit::is_boundary(&text, *end)
+                {
+                    return Err(invalid);
+                }
+                edited = Some(insert(*start, *end, replacement));
             }
             GuiTextEdit::Selection(selection) => {
                 if selection
@@ -294,7 +405,7 @@ impl GuiLocalState {
                 state.composition = None;
             }
             GuiTextEdit::Compose(composition) => {
-                single_line_text(&composition.text).map_err(|_| invalid)?;
+                validate_edit_text(&composition.text, state.multiline).map_err(|_| invalid)?;
                 if composition
                     .selection
                     .iter()
@@ -306,12 +417,7 @@ impl GuiLocalState {
             }
             GuiTextEdit::CommitComposition => {
                 if let Some(composition) = state.composition.take() {
-                    edited = Some(text_edit::insert_at(
-                        &text,
-                        anchor,
-                        caret,
-                        &composition.text,
-                    ));
+                    edited = Some(insert(anchor, caret, &composition.text));
                 }
             }
             GuiTextEdit::CancelComposition => {
@@ -351,7 +457,7 @@ impl GuiLocalState {
         }
         let mut changed_text = false;
         if let Some(edited) = edited {
-            single_line_text(&edited.text).map_err(|_| invalid)?;
+            validate_edit_text(&edited.text, state.multiline).map_err(|_| invalid)?;
             state.selection = [edited.caret; 2];
             if *edited.text != *text {
                 changed_text = true;

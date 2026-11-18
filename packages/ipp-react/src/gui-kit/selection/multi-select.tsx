@@ -104,7 +104,7 @@ export function MultiSelect(props: MultiSelectProps) {
   const labels = selected.map((option) => option.label);
   const joined = labels.join(", ");
   const measured = useTextMeasurements([[joined, kit.typeSize("body")]]);
-  const bounds = useField(id, "CanvasBounds", "width");
+  const bounds = useField(id, "CanvasBounds", "local_width");
   const actualLayout =
     bounds.status === "ready" && typeof bounds.value === "number"
       ? { ...layout, width: bounds.value }

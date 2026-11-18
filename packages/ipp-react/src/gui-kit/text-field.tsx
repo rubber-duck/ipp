@@ -11,6 +11,9 @@ import {
   Row,
   type GuiKitLayoutProps,
 } from "./layout.js";
+import { useMemo, type ReactNode } from "react";
+import type { GuiControlHandle } from "../gui/control-ref.js";
+import { useLabelTarget } from "./containers/label.js";
 import { useTextValue } from "./values/text-value.js";
 import type { GuiKitSpace } from "./spacing.js";
 
@@ -21,6 +24,7 @@ export interface TextFieldProps
       | "value"
       | "children"
       | "fields"
+      | "read_only"
       | "numeric"
       | "onTextCommit"
       | "min"
@@ -42,6 +46,12 @@ export interface TextFieldProps
   /** Spacing between the label, input, description and error. Raw layout.gap wins. */
   readonly gap?: GuiKitSpace;
   readonly disabled?: boolean;
+  readonly required?: boolean;
+  readonly readOnly?: boolean;
+  readonly invalid?: boolean;
+  /** Editable box height in canvas units. */
+  readonly inputHeight?: number;
+  readonly trailingControl?: ReactNode;
   readonly layer?: number;
 }
 
@@ -54,6 +64,11 @@ export function TextField({
   description,
   error,
   disabled = false,
+  required = false,
+  readOnly = false,
+  invalid,
+  inputHeight,
+  trailingControl,
   layer = 0,
   ref,
   placeholder = "",
@@ -79,7 +94,28 @@ export function TextField({
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const inForm = useFormLayout();
-  const text = useTextValue(value, defaultValue, onChange, ref);
+  const association = useLabelTarget();
+  const joined = useMemo(
+    () => (handle: GuiControlHandle | null) => {
+      association.ref(handle);
+      if (typeof ref === "function") {
+        const cleanup = ref(handle);
+        return () => {
+          association.ref(null);
+          if (typeof cleanup === "function") cleanup();
+          else ref(null);
+        };
+      }
+      if (ref) ref.current = handle;
+      return () => {
+        association.ref(null);
+        if (ref) ref.current = null;
+      };
+    },
+    [association.ref, ref],
+  );
+  const text = useTextValue(value, defaultValue, onChange, joined);
+  const boxHeight = inputHeight ?? kit.unit(kit.tokens.controlHeight);
   const { gap: rawGap, ...rootLayout } = layout ?? {};
   return (
     <Entity id={id}>
@@ -117,30 +153,35 @@ export function TextField({
       <Children>
         <Field
           id={`${id}/field`}
+          required={required}
+          invalid={invalid ?? !!error}
+          target={association.target}
           label={label}
           description={description}
           error={error}
           disabled={disabled}
           gap={rawGap ?? gap}
         >
-          <Row
-            gap={0}
-            id={`${id}/row`}
-            height={kit.unit(kit.tokens.controlHeight)}
-          >
+          <Row gap={0} id={`${id}/row`} height={boxHeight}>
             <Entity id={`${id}/input`}>
               <PresentationGate open />
               <Layout
                 kind={LAYOUT_LEAF}
-                height={kit.unit(kit.tokens.controlHeight)}
+                height={boxHeight}
+                clip={control.multiline ?? false}
                 flex={1}
               />
               <Behavior
                 enabled={!disabled}
                 semantic_label={label ?? placeholder}
+                semantic_description={description ?? ""}
+                semantic_error={error ?? ""}
+                semantic_required={required}
+                semantic_invalid={invalid ?? !!error}
               />
               <TextInput
                 {...control}
+                read_only={readOnly}
                 placeholder={placeholder}
                 masked={masked}
                 text={text.initial}
@@ -148,6 +189,7 @@ export function TextField({
                 ref={text.ref}
               />
             </Entity>
+            {trailingControl}
           </Row>
         </Field>
       </Children>

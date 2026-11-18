@@ -47,12 +47,14 @@ import {
   LIFECYCLE,
   selectSystems,
 } from "../../../fixtures/system-selections.js";
+import { editingControls } from "./editing.js";
 import { verifyAgentGroupOrder } from "./group-order.js";
 import { assetsLoaded } from "../../support/mounted-panel.js";
 
 export const AGENT_FORM_SIZE = { width: 320, height: 400 };
 export interface AgentActionsEnvironment {
   capture(name: string, image: PresentedCapture): Promise<void>;
+  chooseBrowserFile(selector: string): Promise<void>;
   record(value: object): Promise<void>;
   /** Driver cuts the real transport after the next submitted message. */
   loseConnectionOnNextSend(): void;
@@ -102,6 +104,7 @@ export async function agentActions(
   fontBytes: ArrayBuffer,
   environment: AgentActionsEnvironment,
 ) {
+  await editingControls(host, contract, fontBytes, environment);
   const worlds = await Promise.all(
     ["main", "other"].map((name) =>
       host.createWorld({

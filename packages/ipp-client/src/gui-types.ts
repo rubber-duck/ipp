@@ -94,7 +94,7 @@ export type GuiClientInput =
       repeat: boolean;
       pressed: boolean;
     }
-  | { kind: "text"; text: string; paste?: boolean }
+  | { kind: "text"; text: string; paste?: boolean; structured?: string }
   | {
       kind: "pointer";
       pointer: bigint;

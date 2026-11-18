@@ -971,6 +971,7 @@ fn client_input_is_exclusive_and_does_not_leak_to_world_observers() {
     let event = GuiClientInput::Text {
         text: "echo private 😀\n".into(),
         paste: true,
+        structured: Some("opaque".into()),
     };
     let request = host.next_request();
     let input = host
@@ -1024,6 +1025,7 @@ fn client_input_is_exclusive_and_does_not_leak_to_world_observers() {
         GuiClientInput::Text {
             text: "late".into(),
             paste: false,
+            structured: None,
         },
     )
     .unwrap();

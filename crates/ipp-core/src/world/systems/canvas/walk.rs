@@ -117,6 +117,19 @@ impl Placement {
         ]
     }
 
+    fn observed_bounds(self, local: [f32; 2], canvas: [f32; 4]) -> CanvasBounds {
+        CanvasBounds {
+            x: canvas[0],
+            y: canvas[1],
+            width: canvas[2],
+            height: canvas[3],
+            local_width: local[0],
+            local_height: local[1],
+            scale_x: self.scale[0],
+            scale_y: self.scale[1],
+        }
+    }
+
     fn style(self, target: CanvasTarget) -> CanvasPrimitiveStyle {
         CanvasPrimitiveStyle {
             identity: CanvasPrimitiveId {
@@ -185,7 +198,7 @@ pub(super) struct CanvasWalk {
     /// Records of the walked positions, in order.
     pub records: Vec<CanvasWalkRecord>,
     /// Evaluated bounds of the walked entities that have `CanvasBounds`.
-    pub bounds: Vec<(EntityId, [f32; 4])>,
+    pub bounds: Vec<(EntityId, super::CanvasBounds)>,
     /// Whether a walked leaf, slot or geometry moved or changed shape.
     pub layout_changed: bool,
 }
@@ -391,7 +404,7 @@ impl CanvasSystem {
             // one, take the pointer from what lies beneath, below the
             // overlay's own content.
             let blocker = match overlay.mode {
-                GuiOverlay::MODE_LIGHT => Some((bounds, placed.clip)),
+                GuiOverlay::MODE_LIGHT | GuiOverlay::MODE_HOVER_CARD => Some((bounds, placed.clip)),
                 GuiOverlay::MODE_MODAL => Some((canvas_clip, canvas_clip)),
                 _ => None,
             };
@@ -434,12 +447,15 @@ impl CanvasSystem {
             let bounds = placed.bounds([0.0, 0.0, mapping.size[0], mapping.size[1]]);
             walk.bounds.push((
                 entity,
-                [
-                    bounds[0],
-                    bounds[1],
-                    bounds[2] - bounds[0],
-                    bounds[3] - bounds[1],
-                ],
+                placed.observed_bounds(
+                    mapping.size,
+                    [
+                        bounds[0],
+                        bounds[1],
+                        bounds[2] - bounds[0],
+                        bounds[3] - bounds[1],
+                    ],
+                ),
             ));
         }
         let control =
@@ -594,7 +610,12 @@ impl CanvasSystem {
                     .copied(),
                 text: layout
                     .and_then(|view| view.control_labels.get(&entity))
-                    .and_then(|label| Some((label.layout.clone()?, label.origin()))),
+                    .and_then(|label| {
+                        Some((
+                            label.layout.clone()?,
+                            label.text_origin(gui.native_text_state(control.target)),
+                        ))
+                    }),
                 scroll_bars: std::array::from_fn(|axis| {
                     scroll_bars
                         .iter()
@@ -776,12 +797,15 @@ impl CanvasSystem {
                     let bounds = placed.bounds([0.0, 0.0, frame.width, frame.height]);
                     walk.bounds.push((
                         entity,
-                        [
-                            bounds[0],
-                            bounds[1],
-                            bounds[2] - bounds[0],
-                            bounds[3] - bounds[1],
-                        ],
+                        placed.observed_bounds(
+                            mapping.map_or([frame.width, frame.height], |m| m.size),
+                            [
+                                bounds[0],
+                                bounds[1],
+                                bounds[2] - bounds[0],
+                                bounds[3] - bounds[1],
+                            ],
+                        ),
                     ));
                 }
             }
@@ -873,12 +897,15 @@ impl CanvasSystem {
                 let extent = [size[0] * placed.scale[0], size[1] * placed.scale[1]];
                 walk.bounds.push((
                     entity,
-                    [
-                        placed.position[0] + extent[0].min(0.0),
-                        placed.position[1] + extent[1].min(0.0),
-                        extent[0].abs(),
-                        extent[1].abs(),
-                    ],
+                    placed.observed_bounds(
+                        size,
+                        [
+                            placed.position[0] + extent[0].min(0.0),
+                            placed.position[1] + extent[1].min(0.0),
+                            extent[0].abs(),
+                            extent[1].abs(),
+                        ],
+                    ),
                 ));
             }
 

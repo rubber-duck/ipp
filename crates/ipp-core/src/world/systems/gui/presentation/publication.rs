@@ -196,6 +196,10 @@ impl GuiNumberGeometry {
 /// from the group's `GuiGroup`, the item's fields and the GUI System.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GuiGroupItem {
+    /// Leading label character for typeahead-enabled groups.
+    pub initial: Option<char>,
+    /// Whether a perpendicular arrow activates a focused button.
+    pub activate_cross_axis: bool,
     /// The group: the control's nearest ancestor with a `GuiGroup`.
     pub group: EntityId,
     /// The group's `axis`.

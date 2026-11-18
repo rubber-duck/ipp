@@ -223,7 +223,10 @@ impl GuiLocalState {
         let mut opened = Vec::new();
         for entity in changed {
             let current = overlay(world, entity).filter(|&(_, mode)| {
-                mode == GuiOverlay::MODE_LIGHT || mode == GuiOverlay::MODE_MODAL
+                matches!(
+                    mode,
+                    GuiOverlay::MODE_LIGHT | GuiOverlay::MODE_MODAL | GuiOverlay::MODE_HOVER_CARD
+                )
             });
             let open = current.is_some() && is_open(world, entity);
             let recorded = self
@@ -259,7 +262,15 @@ impl GuiLocalState {
         // An overlay opened inside another one takes focus after it.
         opened.sort_by_key(|record| ancestry(&world.state, record.entity).len());
         for mut record in opened {
-            if let Some(first) = Self::first_focusable(world, record.entity) {
+            if record.mode == GuiOverlay::MODE_HOVER_CARD {
+                record.invoker = world
+                    .state
+                    .links
+                    .effective(record.entity)
+                    .and_then(|link| link.parent)
+                    .and_then(|parent| entity_control(world, &world.state, parent))
+                    .map(|control| (control.target, 0));
+            } else if let Some(first) = Self::first_focusable(world, record.entity) {
                 let current = self.focus.as_ref().filter(|(_, owner)| live(owner));
                 let visible = current.is_none() || self.focus_visible;
                 record.invoker = current
@@ -328,31 +339,59 @@ impl GuiLocalState {
         let focus = self
             .focus
             .as_ref()
-            .filter(|(_, owner)| self.focus_visible && live(owner))
+            .filter(|(_, owner)| live(owner))
             .map(|(target, _)| *target);
-        for parent in self.hovered_controls().chain(focus) {
-            let Some(hint) = world
+        let hovered = self.hovered_controls().map(|target| (target, false));
+        for (target, from_focus) in hovered.chain(focus.map(|target| (target, true))) {
+            if let Some((hint, mode)) =
+                world
+                    .state
+                    .links
+                    .children(Some(target.entity))
+                    .find_map(|child| {
+                        let (_, mode) = overlay(world, child)?;
+                        matches!(mode, GuiOverlay::MODE_HINT | GuiOverlay::MODE_HOVER_CARD)
+                            .then_some((child, mode))
+                    })
+                && (!from_focus || self.focus_visible)
+                && eligibility(world, target.entity).eligible()
+            {
+                return super::hint::GuiHintRequest {
+                    wanted: Some(super::hint::GuiHint {
+                        overlay: hint,
+                        parent: target,
+                    }),
+                    delay: if self.focus_visible && focus == Some(target) {
+                        super::hint::GUI_HINT_FOCUS_DELAY
+                    } else {
+                        super::hint::GUI_HINT_HOVER_DELAY
+                    },
+                    pressed: mode == GuiOverlay::MODE_HINT
+                        && self.interaction_flags(target).pressed,
+                };
+            }
+            // Once inside a preview, surface hover and focus keep its current
+            // request alive, including movement between the preview's controls.
+            let ancestors = ancestry(&world.state, target.entity);
+            if let Some(card) = ancestors.iter().copied().rev().find(|&entity| {
+                overlay(world, entity).is_some_and(|(_, mode)| mode == GuiOverlay::MODE_HOVER_CARD)
+                    && is_open(world, entity)
+            }) && let Some(parent) = world
                 .state
                 .links
-                .children(Some(parent.entity))
-                .find(|child| {
-                    overlay(world, *child).is_some_and(|(_, mode)| mode == GuiOverlay::MODE_HINT)
-                })
-            else {
-                continue;
-            };
-            return super::hint::GuiHintRequest {
-                wanted: Some(super::hint::GuiHint {
-                    overlay: hint,
-                    parent,
-                }),
-                delay: if focus == Some(parent) {
-                    super::hint::GUI_HINT_FOCUS_DELAY
-                } else {
-                    super::hint::GUI_HINT_HOVER_DELAY
-                },
-                pressed: self.interaction_flags(parent).pressed,
-            };
+                .effective(card)
+                .and_then(|link| link.parent)
+                .and_then(|entity| entity_control(world, &world.state, entity))
+                && eligibility(world, parent.target.entity).eligible()
+            {
+                return super::hint::GuiHintRequest {
+                    wanted: Some(super::hint::GuiHint {
+                        overlay: card,
+                        parent: parent.target,
+                    }),
+                    ..Default::default()
+                };
+            }
         }
         super::hint::GuiHintRequest::default()
     }

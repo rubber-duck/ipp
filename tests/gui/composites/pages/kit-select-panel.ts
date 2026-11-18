@@ -16,6 +16,7 @@ import {
   Dropdown,
   GuiKit,
   MultiSelect,
+  Listbox,
   SearchableDropdown,
   type SelectOption,
 } from "../../../../packages/ipp-react/src/gui-kit.js";
@@ -74,6 +75,7 @@ export const SEARCH_ROWS = NODES.map(
 
 /** What each control reported to the application, in order. */
 export interface SelectReports {
+  readonly listbox: (readonly string[])[];
   readonly dropdown: string[];
   readonly dropdownOpen: boolean[];
   readonly searchable: string[];
@@ -135,6 +137,7 @@ export function kitSelectPanel(origin: readonly [number, number]) {
     async build({ client, font, contract, report }) {
       const [width, height] = KIT_SELECT_PANEL;
       const reports: SelectReports = {
+        listbox: [],
         dropdown: [],
         dropdownOpen: [],
         searchable: [],
@@ -148,6 +151,7 @@ export function kitSelectPanel(origin: readonly [number, number]) {
         onError: report,
       });
       const below = { width: COLUMN, margin_top: MARGIN };
+      let standaloneOptions: readonly SelectOption[] = SKINS;
       const draw = (controlled = false) =>
         root.render(
           h(
@@ -208,6 +212,14 @@ export function kitSelectPanel(origin: readonly [number, number]) {
                       layout: below,
                     }),
                     h(Destination, { reports }),
+                    h(Listbox, {
+                      id: "standalone",
+                      label: "Standalone skins",
+                      options: standaloneOptions,
+                      multiple: true,
+                      maxRows: 3,
+                      onChange: (keys) => reports.listbox.push(keys),
+                    }),
                   ),
                 ),
                 h(
@@ -268,6 +280,12 @@ export function kitSelectPanel(origin: readonly [number, number]) {
 
       return {
         reports,
+        async replaceStandalone(empty: boolean) {
+          standaloneOptions = empty
+            ? []
+            : [{ key: "second-neon", label: "Neon" }, ...SKINS.toReversed()];
+          await draw();
+        },
         /** Mount a controlled owner that rejects both closing and selection. */
         async rejectDropdownChanges() {
           reports.dropdown.length = 0;
@@ -301,6 +319,7 @@ export function kitSelectPanel(origin: readonly [number, number]) {
           const text = (index: number, field: string) =>
             String(texts[index]?.[field] ?? "");
           return {
+            listbox: [...reports.listbox],
             focus: focus ? symbolOf(ids, focus.target.entity) : null,
             focusVisible: focus ? focus.visible : null,
             active: active.length === 1 ? active[0]! : active.join(",") || null,

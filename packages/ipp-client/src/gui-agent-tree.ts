@@ -151,6 +151,7 @@ export function guiAgentGroupItems(
     // when multiple controls make this entity unavailable for input.
     let item = false;
     for (const [component, kind] of kinds) {
+      if (kind === "meter") continue;
       if (!entity.components.some((entry) => entry.component === component))
         continue;
       item = kind !== "scrollView" && kind !== "virtualList";

@@ -178,11 +178,22 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         await send(
           { kind: "key", key, ...(shift === undefined ? {} : { shift }) },
           variant("GUI_PHYSICAL_EVENT_KEY", {
-            key: tag(`GUI_PHYSICAL_KEY_${suffix}`),
+            key: variant(`GUI_PHYSICAL_KEY_${suffix}`),
             shift: shift === true,
           }),
         );
       }
+    }
+    for (const character of ["a", "7", "𐐀"]) {
+      await send(
+        { kind: "typeahead", character },
+        variant("GUI_PHYSICAL_EVENT_KEY", {
+          key: variant("GUI_PHYSICAL_KEY_CHARACTER", {
+            character: character.codePointAt(0),
+          }),
+          shift: false,
+        }),
+      );
     }
     const wheelHit = layout("gui-input-hit", {
       target: layout("gui-target", {
@@ -253,6 +264,15 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
       selection_end: 3,
       masked: true,
       client_input: false,
+      multiline: false,
+      read_only: false,
+      purpose: 0,
+      caret_bounds: layout("gui-native-caret-bounds", {
+        x: 1,
+        y: 2,
+        width: 0,
+        height: 12,
+      }),
       composition: layout("gui-native-composition", {
         text: "b",
         selection_start: 0,
@@ -275,6 +295,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
     );
     assert.deepEqual(context.nativeText, {
       fence,
+      caretBounds: [1, 2, 0, 12],
       text: "éa",
       selectionStart: 2,
       selectionEnd: 3,
@@ -283,6 +304,16 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
     });
     const edits = [
       [{ kind: "text", text: "ab" }, "INSERT", { text: "ab" }],
+      [
+        { kind: "replaceRange", start: 0, end: 2, text: "x" },
+        "REPLACE_RANGE",
+        { start: 0, end: 2, text: "x" },
+      ],
+      [
+        { kind: "navigate", direction: "down", extend: true },
+        "NAVIGATE",
+        { direction: 1, extend: true },
+      ],
       [
         { kind: "selection", start: 1, end: 2 },
         "SELECTION",
@@ -349,7 +380,7 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
         repeat: true,
         pressed: false,
       },
-      { kind: "text", text: "é\n", paste: true },
+      { kind: "text", text: "é\n", paste: true, structured: "opaque" },
       { kind: "text", text: "a", paste: false },
     ]) {
       const { kind, ...fields } = event;
@@ -358,7 +389,12 @@ for (const directory of ["target/gles-host", "target/browser-build/render"]) {
           context: 1n,
           target: encodedTarget,
           generation: 20n,
-          event: variant(`GUI_CLIENT_INPUT_${kind.toUpperCase()}`, fields),
+          event: variant(
+            `GUI_CLIENT_INPUT_${kind.toUpperCase()}`,
+            kind === "text"
+              ? { ...fields, structured: fields.structured ?? null }
+              : fields,
+          ),
         }),
         reply: routed(),
       };

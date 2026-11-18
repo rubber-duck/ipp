@@ -12,6 +12,7 @@ import "./gui-soft-keyboard.test.js";
 import "./gui-text-bridge.test.js";
 import "./gui-declaration.test.js";
 import "./gui-kit-core.test.js";
+import "./gui-kit-editing.test.js";
 import "./gui-kit-controlled-values.test.js";
 import "./gui-kit-containers.test.js";
 import "./gui-kit-feedback.test.js";

@@ -25,6 +25,10 @@ impl Reader<'_> {
             GUI_CLIENT_INPUT_TEXT => GuiClientInput::Text {
                 text: self.client_input_text(GUI_CLIENT_TEXT_MAX_BYTES)?,
                 paste: self.boolean()?,
+                structured: self
+                    .boolean()?
+                    .then(|| self.client_input_text(GUI_CLIENT_TEXT_MAX_BYTES))
+                    .transpose()?,
             },
             GUI_CLIENT_INPUT_POINTER => GuiClientInput::Pointer {
                 pointer: self.u64()?,
@@ -68,10 +72,16 @@ impl Writer {
             GuiClientInput::Text {
                 text,
                 paste,
+                structured,
             } => {
                 self.u8(GUI_CLIENT_INPUT_TEXT)?;
                 self.string(text)?;
-                self.u8(u8::from(*paste))
+                self.u8(u8::from(*paste))?;
+                self.u8(u8::from(structured.is_some()))?;
+                if let Some(value) = structured {
+                    self.string(value)?;
+                }
+                Ok(())
             }
             GuiClientInput::Pointer {
                 pointer,

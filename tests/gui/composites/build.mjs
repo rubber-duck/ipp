@@ -56,6 +56,14 @@ const PARTS = {
     "tests/gui/composites/pages/kit-overlays.ts",
     "tests/gui/composites/kit-overlays.test.ts",
   ],
+  "kit-inventory": [
+    "tests/gui/composites/pages/kit-inventory.tsx",
+    "tests/gui/composites/kit-inventory.test.ts",
+  ],
+  "kit-collections": [
+    "tests/gui/composites/pages/kit-collections.tsx",
+    "tests/gui/composites/kit-collections.test.ts",
+  ],
   "kit-select": [
     "tests/gui/composites/pages/kit-select.ts",
     "tests/gui/composites/kit-select.test.ts",

@@ -15,6 +15,7 @@ const kinds = [
   "virtualList",
   "inputTarget",
   "group",
+  "meter",
 ];
 const actionKinds = [
   "scrollTo",
@@ -97,7 +98,7 @@ export const guiAgentTools = [
   },
 ] as const;
 
-const control = object({
+const controlFields = {
   ref: string,
   world: string,
   entity: decimal,
@@ -117,7 +118,20 @@ const control = object({
     type: "object",
     additionalProperties: { type: ["string", "number", "boolean", "null"] },
   },
-});
+};
+const control = object(
+  {
+    ...controlFields,
+    semantics: object({
+      description: string,
+      error: string,
+      required: { type: "boolean" },
+      invalid: { type: "boolean" },
+      labelFor: nullableString,
+    }),
+  },
+  Object.keys(controlFields),
+);
 const observation = object({
   world: object({
     key: string,

@@ -13,7 +13,11 @@ import { LIQUID_GLASS_SHADER } from "./liquid-skin-material.js";
 import { AttachmentContext } from "../composition/attached-world.js";
 import { Paint } from "../gui/components.js";
 import { Theme, ThemeMotion } from "../gui/theme.js";
-import { useReducedMotionPreference } from "../gui/preferences.js";
+import { useOptionalWorld } from "../scope/world.js";
+import {
+  useWorldReducedMotion,
+  useReducedMotionPreference,
+} from "../gui/preferences.js";
 import { actionThemes } from "./action-themes.js";
 import { valueThemes } from "./value-themes.js";
 import { surfaceThemes } from "./surface-themes.js";
@@ -100,6 +104,8 @@ export function GlassSkin({
   declarations = true,
 }: GlassSkinProps) {
   const container = useContext(AttachmentContext);
+  const client = useOptionalWorld()?.client;
+  const motion = useWorldReducedMotion(client) ?? reducedMotion ?? false;
   if (!id || !Number.isFinite(fontSize) || fontSize <= 0)
     throw new RangeError(
       "GlassSkin needs a stable id and positive finite fontSize",
@@ -142,14 +148,14 @@ export function GlassSkin({
       font,
       fontSize,
       palette,
-      reducedMotion: reducedMotion ?? false,
+      reducedMotion: motion,
       container,
       unit: (length: number) => (length * fontSize) / 16,
       theme: (name: GlassThemeName) => `${id}/theme/${name}`,
     }),
-    [contract, font, fontSize, palette, reducedMotion, container, id],
+    [contract, font, fontSize, palette, motion, container, id],
   );
-  useReducedMotionPreference(container?.commits, reducedMotion);
+  useReducedMotionPreference(container?.commits, reducedMotion, client);
   return (
     <GlassContext value={scope}>
       {declarations && (
@@ -193,7 +199,7 @@ export function GlassSkin({
               ]}
               body={glassBody(theme.name)}
             />
-            {lightAnimation && !reducedMotion && (
+            {lightAnimation && !motion && (
               <Animation source={lightAnimation} looping />
             )}
           </Entity>

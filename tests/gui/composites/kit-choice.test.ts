@@ -114,4 +114,17 @@ compositeTests<typeof prepare>("kit-choice", { budget: 60 }, async (run) => {
       treeReports,
     };
   });
+  await run.case("toolbar roving focus", async () => {
+    await page.keyboard.press("Tab");
+    await step("expectKitFocus", "tools/add", true);
+    await page.keyboard.press("ArrowRight");
+    await step("expectKitFocus", "tools/edit", true);
+    await page.keyboard.press("ArrowRight");
+    await step("expectKitFocus", "tools/edit", true);
+    await page.keyboard.press("Home");
+    await step("expectKitFocus", "tools/add", true);
+    await page.keyboard.press("Shift+Tab");
+    await step("expectKitFocus", rows[0]!, true);
+    return { toolbar: "disabled item skipped and group exited" };
+  });
 });

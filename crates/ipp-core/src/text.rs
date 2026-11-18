@@ -374,53 +374,50 @@ impl TextLayout {
     /// splits a scalar or grapheme, or lies past the text. An offset shared
     /// by a line end and the next line start prefers the next line start.
     pub fn caret_position(&self, offset: u32) -> Option<TextCaret> {
+        self.caret_with_affinity(offset, false)
+    }
+
+    /// Place a shared wrap boundary on its preceding line when requested by
+    /// a visual End or pointer selection. Skipped wrap spaces stay at the
+    /// preceding line's trailing pen, including trailing spaces at text end.
+    pub fn caret_with_affinity(&self, offset: u32, upstream: bool) -> Option<TextCaret> {
         if !self.is_caret_position(offset) {
             return None;
         }
-
-        for (index, line) in self.lines.iter().enumerate() {
-            if line.source_range[0] == offset {
-                return Some(TextCaret {
-                    line: index as u32,
-                    position: [0.0, line.top],
-                    height: line.height,
-                });
-            }
+        let mut index = self
+            .lines
+            .partition_point(|line| line.source_range[0] <= offset)
+            .saturating_sub(1);
+        if upstream
+            && index > 0
+            && self.lines[index].source_range[0] == offset
+            && !self.lines[index - 1].terminated
+        {
+            index -= 1;
         }
+        let line = self.lines.get(index)?;
+        Some(TextCaret {
+            line: index as u32,
+            position: [line_pen_at(line, &self.glyphs, offset), line.top],
+            height: line.height,
+        })
+    }
 
-        for (index, line) in self.lines.iter().enumerate() {
-            let [start, end] = line.source_range;
-
-            if offset == end && offset >= start {
-                return Some(TextCaret {
-                    line: index as u32,
-                    position: [line.width, line.top],
-                    height: line.height,
-                });
-            }
-
-            if offset > start && offset < end {
-                for glyph_index in line.glyph_range[0]..line.glyph_range[1] {
-                    let glyph = self.glyphs[glyph_index as usize];
-
-                    if glyph.source_range[0] >= offset {
-                        return Some(TextCaret {
-                            line: index as u32,
-                            position: [glyph.position[0], line.top],
-                            height: line.height,
-                        });
-                    }
-                }
-
-                return Some(TextCaret {
-                    line: index as u32,
-                    position: [line.width, line.top],
-                    height: line.height,
-                });
-            }
+    /// Last legal editing offset of a line, including visually consumed wrap
+    /// whitespace. A line ending in an explicit break stops before that break.
+    pub(crate) fn line_caret_end(&self, index: usize) -> u32 {
+        let Some(next) = self.lines.get(index + 1) else {
+            return self.grapheme_boundaries.last().copied().unwrap_or(0);
+        };
+        let boundary = next.source_range[0];
+        if self.lines[index].terminated {
+            let at = self
+                .grapheme_boundaries
+                .partition_point(|offset| *offset < boundary);
+            self.grapheme_boundaries[at.saturating_sub(1)]
+        } else {
+            boundary
         }
-
-        None
     }
 
     /// Per-line `[x, y, width, height]` selection rectangles in ems for the

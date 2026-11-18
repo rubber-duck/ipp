@@ -28,6 +28,16 @@ pub struct GuiBehavior {
     pub focusable: bool,
     /// Explicit semantic name; an empty value uses the control's label.
     pub semantic_label: Arc<str>,
+    /// Explanatory text for this control or compound field.
+    pub semantic_description: Arc<str>,
+    /// Application validation message, when present.
+    pub semantic_error: Arc<str>,
+    /// Whether the application requires a value.
+    pub semantic_required: bool,
+    /// Whether the application currently considers the value invalid.
+    pub semantic_invalid: bool,
+    /// Exact World/entity/component lifetime named by this label, encoded by the authoring client.
+    pub label_for: Arc<str>,
     /// Evaluated: this entity and all its ancestors are enabled.
     pub effective_enabled: bool,
     /// Evaluated: this entity and all its ancestors are visible.
@@ -48,6 +58,11 @@ impl Default for GuiBehavior {
             focus_scope: false,
             focusable: true,
             semantic_label: Arc::default(),
+            semantic_description: Arc::default(),
+            semantic_error: Arc::default(),
+            semantic_required: false,
+            semantic_invalid: false,
+            label_for: Arc::default(),
             effective_enabled: true,
             effective_visible: true,
             available: true,
@@ -58,7 +73,46 @@ impl Default for GuiBehavior {
 
 impl ComponentLifecycle for GuiBehavior {
     fn validate(&self) -> Result<(), ErrorReason> {
-        bounded_text(&self.semantic_label)
+        bounded_text(&self.semantic_label)?;
+        bounded_text(&self.semantic_description)?;
+        bounded_text(&self.semantic_error)?;
+        bounded_text(&self.label_for)
+    }
+}
+
+/// A read-only measurement declared by the application. It has no input target.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
+pub struct GuiMeter {
+    /// Inclusive lower bound.
+    pub min: f32,
+    /// Inclusive upper bound, strictly greater than the lower bound.
+    pub max: f32,
+    /// Measurement within the declared bounds.
+    pub value: f32,
+}
+
+impl Default for GuiMeter {
+    fn default() -> Self {
+        Self {
+            min: 0.0,
+            max: 1.0,
+            value: 0.0,
+        }
+    }
+}
+
+impl ComponentLifecycle for GuiMeter {
+    fn validate(&self) -> Result<(), ErrorReason> {
+        if self.min.is_finite()
+            && self.max.is_finite()
+            && self.min < self.max
+            && (self.min..=self.max).contains(&self.value)
+        {
+            Ok(())
+        } else {
+            Err(ErrorReason::InvalidValue)
+        }
     }
 }
 
@@ -370,6 +424,16 @@ pub struct GuiTextInput {
     pub placeholder: Arc<str>,
     /// Committed single-line text, written by clients and by the GUI System.
     pub text: Arc<str>,
+    /// Edit LF-delimited plain text using wrapped visual lines.
+    pub multiline: bool,
+    /// Keep focus and selection while refusing user text mutations.
+    pub read_only: bool,
+    /// Platform input purpose: plain 0, current password 1, new password 2, one-time code 3.
+    pub purpose: u32,
+    /// Maximum ASCII code length for one-time-code inputs; zero otherwise.
+    pub code_length: u32,
+    /// Allowed ASCII characters for a bounded code.
+    pub code_characters: Arc<str>,
     /// Present one bullet per grapheme without changing text, composition or editing.
     /// Also masks a numeric input's formatted number and pending edit.
     pub masked: bool,
@@ -402,6 +466,11 @@ impl Default for GuiTextInput {
         Self {
             placeholder: Arc::default(),
             text: Arc::default(),
+            multiline: false,
+            read_only: false,
+            purpose: 0,
+            code_length: 0,
+            code_characters: Arc::default(),
             masked: false,
             numeric: false,
             value: 0.0,
@@ -422,7 +491,22 @@ impl ComponentLifecycle for GuiTextInput {
 
     fn validate(&self) -> Result<(), ErrorReason> {
         bounded_text(&self.placeholder)?;
-        single_line_text(&self.text)?;
+        validate_edit_text(&self.text, self.multiline)?;
+        if self.code_length > 64
+            || (self.code_length > 0
+                && (self.purpose != 3
+                    || self.code_characters.is_empty()
+                    || !self.code_characters.bytes().all(|c| c.is_ascii_graphic())
+                    || self.code_characters.len() > 128
+                    || self.text.len() > self.code_length as usize
+                    || !self.text.chars().all(|c| self.code_characters.contains(c))))
+        {
+            return Err(ErrorReason::InvalidValue);
+        }
+        if self.purpose > 3 || self.multiline && (self.numeric || self.masked || self.purpose != 0)
+        {
+            return Err(ErrorReason::InvalidValue);
+        }
         if [self.value, self.min, self.max, self.step, self.fine_step]
             .into_iter()
             .all(f32::is_finite)
@@ -451,6 +535,10 @@ impl ComponentLifecycle for GuiTextInput {
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, SchemaComponent)]
 pub struct GuiGroup {
+    /// Enable cycling among eligible items by the first character of their semantic label.
+    pub typeahead: bool,
+    /// A perpendicular arrow activates a focused Button, allowing toolbar menus to open.
+    pub activate_cross_axis: bool,
     /// Arrow keys that move among the items: horizontal 0 (Left and Right),
     /// vertical 1 (Up and Down), both 2.
     pub axis: u32,
@@ -466,6 +554,8 @@ impl Default for GuiGroup {
         Self {
             axis: GUI_GROUP_VERTICAL,
             selection: GUI_GROUP_SELECT_NONE,
+            typeahead: false,
+            activate_cross_axis: false,
         }
     }
 }
@@ -523,6 +613,18 @@ pub(super) fn bounded_text(text: &str) -> Result<(), ErrorReason> {
 pub(super) fn single_line_text(text: &str) -> Result<(), ErrorReason> {
     bounded_text(text)?;
     if text.contains(['\r', '\n']) {
+        Err(ErrorReason::InvalidValue)
+    } else {
+        Ok(())
+    }
+}
+
+pub(super) fn validate_edit_text(text: &str, multiline: bool) -> Result<(), ErrorReason> {
+    if !multiline {
+        return single_line_text(text);
+    }
+    bounded_text(text)?;
+    if text.contains('\r') {
         Err(ErrorReason::InvalidValue)
     } else {
         Ok(())

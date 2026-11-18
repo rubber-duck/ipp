@@ -28,6 +28,10 @@ export interface GuiNativeTextState {
   readonly masked: boolean;
   /** This focus captures input for a client; it has no editable core text. */
   readonly clientInput?: boolean;
+  readonly multiline?: boolean;
+  readonly readOnly?: boolean;
+  readonly purpose?: "current-password" | "new-password" | "one-time-code";
+  readonly caretBounds?: readonly [number, number, number, number];
   readonly selectionStart: number;
   readonly selectionEnd: number;
   readonly composition?: {
@@ -39,6 +43,12 @@ export interface GuiNativeTextState {
 
 export type GuiNativeEdit =
   | { kind: "text"; text: string }
+  | {
+      kind: "navigate";
+      direction: "up" | "down" | "home" | "end" | "left" | "right";
+      extend: boolean;
+    }
+  | { kind: "replaceRange"; start: number; end: number; text: string }
   | { kind: "selection"; start: number; end: number }
   | { kind: "composition"; text: string; caretStart: number; caretEnd: number }
   | { kind: "commitComposition" | "cancelComposition" }
@@ -73,6 +83,16 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
         caretEnd: reader.u32(),
       }
     : undefined;
+  const multiline = reader.boolean();
+  const readOnly = reader.boolean();
+  const purposeIndex = reader.u8();
+  if (purposeIndex > 3) throw new Error("Unknown GUI input purpose");
+  const purpose = (
+    [undefined, "current-password", "new-password", "one-time-code"] as const
+  )[purposeIndex];
+  const caretBounds = reader.boolean()
+    ? ([reader.f32(), reader.f32(), reader.f32(), reader.f32()] as const)
+    : undefined;
   reader.end();
   const valid = (text: string, offsets: readonly number[]) => {
     const length = new TextEncoder().encode(text).length;
@@ -94,6 +114,10 @@ function readNative(reader: HostWireReader): GuiNativeTextState {
     text,
     masked,
     ...(clientInput ? { clientInput: true } : {}),
+    ...(multiline ? { multiline } : {}),
+    ...(readOnly ? { readOnly } : {}),
+    ...(purpose ? { purpose } : {}),
+    ...(caretBounds ? { caretBounds } : {}),
     selectionStart,
     selectionEnd,
     ...(composition ? { composition } : {}),
@@ -150,6 +174,7 @@ export type GuiPhysicalInput =
       delta: readonly [number, number];
       shift?: boolean;
     }
+  | { kind: "typeahead"; character: string }
   | { kind: "key"; key: GuiPhysicalKey; shift?: boolean }
   | { kind: "blur" };
 
@@ -375,7 +400,14 @@ export class GuiPhysicalContext {
         previous.fence.target.world.incarnation &&
       (state.fence.generation < previous.fence.generation ||
         (state.fence.generation === previous.fence.generation &&
-          state.masked === previous.masked))
+          state.masked === previous.masked &&
+          (origin === "terminal" ||
+            state.caretBounds === previous.caretBounds ||
+            (state.caretBounds &&
+              previous.caretBounds &&
+              state.caretBounds.every(
+                (n, i) => n === previous.caretBounds![i],
+              )))))
     )
       return;
     if (state === null && previous === null) return;
@@ -513,14 +545,20 @@ export class GuiPhysicalContext {
       body.u64(fence.target.incarnation);
       body.u64(fence.generation);
       if (event.kind === "text") {
+        const encoder = new TextEncoder();
+        if (event.structured !== undefined && !event.paste)
+          throw new TypeError("Structured input requires a paste");
         if (
-          new TextEncoder().encode(event.text).length >
+          encoder.encode(event.text).length +
+            encoder.encode(event.structured).length >
           this.limit("GUI_CLIENT_TEXT_BYTES")
         )
           throw new RangeError("Client text capacity exceeded");
         body.u8(this.tag("GUI_CLIENT_INPUT_TEXT"));
         body.string(event.text);
         body.u8(event.paste ? 1 : 0);
+        body.u8(event.structured !== undefined ? 1 : 0);
+        if (event.structured !== undefined) body.string(event.structured);
       } else {
         for (const value of [event.key, event.code])
           if (
@@ -590,6 +628,15 @@ export class GuiPhysicalContext {
         point(input.delta);
         body.u8(input.shift === true ? 1 : 0);
         break;
+      case "typeahead": {
+        if (!/^[\p{Alphabetic}\p{Number}]$/u.test(input.character))
+          throw new Error("Typeahead expects one letter or number");
+        body.u8(this.tag("GUI_PHYSICAL_EVENT_KEY"));
+        body.u8(this.tag("GUI_PHYSICAL_KEY_CHARACTER"));
+        body.u32(input.character.codePointAt(0)!);
+        body.u8(0);
+        break;
+      }
       case "key": {
         if (!Object.hasOwn(keys, input.key))
           throw new Error("Invalid physical key");
@@ -630,6 +677,21 @@ export class GuiPhysicalContext {
     switch (edit.kind) {
       case "text":
         body.u8(this.tag("GUI_NATIVE_EDIT_INSERT"));
+        body.string(edit.text);
+        break;
+      case "navigate":
+        body.u8(this.tag("GUI_NATIVE_EDIT_NAVIGATE"));
+        body.u8(
+          ["up", "down", "home", "end", "left", "right"].indexOf(
+            edit.direction,
+          ),
+        );
+        body.u8(Number(edit.extend));
+        break;
+      case "replaceRange":
+        body.u8(this.tag("GUI_NATIVE_EDIT_REPLACE_RANGE"));
+        body.u32(edit.start);
+        body.u32(edit.end);
         body.string(edit.text);
         break;
       case "selection":

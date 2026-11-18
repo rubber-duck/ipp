@@ -7,6 +7,7 @@ import type { GuiSkinDefinition } from "../src/gui/skin-types.js";
  * comparisons more than one family uses.
  */
 import assert from "node:assert/strict";
+import { after } from "node:test";
 import { setImmediate as turn } from "node:timers/promises";
 import { createElement as h, type ReactNode } from "react";
 import {
@@ -137,7 +138,16 @@ export const DESCRIPTORS = Object.fromEntries(
   Object.entries({
     ...guiComponentContract,
     CanvasBounds: {
-      fields: { x: "number", y: "number", width: "number", height: "number" },
+      fields: {
+        x: "number",
+        y: "number",
+        width: "number",
+        height: "number",
+        local_width: "number",
+        local_height: "number",
+        scale_x: "number",
+        scale_y: "number",
+      },
     },
     PresentationGate: componentContract.PresentationGate,
     PlotFrame2d: componentContract.PlotFrame2d,
@@ -702,18 +712,20 @@ export class KitWorld
         const text = this.entity(symbol).components.get("CanvasText");
         const layout = this.entity(symbol).components.get("GuiLayout");
         const size = Number(text?.get("font_size") ?? 16);
+        const width = text
+          ? [...String(text.get("text") ?? "")].length * 0.54 * size
+          : (layout?.get("width") ?? 0);
         const fields =
           component === "CanvasBounds"
             ? new Map<string, unknown>([
                 ["x", 0],
                 ["y", 0],
-                [
-                  "width",
-                  text
-                    ? [...String(text.get("text") ?? "")].length * 0.54 * size
-                    : (layout?.get("width") ?? 0),
-                ],
+                ["width", width],
                 ["height", size * 1.2],
+                ["local_width", width],
+                ["local_height", size * 1.2],
+                ["scale_x", 1],
+                ["scale_y", 1],
               ])
             : this.fields(symbol, component);
         listener({
@@ -817,6 +829,7 @@ export async function render(
   }: { fontSize?: number; world?: KitWorld; reducedMotion?: boolean } = {},
 ) {
   const root = createRoot(world);
+  after(() => root.unmount());
   const errors: unknown[] = [];
   const draw = async (
     next: ReactNode,

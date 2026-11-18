@@ -132,6 +132,8 @@ Exercise interactive same-origin pages through the existing client-managed GUI t
 
 ## GUI implementation approach
 
+Share native multiline editing metrics with layout and rendering. Validate line navigation, caret reveal and fenced composition through both Host arrangements with completed frames. The application implements token document editing through the [client-managed content boundary](../architecture/gui.md#client-managed-content).
+
 Implement the [GUI boundary](../architecture/gui.md) with ordinary entity/component declarations, the core ordered tree and selected local control/layout Systems. Preserve incremental typed access and retained algorithms while removing GuiRoot node ownership and the separate structural protocol. Retain compact theme/part tables and shared theme references. Publish coherent link, attachment, output and control-state interfaces before dependent consumers migrate. Route composed input into next-boundary actions without mutable cross-World references or additional animation samples.
 
 Move concrete look tables, design tokens and appearance timings into client skin definitions. Expose shared, authored measurement inputs for intrinsic sizing and interactive parts, consumed by layout, paint and input together. Remove implicit parts and fallback styles from core and generated contracts; migrate callers directly to explicit Cybertron, Glass or application-authored presentation. Preserve compact native states and retained renderer sharing.

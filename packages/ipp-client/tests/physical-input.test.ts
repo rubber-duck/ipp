@@ -277,3 +277,30 @@ test("physical wheel hit decoder rejects over-depth and truncated paths", async 
     await context.close();
   }
 });
+
+test("a presentation notification can move the caret without changing its editing generation", async () => {
+  const context = await harness().input.open(view);
+  const native = {
+    fence: {
+      target: {
+        world: view.binding.output.world,
+        entity: 4n,
+        component: 8,
+        incarnation: 1n,
+      },
+      generation: 1n,
+    },
+    text: "a",
+    masked: false,
+    selectionStart: 1,
+    selectionEnd: 1,
+  };
+  context.observeText(native, "terminal");
+  context.observeText({ ...native, caretBounds: [10, 20, 0, 12] });
+  assert.deepEqual(context.nativeText?.caretBounds, [10, 20, 0, 12]);
+  context.observeText(native, "terminal");
+  assert.deepEqual(context.nativeText?.caretBounds, [10, 20, 0, 12]);
+  context.observeText({ ...native, caretBounds: [10, 4, 0, 12] });
+  assert.deepEqual(context.nativeText?.caretBounds, [10, 4, 0, 12]);
+  await context.close();
+});

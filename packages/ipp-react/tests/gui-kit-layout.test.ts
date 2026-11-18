@@ -275,7 +275,7 @@ test("text field gap overrides reach labels, help and errors and restore the rol
   );
   try {
     assert.equal(world.fields(`${id}/field`, "GuiLayout").get("gap"), 0);
-    assert.deepEqual(world.tone(`${id}/field/label`), TOKENS.neutral);
+    assert.deepEqual(world.tone(`${id}/field/label/caption`), TOKENS.neutral);
     assert.deepEqual(world.tone(`${id}/field/error`), TOKENS.error);
     assert.deepEqual(world.tone(`${id}/field/description`), TOKENS.neutral);
     const input = world.entity(`${id}/input`);
@@ -284,7 +284,7 @@ test("text field gap overrides reach labels, help and errors and restore the rol
     await draw(field({}));
     assert.equal(world.fields(`${id}/field`, "GuiLayout").get("gap"), 10);
     assert.equal(world.entity(`${id}/input`), input);
-    assert.deepEqual(world.tone(`${id}/field/label`), TOKENS.accent);
+    assert.deepEqual(world.tone(`${id}/field/label/caption`), TOKENS.accent);
   } finally {
     await root.unmount();
   }

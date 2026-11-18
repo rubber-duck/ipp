@@ -141,10 +141,12 @@ impl GuiSystem {
             GuiLocalOperation::Text {
                 fence,
                 edit,
+                ..
             } => return self.edit_text(context, command, control, *fence, edit, tick, ancestry),
             GuiLocalOperation::TextCaret {
                 offset,
                 extend,
+                ..
             } => {
                 let native = self
                     .local
@@ -465,7 +467,7 @@ impl GuiSystem {
             mut changed_display,
         } = self
             .local
-            .prepare_text_edit(command, control, text, fence, edit, tick, ancestry)?;
+            .prepare_text_edit(command, control, text, &input, fence, edit, tick, ancestry)?;
 
         // Enter commits a numeric edit: its number, then the edit shows it
         // formatted and submits that; text that does not parse is rejected
@@ -476,7 +478,14 @@ impl GuiSystem {
             && matches!(edit, GuiTextEdit::Submit)
             && let Some(effect) = effect.as_mut()
         {
-            match input.committed(&state.text) {
+            // A read-only display may round the stored value at its authored
+            // precision. Submitting it must never write the rounded display back.
+            let committed = if input.read_only {
+                Some(input.value)
+            } else {
+                input.committed(&state.text)
+            };
+            match committed {
                 Some(committed) => {
                     let formatted =
                         super::controls::number::format_number(committed, input.precision);
@@ -485,7 +494,7 @@ impl GuiSystem {
                         control.target,
                         formatted.clone(),
                         state.fence.generation,
-                        input.masked,
+                        Some(&input),
                     );
                     effect.kind = GuiLocalEffectKind::Submitted(formatted.clone());
                     value = (committed != input.value).then_some(committed);
@@ -1130,6 +1139,9 @@ fn value_writes(
         (GuiLocalAction::SetScalar(scalar), ComponentValue::GuiTextInput(input))
             if input.numeric =>
         {
+            if input.read_only {
+                return Err(GuiLocalActionError::Unavailable);
+            }
             let scalar = *scalar;
             if !scalar.is_finite() || scalar < input.min || scalar > input.max {
                 return Err(GuiLocalActionError::InvalidValue);
@@ -1144,7 +1156,10 @@ fn value_writes(
             }))
         }
         (GuiLocalAction::SetText(text), ComponentValue::GuiTextInput(input)) if !input.numeric => {
-            super::component::single_line_text(text)
+            if input.read_only {
+                return Err(GuiLocalActionError::Unavailable);
+            }
+            super::component::validate_edit_text(text, input.multiline)
                 .map_err(|_| GuiLocalActionError::InvalidValue)?;
             Ok(GuiValueWrites::new(if **text == *input.text {
                 Vec::new()

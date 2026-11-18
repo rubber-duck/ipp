@@ -324,7 +324,7 @@ layouts! {
     "gui-physical-event" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("input", Union => "gui-physical-event")];
     "gui-physical-client" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("event", Union => "gui-client-input")];
     "gui-client-key" => [field!("tag", Variant => "gui-client-input"), field!("key", Utf8, 64), field!("code", Utf8, 64), field!("modifiers", U8), field!("repeat", Bool), field!("pressed", Bool)];
-    "gui-client-text" => [field!("tag", Variant => "gui-client-input"), field!("text", Utf8, 65536), field!("paste", Bool)];
+    "gui-client-text" => [field!("tag", Variant => "gui-client-input"), field!("text", Utf8, 65536), field!("paste", Bool), field!("structured", Option => "utf8-65536")];
     "gui-client-pointer" => [field!("tag", Variant => "gui-client-input"), field!("pointer", U64), field!("phase", U8), field!("button", U8), field!("point", Named => "gui-input-vector")];
     "gui-client-wheel" => [field!("tag", Variant => "gui-client-input"), field!("point", Named => "gui-input-vector"), field!("delta", Named => "gui-input-vector")];
     "gui-physical-text" => [field!("tag", Variant => "gui-physical-request"), field!("context", U64), field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("edit", Union => "gui-native-edit")];
@@ -333,7 +333,7 @@ layouts! {
     "gui-physical-pointer-up" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64), field!("point", Named => "gui-input-vector"), field!("button", Variant => "gui-physical-button")];
     "gui-physical-pointer-cancel" => [field!("tag", Variant => "gui-physical-event"), field!("pointer", U64)];
     "gui-physical-wheel" => [field!("tag", Variant => "gui-physical-event"), field!("point", Named => "gui-input-vector"), field!("delta", Named => "gui-input-vector"), field!("shift", Bool)];
-    "gui-physical-key" => [field!("tag", Variant => "gui-physical-event"), field!("key", Variant => "gui-physical-key"), field!("shift", Bool)];
+    "gui-physical-key" => [field!("tag", Variant => "gui-physical-event"), field!("key", Union => "gui-physical-key"), field!("shift", Bool)];
     "gui-physical-blur" => [field!("tag", Variant => "gui-physical-event")];
     "gui-physical-opened" => [field!("tag", Variant => "gui-physical-response"), field!("context", U64)];
     "gui-physical-closed" => [field!("tag", Variant => "gui-physical-response")];
@@ -359,6 +359,7 @@ layouts! {
     "gui-physical-key-end" => [field!("tag", Variant => "gui-physical-key")];
     "gui-physical-key-context-menu" => [field!("tag", Variant => "gui-physical-key")];
     "gui-physical-key-f10" => [field!("tag", Variant => "gui-physical-key")];
+    "gui-physical-key-character" => [field!("tag", Variant => "gui-physical-key"), field!("character", U32)];
     "gui-native-insert" => [field!("tag", Variant => "gui-native-edit"), field!("text", Utf8, FIELD_BYTES)];
     "gui-native-selection" => [field!("tag", Variant => "gui-native-edit"), field!("start", U32), field!("end", U32)];
     "gui-native-compose" => [field!("tag", Variant => "gui-native-edit"), field!("composition", Named => "gui-native-composition")];
@@ -371,6 +372,9 @@ layouts! {
     "gui-native-home" => [field!("tag", Variant => "gui-native-edit")];
     "gui-native-end" => [field!("tag", Variant => "gui-native-edit")];
     "gui-native-select-all" => [field!("tag", Variant => "gui-native-edit")];
+    "gui-native-replace-range" => [field!("tag", Variant => "gui-native-edit"), field!("start", U32), field!("end", U32), field!("text", Utf8, FIELD_BYTES)];
+    "gui-native-visual-line-navigation" => [field!("tag", Variant => "gui-native-edit"), field!("direction", U8), field!("extend", Bool)];
+    "gui-native-caret-bounds" => [field!("x", FiniteF32), field!("y", FiniteF32), field!("width", FiniteF32), field!("height", FiniteF32)];
     "gui-native-submit" => [field!("tag", Variant => "gui-native-edit")];
     "gui-physical-disposition-routed" => [field!("tag", Variant => "gui-physical-disposition")];
     "gui-physical-disposition-miss" => [field!("tag", Variant => "gui-physical-disposition")];
@@ -381,7 +385,7 @@ layouts! {
     "gui-physical-target" => [field!("world", Named => "world-reference"), field!("entity", U64), field!("component", U16), field!("incarnation", U64)];
     "gui-native-buffer" => [field!("byte_length", U32), field!("state", Named => "gui-native-state")];
     "gui-native-composition" => [field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32)];
-    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("masked", Bool), field!("client_input", Bool), field!("composition", Option => "gui-native-composition")];
+    "gui-native-state" => [field!("target", Named => "gui-physical-target"), field!("generation", U64), field!("text", Utf8, FIELD_BYTES), field!("selection_start", U32), field!("selection_end", U32), field!("masked", Bool), field!("client_input", Bool), field!("composition", Option => "gui-native-composition"), field!("multiline", Bool), field!("read_only", Bool), field!("purpose", U8), field!("caret_bounds", Option => "gui-native-caret-bounds")];
     "host-request-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("body_bytes", U32), field!("body", Union => "gui-physical-request")];
     "host-response-gui-input" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-response"), field!("body_bytes", U32), field!("body", Union => "gui-physical-response")];
     "host-request-get-root-output-binding" => [field!("magic", U64), field!("connection", U64), field!("request_id", U64), field!("tag", Variant => "host-request"), field!("world", Named => "world-reference")];
@@ -1340,6 +1344,7 @@ tags! {
     GuiPhysicalKey GUI_PHYSICAL_KEY_END = 10 => "gui-physical-key-end";
     GuiPhysicalKey GUI_PHYSICAL_KEY_CONTEXT_MENU = 11 => "gui-physical-key-context-menu";
     GuiPhysicalKey GUI_PHYSICAL_KEY_F10 = 12 => "gui-physical-key-f10";
+    GuiPhysicalKey GUI_PHYSICAL_KEY_CHARACTER = 13 => "gui-physical-key-character";
     GuiNativeEdit GUI_NATIVE_EDIT_INSERT = 0 => "gui-native-insert";
     GuiNativeEdit GUI_NATIVE_EDIT_SELECTION = 1 => "gui-native-selection";
     GuiNativeEdit GUI_NATIVE_EDIT_COMPOSE = 2 => "gui-native-compose";
@@ -1353,6 +1358,8 @@ tags! {
     GuiNativeEdit GUI_NATIVE_EDIT_END = 10 => "gui-native-end";
     GuiNativeEdit GUI_NATIVE_EDIT_SELECT_ALL = 11 => "gui-native-select-all";
     GuiNativeEdit GUI_NATIVE_EDIT_SUBMIT = 12 => "gui-native-submit";
+    GuiNativeEdit GUI_NATIVE_EDIT_NAVIGATE = 14 => "gui-native-visual-line-navigation";
+    GuiNativeEdit GUI_NATIVE_EDIT_REPLACE_RANGE = 13 => "gui-native-replace-range";
     GuiPhysicalDisposition GUI_PHYSICAL_DISPOSITION_ROUTED = 0 => "gui-physical-disposition-routed";
     GuiPhysicalDisposition GUI_PHYSICAL_DISPOSITION_MISS = 1 => "gui-physical-disposition-miss";
     GuiPhysicalDisposition GUI_PHYSICAL_DISPOSITION_BLOCKED = 2 => "gui-physical-disposition-blocked";

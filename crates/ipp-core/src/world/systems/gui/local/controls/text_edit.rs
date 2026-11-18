@@ -120,6 +120,47 @@ pub(crate) fn delete_forward(text: &str, caret: u32, anchor: Option<u32>) -> Opt
     Some(delete_range(text, caret, next))
 }
 
+/// Nearest grapheme edge on a visual line in em coordinates.
+pub(crate) fn caret_on_line(layout: &TextLayout, index: usize, x: f32) -> u32 {
+    let line = &layout.lines[index];
+    let start = line.source_range[0];
+    let end = layout.line_caret_end(index);
+    let glyphs = &layout.glyphs[line.glyph_range[0] as usize..line.glyph_range[1] as usize];
+    let first = layout
+        .grapheme_boundaries
+        .partition_point(|offset| *offset < start);
+    let mut best = start;
+    let mut distance = f32::INFINITY;
+    let mut glyph = 0;
+    for &offset in &layout.grapheme_boundaries[first..] {
+        if offset > end {
+            break;
+        }
+        while glyph < glyphs.len() && glyphs[glyph].source_range[0] < offset {
+            glyph += 1;
+        }
+        let pen = glyphs.get(glyph).map_or(line.width, |g| g.position[0]);
+        let delta = (x - pen).abs();
+        if delta <= distance {
+            best = offset;
+            distance = delta;
+        }
+    }
+    best
+}
+
+pub(crate) fn caret_offset_at_point(layout: &TextLayout, point: [f32; 2]) -> (u32, bool) {
+    if layout.lines.len() <= 1 {
+        return (caret_offset_at_x(layout, point[0]), false);
+    }
+    let line = layout
+        .lines
+        .partition_point(|line| line.top + line.height <= point[1])
+        .min(layout.lines.len() - 1);
+    let offset = caret_on_line(layout, line, point[0]);
+    (offset, offset == layout.line_caret_end(line))
+}
+
 /// Nearest legal caret offset to an em pen `x` on a measured layout.
 /// Ties prefer the later offset so a centred single glyph keeps an
 /// append-style caret at the end.
@@ -133,7 +174,6 @@ pub(crate) fn caret_offset_at_x(layout: &TextLayout, x_ems: f32) -> u32 {
     let lines = &layout.lines;
     let glyphs = &layout.glyphs;
     let mut starting_line = 0;
-    let mut ending_line = 0;
     let mut glyph = 0;
     let mut best = 0_u32;
     let mut best_dist = f32::INFINITY;
@@ -150,22 +190,11 @@ pub(crate) fn caret_offset_at_x(layout: &TextLayout, x_ems: f32) -> u32 {
         {
             0.0
         } else {
-            while ending_line < lines.len() && lines[ending_line].source_range[1] < boundary {
-                record_step();
-                ending_line += 1;
-            }
-
-            // A boundary between lines (a consumed break or wrap space) has
-            // no caret geometry.
-            let Some(line) = lines.get(ending_line) else {
+            let Some(line) = lines.get(starting_line.saturating_sub(1)) else {
                 continue;
             };
-            let [start, end] = line.source_range;
-            if start >= boundary {
-                continue;
-            }
-
-            if boundary == end {
+            let end = line.source_range[1];
+            if boundary >= end {
                 line.width
             } else {
                 let [first, last] = line.glyph_range.map(|index| index as usize);

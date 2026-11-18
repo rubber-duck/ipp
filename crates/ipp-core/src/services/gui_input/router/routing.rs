@@ -156,6 +156,41 @@ impl GuiInputRouter {
         inspect(world.gui_native_text(focus.control.record.target, context.session.id()))
     }
 
+    /// Synchronize platform state with the latest measured caret in Canvas coordinates.
+    pub fn with_native_presentation<Result>(
+        &self,
+        host: &mut HostRuntime,
+        context: &GuiRoutingContext,
+        inspect: impl FnOnce(Option<&crate::systems::gui::local::GuiNativeTextState>) -> Result,
+    ) -> Result {
+        if context.context.0.native.borrow().focus.is_none() {
+            return inspect(None);
+        }
+        let Some(focus) = context.focus.as_ref() else {
+            return inspect(None);
+        };
+        let Some(world) = host.world_mut(focus.control.record.target.world.id()) else {
+            return inspect(None);
+        };
+        let state = world
+            .gui_native_text(focus.control.record.target, context.session.id())
+            .cloned()
+            .map(|mut state| {
+                state.caret_bounds = focus.control.text.as_ref().and_then(|(layout, origin)| {
+                    let caret = state.caret(layout)?;
+                    let hit = &focus.control.hit;
+                    let x = (origin[0] + caret.position[0] * layout.font_size) * hit.scale[0]
+                        + hit.position[0];
+                    let y = (origin[1] + caret.position[1] * layout.font_size) * hit.scale[1]
+                        + hit.position[1];
+                    let bottom = y + caret.height * layout.font_size * hit.scale[1];
+                    Some([x, y.min(bottom), 0.0, (bottom - y).abs()])
+                });
+                state
+            });
+        inspect(state.as_ref())
+    }
+
     /// Cancel stale physical ownership after the Host frame, including idle
     /// input, and make logical focus a client command set in a presented World
     /// this context's keyboard target. Completed policy plus the current
@@ -186,7 +221,9 @@ impl GuiInputRouter {
             let result = view
                 .ok_or(GuiInputError::Unavailable)
                 .and_then(|view| current_target(host, view, focus));
-            if result.is_err() {
+            if let Some(view) = view.filter(|_| result.is_ok()) {
+                context.focus = refresh(host, view, focus).ok();
+            } else {
                 cancelled.focus = context.context.0.native.borrow().focus.is_some();
                 let _ = self.service.set_native_focus(&context.context, None);
                 context.focus = None;
@@ -552,8 +589,69 @@ impl GuiInputRouter {
                     return Ok(GuiRoutingDisposition::Blocked);
                 }
 
+                let mut upstream = false;
+                let edit = if let GuiTextEdit::Navigate {
+                    direction: direction @ 0..=3,
+                    extend,
+                } = edit
+                {
+                    let native = host
+                        .world_mut(fence.target.world.id())
+                        .and_then(|world| {
+                            world
+                                .gui_native_text(fence.target, context.session.id())
+                                .cloned()
+                        })
+                        .filter(|state| {
+                            state.fence == fence && state.multiline && state.composition.is_none()
+                        })
+                        .ok_or(GuiInputError::Unavailable)?;
+                    let (layout, _) = target
+                        .control
+                        .text
+                        .as_ref()
+                        .ok_or(GuiInputError::Unavailable)?;
+                    let [anchor, _] = native.selection;
+                    let position = native.caret(layout).ok_or(GuiInputError::Unavailable)?;
+                    let here = position.line as usize;
+                    let next = match direction {
+                        0 | 1 => {
+                            let row = if direction == 0 {
+                                here.saturating_sub(1)
+                            } else {
+                                (here + 1).min(layout.lines.len() - 1)
+                            };
+                            let offset =
+                                crate::systems::gui::local::controls::text_edit::caret_on_line(
+                                    layout,
+                                    row,
+                                    position.position[0],
+                                );
+                            upstream = offset == layout.line_caret_end(row);
+                            offset
+                        }
+                        2 => layout.lines[here].source_range[0],
+                        3 => {
+                            upstream = true;
+                            layout.line_caret_end(here)
+                        }
+                        _ => return Err(GuiInputError::Unavailable),
+                    };
+                    GuiTextEdit::Selection([
+                        if extend {
+                            anchor
+                        } else {
+                            next
+                        },
+                        next,
+                    ])
+                } else {
+                    edit
+                };
                 // Enter activates the active item of the group the input drives.
                 if matches!(edit, crate::systems::gui::local::GuiTextEdit::Submit)
+                    && !self
+                        .with_native_text(host, context, |state| state.is_some_and(|s| s.multiline))
                     && let Some(disposition) = self.group_key(
                         host,
                         context,
@@ -581,7 +679,7 @@ impl GuiInputRouter {
                     host,
                     context.queue_owner,
                     fence.target,
-                    GuiLocalCommand::text(input, fence, edit)?,
+                    GuiLocalCommand::text(input, fence, edit, upstream)?,
                 )?;
                 Ok(GuiRoutingDisposition::Routed {
                     target: fence.target,
@@ -859,31 +957,8 @@ impl GuiInputRouter {
                 {
                     self.leave_hover(host, context, pointer, delivery)?;
                     if let Some(target) = target {
-                        if context.pointers.len() >= GUI_INPUT_MAX_POINTERS {
-                            return Err(GuiInputError::Capacity);
-                        }
                         let identity = target.control.record.target;
-                        let (command, lease) = self.feedback(
-                            host,
-                            context,
-                            &target,
-                            pointer,
-                            None,
-                            GuiInteractionUpdate::Hover(true),
-                            delivery,
-                        )?;
-                        super::group::note_hover(context, &target);
-                        context.pointers.insert(
-                            pointer,
-                            Pointer {
-                                target,
-                                lease,
-                                pressed: false,
-                                tap: false,
-                                drag: None,
-                            },
-                        );
-                        enqueue(host, context.queue_owner, identity, command)?;
+                        self.enter_hover(host, context, pointer, target, delivery)?;
                         return Ok(GuiRoutingDisposition::Routed {
                             target: identity,
                         });
@@ -1170,6 +1245,52 @@ impl GuiInputRouter {
                     self.group_key(host, context, view, &target, key, delivery)?
                 {
                     return Ok(disposition);
+                }
+                if target.control.record.kind == GuiControlKind::TextInput
+                    && let Some((fence, edit)) = self.with_native_text(host, context, |state| {
+                        let state =
+                            state.filter(|state| state.multiline && state.composition.is_none())?;
+                        let edit = match key {
+                            GuiPhysicalKey::Enter => GuiTextEdit::Insert("\n".into()),
+                            GuiPhysicalKey::Left => GuiTextEdit::Navigate {
+                                direction: 4,
+                                extend: shift,
+                            },
+                            GuiPhysicalKey::Right => GuiTextEdit::Navigate {
+                                direction: 5,
+                                extend: shift,
+                            },
+                            GuiPhysicalKey::Up => GuiTextEdit::Navigate {
+                                direction: 0,
+                                extend: shift,
+                            },
+                            GuiPhysicalKey::Down => GuiTextEdit::Navigate {
+                                direction: 1,
+                                extend: shift,
+                            },
+                            GuiPhysicalKey::Home => GuiTextEdit::Navigate {
+                                direction: 2,
+                                extend: shift,
+                            },
+                            GuiPhysicalKey::End => GuiTextEdit::Navigate {
+                                direction: 3,
+                                extend: shift,
+                            },
+                            _ => return None,
+                        };
+                        Some((state.fence, edit))
+                    })
+                {
+                    return self.route_inner(
+                        host,
+                        context,
+                        view,
+                        GuiPhysicalInput::Text {
+                            fence,
+                            edit,
+                        },
+                        delivery,
+                    );
                 }
                 // Up and Down step a numeric text input, by the fine step
                 // with Shift, after committing its edit; Left and Right stay
@@ -1530,6 +1651,42 @@ impl GuiInputRouter {
         Ok(())
     }
 
+    fn enter_hover(
+        &mut self,
+        host: &mut HostRuntime,
+        context: &mut GuiRoutingContext,
+        pointer: u64,
+        target: Target,
+        delivery: &mut dyn GuiRoutingDelivery,
+    ) -> Result<(), GuiInputError> {
+        if context.pointers.len() >= GUI_INPUT_MAX_POINTERS {
+            return Err(GuiInputError::Capacity);
+        }
+        let identity = target.control.record.target;
+        let (command, lease) = self.feedback(
+            host,
+            context,
+            &target,
+            pointer,
+            None,
+            GuiInteractionUpdate::Hover(true),
+            delivery,
+        )?;
+        super::group::note_hover(context, &target);
+        context.pointers.insert(
+            pointer,
+            Pointer {
+                target,
+                lease,
+                pressed: false,
+                tap: false,
+                drag: None,
+            },
+        );
+        enqueue(host, context.queue_owner, identity, command)?;
+        Ok(())
+    }
+
     /// End an unpressed pointer's hover before it moves elsewhere. A hover
     /// whose feedback has not been applied yet only revokes its candidate
     /// lease: the queued Hover then fails validation instead of lighting the
@@ -1604,15 +1761,15 @@ impl GuiInputRouter {
             // it with the new hit would pair the old lease with the wrong target.
             active.target = refresh(host, view, &active.target)?;
         }
+        let identity = target.control.record.target;
         if phase == 1
-            && context
-                .pointers
-                .get(&pointer)
-                .is_some_and(|active| !active.pressed)
+            && !context.pointers.get(&pointer).is_some_and(|active| {
+                active.pressed || active.target.control.record.target == identity
+            })
         {
             self.leave_hover(host, context, pointer, delivery)?;
+            self.enter_hover(host, context, pointer, target.clone(), delivery)?;
         }
-        let identity = target.control.record.target;
         let local = if let Some(point) = point {
             // A captured ray may temporarily miss a curved Surface. Keep capture.
             if project_composed_point(

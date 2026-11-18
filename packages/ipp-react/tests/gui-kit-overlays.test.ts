@@ -9,10 +9,18 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
+import {
+  canvasOutput,
+  GuiPhysicalContext,
+  type GuiNativeEdit,
+} from "@ipp/client";
 import { Fragment, createElement as h } from "react";
 import { Children, Entity } from "../src/index.js";
 import {
   GUI_KIT_ICONS,
+  matchTextTrigger,
+  TriggerMenu,
+  type TriggerMenuProps,
   TextLine,
   ToastStack,
   type ToastItem,
@@ -1119,4 +1127,157 @@ test("Popover compact sizing is explicit and removing it restores the regular tr
   assert.equal(world.fields("sizes", "GuiLayout").get("height"), 80);
   assert.equal(world.fields("sizes", "GuiFont").get("font_size"), 32);
   assert.equal(world.skin("sizes"), "secondary");
+});
+
+test("trigger matching excludes credentials for either reveal state", () => {
+  const state = {
+    text: "@example",
+    selectionStart: 8,
+    selectionEnd: 8,
+    masked: false,
+    fence: {
+      target: {
+        world: { id: 1n, incarnation: 1n },
+        entity: 1n,
+        component: 1,
+        incarnation: 1n,
+      },
+      generation: 1n,
+    },
+  };
+  assert.deepEqual(matchTextTrigger(state, ["@"]), {
+    trigger: "@",
+    query: "example",
+    start: 0,
+    end: 8,
+  });
+  for (const purpose of [
+    "current-password",
+    "new-password",
+    "one-time-code",
+  ] as const) {
+    for (const masked of [false, true]) {
+      assert.equal(
+        matchTextTrigger({ ...state, purpose, masked }, ["@"]),
+        null,
+      );
+    }
+  }
+});
+
+test("TriggerMenu scopes lookups, selections and dismissals to the physical context and exact query", async () => {
+  const target = {
+    world: { id: 1n, incarnation: 1n },
+    entity: 1n,
+    component: 1,
+    incarnation: 1n,
+  };
+  const edits: { context: GuiPhysicalContext; edit: GuiNativeEdit }[] = [];
+  const publish = (context: GuiPhysicalContext, text: string, x = 0) =>
+    context.observeText({
+      fence: { target, generation: 1n },
+      text,
+      masked: false,
+      selectionStart: 2,
+      selectionEnd: 2,
+      caretBounds: [x, 0, 0, 12],
+    });
+  const editor = (text: string) => {
+    const context = new GuiPhysicalContext(
+      1n,
+      {
+        surface: { id: 1n, context: 1n, maxWidth: 100, maxHeight: 100 },
+        selection: 1n,
+        binding: {
+          output: canvasOutput(target.world),
+          generation: { host: 1n, serial: 1n },
+          viewport: { width: 100, height: 100, devicePixelRatio: 1 },
+        },
+      },
+      async () => assert.fail("Unexpected physical request"),
+      () => {},
+      () => 1,
+      () => 64,
+    );
+    context.editText = async (fence, edit) => {
+      assert.deepEqual(fence, { target, generation: 1n });
+      edits.push({ context, edit });
+      return { disposition: "routed", applied: 1, rejected: 0, cancelled: 0 };
+    };
+    publish(context, text);
+    return context;
+  };
+  const lookups: { query: string; signal: AbortSignal; finish: () => void }[] =
+    [];
+  const candidates: TriggerMenuProps["candidates"] = ({ query }, signal) =>
+    new Promise((resolve) =>
+      lookups.push({
+        query,
+        signal,
+        finish: () =>
+          resolve([{ key: query, label: query, insert: "@" + query + "!" }]),
+      }),
+    );
+  const inserts: string[] = [];
+  const scene = (context: GuiPhysicalContext) =>
+    h(TriggerMenu, {
+      id: "suggest",
+      context,
+      target,
+      triggers: ["@"],
+      candidates,
+      onInsert: (option) => inserts.push(option.insert),
+    });
+  const first = editor("@a");
+  const { world, root, draw } = await render(scene(first));
+  const second = editor("@b");
+  await draw(scene(second));
+  assert.deepEqual(
+    lookups.map((request) => request.query),
+    ["a", "b"],
+  );
+  assert.equal(lookups[0]!.signal.aborted, true);
+  lookups[1]!.finish();
+  await settle(root);
+  lookups[0]!.finish();
+  await settle(root);
+  assert.equal(world.entities.has("suggest/options/a"), false);
+  assert.ok(world.entities.has("suggest/options/b"));
+  world.value("suggest/popup", "GuiBehavior", { visible: true });
+  await settle(root);
+
+  // A press can arrive before the new selection has been rendered.
+  publish(second, "@c", 1);
+  world.effect("suggest/options/b", { kind: "pressed" });
+  await settle(root);
+  assert.equal(edits.length, 0);
+  assert.equal(lookups[2]?.query, "c");
+  lookups[2]!.finish();
+  await settle(root);
+  // The native close authored while loading this query may be reported after its rows appear.
+  world.value("suggest/popup", "GuiBehavior", { visible: false }, false);
+  await settle(root);
+  assert.ok(
+    world.entities.has("suggest/options/c"),
+    "a delayed close from the previous query cannot dismiss these rows",
+  );
+  world.value("suggest/popup", "GuiBehavior", { visible: true });
+  world.value("suggest/popup", "GuiBehavior", { visible: false });
+  await settle(root);
+  assert.equal(world.entities.has("suggest/options/c"), false);
+
+  // The next Host can start with the same query and every native ID reused.
+  const third = editor("@c");
+  await draw(scene(third));
+  assert.equal(lookups[3]?.query, "c");
+  lookups[3]!.finish();
+  await settle(root);
+  world.effect("suggest/options/c", { kind: "pressed" });
+  await settle(root);
+  assert.deepEqual(
+    edits.map((e) => e.edit),
+    [{ kind: "replaceRange", start: 0, end: 2, text: "@c!" }],
+  );
+  assert.equal(edits[0]!.context, third);
+  assert.deepEqual(inserts, ["@c!"]);
 });

@@ -1769,6 +1769,35 @@ fn fitted_column_keeps_padding_once_and_leaves_space_for_later_siblings() {
 }
 
 #[test]
+fn revealing_part_of_a_fitted_column_preserves_child_measurement_and_sibling_flow() {
+    let mut panel = GuiPanel::new(container(2));
+    let root = panel.root_entity;
+    let region = panel.node(
+        root,
+        GuiLayout {
+            kind: 2,
+            fit_height: true,
+            height_fraction: 0.5,
+            ..Default::default()
+        },
+    );
+    let first = panel.button(region, sized(90.0, 40.0));
+    let after = panel.button(root, sized(90.0, 20.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(region).size[1], 20.0);
+    assert_eq!(panel.layout(first).size[1], 40.0);
+    assert_eq!(panel.layout(after).origin[1], 20.0);
+
+    let second = panel.button(region, sized(90.0, 30.0));
+    panel.frame();
+
+    assert_eq!(panel.layout(region).size[1], 35.0);
+    assert_eq!(panel.layout(second).size[1], 30.0);
+    assert_eq!(panel.layout(after).origin[1], 35.0);
+}
+
+#[test]
 fn fitted_row_keeps_bounded_intrinsic_flex_and_places_later_siblings() {
     let mut panel = GuiPanel::new(container(1));
     let root = panel.root_entity;

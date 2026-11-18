@@ -65,7 +65,18 @@ fn revisions(view: &CanvasPublication) -> [u64; 3] {
 #[test]
 fn optional_bounds_added_to_retained_layout_are_fresh_after_removal_and_reinsertion() {
     let mut panel = GuiPanel::new(stack());
-    let node = panel.node(panel.root_entity, sized(80.0, 30.0));
+    let container = panel.create(
+        Some(panel.root_entity),
+        vec![
+            ComponentValue::GuiLayout(stack()),
+            ComponentValue::CanvasStyle(CanvasStyle {
+                scale_x: 2.0,
+                scale_y: -3.0,
+                ..Default::default()
+            }),
+        ],
+    );
+    let node = panel.node(container, sized(80.0, 30.0));
     panel.frame();
     let read = |panel: &mut GuiPanel| {
         panel
@@ -77,9 +88,16 @@ fn optional_bounds_added_to_retained_layout_are_fresh_after_removal_and_reinsert
             .components
             .into_iter()
             .find_map(|value| match value {
-                ComponentValue::CanvasBounds(bounds) => {
-                    Some([bounds.x, bounds.y, bounds.width, bounds.height])
-                }
+                ComponentValue::CanvasBounds(bounds) => Some([
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    bounds.local_width,
+                    bounds.local_height,
+                    bounds.scale_x,
+                    bounds.scale_y,
+                ]),
                 _ => None,
             })
     };
@@ -94,7 +112,10 @@ fn optional_bounds_added_to_retained_layout_are_fresh_after_removal_and_reinsert
         .result
         .unwrap();
     panel.frame();
-    assert_eq!(read(&mut panel), Some([0.0, 0.0, 80.0, 30.0]));
+    assert_eq!(
+        read(&mut panel),
+        Some([0.0, -90.0, 160.0, 90.0, 80.0, 30.0, 2.0, -3.0])
+    );
     let stable = revisions(&panel.output());
     panel.frame();
     assert_eq!(revisions(&panel.output()), stable);
@@ -126,7 +147,10 @@ fn optional_bounds_added_to_retained_layout_are_fresh_after_removal_and_reinsert
         .result
         .unwrap();
     panel.frame();
-    assert_eq!(read(&mut panel), Some([0.0, 0.0, 42.0, 30.0]));
+    assert_eq!(
+        read(&mut panel),
+        Some([0.0, -90.0, 84.0, 90.0, 42.0, 30.0, 2.0, -3.0])
+    );
 }
 
 #[test]
@@ -847,15 +871,25 @@ fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
             .components
             .into_iter()
             .find_map(|value| match value {
-                ComponentValue::CanvasBounds(bounds) => {
-                    Some([bounds.x, bounds.y, bounds.width, bounds.height])
-                }
+                ComponentValue::CanvasBounds(bounds) => Some([
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    bounds.local_width,
+                    bounds.local_height,
+                    bounds.scale_x,
+                    bounds.scale_y,
+                ]),
                 _ => None,
             })
             .unwrap()
     };
     panel.frame();
-    assert_eq!(read(&mut panel), [10.0, 20.0, 0.0, 0.0]);
+    assert_eq!(
+        read(&mut panel),
+        [10.0, 20.0, 0.0, 0.0, 0.0, 0.0, -2.0, -3.0]
+    );
     for _ in 0..16 {
         for request in panel.host.take_resource_requests() {
             panel
@@ -868,7 +902,10 @@ fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
             break;
         }
     }
-    assert_eq!(read(&mut panel), [-14.0, -16.0, 24.0, 36.0]);
+    assert_eq!(
+        read(&mut panel),
+        [-14.0, -16.0, 24.0, 36.0, 12.0, 12.0, -2.0, -3.0]
+    );
     panel
         .set(
             label,
@@ -879,7 +916,10 @@ fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
         .result
         .unwrap();
     panel.frame();
-    assert_eq!(read(&mut panel), [10.0, -16.0, 0.0, 36.0]);
+    assert_eq!(
+        read(&mut panel),
+        [10.0, -16.0, 0.0, 36.0, 0.0, 12.0, -2.0, -3.0]
+    );
     panel
         .set(
             label,
@@ -899,7 +939,10 @@ fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
         .result
         .unwrap();
     panel.frame();
-    assert_eq!(read(&mut panel), [-14.0, -52.0, 24.0, 72.0]);
+    assert_eq!(
+        read(&mut panel),
+        [-14.0, -52.0, 24.0, 72.0, 12.0, 24.0, -2.0, -3.0]
+    );
     panel
         .set(
             label,
@@ -910,5 +953,8 @@ fn raw_text_bounds_follow_font_readiness_text_and_scale_without_visible_ink() {
         .result
         .unwrap();
     panel.frame();
-    assert_eq!(read(&mut panel), [10.0, 20.0, 0.0, 0.0]);
+    assert_eq!(
+        read(&mut panel),
+        [10.0, 20.0, 0.0, 0.0, 0.0, 0.0, -2.0, -3.0]
+    );
 }

@@ -399,7 +399,10 @@ test("the leading section pulses only while the task runs and the bar is declare
   assert.equal(world.controllers.size, 0);
   assert.deepEqual(skinRows(world, "upload/lead"), piece(END, true));
 
+  // Relinquishing authorship keeps the current World preference.
   await draw(bar({}));
+  assert.equal(world.controllers.size, 0);
+  await draw(bar({}), { reducedMotion: false });
   assertPulsing(world);
   await draw(bar({ status: "complete" }));
   assert.equal(world.controllers.size, 0);
@@ -624,7 +627,7 @@ test("a spinner's animation exists only while it is declared and moving", async 
   assert.ok(world.entities.has("busy/arc"));
 
   // Removing a turning spinner removes its animation with it.
-  await draw(busy());
+  await draw(busy(), { reducedMotion: false });
   assert.equal(world.controllers.size, 1);
   await draw(h(Entity, { id: "done" }));
   assert.equal(world.controllers.size, 0);
@@ -804,7 +807,9 @@ test("a ring of unknown total turns the spinner's quarter and shows no percentag
   assert.deepEqual(skinRows(world, "upload/value"), ring(8, 0.25));
 
   // A report replaces the turning arc with the leading arc's pulse.
-  await draw(ringProgress({ size: "small", value: 0.5 }));
+  await draw(ringProgress({ size: "small", value: 0.5 }), {
+    reducedMotion: false,
+  });
   assertPulsing(world);
   assert.deepEqual(
     skinRows(world, "upload/value"),

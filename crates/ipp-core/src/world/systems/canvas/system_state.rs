@@ -38,7 +38,7 @@ pub(super) struct CanvasSystemState {
     pub gui_revision: u64,
     pub gui_dirty: bool,
     /// Evaluated bounds of the latest pass, written to `CanvasBounds`.
-    pub bounds: Vec<(EntityId, [f32; 4])>,
+    pub bounds: Vec<(EntityId, super::CanvasBounds)>,
     /// Work of the latest evaluation.
     pub work: CanvasWork,
 }

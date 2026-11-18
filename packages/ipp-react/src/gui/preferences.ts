@@ -1,44 +1,105 @@
-import { useLayoutEffect, useRef } from "react";
+import {
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useSyncExternalStore,
+} from "react";
+import type { ReactWorldClient } from "../reconciler/world-client.js";
 import type { ReactWorldCommits } from "../reconciler/commits.js";
 
-/**
- * Send the World's reduced-motion preference through `commits` when the
- * setting changes, and turn it off again when the setting or the kit goes
- * after turning it on. Undefined `commits`, in a kit that declares nothing,
- * sends nothing.
- */
-export function useReducedMotionPreference(
-  commits: ReactWorldCommits | undefined,
-  reducedMotion: boolean | undefined,
-): void {
-  /** The value this kit last sent, if any. */
-  const sent = useRef<boolean | undefined>(undefined);
-  useLayoutEffect(() => {
-    if (!commits) return;
+/** One bounded inspection at a time for all providers sharing an attached client.
+ * Hosts own motion timing. This low-frequency read observes a World setting
+ * for which the generated inspection API currently has no push notification. */
+class PreferenceReader {
+  value: boolean | undefined;
+  private readonly listeners = new Set<() => void>();
+  private lease = 0;
+  private authored = 0;
+  intent(value: boolean) {
+    ++this.authored;
+    this.publish(value);
+  }
+  private publish(value: boolean) {
+    if (this.value === value) return;
+    this.value = value;
+    for (const notify of this.listeners) notify();
+  }
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  constructor(private readonly client: ReactWorldClient) {}
+  readonly subscribe = (listener: () => void) => {
+    this.listeners.add(listener);
+    if (this.listeners.size === 1) void this.read(++this.lease);
     return () => {
-      // Unmounting the root fences it first, so this then sends nothing.
-      if (sent.current) sendReducedMotion(commits, false);
-      sent.current = undefined;
+      this.listeners.delete(listener);
+      if (this.listeners.size === 0) {
+        ++this.lease;
+        clearTimeout(this.timer);
+        this.value = undefined;
+      }
     };
-  }, [commits]);
-  useLayoutEffect(() => {
-    if (!commits) return;
-    const next = reducedMotion ?? (sent.current ? false : undefined);
-    if (
-      next !== undefined &&
-      next !== sent.current &&
-      sendReducedMotion(commits, next)
-    )
-      sent.current = next;
-  }, [commits, reducedMotion]);
+  };
+  private async read(lease: number) {
+    const version = this.authored;
+    try {
+      const page = await this.client.inspectPage!({
+        collection: "guiPreferences",
+      });
+      if (this.lease !== lease) return;
+      const next = page.guiPreferences?.reducedMotion;
+      if (next !== undefined && version === this.authored) this.publish(next);
+    } catch {
+      // Closed clients have no more updates. A transient read retries below.
+    }
+    if (lease === this.lease && !this.client.closure) {
+      this.timer = setTimeout(() => void this.read(lease), 250);
+      // Poll while the application is running. A Node client can exit with
+      // subscribers still mounted; this background read owns no Host lifetime.
+      if (typeof this.timer === "object") this.timer.unref?.();
+    }
+  }
 }
 
-function sendReducedMotion(
-  commits: ReactWorldCommits,
-  reducedMotion: boolean,
-): boolean {
-  return commits.sendSystemCommand({
-    type: "GuiPreferencesUpdateCommand",
-    reducedMotion,
-  });
+const readers = new WeakMap<ReactWorldClient, PreferenceReader>();
+const noSubscribe = () => () => {};
+
+export function useWorldReducedMotion(client: ReactWorldClient | undefined) {
+  let reader = client && readers.get(client);
+  if (!reader && client?.inspectPage) {
+    reader = new PreferenceReader(client);
+    readers.set(client, reader);
+  }
+  const snapshot = useCallback(() => reader?.value, [reader]);
+  return useSyncExternalStore(
+    reader?.subscribe ?? noSubscribe,
+    snapshot,
+    snapshot,
+  );
+}
+
+/** Only a new authored intent writes the World. Unmounting relinquishes the writer. */
+export function useReducedMotionPreference(
+  commits: ReactWorldCommits | undefined,
+  desired: boolean | undefined,
+  client: ReactWorldClient | undefined,
+) {
+  const sent = useRef<{ commits: ReactWorldCommits; value: boolean } | null>(
+    null,
+  );
+  useLayoutEffect(() => {
+    if (!commits || desired === undefined) {
+      sent.current = null;
+      return;
+    }
+    if (sent.current?.commits === commits && sent.current.value === desired)
+      return;
+    if (
+      commits.sendSystemCommand({
+        type: "GuiPreferencesUpdateCommand",
+        reducedMotion: desired,
+      })
+    ) {
+      sent.current = { commits, value: desired };
+      if (client) readers.get(client)?.intent(desired);
+    }
+  }, [commits, desired, client]);
 }

@@ -32,6 +32,7 @@ import { useComposedControlRef } from "../../gui/control-refs.js";
 import type { GuiControlHandle } from "../../gui/control-ref.js";
 import { useValueSynchronization } from "../values/value-synchronization.js";
 import { Skin } from "../../gui/theme.js";
+import { Button as NativeButton } from "../../gui/controls.js";
 import { BehaviorWithRef } from "../../gui/behavior-ref.js";
 import type {
   GuiControlEvent,
@@ -60,7 +61,12 @@ export type GuiKitOverlayAlign = "start" | "centre" | "end" | "stretch";
  * press or focus leaving (light), Escape only while it blocks what lies
  * beneath it (modal), or hover and visible focus on its parent (hint).
  */
-export type GuiKitOverlayMode = "manual" | "light" | "modal" | "hint";
+export type GuiKitOverlayMode =
+  | "manual"
+  | "light"
+  | "modal"
+  | "hint"
+  | "hoverCard";
 
 /** `GuiOverlay` field values. */
 export const OVERLAY_SIDE = {
@@ -81,6 +87,7 @@ export const OVERLAY_MODE = {
   light: 1,
   modal: 2,
   hint: 3,
+  hoverCard: 4,
 } as const satisfies Record<GuiKitOverlayMode, number>;
 
 export interface OverlayOpenProps {
@@ -276,7 +283,9 @@ export function Floating(props: FloatingProps) {
         layer={layer}
         {...(offset ? { x: offset[0], y: offset[1] } : {})}
       />
+      {mode === "hoverCard" && <NativeButton label="" skin={false} />}
       <BehaviorWithRef
+        {...(mode === "hoverCard" ? { focusable: false } : {})}
         visible={controlled ? synchronization.initial.visible : open}
         controlRef={attach}
         onVisibleChange={(event) => {

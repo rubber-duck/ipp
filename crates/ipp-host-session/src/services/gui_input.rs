@@ -23,7 +23,11 @@ use std::{cell::RefCell, collections::LinkedList, rc::Rc};
 mod delivery_tests;
 
 struct Owner {
-    native_presentation: Option<(ipp_core::systems::gui::local::GuiTextFence, bool)>,
+    native_presentation: Option<(
+        ipp_core::systems::gui::local::GuiTextFence,
+        bool,
+        Option<[f32; 4]>,
+    )>,
     connection: u64,
     id: u64,
     view: PresentationView,
@@ -660,52 +664,55 @@ impl GuiHostInputService {
                 .ok()
             });
         let cancellation = self.router.synchronize(host, &mut owner.context, view);
-        self.router.with_native_text(host, &owner.context, |state| {
-            let presentation = state.map(|state| (state.fence, state.masked));
-            if presentation == owner.native_presentation {
-                return;
-            }
-            let result = (|| {
-                let size = state
-                    .map(ipp_protocol::host::gui_input::native_state_size)
-                    .transpose()
-                    .map_err(|_| ())?
-                    .unwrap_or(0);
-                let mut reservation = ReplyReservation::new(
-                    owner.budget.clone(),
-                    OutputClass::Ordinary,
-                    512 + 2 * size,
-                )
-                .map_err(|_| ())?;
-                let slot = owner.outbox.reserve().map_err(|_| ())?;
-                let response = HostResponse {
-                    connection: owner.connection,
-                    request_id: 0,
-                    body: HostResponseBody::GuiInput(GuiPhysicalResponse::Native {
-                        context: owner.id,
-                        state: state
-                            .map(ipp_protocol::host::gui_input::encode_native_state)
-                            .transpose()
-                            .map_err(|_| ())?,
-                    }),
-                };
-                let bytes = ipp_protocol::host::encode_host_response(&response).map_err(|_| ())?;
-                drop(response);
-                reservation.encoded(bytes.capacity());
-                slot.settle(QueuedResponse {
-                    bytes: bytes.into(),
-                    reservation: Rc::new(RefCell::new(reservation)).into(),
-                });
-                owner.native_presentation = presentation;
-                Ok::<(), ()>(())
-            })();
-            if result.is_err() {
-                owner
-                    .budget
-                    .0
-                    .fail(ipp_core::services::reliable_output::OutputFailure::Capacity);
-            }
-        });
+        self.router
+            .with_native_presentation(host, &owner.context, |state| {
+                let presentation =
+                    state.map(|state| (state.fence, state.masked, state.caret_bounds));
+                if presentation == owner.native_presentation {
+                    return;
+                }
+                let result = (|| {
+                    let size = state
+                        .map(ipp_protocol::host::gui_input::native_state_size)
+                        .transpose()
+                        .map_err(|_| ())?
+                        .unwrap_or(0);
+                    let mut reservation = ReplyReservation::new(
+                        owner.budget.clone(),
+                        OutputClass::Ordinary,
+                        512 + 2 * size,
+                    )
+                    .map_err(|_| ())?;
+                    let slot = owner.outbox.reserve().map_err(|_| ())?;
+                    let response = HostResponse {
+                        connection: owner.connection,
+                        request_id: 0,
+                        body: HostResponseBody::GuiInput(GuiPhysicalResponse::Native {
+                            context: owner.id,
+                            state: state
+                                .map(ipp_protocol::host::gui_input::encode_native_state)
+                                .transpose()
+                                .map_err(|_| ())?,
+                        }),
+                    };
+                    let bytes =
+                        ipp_protocol::host::encode_host_response(&response).map_err(|_| ())?;
+                    drop(response);
+                    reservation.encoded(bytes.capacity());
+                    slot.settle(QueuedResponse {
+                        bytes: bytes.into(),
+                        reservation: Rc::new(RefCell::new(reservation)).into(),
+                    });
+                    owner.native_presentation = presentation;
+                    Ok::<(), ()>(())
+                })();
+                if result.is_err() {
+                    owner
+                        .budget
+                        .0
+                        .fail(ipp_core::services::reliable_output::OutputFailure::Capacity);
+                }
+            });
         if cancellation.is_empty() {
             return;
         }

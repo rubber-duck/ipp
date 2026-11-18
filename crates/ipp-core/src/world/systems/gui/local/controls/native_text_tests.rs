@@ -1073,3 +1073,191 @@ fn masked_numeric_commits_and_steps_keep_their_number_semantics() {
     assert_eq!(&*host.native().unwrap().text, "13");
     assert!(host.native().unwrap().masked);
 }
+
+fn focus_configured(input: GuiTextInput) -> (GuiRoutedHost, EntityId) {
+    focus_with_width(input, ROUTED_EXTENT)
+}
+
+fn focus_with_width(input: GuiTextInput, width: f32) -> (GuiRoutedHost, EntityId) {
+    let mut host = GuiRoutedHost::new();
+    let entity = host.create(vec![
+        text_skin(),
+        text_metrics(),
+        ComponentValue::GuiTextInput(input),
+        ComponentValue::GuiLayout(GuiLayout {
+            width,
+            height: INPUT_HEIGHT,
+            ..Default::default()
+        }),
+    ]);
+    host.route(GuiPhysicalInput::Key {
+        key: GuiPhysicalKey::Tab,
+        shift: false,
+    })
+    .unwrap();
+    host.terminals();
+    (host, entity)
+}
+
+#[test]
+fn multiline_navigation_and_replacement_use_current_layout_and_grapheme_boundaries() {
+    let (mut host, entity) = focus_configured(GuiTextInput {
+        multiline: true,
+        text: "ae\nVe".into(),
+        ..Default::default()
+    });
+    let home = edit(
+        &mut host,
+        GuiTextEdit::Navigate {
+            direction: 2,
+            extend: false,
+        },
+    );
+    assert_eq!(home.selection, [3, 3]);
+    let up = edit(
+        &mut host,
+        GuiTextEdit::Navigate {
+            direction: 0,
+            extend: true,
+        },
+    );
+    assert_eq!(up.selection, [3, 0]);
+    let shifted = edit(
+        &mut host,
+        GuiTextEdit::Navigate {
+            direction: 5,
+            extend: true,
+        },
+    );
+    assert_eq!(shifted.selection, [3, 1]);
+    let applied = edit(
+        &mut host,
+        GuiTextEdit::ReplaceRange {
+            range: [0, 3],
+            text: "é\n".into(),
+        },
+    );
+    assert_eq!(applied.text.as_ref(), "é\nVe");
+    assert_eq!(applied.selection, [3, 3]);
+    assert_eq!(
+        refused(
+            &mut host,
+            applied.fence,
+            GuiTextEdit::ReplaceRange {
+                range: [1, 2],
+                text: "".into()
+            }
+        ),
+        GuiInputError::Local(GuiLocalActionError::InvalidValue)
+    );
+    host.route(GuiPhysicalInput::Key {
+        key: GuiPhysicalKey::Enter,
+        shift: false,
+    })
+    .unwrap();
+    assert_eq!(stored(&mut host, entity).as_ref(), "é\n\nVe");
+}
+
+#[test]
+fn multiline_navigation_reaches_overflow_spaces_and_stays_on_the_visual_line_at_end() {
+    let navigate = |host: &mut GuiRoutedHost, direction| {
+        edit(
+            host,
+            GuiTextEdit::Navigate {
+                direction,
+                extend: false,
+            },
+        )
+    };
+    let width = 2.0 * (ROUTED_FONT_SIZE + A) + 0.01;
+    for text in ["aa   bb", "aa   ", "aaaa"] {
+        let (mut host, _) = focus_with_width(
+            GuiTextInput {
+                text: text.into(),
+                multiline: true,
+                ..Default::default()
+            },
+            width,
+        );
+        if text.contains(' ') {
+            edit(&mut host, GuiTextEdit::Selection([3, 3]));
+            assert_eq!(navigate(&mut host, 2).selection, [0, 0]);
+            assert_eq!(navigate(&mut host, 3).selection, [5, 5]);
+            edit(&mut host, GuiTextEdit::Selection([3, 3]));
+            let _ = navigate(&mut host, 1);
+        } else {
+            edit(&mut host, GuiTextEdit::Selection([0, 0]));
+            let end = navigate(&mut host, 3);
+            assert_eq!(end.selection, [2, 2]);
+            assert!(end.caret_upstream);
+            assert_eq!(navigate(&mut host, 2).selection, [0, 0]);
+        }
+    }
+}
+
+#[test]
+fn code_policy_filters_insertion_without_truncating_the_retained_suffix() {
+    let (mut host, _) = focus_configured(GuiTextInput {
+        purpose: 3,
+        code_length: 4,
+        code_characters: "0123456789".into(),
+        text: "12".into(),
+        ..Default::default()
+    });
+    let _ = edit(&mut host, GuiTextEdit::Selection([1, 1]));
+    let applied = edit(&mut host, GuiTextEdit::Insert("💠345".into()));
+    assert_eq!(applied.text.as_ref(), "1342");
+    assert_eq!(applied.selection, [3, 3]);
+}
+
+#[test]
+fn read_only_inputs_allow_selection_and_reject_late_mutation() {
+    let (mut host, entity) = focus_configured(GuiTextInput {
+        read_only: true,
+        text: "preserved".into(),
+        ..Default::default()
+    });
+    let selected = edit(&mut host, GuiTextEdit::SelectAll);
+    assert_eq!(selected.selection, [0, 9]);
+    assert_eq!(
+        refused(&mut host, selected.fence, GuiTextEdit::Delete),
+        GuiInputError::Local(GuiLocalActionError::Unavailable)
+    );
+    assert_eq!(stored(&mut host, entity).as_ref(), "preserved");
+}
+
+#[test]
+fn read_only_numeric_submit_keeps_purpose_selection_policy_and_unrounded_value() {
+    let (mut host, entity) = focus_configured(GuiTextInput {
+        numeric: true,
+        masked: false,
+        read_only: true,
+        purpose: 2,
+        value: 7.25,
+        precision: 0,
+        step_parts: true,
+        ..Default::default()
+    });
+    let submitted = edit(&mut host, GuiTextEdit::Submit);
+    assert!(submitted.read_only);
+    assert_eq!(submitted.purpose, 2);
+    assert_eq!(submitted.text.as_ref(), "7");
+    assert_eq!(
+        refused(&mut host, submitted.fence, GuiTextEdit::Insert("9".into())),
+        GuiInputError::Local(GuiLocalActionError::Unavailable)
+    );
+    host.route(GuiPhysicalInput::Key {
+        key: GuiPhysicalKey::Up,
+        shift: false,
+    })
+    .unwrap();
+    let terminals = host.terminals();
+    assert!(
+        terminals.iter().any(|terminal| matches!(
+            terminal,
+            GuiDeliveryTerminal::Rejected(GuiInputError::Local(GuiLocalActionError::Unavailable))
+        )),
+        "{terminals:?}"
+    );
+    assert!(matches!(host.snapshot(entity).value,GuiTestValue::Number(value) if value==7.25));
+}

@@ -15,10 +15,12 @@ pub(super) enum GuiLocalOperation {
         event: GuiClientInput,
     },
     TextCaret {
+        upstream: bool,
         offset: u32,
         extend: bool,
     },
     Text {
+        upstream: bool,
         fence: GuiTextFence,
         edit: GuiTextEdit,
     },
@@ -92,10 +94,12 @@ impl GuiLocalCommand {
         input: GuiInputCommand,
         offset: u32,
         extend: bool,
+        upstream: bool,
     ) -> Result<Self, GuiInputError> {
         Self::new(
             input,
             GuiLocalOperation::TextCaret {
+                upstream,
                 offset,
                 extend,
             },
@@ -107,6 +111,7 @@ impl GuiLocalCommand {
         input: GuiInputCommand,
         fence: GuiTextFence,
         edit: GuiTextEdit,
+        upstream: bool,
     ) -> Result<Self, GuiInputError> {
         if input.target() != fence.target {
             input.reject(GuiInputError::Unavailable);
@@ -115,6 +120,7 @@ impl GuiLocalCommand {
         Self::new(
             input,
             GuiLocalOperation::Text {
+                upstream,
                 fence,
                 edit,
             },

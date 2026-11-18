@@ -171,7 +171,7 @@ impl GuiTextInput {
     /// Whether the decrement and increment parts step: each until the
     /// committed number reaches its bound, and neither with a zero step.
     pub(in crate::world::systems) fn step_enabled(&self) -> [bool; 2] {
-        let steps = self.step > 0.0;
+        let steps = self.step > 0.0 && !self.read_only;
         [
             steps && self.value > self.min,
             steps && self.value < self.max,
@@ -396,6 +396,9 @@ impl GuiSystem {
             .filter(|input| input.numeric)
             .cloned()
             .ok_or(unsupported)?;
+        if input.read_only && matches!(operation, GuiNumberOperation::Step { .. }) {
+            return Err(GuiInputError::Local(GuiLocalActionError::Unavailable));
+        }
         if matches!(
             operation,
             GuiNumberOperation::Step {
@@ -410,7 +413,9 @@ impl GuiSystem {
         // Only the session holding the edit commits or discards it.
         let owner = command.input.session_lifetime();
         let held = self.local.holds_native_text(target, &owner);
-        let edit = held.then(|| self.local.number_edit(target)).flatten();
+        let edit = (held && !input.read_only)
+            .then(|| self.local.number_edit(target))
+            .flatten();
         let outcome = input.number_outcome(operation, edit.as_ref());
         let formatted = format_number(outcome.value, input.precision);
         let kind = match (outcome.rejected.clone(), operation) {
@@ -481,7 +486,7 @@ impl GuiSystem {
                         target,
                         formatted.clone(),
                         generation,
-                        native.state.masked,
+                        Some(&input),
                     );
                     native.basis = Some(formatted);
                     local.native_generation = generation;
@@ -570,7 +575,7 @@ impl GuiSystem {
                         .components
                         .gui_text_input(target.entity.index() as usize)
                 })
-                .filter(|input| input.numeric)
+                .filter(|input| input.numeric && !input.read_only)
             else {
                 continue;
             };
@@ -620,7 +625,7 @@ impl GuiSystem {
         ) else {
             return Ok(());
         };
-        if !input.numeric {
+        if !input.numeric || input.read_only {
             return Ok(());
         }
         match input.committed(&text) {

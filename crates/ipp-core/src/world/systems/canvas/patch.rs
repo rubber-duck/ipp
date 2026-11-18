@@ -48,7 +48,7 @@ struct CanvasPatchOutput {
     overlays: Vec<(usize, GuiOverlayObservation)>,
     forgotten_parts: Vec<CanvasPrimitiveId>,
     forgotten_controls: Vec<CanvasTarget>,
-    bounds: Vec<(EntityId, [f32; 4])>,
+    bounds: Vec<(EntityId, CanvasBounds)>,
     interaction: [i64; 4],
     /// A replaced entry changed the resource it retains.
     resources: bool,
@@ -537,7 +537,7 @@ impl CanvasSystem {
                     .world
                     .components
                     .canvas_bounds(entity.index() as usize)
-                    .map(|bounds| [bounds.x, bounds.y, bounds.width, bounds.height])
+                    .copied()
             });
             assert_eq!(
                 current,

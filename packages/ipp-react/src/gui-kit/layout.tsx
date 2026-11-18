@@ -7,7 +7,14 @@ import {
   Entity,
   type ComponentFields,
 } from "../components.js";
-import { Style, Layout, type LayoutProps } from "../gui/components.js";
+import {
+  Behavior,
+  Bounds,
+  Group,
+  Style,
+  Layout,
+  type LayoutProps,
+} from "../gui/components.js";
 import { useGuiKit } from "./kit.js";
 import {
   resolveSpacing,
@@ -164,6 +171,7 @@ export function Strut({
 }
 
 export interface RowProps extends GuiKitFlowLayoutProps {
+  readonly measureBounds?: boolean;
   /** Nonnegative layer offset applied once at this component root; zero inherits. */
   readonly layer?: number;
   readonly id?: string;
@@ -174,6 +182,7 @@ export interface RowProps extends GuiKitFlowLayoutProps {
 export function Row({
   id: providedId,
   layer = 0,
+  measureBounds = false,
   children,
   ...layout
 }: RowProps) {
@@ -187,6 +196,7 @@ export function Row({
   return (
     <Entity id={id}>
       <PresentationGate open />
+      {measureBounds && <Bounds />}
       <Style layer={layer} />
       <Layout kind={LAYOUT_ROW} {...fields} />
       <Children>{children}</Children>
@@ -194,25 +204,54 @@ export function Row({
   );
 }
 
-export type ToolbarProps = RowProps;
+export interface ToolbarProps extends RowProps {
+  /** Open an item with a perpendicular arrow, such as a menu popup. */
+  readonly activateOnCrossAxis?: boolean;
+  readonly orientation?: "horizontal" | "vertical";
+  readonly label?: string;
+}
 
-/** A centered control row with the skin's half-inset between adjacent controls. */
-export function Toolbar(props: ToolbarProps) {
+/** One native Tab stop. Axis arrows and Home/End navigate eligible items. */
+export function Toolbar({
+  id: providedId,
+  layer = 0,
+  measureBounds = false,
+  orientation = "horizontal",
+  label = "",
+  activateOnCrossAxis = false,
+  children,
+  ...props
+}: ToolbarProps) {
+  const id = useEntityId(providedId);
   const kit = useGuiKit();
+  const vertical = orientation === "vertical";
   const height = props.layout?.height ?? props.height;
+  const fields = useLayoutFields(props, {
+    fit_height: true,
+    min_height:
+      height !== undefined && height >= 0 ? 0 : kit.unit(kit.tokens.row),
+    gap: kit.spacing.label,
+    align_items: 0,
+  });
   return (
-    <Row
-      {...props}
-      minHeight={
-        props.minHeight ??
-        (height !== undefined && height >= 0 ? 0 : kit.unit(kit.tokens.row))
-      }
-      gap={props.gap ?? "label"}
-    />
+    <Entity id={id}>
+      <PresentationGate open />
+      {measureBounds && <Bounds />}
+      <Style layer={layer} />
+      <Layout kind={vertical ? LAYOUT_COLUMN : LAYOUT_ROW} {...fields} />
+      <Group
+        axis={vertical ? 1 : 0}
+        selection={0}
+        activate_cross_axis={activateOnCrossAxis}
+      />
+      <Behavior semantic_label={label} />
+      <Children>{children}</Children>
+    </Entity>
   );
 }
 
 export interface ContainerProps extends GuiKitFlowLayoutProps {
+  readonly measureBounds?: boolean;
   readonly id?: string;
   readonly layer?: number;
   readonly children?: ReactNode;
@@ -222,6 +261,7 @@ export interface ContainerProps extends GuiKitFlowLayoutProps {
 export function Column({
   id: providedId,
   layer = 0,
+  measureBounds = false,
   children,
   ...layout
 }: ContainerProps) {
@@ -230,6 +270,7 @@ export function Column({
   return (
     <Entity id={id}>
       <PresentationGate open />
+      {measureBounds && <Bounds />}
       <Style layer={layer} />
       <Layout
         kind={LAYOUT_COLUMN}
@@ -247,6 +288,7 @@ export function Column({
 export function OverlayStack({
   id: providedId,
   layer = 0,
+  measureBounds = false,
   children,
   ...layout
 }: ContainerProps) {
@@ -254,6 +296,7 @@ export function OverlayStack({
   return (
     <Entity id={id}>
       <PresentationGate open />
+      {measureBounds && <Bounds />}
       <Style layer={layer} />
       <Layout kind={LAYOUT_STACK} {...useLayoutFields(layout)} />
       <Children>{children}</Children>

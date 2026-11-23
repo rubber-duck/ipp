@@ -29,6 +29,22 @@ pub(super) fn prepare(
             layer: 0,
         };
         output.push(match &item.kind {
+            PlotPrimitiveKind::AxisLine {
+                size,
+                radius,
+            } => CanvasPrimitive::Box {
+                style: CanvasPrimitiveStyle {
+                    color: [1.0; 4],
+                    ..style
+                },
+                size: *size,
+                corner_radius: [*radius; 2],
+                border_width: 0.0,
+                border_color: [0.0; 4],
+                fill: CanvasShapeFill::Solid(item.color),
+                glow: None,
+                shape: CanvasBoxShape::RECT,
+            },
             PlotPrimitiveKind::CalloutBox {
                 size,
                 radius,

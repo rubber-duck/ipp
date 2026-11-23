@@ -120,6 +120,11 @@ pub struct PlotPrimitive {
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
 pub enum PlotPrimitiveKind {
+    /// Axis shaft, painted separately from ticks, arrows, text and guides.
+    AxisLine {
+        size: [f32; 2],
+        radius: f32,
+    },
     /// Shared callout paint, separate from the data-mark material.
     CalloutBox {
         size: [f32; 2],
@@ -290,6 +295,25 @@ pub struct PlotHit {
     pub shape: PlotHitShape,
 }
 
+/// A bar's bounds before rotation, shared by its mesh and its picking solid.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PlotBarSolid {
+    /// Lower corner in chart space before yaw.
+    pub min: [f32; 3],
+    /// Upper corner in chart space before yaw.
+    pub max: [f32; 3],
+    /// Inset of the top and bottom faces, in chart units.
+    pub bevel: f32,
+    /// Rotation in radians around the bar's vertical centreline.
+    pub yaw: f32,
+}
+
+impl PlotBarSolid {
+    pub(super) fn center_xz(&self) -> [f32; 2] {
+        [0, 2].map(|i| self.min[i].midpoint(self.max[i]))
+    }
+}
+
 /// Geometry used for row picking, independently of presentation visibility/materials.
 #[derive(Clone, Debug, PartialEq)]
 #[allow(missing_docs)]
@@ -302,6 +326,8 @@ pub enum PlotHitShape {
     },
     /// Canvas-local rectangle.
     Rect([f32; 4]),
+    /// Four clockwise Canvas corners shared with the painted bar.
+    SlantedBar([[f32; 2]; 4]),
     /// Canvas-local circle.
     Circle {
         center: [f32; 2],
@@ -320,6 +346,8 @@ pub enum PlotHitShape {
         min: [f32; 3],
         max: [f32; 3],
     },
+    /// Closed bar with an optional turn and cap bevel.
+    Bar(PlotBarSolid),
     /// Exact radial prism: clockwise +Y rotation from +Z, X/Z centre and absolute Y limits.
     RadialPrism {
         center: [f32; 3],
@@ -388,6 +416,25 @@ impl PlotPrimitive {
         }
     }
 
+    pub(super) fn axis_line(
+        part: u32,
+        position: [f32; 2],
+        size: [f32; 2],
+        radius: f32,
+        color: [f32; 4],
+    ) -> Self {
+        Self {
+            part,
+            position,
+            color,
+            data_mark: false,
+            kind: PlotPrimitiveKind::AxisLine {
+                size,
+                radius,
+            },
+        }
+    }
+
     /// A generated analytic contour in top-left/Y-down local coordinates.
     pub fn path(part: u32, path: PlotPath, color: [f32; 4]) -> Self {
         Self {
@@ -431,6 +478,8 @@ pub struct PlotPublishedChart {
     pub model: [f32; 16],
     /// Prepared scene meshes through the ordinary material/draw contract.
     pub meshes: Vec<PlotPublishedMesh>,
+    /// Shared paint for the axis shafts.
+    pub axis_paint: Option<crate::systems::canvas::CanvasPaintInstance>,
     /// Shared panel shader, independent of data-mark materials.
     pub callout_paint: Option<crate::systems::canvas::CanvasPaintInstance>,
     /// Prepared shared plane paint (font glyphs included).
@@ -461,6 +510,7 @@ impl PartialEq for PlotPublishedChart {
     fn eq(&self, other: &Self) -> bool {
         self.target == other.target
             && self.callout_paint == other.callout_paint
+            && self.axis_paint == other.axis_paint
             && self.model == other.model
             && same_geometry(&self.geometry, &other.geometry)
             && self.meshes.len() == other.meshes.len()
@@ -580,6 +630,7 @@ impl PlotSystem {
                         meshes: Vec::new(),
                         planes: chart.planes.clone(),
                         callout_paint: None,
+                        axis_paint: None,
                     });
                 }
                 let published = &mut charts[count];
@@ -673,19 +724,31 @@ impl PlotSystem {
                 }
                 published.meshes.truncate(mesh_count);
 
-                let callout_paint = super::callout::paint_target(world.world, chart.target.entity)
-                    .and_then(|target| {
-                        super::callout::paint_instance(
-                            world.world,
-                            world.asset_resources(),
-                            target,
-                            published.callout_paint.as_ref(),
-                        )
-                    });
-                if let Some(shader) = callout_paint.as_ref().and_then(|paint| paint.shader) {
-                    output.retain(shader);
+                for (component, slot) in [
+                    (
+                        crate::ComponentValue::PLOT_CALLOUT_PAINT,
+                        &mut published.callout_paint,
+                    ),
+                    (
+                        crate::ComponentValue::PLOT_AXIS_PAINT,
+                        &mut published.axis_paint,
+                    ),
+                ] {
+                    let instance =
+                        super::paint::paint_target(world.world, chart.target.entity, component)
+                            .and_then(|target| {
+                                super::paint::paint_instance(
+                                    world.world,
+                                    world.asset_resources(),
+                                    target,
+                                    slot.as_ref(),
+                                )
+                            });
+                    if let Some(shader) = instance.as_ref().and_then(|paint| paint.shader) {
+                        output.retain(shader);
+                    }
+                    *slot = instance;
                 }
-                published.callout_paint = callout_paint;
                 count += 1;
             }
             charts.truncate(count);

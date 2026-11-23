@@ -156,6 +156,7 @@ export type {
 
 export {
   PlotCalloutStyle,
+  PlotAxisPaint,
   PlotCalloutPaint,
   PlotFrame2d,
   PlotFrame3d,
@@ -192,6 +193,7 @@ export type {
   PlotLabel,
   PlotRowsProps,
   PlotCalloutStyleProps,
+  PlotAxisPaintProps,
   PlotCalloutPaintProps,
   PlotFrame2dProps,
   PlotFrame3dProps,
@@ -250,4 +252,5 @@ export {
 export type { OwnedReactWorldRoot, WorldPresetOptions } from "./scope/setup.js";
 
 export { PlotSkinProvider } from "./plots/skin-provider.js";
+export { usePlotSkin } from "./plots/declarations.js";
 export type { PlotSkinAppearance } from "./plots/skin-types.js";

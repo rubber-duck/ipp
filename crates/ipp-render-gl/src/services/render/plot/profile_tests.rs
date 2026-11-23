@@ -125,7 +125,7 @@ fn layout(count: usize, radial: bool, validate_reuse: bool) {
     let planes: Vec<_> = retained
         .iter()
         .map(|plane| ScenePlotPlane {
-            callout_paint: None,
+            paint: None,
             entity: crate::services::render::outputs::scene::RenderEntity {
                 world,
                 entity,

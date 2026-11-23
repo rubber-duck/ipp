@@ -51,7 +51,7 @@ export function ChartSkin({
   );
 }
 
-/** Ordinary native aiming keeps spatial Glass legends readable while orbiting. */
+/** Ordinary native aiming keeps spatial legends readable while orbiting. */
 export function ChartLegendFacing({
   selection,
   facing,
@@ -67,20 +67,20 @@ export function ChartLegendFacing({
   depth: number;
   children?: ReactNode;
 }) {
-  const glass =
-    useSyncExternalStore(selection.subscribe, selection.read) === "glass";
+  const skin = useSyncExternalStore(selection.subscribe, selection.read);
+  const aim = skin === "glass" || skin === "cartoon";
   return (
     <>
       <Entity bindTo={facing}>
-        <Transform z={glass ? depth * 0.5 : depth} />
-        <LookAt target={camera} enabled={glass} />
+        <Transform z={aim ? depth * 0.5 : depth} />
+        <LookAt target={camera} enabled={aim} />
       </Entity>
       <Entity bindTo={surface}>
         <Transform
-          qy={glass ? 1 : 0}
-          qw={glass ? 0 : 1}
-          sx={glass ? 0.88 : 1}
-          sy={glass ? 0.88 : 1}
+          qy={aim ? 1 : 0}
+          qw={aim ? 0 : 1}
+          sx={skin === "glass" ? 0.88 : 1}
+          sy={skin === "glass" ? 0.88 : 1}
         />
         {children}
       </Entity>

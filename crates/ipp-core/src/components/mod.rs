@@ -64,6 +64,6 @@ pub use crate::systems::gui::presentation::{GuiFont, GuiMetrics, GuiSkin, GuiThe
 pub use crate::systems::data_bindings::{BufferDataSourceBinding, StreamingDataSourceBinding};
 
 pub use crate::systems::plot::{
-    PlotBars2d, PlotCalloutPaint, PlotCalloutStyle, PlotFrame2d, PlotFrame3d, PlotGridBars3d,
-    PlotHeightSurface3d, PlotLine2d, PlotPie2d, PlotPie3d, PlotPoints3d,
+    PlotAxisPaint, PlotBars2d, PlotCalloutPaint, PlotCalloutStyle, PlotFrame2d, PlotFrame3d,
+    PlotGridBars3d, PlotHeightSurface3d, PlotLine2d, PlotPie2d, PlotPie3d, PlotPoints3d,
 };

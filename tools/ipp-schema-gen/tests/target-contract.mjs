@@ -293,6 +293,7 @@ for (const schema of [native, target]) {
       [
         "CustomMaterial",
         "CanvasPaint",
+        "PlotAxisPaint",
         "PlotCalloutPaint",
         "BufferDataSourceBinding",
         "StreamingDataSourceBinding",

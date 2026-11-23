@@ -22,6 +22,10 @@ export const plotComponentContract = {
       leader_width: "number",
     },
   },
+  PlotAxisPaint: {
+    host: "ipp-plot-axis-paint",
+    fields: { source: "string", variant: "number" },
+  },
   PlotCalloutPaint: {
     host: "ipp-plot-callout-paint",
     fields: { source: "string", variant: "number" },
@@ -59,6 +63,8 @@ export const plotComponentContract = {
       highlight_green: "number",
       highlight_blue: "number",
       highlight_alpha: "number",
+      axis_width_scale: "number",
+      bar_lean: "number",
       line_width: "number",
     },
   },
@@ -93,6 +99,9 @@ export const plotComponentContract = {
       grid_blue: "number",
       grid_alpha: "number",
       mark_outlines: "boolean",
+      floor_grid: "boolean",
+      axis_width_scale: "number",
+      bar_bevel: "number",
       line_width: "number",
     },
   },
@@ -132,6 +141,8 @@ export const plotComponentContract = {
       labels: "bytes",
       bar_width: "number",
       bar_depth: "number",
+      stacked_blocks: "boolean",
+      block_yaw: "number",
     },
   },
   PlotHeightSurface3d: {

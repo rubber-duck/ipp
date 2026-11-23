@@ -1,5 +1,11 @@
 /** Shared native/example authoring; source data stays in the Data Service. */
-import { createElement as h, Fragment, type ReactNode } from "react";
+import {
+  createElement as h,
+  cloneElement,
+  Fragment,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import type { AnimationWorldClient, RowPropertyValue } from "@ipp/client";
 import {
   BufferDataSourceBinding,
@@ -24,6 +30,7 @@ import {
   type PlotSeries,
   type PlotLabel,
   fixed,
+  usePlotSkin,
 } from "@ipp/react";
 
 type Row = Readonly<Record<string, RowPropertyValue>>;
@@ -36,6 +43,18 @@ const charts = {
   PlotPoints3d,
   PlotPie3d,
 };
+
+/** Gallery samples adopt the active skin's mark sizes over their exhibit defaults. */
+function SampleMarks({
+  declaration,
+  component,
+}: {
+  declaration: ReactElement<object>;
+  component: keyof typeof charts;
+}) {
+  const defaults = usePlotSkin()?.marks?.[component];
+  return defaults ? cloneElement(declaration, defaults) : declaration;
+}
 
 /** Native fixture values enter the same public typed declarations as an app. */
 export async function declarePlot(
@@ -58,6 +77,10 @@ export async function declarePlot(
   },
   interpolationRates: Readonly<Record<string, number>> = {},
   wrap: (children: ReactNode) => ReactNode = (children) => children,
+  frame: ReactNode = h(
+    component.endsWith("2d") ? PlotFrame2d : PlotFrame3d,
+    {},
+  ),
 ) {
   const root = createRoot(client);
   const seriesRows = {
@@ -131,8 +154,8 @@ export async function declarePlot(
             h(
               Fragment,
               null,
-              h(component.endsWith("2d") ? PlotFrame2d : PlotFrame3d, {}),
-              chart,
+              frame,
+              h(SampleMarks, { declaration: chart, component }),
             ),
           ),
         ),

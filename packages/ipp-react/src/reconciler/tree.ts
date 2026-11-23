@@ -85,6 +85,7 @@ const skinFallbackHosts = new Set([
   "ipp-canvas-paint",
   "ipp-custom-material",
   "ipp-plot-callout-style",
+  "ipp-plot-axis-paint",
   "ipp-plot-callout-paint",
 ]);
 

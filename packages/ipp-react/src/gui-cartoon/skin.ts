@@ -6,7 +6,8 @@ import { compactSkin } from "../gui-kit/compact-skin.js";
 import type { GuiKitContract } from "../gui-kit/kit.js";
 import type { GuiSkinDefinition } from "../gui/skin-types.js";
 import { cartoonLooks } from "./looks.js";
-import { cartoonTokens, grass, pine, sky } from "./palette.js";
+import { cartoonPlots } from "./charts.js";
+import { cartoonTokens } from "./palette.js";
 
 /** Inked contours, two-tone button faces and opaque, night-blue cards. */
 export function cartoonSkin(contract: GuiKitContract): GuiSkinDefinition {
@@ -30,29 +31,18 @@ export function cartoonSkin(contract: GuiKitContract): GuiSkinDefinition {
     iconThemes,
     themeVariants,
     notificationAngles: [-0.014, -0.009, 0.01, 0.015],
-    assetIds: ["tab-paint", "meter", "notice-icon"],
+    assetIds: [
+      "tab-paint",
+      "meter",
+      "notice-icon",
+      "pencil-axis",
+      "chart-mark",
+      "chart-mesh",
+      "chart-card",
+      "chart-paper",
+      "chart-base",
+    ],
     assets: cartoonAssets,
-    plots: () => {
-      const frame = {
-        red: sky[0],
-        green: sky[1],
-        blue: sky[2],
-        alpha: 1,
-        grid_red: pine[0],
-        grid_green: pine[1],
-        grid_blue: pine[2],
-        grid_alpha: 0.7,
-      };
-      return {
-        frame2d: {
-          ...frame,
-          highlight_red: grass[0],
-          highlight_green: grass[1],
-          highlight_blue: grass[2],
-          highlight_alpha: 1,
-        },
-        frame3d: { ...frame, mark_outlines: true },
-      };
-    },
+    plots: cartoonPlots,
   };
 }

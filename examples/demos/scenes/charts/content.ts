@@ -54,6 +54,7 @@ import {
   type ChartDataMode,
   type ChartWindow,
 } from "./streaming.js";
+import { ChartPaper, ChartFrame } from "./paper.js";
 import { ChartLegendFacing, ChartSkin, ChartSkinSelection } from "./skin.js";
 import type { GuiKitContract } from "@ipp/react/gui-kit";
 import type { GallerySkin } from "../../shared/skin-preference.js";
@@ -242,42 +243,7 @@ export class ChartContent {
         font = await this.font(client, selection, bytes);
         await this.create(client, [
           createEntity(1, `chart-background-${spec.id}`),
-          insertComponent(
-            client,
-            "CanvasStyle",
-            { kind: "alias", alias: 1 },
-            { red: 0.015, green: 0.025, blue: 0.04, alpha: 1 },
-          ),
-          insertComponent(
-            client,
-            "CanvasBox",
-            { kind: "alias", alias: 1 },
-            { width: CHART_CANVAS_EXTENT[0], height: CHART_CANVAS_EXTENT[1] },
-          ),
           createEntity(2, `chart-title-${spec.id}`),
-          insertComponent(
-            client,
-            "CanvasStyle",
-            { kind: "alias", alias: 2 },
-            {
-              x: 600 - 24 - spec.title.length * 9,
-              y: 2,
-              red: 0,
-              green: 0.8,
-              blue: 1,
-              alpha: 1,
-            },
-          ),
-          insertComponent(
-            client,
-            "CanvasText",
-            { kind: "alias", alias: 2 },
-            {
-              text: spec.title.toUpperCase(),
-              source: font.source,
-              font_size: 14,
-            },
-          ),
         ]);
         const anchor = await this.create(this.client, [
           createEntity(1, `chart-surface-${spec.id}`),
@@ -504,6 +470,7 @@ export class ChartContent {
         h(
           ChartSkin,
           { selection: this.skin, id: `${id}/appearance` },
+          canvas ? h(ChartPaper, { spec, font }) : null,
           h(PlotLegend, {
             ...descriptor,
             font,
@@ -578,11 +545,8 @@ export class ChartContent {
         : undefined,
       this.smoothChanges ? this.interpolationRates(chart) : {},
       (children) =>
-        h(ChartSkin, {
-          selection: this.skin,
-          id: chart.spec.id,
-          children,
-        }),
+        h(ChartSkin, { selection: this.skin, id: spec.id }, children),
+      h(ChartFrame, { spec }),
     );
     this.roots.set(spec.id, root);
   }
@@ -609,19 +573,6 @@ export class ChartContent {
                 .id,
             field,
           })),
-          ...(canvas
-            ? componentFields(chart.client, "CanvasText", {
-                source: font.source,
-              }).map((field) => ({
-                kind: "setField" as const,
-                entity: {
-                  kind: "symbol" as const,
-                  symbol: `chart-title-${chart.spec.id}`,
-                },
-                component: chart.client.components.CanvasText!.id,
-                field,
-              }))
-            : []),
         ]),
       );
       chart.font = font;

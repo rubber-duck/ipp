@@ -23,8 +23,14 @@ impl SystemFactory for PlotSystemFactory {
     }
 
     fn capabilities(&self) -> SystemCapabilities {
-        let mut capabilities =
-            SystemCapabilities::new([C::PLOT_CALLOUT_STYLE, C::PLOT_CALLOUT_PAINT], []);
+        let mut capabilities = SystemCapabilities::new(
+            [
+                C::PLOT_CALLOUT_STYLE,
+                C::PLOT_CALLOUT_PAINT,
+                C::PLOT_AXIS_PAINT,
+            ],
+            [],
+        );
         capabilities.components.extend(
             [
                 C::PLOT_FRAME2D,

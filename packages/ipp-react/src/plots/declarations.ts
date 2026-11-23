@@ -1,5 +1,6 @@
 /** Thin Plot declarations. Rust owns preparation, geometry, labels and picking. */
 import { createElement, Fragment, useContext } from "react";
+import type { PlotSkinAppearance } from "./skin-types.js";
 import { PlotSkinContext } from "./skin-context.js";
 import { AttachmentContext } from "../composition/attached-world.js";
 import { useOptionalWorld } from "../scope/world.js";
@@ -18,13 +19,20 @@ import {
 /** Native annotation layout, independent of its optional shared Canvas paint. */
 export type PlotCalloutStyleProps = ComponentProps &
   ComponentFields<"PlotCalloutStyle">;
-export type PlotCalloutPaintProps = ComponentProps &
-  ComponentFields<"PlotCalloutPaint"> & {
-    [name: string]:
-      | DynamicPropertyInput
-      | import("react").ReactNode
-      | import("../assets/declarations.js").AssetReference;
-  };
+type PlotPaintProps<Name extends "PlotCalloutPaint" | "PlotAxisPaint"> =
+  ComponentProps &
+    ComponentFields<Name> & {
+      [name: string]:
+        | DynamicPropertyInput
+        | import("react").ReactNode
+        | import("../assets/declarations.js").AssetReference;
+    };
+export type PlotCalloutPaintProps = PlotPaintProps<"PlotCalloutPaint">;
+export type PlotAxisPaintProps = PlotPaintProps<"PlotAxisPaint">;
+export function PlotAxisPaint(props: PlotAxisPaintProps) {
+  return createElement(componentContract.PlotAxisPaint.host, props);
+}
+
 export function PlotCalloutStyle(props: PlotCalloutStyleProps) {
   return createElement(componentContract.PlotCalloutStyle.host, props);
 }
@@ -84,7 +92,7 @@ export type PlotFrame2dProps = ComponentProps &
 export type PlotFrame3dProps = ComponentProps &
   ComponentFields<"PlotFrame3d"> &
   PlotAppearanceProps;
-function usePlotSkin(enabled = true) {
+export function usePlotSkin(enabled = true) {
   const context = useContext(PlotSkinContext);
   const container = useContext(AttachmentContext);
   return enabled && context?.container === container
@@ -93,21 +101,31 @@ function usePlotSkin(enabled = true) {
 }
 export function PlotFrame2d(props: PlotFrame2dProps) {
   const { skin, ...fields } = props;
+  const appearance = usePlotSkin(skin);
   return createElement(componentContract.PlotFrame2d.host, {
-    ...usePlotSkin(skin)?.frame2d,
+    ...(appearance && {
+      axis_width_scale: 1,
+      bar_lean: 0,
+      ...appearance.frame2d,
+    }),
     ...fields,
   });
 }
 
 export function PlotFrame3d(props: PlotFrame3dProps) {
   const { skin, ...fields } = props;
+  const appearance = usePlotSkin(skin);
   return createElement(componentContract.PlotFrame3d.host, {
-    ...usePlotSkin(skin)?.frame3d,
+    ...(appearance && {
+      axis_width_scale: 1,
+      bar_bevel: 0,
+      ...appearance.frame3d,
+    }),
     ...fields,
   });
 }
 
-type ChartName =
+export type ChartName =
   | "PlotLine2d"
   | "PlotBars2d"
   | "PlotPie2d"
@@ -157,6 +175,21 @@ export function plotLabelRows(table: RowsInput<PlotLabel>) {
   };
 }
 
+// Omitted fields on a retained component keep their value. Reassert native mark
+// defaults when switching to a skin that doesn't customize these shapes.
+const nativeMarks: NonNullable<PlotSkinAppearance["marks"]> = {
+  PlotGridBars3d: { stacked_blocks: false, block_yaw: 0 },
+  PlotLine2d: { line_width: 2, marker_size: 6 },
+  PlotHeightSurface3d: { wireframe: true },
+  PlotPoints3d: { marker_size: 0.15, marker_shape: 0 },
+};
+
+function isPlanarChart(
+  name: ChartName,
+): name is Extract<ChartName, `${string}2d`> {
+  return name.endsWith("2d");
+}
+
 function chart<Name extends ChartName>(name: Name, props: PlotProps<Name>) {
   const { skin } = props;
   const appearance = usePlotSkin(skin);
@@ -166,11 +199,26 @@ function chart<Name extends ChartName>(name: Name, props: PlotProps<Name>) {
     throw new Error(
       `${name} needs a target contract: supply createRoot(..., { contract }) or the contract prop`,
     );
-  const declaration = describePlot(name, { ...props, contract });
+  const declaration = describePlot(name, {
+    ...(appearance && nativeMarks[name]),
+    ...appearance?.marks?.[name],
+    ...props,
+    contract,
+  });
+  const planar = isPlanarChart(name);
+  const markPaint = planar
+    ? (appearance?.chartPaints?.[name] ?? appearance?.paint)
+    : undefined;
   return createElement(
     Fragment,
     null,
     declaration,
+    !name.startsWith("PlotPie") &&
+      appearance?.axisPaint &&
+      createElement(componentContract.PlotAxisPaint.host, {
+        ...appearance.axisPaint,
+        skinFallback: true,
+      }),
     appearance?.callout &&
       createElement(componentContract.PlotCalloutStyle.host, {
         ...appearance.callout,
@@ -181,10 +229,10 @@ function chart<Name extends ChartName>(name: Name, props: PlotProps<Name>) {
         ...appearance.calloutPaint,
         skinFallback: true,
       }),
-    name.endsWith("2d")
-      ? appearance?.paint &&
+    planar
+      ? markPaint &&
           createElement(componentContract.CanvasPaint.host, {
-            ...appearance.paint,
+            ...markPaint,
             skinFallback: true,
           })
       : appearance?.material &&

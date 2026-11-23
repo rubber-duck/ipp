@@ -786,8 +786,11 @@ pub(super) fn paint_instance(
     assets: &AssetManagementService,
     target: CanvasTarget,
 ) -> Option<CanvasPaintInstance> {
-    if target.component == ComponentValue::PLOT_CALLOUT_PAINT {
-        return crate::systems::plot::callout::paint_instance(world, assets, target, None);
+    if matches!(
+        target.component,
+        ComponentValue::PLOT_CALLOUT_PAINT | ComponentValue::PLOT_AXIS_PAINT
+    ) {
+        return crate::systems::plot::paint::paint_instance(world, assets, target, None);
     }
     if paint_target(world, target.entity)? != target {
         return None;

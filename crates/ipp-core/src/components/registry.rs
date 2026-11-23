@@ -80,6 +80,7 @@ ipp_schema_derive::component_registry! {
         PlotPie3d = 111,
         PlotCalloutStyle = 112,
         PlotCalloutPaint = 113,
+        PlotAxisPaint = 114,
     }
 }
 

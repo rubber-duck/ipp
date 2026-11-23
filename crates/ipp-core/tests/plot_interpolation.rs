@@ -548,17 +548,64 @@ fn sibling_paint_selects_lines_markers_and_sectors_without_painting_axes() {
             .count(),
         2
     );
-    assert!(canvas.entries.iter().any(|entry| matches!(
-        entry.as_ref(),
-        CanvasPaintEntry::Primitive {
-            primitive: CanvasPrimitive::Path {
-                paint: None,
-                ..
-            },
-            ..
-        }
-    )));
     let line_geometry = fixture.geometry().charts[0].geometry.clone();
+    let axis_parts: Vec<_> = line_geometry
+        .canvas
+        .iter()
+        .filter(|item| matches!(item.kind, PlotPrimitiveKind::AxisLine { .. }))
+        .map(|item| ipp_core::systems::canvas::CanvasPart::Plot(item.part))
+        .collect();
+    assert_eq!(axis_parts.len(), 2);
+    let assert_axes = |canvas: &CanvasPublication, painted: bool| {
+        let mut found = 0;
+        for entry in canvas.entries.iter() {
+            let CanvasPaintEntry::Primitive {
+                primitive:
+                    CanvasPrimitive::Box {
+                        style,
+                        fill,
+                        ..
+                    },
+                ..
+            } = entry.as_ref()
+            else {
+                continue;
+            };
+            if axis_parts.contains(&style.identity.part) {
+                if painted {
+                    assert!(
+                        matches!(fill, CanvasShapeFill::Paint { paint, .. } if paint.component == C::PLOT_AXIS_PAINT)
+                    );
+                } else {
+                    assert!(matches!(fill, CanvasShapeFill::Solid(_)));
+                }
+                found += 1;
+            }
+        }
+        assert_eq!(found, 2);
+    };
+    assert_axes(canvas, false);
+    fixture.command(Command::insert_value(
+        EntityRef::Handle(fixture.entity),
+        C::PlotAxisPaint(PlotAxisPaint::default()),
+    ));
+    fixture.step(0.0);
+    assert_axes(
+        fixture
+            .host
+            .output(
+                fixture.host.latest_publication(fixture.world).unwrap(),
+                output,
+            )
+            .unwrap()
+            .data::<CanvasPublication>()
+            .unwrap(),
+        true,
+    );
+    fixture.command(Command::RemoveComponent {
+        entity: EntityRef::Handle(fixture.entity),
+        component: C::PLOT_AXIS_PAINT,
+    });
     assert_eq!(line_geometry.hits.len(), 2);
     fixture.command(Command::SetDynamicProperty {
         entity: EntityRef::Handle(fixture.entity),

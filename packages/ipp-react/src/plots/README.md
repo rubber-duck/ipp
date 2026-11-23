@@ -102,4 +102,8 @@ The legend creates no Worlds, assets, subscriptions or animation controllers. Su
 
 The [chart showcase](../../../../examples/chart-showcase/README.md) uses these declarations with actual Data Service sources and native rendering. The maintained [React Plot scenario](../../../../tests/data/scenarios/react-plots.ts) supplies source, parameter-animation and completed-frame assertions for the combined Plot integration suite.
 
+A skin can override its shared planar mark `paint` for an individual chart kind through `chartPaints`. An explicit chart paint takes precedence over either skin default.
+
+`PlotAxisPaint` accepts a Canvas paint on the Cartesian axis strokes. A provider can supply it with `axisPaint` and size the stroke envelope with the frame’s `axis_width_scale`. `PlotGridBars3d.stacked_blocks` builds cubes from the smaller footprint dimension and fits the outermost block to the measured value. Its `block_yaw` sets the maximum turn about each block’s vertical centreline in radians.
+
 `PlotCalloutStyle` also resolves from `PlotSkinProvider`, separately from mark paint/material. Its padding, radius and leader width use the frame font as their unit; its independent `PlotCalloutPaint` takes ordinary dynamic shader props. Explicit low-level callout styles can use the same Canvas paint source as GUI panels, with native label placement and no child World.

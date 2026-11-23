@@ -60,6 +60,7 @@ fn chart() -> PlotPublishedChart {
         }],
         planes: Arc::from([]),
         callout_paint: None,
+        axis_paint: None,
     }
 }
 

@@ -156,6 +156,7 @@ export const DESCRIPTORS = Object.fromEntries(
     PlotGridBars3d: componentContract.PlotGridBars3d,
     CustomMaterial: componentContract.CustomMaterial,
     PlotCalloutStyle: componentContract.PlotCalloutStyle,
+    PlotAxisPaint: componentContract.PlotAxisPaint,
     PlotCalloutPaint: componentContract.PlotCalloutPaint,
   }).map(([name, definition], index) => [
     name,

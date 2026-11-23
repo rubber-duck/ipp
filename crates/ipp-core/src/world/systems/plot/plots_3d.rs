@@ -138,6 +138,13 @@ fn ranges(frame: &PlotFrame3d, samples: &[Vec<Sample>], baseline: bool) -> ([f64
     (min, max)
 }
 
+/// A stable starting phase for each stack, independent of row order and value.
+fn stack_phase(row: PlotRowIdentity) -> u64 {
+    let key = row.row_id.0 ^ (u64::from(row.series) << 32);
+    let mixed = (key ^ (key >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb)
+}
+
 /// Prepare grid-positioned bars, including a single depth row.
 pub fn prepare_bars(
     chart: &PlotGridBars3d,
@@ -150,46 +157,115 @@ pub fn prepare_bars(
     let labels = Labels::new(&chart.labels)?;
     let mut output = PlotPreparedGeometry::default();
     let mut meshes = MeshBuilder::default();
+    let edge = chart.bar_width.min(chart.bar_depth);
+    let plank = edge / 6.0;
+    let [width, depth] = if chart.stacked_blocks {
+        [edge; 2]
+    } else {
+        [chart.bar_width, chart.bar_depth]
+    };
     for sample in samples.iter().flatten() {
         let point = checked_point(mapping.map(sample.point))?;
         let baseline = checked_point(mapping.map([sample.point[0], 0.0, sample.point[2]]))?[1];
-        let low = [
-            point[0] - chart.bar_width * 0.5,
-            baseline.min(point[1]),
-            point[2] - chart.bar_depth * 0.5,
-        ];
-        let high = [
-            point[0] + chart.bar_width * 0.5,
-            baseline.max(point[1]),
-            point[2] + chart.bar_depth * 0.5,
-        ];
-        meshes.highlighted = labels.highlighted(sample.row);
-        meshes.cuboid(low, high, sample.color)?;
         let highlighted = labels.highlighted(sample.row);
-        if frame.mark_outlines {
-            meshes.outline(
-                low,
-                high,
-                frame.line_width
-                    * if highlighted {
-                        2.4
-                    } else {
-                        1.0
-                    },
-                if highlighted {
-                    [0.2, 1.0, 1.0, 1.0]
+        meshes.highlighted = highlighted;
+        let outline = frame.mark_outlines.then_some((
+            frame.line_width
+                * if highlighted {
+                    2.4
                 } else {
-                    [0.0, 0.7, 0.85, 1.0]
+                    1.0
                 },
-            )?;
-        }
-        output.hits.push(PlotHit {
-            row: sample.row,
-            shape: PlotHitShape::Box {
-                min: low,
-                max: high,
+            if highlighted {
+                [0.2, 1.0, 1.0, 1.0]
+            } else {
+                [0.0, 0.7, 0.85, 1.0]
             },
-        });
+        ));
+        let height = (point[1] - baseline).abs();
+        // Keep a sub-plank remainder on the outermost cube. All blocks nearer
+        // the baseline stay cubic, including columns that grow down from zero.
+        let count = if chart.stacked_blocks {
+            let units = f64::from(height) / f64::from(edge);
+            let count = units.floor()
+                + if units.fract() >= 1.0 / 6.0 {
+                    1.0
+                } else {
+                    0.0
+                };
+            // A pathological aspect ratio must not trigger unbounded tessellation.
+            if count > 1024.0 {
+                return Err(ErrorReason::Capacity);
+            }
+            (count as u32).max(1)
+        } else {
+            1
+        };
+        let direction = (point[1] - baseline).signum();
+        let mut near = baseline;
+        let mut phase = stack_phase(sample.row);
+        for layer in 1..=count {
+            let far = if layer == count {
+                point[1]
+            } else {
+                baseline + direction * (edge * layer as f32)
+            };
+            let low = [
+                point[0] - width * 0.5,
+                near.min(far),
+                point[2] - depth * 0.5,
+            ];
+            let high = [
+                point[0] + width * 0.5,
+                near.max(far),
+                point[2] + depth * 0.5,
+            ];
+            let thickness = high[1] - low[1];
+            let bevel = if chart.stacked_blocks {
+                (frame.bar_bevel * edge)
+                    .min(plank * 0.45)
+                    .min(thickness * 0.25)
+            } else {
+                frame.bar_bevel * edge.min(thickness)
+            };
+            let shape = if bevel > 0.0 || chart.stacked_blocks {
+                // A golden-ratio step keeps adjacent blocks visibly distinct without
+                // accumulating twist as the column grows.
+                phase = phase.wrapping_add(0x9e37_79b9_7f4a_7c15);
+                let yaw = if chart.stacked_blocks {
+                    chart.block_yaw * ((phase >> 48) as f32 / 32768.0 - 1.0)
+                } else {
+                    0.0
+                };
+                let solid = PlotBarSolid {
+                    min: low,
+                    max: high,
+                    bevel,
+                    yaw,
+                };
+                meshes.bar_body(
+                    solid,
+                    sample.color,
+                    outline,
+                    chart.stacked_blocks.then_some(plank),
+                )?;
+                PlotHitShape::Bar(solid)
+            } else {
+                meshes.cuboid(low, high, sample.color)?;
+                if let Some((width, tint)) = outline {
+                    meshes.outline(low, high, width, tint)?;
+                }
+                PlotHitShape::Box {
+                    min: low,
+                    max: high,
+                }
+            };
+            output.hits.push(PlotHit {
+                row: sample.row,
+                shape,
+            });
+            near = far;
+        }
         annotate(
             &mut output,
             &mut meshes,
@@ -595,7 +671,9 @@ pub fn prepare_pie(
     }
     // Radial layout retains only the floor grid: Cartesian scales do not affect
     // independent per-slice physical radius or height.
-    floor(&mut output, frame)?;
+    if frame.floor_grid {
+        floor(&mut output, frame)?;
+    }
     finish(output, meshes)
 }
 
@@ -836,6 +914,146 @@ impl MeshBuilder {
         Ok(())
     }
 
+    /// The wall and optional cap bevels share the exact value and baseline heights.
+    fn bar_body(
+        &mut self,
+        solid: PlotBarSolid,
+        color: [f32; 4],
+        outline: Option<(f32, [f32; 4])>,
+        plank: Option<f32>,
+    ) -> Result<(), ErrorReason> {
+        let PlotBarSolid {
+            min: low,
+            max: high,
+            bevel,
+            yaw,
+        } = solid;
+        let [cx, cz] = solid.center_xz();
+        let (sin, cos) = yaw.sin_cos();
+        let ring = |y, inset| {
+            [
+                [low[0] + inset, y, low[2] + inset],
+                [high[0] - inset, y, low[2] + inset],
+                [high[0] - inset, y, high[2] - inset],
+                [low[0] + inset, y, high[2] - inset],
+            ]
+            .map(|[x, y, z]| {
+                let (dx, dz) = (x - cx, z - cz);
+                [cx + cos * dx + sin * dz, y, cz - sin * dx + cos * dz]
+            })
+        };
+        let rings = [
+            ring(low[1], bevel),
+            ring(low[1] + bevel, 0.0),
+            ring(high[1] - bevel, 0.0),
+            ring(high[1], bevel),
+        ];
+        self.quad(rings[0], color, true)?;
+        let cap = [3, 2, 1, 0].map(|i| rings[3][i]);
+        if plank.is_some() {
+            let mut lid_uv = [[10., 0.], [11., 0.], [11., 1.], [10., 1.]];
+            if yaw < 0.0 {
+                lid_uv.rotate_left(1);
+            }
+            self.quad_uv(cap, color, true, lid_uv)?;
+        } else {
+            self.quad(cap, color, true)?;
+        }
+        let (sides, wall) = if bevel > 0.0 {
+            (&rings[..], 1)
+        } else {
+            (&rings[1..3], 0)
+        };
+        for (level, lower) in sides.iter().enumerate() {
+            for i in 0..4 {
+                let j = (i + 1) % 4;
+                if let Some((width, tint)) = outline {
+                    self.line(lower[i], lower[j], width, tint)?;
+                }
+                if let Some(upper) = sides.get(level + 1) {
+                    let face = [lower[i], upper[i], upper[j], lower[j]];
+                    if let Some(plank) = plank.filter(|_| level == wall) {
+                        // The rim uses a face-local coordinate so the seam stays on the bottom edge.
+                        let rim_uv = [[12., 0.], [12., 1.], [13., 1.], [13., 0.]];
+                        if high[1] - low[1] <= 2.0 * plank {
+                            self.quad_uv(face, color, true, rim_uv)?;
+                        } else {
+                            let at_height = |mut point: [f32; 3], y| {
+                                point[1] = y;
+                                point
+                            };
+                            let a = at_height(lower[i], low[1] + plank);
+                            let b = at_height(upper[i], high[1] - plank);
+                            let c = at_height(upper[j], high[1] - plank);
+                            let d = at_height(lower[j], low[1] + plank);
+                            self.quad_uv([lower[i], a, d, lower[j]], color, true, rim_uv)?;
+                            self.crate_panel(
+                                [a, b, c, d],
+                                plank,
+                                color,
+                                (i % 2 == 1) ^ (yaw < 0.0),
+                            )?;
+                            self.quad([b, upper[i], upper[j], c], color, true)?;
+                        }
+                    } else {
+                        self.quad(face, color, true)?;
+                    }
+                    if let Some((width, tint)) = outline {
+                        self.line(lower[i], upper[i], width, tint)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Square posts and rails surround a flat, recessed plank face.
+    fn crate_panel(
+        &mut self,
+        [a, b, c, d]: [[f32; 3]; 4],
+        plank: f32,
+        color: [f32; 4],
+        reverse_boards: bool,
+    ) -> Result<(), ErrorReason> {
+        let span = sub(d, a);
+        let width = span[0].hypot(span[2]);
+        let height = b[1] - a[1];
+        if width == 0.0 || height <= 0.0 {
+            return Ok(());
+        }
+        let inward = [-span[2] / width, 0.0, span[0] / width];
+        let post_width = span.map(|x| x * 0.11);
+        let lip = [
+            add(a, post_width),
+            add(b, post_width),
+            sub(c, post_width),
+            sub(d, post_width),
+        ];
+        let depth = (plank * 0.36).min(height * 0.22);
+        let inset = lip.map(|p| add(p, inward.map(|n| n * depth)));
+        self.quad([a, b, lip[1], lip[0]], color, true)?;
+        self.quad([lip[3], lip[2], c, d], color, true)?;
+        for side in 0..4 {
+            let next = (side + 1) % 4;
+            self.quad(
+                [lip[side], lip[next], inset[next], inset[side]],
+                color,
+                true,
+            )?;
+        }
+        let (left, right) = if reverse_boards {
+            (9., 8.)
+        } else {
+            (8., 9.)
+        };
+        self.quad_uv(
+            inset,
+            color,
+            true,
+            [[left, 0.], [left, 1.], [right, 1.], [right, 0.]],
+        )
+    }
+
     fn cuboid(
         &mut self,
         low: [f32; 3],
@@ -955,6 +1173,10 @@ impl MeshBuilder {
         }
         Ok(())
     }
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] + b[i])
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -1131,8 +1353,11 @@ fn axes(
     let extent = [frame.width, frame.height, frame.depth];
     let font = frame.font_size;
     let color = frame.color();
-    // Three retained enclosure grids; only their station changes with the view.
+    // Only the station of each retained grid changes with the view.
     for normal in 0..3u8 {
+        if normal == 1 && !frame.floor_grid {
+            continue;
+        }
         let (origin, u, v, width, height) = match normal {
             0 => (
                 [0.0, frame.height, 0.0],
@@ -1202,8 +1427,15 @@ fn axes(
         } else {
             [0.0, -1.0, 0.0]
         };
+        let shaft_width = frame.line_width * frame.axis_width_scale;
         let mut primitives = vec![
-            stroke(0, [0.0, 0.0], [length + font, 0.0], frame.line_width, color),
+            PlotPrimitive::axis_line(
+                0,
+                [0.0, -shaft_width * 0.5],
+                [length + font, shaft_width],
+                0.0,
+                color,
+            ),
             polygon(
                 1,
                 &[

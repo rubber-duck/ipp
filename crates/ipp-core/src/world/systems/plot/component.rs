@@ -179,6 +179,10 @@ pub struct PlotFrame2d {
     pub highlight_blue: f32,
     /// Highlight linear coverage alpha.
     pub highlight_alpha: f32,
+    /// Shaft width relative to the grid and tick line width.
+    pub axis_width_scale: f32,
+    /// Maximum horizontal lean per unit of bar height. The zero end tilts across the baseline.
+    pub bar_lean: f32,
     /// Grid/axis line thickness in local logical units.
     pub line_width: f32,
 }
@@ -218,6 +222,8 @@ impl Default for PlotFrame2d {
             highlight_green: highlight[1],
             highlight_blue: highlight[2],
             highlight_alpha: highlight[3],
+            axis_width_scale: 1.0,
+            bar_lean: 0.0,
             line_width: 1.0,
         }
     }
@@ -285,6 +291,12 @@ pub struct PlotFrame3d {
     pub grid_blue: f32,
     /// Grid linear coverage alpha.
     pub grid_alpha: f32,
+    /// Shaft width relative to the grid and tick line width.
+    pub axis_width_scale: f32,
+    /// Draw the horizontal X/Z grid, independently of the vertical walls and axes.
+    pub floor_grid: bool,
+    /// Width of a bar cap chamfer as a fraction of its shortest dimension.
+    pub bar_bevel: f32,
     /// Show mark outlines, including highlighted edges; materials may provide their own feedback.
     pub mark_outlines: bool,
     /// Local physical line width.
@@ -323,13 +335,16 @@ impl Default for PlotFrame3d {
             grid_blue: 0.24,
             grid_alpha: 0.7,
             mark_outlines: true,
+            axis_width_scale: 1.0,
+            floor_grid: true,
+            bar_bevel: 0.0,
             line_width: 0.015,
         }
     }
 }
 
 macro_rules! frame_lifecycle {
-    ($name:ty $(, $extra_color:ident)?) => {
+    ($name:ty, $bar_field:ident $(, $extra_color:ident)?) => {
         impl ComponentLifecycle for $name {
             fn asset_references() -> &'static [ComponentAssetReference] {
                 &[ComponentAssetReference {
@@ -356,11 +371,12 @@ macro_rules! frame_lifecycle {
 
             fn validate(&self) -> Result<(), ErrorReason> {
                 positive(&self.size())?;
-                positive(&[self.font_size, self.line_width])?;
+                positive(&[self.font_size, self.line_width, self.axis_width_scale, self.line_width * self.axis_width_scale])?;
                 color(self.color())?;
                 color(self.grid_color())?;
                 $(color(self.$extra_color())?;)?
-                if self.ticks == 0
+                if !(0.0..=0.5).contains(&self.$bar_field)
+                    || self.ticks == 0
                     || self.ticks > 100
                     || self
                         .min()
@@ -376,8 +392,8 @@ macro_rules! frame_lifecycle {
     };
 }
 
-frame_lifecycle!(PlotFrame2d, highlight_color);
-frame_lifecycle!(PlotFrame3d);
+frame_lifecycle!(PlotFrame2d, bar_lean, highlight_color);
+frame_lifecycle!(PlotFrame3d, bar_bevel);
 
 macro_rules! chart_component {
     ($name:ident, $frame:ident, $required:ident, { $( $(#[$doc:meta])* $field:ident : $ty:ty = $default:expr ),* $(,)? }) => {
@@ -451,6 +467,10 @@ chart_component!(PlotGridBars3d, PLOT_FRAME3D, BOUNDING_GEOMETRY, {
     bar_width: f32 = 0.7,
     /// Bar depth along Z in physical units.
     bar_depth: f32 = 0.7,
+    /// Fit cubic blocks into each bar using the smaller footprint dimension as their edge.
+    stacked_blocks: bool = false,
+    /// Maximum turn of a stacked block about its vertical centreline, in radians.
+    block_yaw: f32 = 0.0,
 });
 
 chart_component!(PlotHeightSurface3d, PLOT_FRAME3D, BOUNDING_GEOMETRY, {
@@ -508,6 +528,9 @@ impl PlotPie2d {
 
 impl PlotGridBars3d {
     fn validate_chart(&self) -> Result<(), ErrorReason> {
+        if !(0.0..=std::f32::consts::PI).contains(&self.block_yaw) {
+            return Err(ErrorReason::InvalidValue);
+        }
         positive(&[self.bar_width, self.bar_depth])
     }
 }

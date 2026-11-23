@@ -73,7 +73,7 @@ pub(in crate::services::render) struct ScenePlotPlane<'a> {
     pub publication: WorldPublicationId,
     pub model: [f32; 16],
     pub chart_model: [f32; 16],
-    pub callout_paint: Option<&'a ipp_core::systems::canvas::CanvasPaintInstance>,
+    pub paint: Option<&'a ipp_core::systems::canvas::CanvasPaintInstance>,
     pub geometry: &'a std::sync::Arc<ipp_core::systems::plot::PlotPreparedGeometry>,
     pub plane: &'a ipp_core::systems::plot::PlotPublishedPlane,
 }
@@ -343,10 +343,18 @@ impl<'a> RenderScene<'a> {
                             publication: publication.id,
                             geometry: &chart.geometry,
                             chart_model,
-                            callout_paint: (plane.layout
-                                == ipp_core::systems::plot::PlotPlaneLayout::Callout)
-                                .then_some(chart.callout_paint.as_ref())
-                                .flatten(),
+                            paint: match (plane.layout, plane.placement) {
+                                (ipp_core::systems::plot::PlotPlaneLayout::Callout, _) => {
+                                    chart.callout_paint.as_ref()
+                                }
+                                (
+                                    ipp_core::systems::plot::PlotPlaneLayout::None,
+                                    ipp_core::systems::plot::PlotPlanePlacement::Axis {
+                                        ..
+                                    },
+                                ) => chart.axis_paint.as_ref(),
+                                _ => None,
+                            },
                             plane,
                             model: super::super::plot::plane_facing::model(
                                 super::super::plot::view_placement::model(

@@ -109,6 +109,183 @@ fn single_row_bars_keep_exact_source_ids_and_negative_zero_baseline() {
 }
 
 #[test]
+fn stacked_bars_keep_each_block_pickable_as_its_source_row_at_both_signs() {
+    let rows = [
+        DataRowId(11),
+        DataRowId(27),
+        DataRowId(41),
+        DataRowId(53),
+        DataRowId(65),
+    ];
+    let x = numbers(&[1., 3., 5., 7., 9.]);
+    let values = numbers(&[-2.4, 3.6, 0.15, 2.1, 1.17]);
+    let columns = [("x", x.as_slice()), ("value", values.as_slice())];
+    let mut chart = PlotGridBars3d {
+        stacked_blocks: true,
+        block_yaw: 9.0_f32.to_radians(),
+        bar_width: 1.0,
+        bar_depth: 1.4,
+        ..Default::default()
+    };
+    chart
+        .series
+        .push(PlotSeriesRow {
+            z: "".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    let frame = PlotFrame3d {
+        mark_outlines: false,
+        ..fixed_frame()
+    };
+    let geometry = prepare_bars(&chart, &frame, &input(&rows, &columns), None).unwrap();
+    let mesh = &geometry.meshes[0];
+    let material = mesh.material.as_ref().unwrap();
+    // Turning a crate preserves level caps and vertical walls, including the inner reveals.
+    assert!(
+        material
+            .normals
+            .iter()
+            .all(|n| n[1].abs() < 1e-5 || (n[1].abs() - 1.).abs() < 1e-5)
+    );
+    let expected: [&[f32]; 5] = [
+        &[5., 4., 3., 2.6],
+        &[5., 6., 7., 8., 8.6],
+        &[5., 5.15],
+        &[5., 6., 7.1],
+        &[5., 6., 6.17],
+    ];
+    for (i, stations) in expected.into_iter().enumerate() {
+        let blocks: Vec<_> = geometry
+            .hits
+            .iter()
+            .filter(|hit| hit.row.row_id == rows[i])
+            .collect();
+        assert_eq!(blocks.len(), stations.len() - 1);
+        let mut previous_yaw: Option<f32> = None;
+        for (hit, ends) in blocks.iter().zip(stations.windows(2)) {
+            let PlotHitShape::Bar(PlotBarSolid {
+                min,
+                max,
+                yaw,
+                ..
+            }) = hit.shape
+            else {
+                panic!("block")
+            };
+            assert_eq!([max[0] - min[0], max[2] - min[2]], [1., 1.]);
+            assert!((min[1] - ends[0].min(ends[1])).abs() < 1e-5);
+            assert!((max[1] - ends[0].max(ends[1])).abs() < 1e-5);
+            assert!(yaw.abs() <= chart.block_yaw);
+            if let Some(previous) = previous_yaw {
+                assert!((yaw - previous).abs() > chart.block_yaw * 0.7);
+            }
+            previous_yaw = Some(yaw);
+
+            // Project down just inside and outside the turned lid's farthest X corner.
+            // Test against the actual emitted vertices so a stationary mesh or hit box fails.
+            let cx = min[0].midpoint(max[0]);
+            let cz = min[2].midpoint(max[2]);
+            let (sin, cos) = yaw.sin_cos();
+            let dx = 0.5 * (cos + sin.abs());
+            let dz = 0.5 * (cos * sin.signum() - sin);
+            assert!(mesh.positions.iter().any(|p| (p[0] - cx - dx).abs() < 1e-5
+                && (p[1] - max[1]).abs() < 1e-5
+                && (p[2] - cz - dz).abs() < 1e-5));
+            for (scale, expected) in [(0.999, Some(1.0)), (1.001, None)] {
+                let ray = crate::systems::geometry::GeometryRay {
+                    origin: [
+                        f64::from(cx + scale * dx),
+                        f64::from(max[1]) + 1.,
+                        f64::from(cz + scale * dz),
+                    ],
+                    direction: [0., -1., 0.],
+                };
+                assert_eq!(hit.shape.ray_intersection(&ray, 0., 2.), expected);
+            }
+            let panel_vertices: Vec<_> = mesh
+                .positions
+                .iter()
+                .zip(&material.uvs)
+                .filter(|(p, uv)| {
+                    (8.0..=9.0).contains(&uv[0])
+                        && p[0] >= min[0]
+                        && p[0] <= max[0]
+                        && p[1] > min[1]
+                        && p[1] < max[1]
+                })
+                .map(|(p, _)| p[1])
+                .collect();
+            if max[1] - min[1] > 1.0 / 3.0 {
+                assert!(!panel_vertices.is_empty());
+                assert!(
+                    panel_vertices
+                        .iter()
+                        .all(|y| (*y - min[1] - 1.0 / 6.0).abs() < 1e-5
+                            || (max[1] - *y - 1.0 / 6.0).abs() < 1e-5)
+                );
+            } else {
+                assert!(
+                    panel_vertices.is_empty(),
+                    "single-board ends use one rim face"
+                );
+            }
+        }
+    }
+
+    // Reorder a row and shorten its fitted end. Both of its remaining crates keep their turn.
+    let new_x = numbers(&[3.]);
+    let new_values = numbers(&[1.75]);
+    let new_columns = [("x", new_x.as_slice()), ("value", new_values.as_slice())];
+    let changed = prepare_bars(&chart, &frame, &input(&rows[1..2], &new_columns), None).unwrap();
+    let yaws = |g: &PlotPreparedGeometry| {
+        g.hits
+            .iter()
+            .filter(|h| h.row.row_id == rows[1])
+            .map(|h| match h.shape {
+                PlotHitShape::Bar(solid) => solid.yaw,
+                _ => panic!("expected stacked block"),
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(yaws(&changed), yaws(&geometry)[..2]);
+}
+
+#[test]
+fn crate_posts_surround_an_uninterrupted_recessed_panel() {
+    for height in [1.0, 0.1] {
+        let mut builder = MeshBuilder::default();
+        builder
+            .crate_panel(
+                [
+                    [0., 0., 0.],
+                    [0., height, 0.],
+                    [1., height, 0.],
+                    [1., 0., 0.],
+                ],
+                1. / 6.,
+                [1.; 4],
+                false,
+            )
+            .unwrap();
+        let mesh = &builder.chunks[0];
+        // Two posts, four returns and one panel; the entire opening is one flat face.
+        assert_eq!(mesh.indices.len(), 7 * 6);
+        let material = mesh.material.as_ref().unwrap();
+        let depth = (1.0_f32 / 6.0 * 0.36).min(height * 0.22);
+        let panel: Vec<_> = mesh
+            .positions
+            .iter()
+            .zip(&material.uvs)
+            .filter(|(_, uv)| (8.0..=9.0).contains(&uv[0]))
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(panel.len(), 6);
+        assert!(panel.iter().all(|p| (p[2] - depth).abs() < 1e-6));
+    }
+}
+
+#[test]
 fn cuboid_faces_are_outward_and_closed() {
     let mut builder = MeshBuilder::default();
     builder.cuboid([-1.0; 3], [1.0; 3], [1.0; 4]).unwrap();
@@ -120,6 +297,45 @@ fn cuboid_faces_are_outward_and_closed() {
             std::array::from_fn(|axis| (face[0][axis] + face[1][axis] + face[2][axis]) / 3.0);
         assert!(dot(normal, centroid) > 0.0);
     }
+}
+
+#[test]
+fn beveled_bar_rays_follow_the_cap_and_sloping_mesh_faces() {
+    use crate::systems::geometry::GeometryRay;
+    let min = [-1.0, 0.0, -1.0];
+    let max = [1.0, 4.0, 1.0];
+    let bevel = 0.125;
+    let solid = PlotBarSolid {
+        min,
+        max,
+        bevel,
+        yaw: 0.,
+    };
+    let mut builder = MeshBuilder::default();
+    builder.bar_body(solid, [1.0; 4], None, None).unwrap();
+    let mesh = &builder.chunks[0];
+    let material = mesh.material.as_ref().unwrap();
+    assert!(material.normals.iter().any(|n| n[0] > 0.7 && n[1] > 0.7));
+    assert!(
+        mesh.positions
+            .contains(&[max[0] - bevel, max[1], max[2] - bevel])
+    );
+
+    let shape = PlotHitShape::Bar(solid);
+    let downward = |x| GeometryRay {
+        origin: [x, 5.0, 0.0],
+        direction: [0.0, -1.0, 0.0],
+    };
+    assert_eq!(shape.ray_intersection(&downward(0.0), 0.0, 10.0), Some(1.0));
+    assert_eq!(
+        shape.ray_intersection(&downward(0.9375), 0.0, 10.0),
+        Some(1.0625)
+    );
+    assert_eq!(shape.ray_intersection(&downward(0.9375), 1.0, 1.05), None);
+    assert_eq!(
+        shape.ray_intersection(&downward(0.9375), 2.0, 10.0),
+        Some(4.9375)
+    );
 }
 
 #[test]
@@ -719,6 +935,35 @@ fn text_faces_the_view_and_cartesian_paths_retain_positive_bases_for_far_station
                 adaptive: false,
             }));
     }
+    let mut walls_only = PlotPreparedGeometry::default();
+    let paper_frame = PlotFrame3d {
+        floor_grid: false,
+        ..frame.clone()
+    };
+    axes(
+        &mut walls_only,
+        &paper_frame,
+        [-1.0, 0.0, -2.0],
+        [3.0, 10.0, 8.0],
+    )
+    .unwrap();
+    let placements: Vec<_> = walls_only.planes.iter().map(|p| p.placement).collect();
+    let expected: Vec<_> = output
+        .planes
+        .iter()
+        .map(|p| p.placement)
+        .filter(|p| {
+            !matches!(
+                p,
+                PlotPlanePlacement::Grid {
+                    normal: 1,
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert_eq!(placements, expected);
+
     let adaptive_frame = PlotFrame3d {
         adaptive_axes: true,
         ..frame

@@ -1529,7 +1529,8 @@ export function baselineBarPointer(
   const y =
     height -
     Number(frame.padding_bottom) -
-    (sourceY / (Number(frame.max_y) - Number(frame.min_y))) *
+    ((sourceY - Number(frame.min_y)) /
+      (Number(frame.max_y) - Number(frame.min_y))) *
       (height - Number(frame.padding_top) - Number(frame.padding_bottom));
   const density = Number(chart.surface?.unitsPerMetre);
   const point = placePoint(

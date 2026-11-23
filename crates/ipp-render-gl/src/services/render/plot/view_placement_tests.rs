@@ -282,7 +282,7 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
         retained
             .iter()
             .map(|plane| ScenePlotPlane {
-                callout_paint: None,
+                paint: None,
                 entity: crate::services::render::outputs::scene::RenderEntity {
                     world,
                     entity,
@@ -371,7 +371,7 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
         inactive
             .iter()
             .map(|plane| ScenePlotPlane {
-                callout_paint: None,
+                paint: None,
                 entity: crate::services::render::outputs::scene::RenderEntity {
                     world,
                     entity,

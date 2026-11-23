@@ -79,6 +79,7 @@ COMPONENTS = [
     "PlotPie3d",
     "PlotCalloutStyle",
     "PlotCalloutPaint",
+    "PlotAxisPaint",
 ]
 
 

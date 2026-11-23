@@ -11,6 +11,7 @@ import {
   CustomMaterial,
   PlotCalloutStyle,
   PlotCalloutPaint,
+  PlotAxisPaint,
 } from "../src/index.js";
 import { Paint, SkinProvider } from "../src/gui.js";
 import { contract, FONT, KitWorld, skinFixture } from "./gui-kit-support.js";
@@ -103,9 +104,11 @@ test("explicit chart appearance wins in either declaration order and restores in
       ...skinFixture(inputs),
       plots: () => ({
         paint: { source },
+        chartPaints: { PlotBars2d: { source: `${source}-bars` } },
         material: { source, alpha_mode: 2 },
         callout: { padding_x: 12 },
         calloutPaint: { source },
+        axisPaint: { source },
       }),
     });
     const plots = {
@@ -136,6 +139,10 @@ test("explicit chart appearance wins in either declaration order and restores in
                   source: "memory:explicit",
                 }),
                 h(PlotCalloutStyle, { key: "callout", padding_x: 7 }),
+                h(PlotAxisPaint, {
+                  key: "axis-paint",
+                  source: "memory:explicit-axis",
+                }),
                 h(PlotCalloutPaint, {
                   key: "callout-paint",
                   source: "memory:explicit-callout",
@@ -159,6 +166,10 @@ test("explicit chart appearance wins in either declaration order and restores in
           world.fields(id!, component!).get("source"),
           "memory:explicit",
         );
+        assert.equal(
+          world.fields(id!, "PlotAxisPaint").get("source"),
+          "memory:explicit-axis",
+        );
         assert.equal(world.fields(id!, "PlotCalloutStyle").get("padding_x"), 7);
         assert.equal(
           world.fields(id!, "PlotCalloutPaint").get("source"),
@@ -174,8 +185,12 @@ test("explicit chart appearance wins in either declaration order and restores in
       await root.render(scene(false, "memory:changed"));
       assert.equal(world.entity("planar"), entity);
       assert.equal(
-        world.fields("planar", "CanvasPaint").get("source"),
+        world.fields("planar", "PlotAxisPaint").get("source"),
         "memory:changed",
+      );
+      assert.equal(
+        world.fields("planar", "CanvasPaint").get("source"),
+        "memory:changed-bars",
       );
       assert.equal(
         world.fields("spatial", "CustomMaterial").get("source"),

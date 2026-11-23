@@ -188,6 +188,97 @@ fn automatic_bar_range_includes_zero_and_keeps_negative_direction() {
 }
 
 #[test]
+fn leaning_bars_keep_value_edges_and_pick_their_silhouette() {
+    let ids = [DataRowId(14), DataRowId(27)];
+    let x = values(&[1.0, 2.0]);
+    let y = values(&[-10.0, 20.0]);
+    let input = input(&ids, &x, &y);
+    let mut chart = PlotBars2d::default();
+    chart.series.push(PlotSeriesRow::default()).unwrap();
+
+    let mut frame = PlotFrame2d::default();
+    let original = prepare_bars(&chart, &frame, &input, None).unwrap();
+    frame.bar_lean = 0.012;
+    let tilted = prepare_bars(&chart, &frame, &input, None).unwrap();
+
+    for (flat, lean) in original.hits.iter().zip(&tilted.hits) {
+        let PlotHitShape::Rect(bounds) = flat.shape else {
+            panic!("rectangular bar")
+        };
+        let PlotHitShape::SlantedBar(corners) = lean.shape else {
+            panic!("leaning bar")
+        };
+        assert_eq!(lean.row, flat.row);
+        let negative = flat.row.row_id == ids[0];
+        let (base, value, base_y, value_y) = if negative {
+            (
+                [corners[0], corners[1]],
+                [corners[3], corners[2]],
+                bounds[1],
+                bounds[3],
+            )
+        } else {
+            (
+                [corners[3], corners[2]],
+                [corners[0], corners[1]],
+                bounds[3],
+                bounds[1],
+            )
+        };
+        assert_eq!([value[0][1], value[1][1]], [value_y; 2]);
+        assert!((base[0][1] - base_y) * (base[1][1] - base_y) < 0.0);
+        assert!(((base[0][1] + base[1][1]) * 0.5 - base_y).abs() < 1e-4);
+        assert_eq!(corners[3][0] > corners[0][0], negative);
+        let span = base[1][0] - base[0][0];
+        for t in [0.25, 0.75] {
+            let x = base[0][0] + t * span;
+            let edge = base[0][1] + t * (base[1][1] - base[0][1]);
+            let toward_value = (value_y - base_y).signum() * 0.1;
+            assert!(lean.shape.contains_canvas_point([x, edge + toward_value]));
+            assert!(!lean.shape.contains_canvas_point([x, edge - toward_value]));
+        }
+    }
+}
+
+#[test]
+fn clipped_bar_base_and_value_edges_stay_level_without_a_visible_zero() {
+    let frame = PlotFrame2d {
+        bar_lean: 0.012,
+        ..fixed_frame()
+    };
+    let row = PlotRowIdentity {
+        series: 0,
+        row_id: DataRowId(1),
+    };
+    for baseline in [-5.0, 40.0] {
+        let [a, b, c, d] = bar_corners([10.0, 10.0, 30.0, 30.0], baseline, row, &frame);
+        assert_eq!([a[1], b[1], c[1], d[1]], [10.0, 10.0, 30.0, 30.0]);
+    }
+}
+
+#[test]
+fn transparent_planar_grid_omits_only_grid_strokes() {
+    let mut frame = fixed_frame();
+    let min = [0.0, 0.0];
+    let max = [10.0, 100.0];
+    let mapping = PlotFrameMapping2d::new(&frame, min, max).unwrap();
+    let lined = CartesianPaint::new(&frame, mapping, min, max).prepare();
+    let grid_color = frame.grid_color();
+    frame.grid_alpha = 0.0;
+    let paper = CartesianPaint::new(&frame, mapping, min, max).prepare();
+    let visible_parts = lined
+        .canvas
+        .iter()
+        .filter(|p| p.color != grid_color)
+        .map(|p| (&p.kind, p.position, p.color));
+    assert_eq!(
+        lined.canvas.len() - paper.canvas.len(),
+        2 * (frame.ticks as usize + 1)
+    );
+    assert!(visible_parts.eq(paper.canvas.iter().map(|p| (&p.kind, p.position, p.color))));
+}
+
+#[test]
 fn multiple_bar_series_use_one_range_and_disjoint_group_slots() {
     let ids = [DataRowId(0)];
     let x = values(&[4.0]);

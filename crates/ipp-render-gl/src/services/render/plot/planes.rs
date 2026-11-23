@@ -86,7 +86,7 @@ impl<D: RenderDevice> RenderService<D> {
         let programs = &mut self.canvas_paints;
         let fallbacks = &mut self.canvas_paint_fallbacks;
         cache.boxes.paints.prepare(
-            plane.callout_paint.map_or(&[], std::slice::from_ref),
+            plane.paint.map_or(&[], std::slice::from_ref),
             |instance| {
                 super::super::canvas::draw::admit_paint::<D>(programs, instance, |key| {
                     scene.resource(key)
@@ -107,7 +107,7 @@ impl<D: RenderDevice> RenderService<D> {
         let clip = plane.plane.clip;
         let painted = &mut scratch.painted;
         painted.clear();
-        if let Some(paint) = plane.callout_paint {
+        if let Some(paint) = plane.paint {
             painted.extend(plane.plane.primitives.iter().map(|primitive| {
                 let mut primitive = primitive.clone();
                 if let CanvasPrimitive::Box {
@@ -130,7 +130,7 @@ impl<D: RenderDevice> RenderService<D> {
             }));
         }
         // Ordinary axes and labels borrow retained primitives without copies.
-        let primitives = if plane.callout_paint.is_some() {
+        let primitives = if plane.paint.is_some() {
             painted.as_slice()
         } else {
             &plane.plane.primitives
@@ -160,7 +160,7 @@ impl<D: RenderDevice> RenderService<D> {
         }
         let mvp = ipp_core::math::multiply(view_projection, plane.model);
         let features = plane
-            .callout_paint
+            .paint
             .and_then(|instance| instance.shader)
             .and_then(|key| scene.resource(key))
             .and_then(|resource| resource.data())
@@ -235,6 +235,13 @@ impl<D: RenderDevice> RenderService<D> {
                         &mut self.device.borrow_mut(),
                         scene.selection,
                         &cache.boxes.paints,
+                    )?;
+                    // A shared shape program can still hold the previous curved
+                    // Canvas projection. These marks live on a flat scene plane.
+                    super::super::surface::analytic::upload(
+                        None,
+                        &mut *self.device.borrow_mut(),
+                        shapes,
                     )?;
                     if let Some(presentation) = &presentation {
                         presentation.upload(&mut *self.device.borrow_mut(), shapes)?;

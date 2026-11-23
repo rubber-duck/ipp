@@ -1,9 +1,7 @@
 //! Authored callout appearance, independent of data-mark paint and data binding.
 use crate::ErrorReason;
-use crate::components::schema::{ComponentAssetReference, ComponentLifecycle};
-use crate::services::asset_management::AssetDemandSelection;
+use crate::components::schema::ComponentLifecycle;
 use ipp_schema_derive::SchemaComponent;
-use std::{collections::BTreeSet, sync::Arc};
 
 /// Optional chart-local panel and leader appearance; dimensions scale with the frame font.
 #[repr(C)]
@@ -103,96 +101,6 @@ impl ComponentLifecycle for PlotCalloutStyle {
     }
 }
 
-/// Independent shared panel paint; property animations never rebuild Plot geometry.
-#[repr(C)]
-#[derive(Clone, Debug, Default, PartialEq, SchemaComponent)]
-pub struct PlotCalloutPaint {
-    /// Shared Canvas paint definition.
-    pub source: Arc<str>,
-    /// Definition variant.
-    pub variant: u32,
-    /// Ordinary independently editable shader parameters.
-    #[schema(ignore)]
-    pub properties: crate::DynamicProperties,
-}
-
-impl ComponentLifecycle for PlotCalloutPaint {
-    fn supports_numeric_property(offset: u32) -> bool {
-        crate::components::dynamic_properties::is_dynamic_field(offset)
-            && offset != crate::components::dynamic_properties::DYNAMIC_METADATA
-    }
-
-    fn validate_numeric_properties(
-        &self,
-        fields: &[(u32, crate::components::schema::FieldValue)],
-    ) -> Result<(), ErrorReason> {
-        // Only existing numeric properties change in place; the source and its
-        // variant are resource fields.
-        for (offset, field) in fields {
-            let crate::components::schema::FieldValue::Dynamic(value) = field else {
-                return Err(ErrorReason::InvalidField);
-            };
-            if !Self::supports_numeric_property(*offset)
-                || value.kind() == crate::DynamicPropertyKind::Asset
-                || self
-                    .properties
-                    .get_key(*offset)
-                    .is_none_or(|previous| previous.kind() != value.kind())
-            {
-                return Err(ErrorReason::InvalidField);
-            }
-            value.validate().map_err(|_| ErrorReason::InvalidValue)?;
-        }
-        Ok(())
-    }
-
-    fn supports_dynamic_properties() -> bool {
-        true
-    }
-
-    fn dynamic_properties(&self) -> Option<&crate::DynamicProperties> {
-        Some(&self.properties)
-    }
-
-    fn dynamic_properties_mut(&mut self) -> Option<&mut crate::DynamicProperties> {
-        Some(&mut self.properties)
-    }
-
-    fn validate(&self) -> Result<(), ErrorReason> {
-        crate::services::asset_management::validate_source(&self.source)
-    }
-
-    /// Dynamic properties are indexed state: each write is checked where it
-    /// happens, by its own value.
-    fn validates_after_operation() -> bool {
-        false
-    }
-
-    fn validate_field(&self, _offset: u32) -> Result<(), ErrorReason> {
-        self.validate()
-    }
-
-    fn asset_references() -> &'static [ComponentAssetReference] {
-        &[ComponentAssetReference {
-            kind: crate::services::asset_management::formats::shader::SHADER_TYPE.0,
-            source_offset: std::mem::offset_of!(Self, source) as u32,
-            variant_offset: std::mem::offset_of!(Self, variant) as u32,
-        }]
-    }
-
-    fn resource_demand(&self, demand: &mut BTreeSet<AssetDemandSelection>) {
-        if !self.source.is_empty() {
-            AssetDemandSelection::insert_into(
-                demand,
-                crate::services::asset_management::formats::shader::SHADER_TYPE,
-                &self.source,
-                self.variant,
-            );
-        }
-        self.properties.resource_demand(demand);
-    }
-}
-
 impl PlotCalloutStyle {
     pub(super) fn color(&self) -> [f32; 4] {
         [self.red, self.green, self.blue, self.alpha]
@@ -228,68 +136,4 @@ pub(super) fn text_extent(text: &str, font: f32) -> [f32; 2] {
             * 0.62,
         text.lines().count().max(1) as f32 * font * 1.2,
     ]
-}
-
-/// Exact callout paint lifetime, distinct from the chart's data-mark paint.
-pub(in crate::world::systems) fn paint_target(
-    world: &crate::world::WorldSimulationState,
-    entity: crate::EntityId,
-) -> Option<crate::systems::canvas::CanvasTarget> {
-    world
-        .components
-        .plot_callout_paint(entity.index() as usize)?;
-    let component = crate::ComponentValue::PLOT_CALLOUT_PAINT;
-    Some(crate::systems::canvas::CanvasTarget {
-        entity,
-        component,
-        incarnation: world
-            .state
-            .entities
-            .get(&entity)?
-            .input(component)?
-            .incarnation,
-    })
-}
-
-pub(in crate::world::systems) fn paint_instance(
-    world: &crate::world::WorldSimulationState,
-    assets: &crate::services::asset_management::AssetManagementService,
-    target: crate::systems::canvas::CanvasTarget,
-    previous: Option<&crate::systems::canvas::CanvasPaintInstance>,
-) -> Option<crate::systems::canvas::CanvasPaintInstance> {
-    if paint_target(world, target.entity)? != target {
-        return None;
-    }
-    let value = world
-        .components
-        .plot_callout_paint(target.entity.index() as usize)?;
-    let shader = assets
-        .find_source(
-            world.id,
-            crate::services::asset_management::formats::shader::SHADER_TYPE,
-            &value.source,
-            value.variant,
-        )
-        .filter(|&key| assets.get(key).and_then(|entry| entry.data()).is_some());
-    let properties = || {
-        value.properties.descriptors().keys().filter_map(|name| {
-            let value = value.properties.get(name)?;
-            (value.kind() != crate::DynamicPropertyKind::Asset).then(|| (name.clone(), value))
-        })
-    };
-    if let Some(previous) = previous.filter(|previous| {
-        previous.target == target
-            && previous.source == value.source
-            && previous.shader == shader
-            && properties().eq(previous.properties.iter().cloned())
-    }) {
-        return Some(previous.clone());
-    }
-    let properties = properties().collect::<Vec<_>>().into();
-    Some(crate::systems::canvas::CanvasPaintInstance {
-        target,
-        source: value.source.clone(),
-        shader,
-        properties,
-    })
 }

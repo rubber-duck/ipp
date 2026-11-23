@@ -188,26 +188,32 @@ pub fn prepare_bars(
             if rect[0] >= rect[2] || rect[1] >= rect[3] {
                 continue;
             }
-            push_data_box(
-                &mut geometry,
-                [rect[0], rect[1]],
-                [rect[2] - rect[0], rect[3] - rect[1]],
-                sample.color,
-            );
+            let corners = bar_corners(rect, a[1], sample.row, frame);
+            let shape = if frame.bar_lean == 0.0 {
+                push_data_box(
+                    &mut geometry,
+                    [rect[0], rect[1]],
+                    [rect[2] - rect[0], rect[3] - rect[1]],
+                    sample.color,
+                );
+                PlotHitShape::Rect(rect)
+            } else {
+                emit_path(&mut geometry, vec![polygon(&corners)], sample.color);
+                geometry
+                    .canvas
+                    .last_mut()
+                    .expect("inserted bar contour")
+                    .data_mark = true;
+                PlotHitShape::SlantedBar(corners)
+            };
             if highlighted.contains(&row_key(sample.row)) {
                 let mut contours = Vec::new();
-                let corners = [
-                    [rect[0], rect[1]],
-                    [rect[2], rect[1]],
-                    [rect[2], rect[3]],
-                    [rect[0], rect[3]],
-                ];
                 for index in 0..4 {
                     stroke_segment(
                         corners[index],
                         corners[(index + 1) % 4],
                         frame.line_width.max(2.0),
-                        mapping.rect,
+                        [0.0, 0.0, frame.width, frame.height],
                         &mut contours,
                     );
                 }
@@ -215,19 +221,17 @@ pub fn prepare_bars(
             }
             geometry.hits.push(PlotHit {
                 row: sample.row,
-                shape: PlotHitShape::Rect(rect),
+                shape,
             });
+            let [left, right] = if y < 0.0 {
+                [corners[3], corners[2]]
+            } else {
+                [corners[0], corners[1]]
+            };
             anchors.insert(
                 row_key(sample.row),
                 Anchor {
-                    point: [
-                        (rect[0] + rect[2]) / 2.0,
-                        if y >= 0.0 {
-                            rect[1]
-                        } else {
-                            rect[3]
-                        },
-                    ],
+                    point: [left[0] + (right[0] - left[0]) * 0.5, left[1]],
                     radius: 4.0,
                 },
             );
@@ -235,6 +239,49 @@ pub fn prepare_bars(
     }
     labels(&mut geometry, frame, &chart.labels, &anchors, callout)?;
     Ok(geometry)
+}
+
+/// Clockwise in Canvas coordinates. Only the true zero end straddles the baseline;
+/// a fixed-range cut and the value end both stay level.
+fn bar_corners(
+    [left, top, right, bottom]: [f32; 4],
+    baseline: f32,
+    row: PlotRowIdentity,
+    frame: &PlotFrame2d,
+) -> [[f32; 2]; 4] {
+    let width = right - left;
+    let height = bottom - top;
+    let direction = if (row.row_id.0 ^ u64::from(row.series)) & 1 == 0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let shift = (height * frame.bar_lean).min(width * 0.1) * direction;
+    let mut corners = [
+        [left + (-shift).max(0.0), top],
+        [right - shift.max(0.0), top],
+        [right + shift.min(0.0), bottom],
+        [left + shift.max(0.0), bottom],
+    ];
+
+    let (left_end, right_end, margin) = if baseline == bottom {
+        (3, 2, frame.height - bottom)
+    } else if baseline == top {
+        (0, 1, top)
+    } else {
+        return corners;
+    };
+
+    // A small crossing stays visible over the axis stroke. Bound it for short
+    // bars and keep the corners inside the Canvas when the frame has no padding.
+    let rise = ((width - shift.abs()) * frame.bar_lean * 1.5)
+        .min(2.0)
+        .min(height * 0.2)
+        .min(margin)
+        * direction;
+    corners[left_end][1] += rise;
+    corners[right_end][1] -= rise;
+    corners
 }
 
 /// All positive finite values of visible series share one radial total. Zero,
@@ -528,18 +575,20 @@ impl<'a> CartesianPaint<'a> {
             let x = self.min[0] + (self.max[0] - self.min[0]) * ratio;
             let y = self.min[1] + (self.max[1] - self.min[1]) * ratio;
             let point = self.mapping.map([x, y]);
-            push_box(
-                &mut geometry,
-                [point[0] - frame.line_width / 2.0, top],
-                [frame.line_width, bottom - top],
-                frame.grid_color(),
-            );
-            push_box(
-                &mut geometry,
-                [left, point[1] - frame.line_width / 2.0],
-                [right - left, frame.line_width],
-                frame.grid_color(),
-            );
+            if frame.grid_alpha > 0.0 {
+                push_box(
+                    &mut geometry,
+                    [point[0] - frame.line_width / 2.0, top],
+                    [frame.line_width, bottom - top],
+                    frame.grid_color(),
+                );
+                push_box(
+                    &mut geometry,
+                    [left, point[1] - frame.line_width / 2.0],
+                    [right - left, frame.line_width],
+                    frame.grid_color(),
+                );
+            }
             let text = tick_text(x);
             let offset = text.chars().count() as f32 * frame.font_size * 0.3;
             push_text(
@@ -559,19 +608,22 @@ impl<'a> CartesianPaint<'a> {
                 frame.color(),
             );
         }
-        for (a, b) in [
-            ([left, top], [left, bottom]),
-            ([left, bottom], [right, bottom]),
+        let width = frame.line_width * frame.axis_width_scale;
+        let radius = width * 0.5;
+        for (position, size) in [
+            ([left - radius, top - radius], [width, bottom - top + width]),
+            (
+                [left - radius, bottom - radius],
+                [right - left + width, width],
+            ),
         ] {
-            let mut contours = Vec::new();
-            stroke_segment(
-                a,
-                b,
-                frame.line_width,
-                [0.0, 0.0, frame.width, frame.height],
-                &mut contours,
-            );
-            emit_path(&mut geometry, contours, frame.color());
+            geometry.canvas.push(PlotPrimitive::axis_line(
+                geometry.canvas.len() as u32,
+                position,
+                size,
+                radius,
+                frame.color(),
+            ));
         }
         if !frame.x_title.is_empty() {
             let offset = frame.x_title.chars().count() as f32 * frame.font_size * 0.3;

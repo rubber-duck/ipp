@@ -143,6 +143,10 @@ impl PlotHitShape {
             Self::Rect([left, top, right, bottom]) => {
                 point[0] >= left && point[0] <= right && point[1] >= top && point[1] <= bottom
             }
+            Self::SlantedBar(corners) => corners.iter().enumerate().all(|(index, a)| {
+                let b = corners[(index + 1) % 4];
+                (b[0] - a[0]) * (point[1] - a[1]) >= (b[1] - a[1]) * (point[0] - a[0])
+            }),
             Self::Circle {
                 center,
                 radius,
@@ -177,6 +181,29 @@ impl PlotHitShape {
             }
             .ray_intersection(ray, near, far)
             .map(|hit| hit.distance),
+            Self::Bar(solid) => {
+                let [cx, cz] = solid.center_xz().map(f64::from);
+                let (sin, cos) = f64::from(solid.yaw).sin_cos();
+                let unturn = |[x, y, z]: [f64; 3]| [cos * x - sin * z, y, sin * x + cos * z];
+                let local = GeometryRay {
+                    origin: unturn([ray.origin[0] - cx, ray.origin[1], ray.origin[2] - cz]),
+                    direction: unturn(ray.direction),
+                };
+                let relative =
+                    |p: [f32; 3]| [f64::from(p[0]) - cx, f64::from(p[1]), f64::from(p[2]) - cz];
+                let min = relative(solid.min);
+                let max = relative(solid.max);
+                if solid.bevel == 0.0 {
+                    GeometryShape::Box {
+                        min,
+                        max,
+                    }
+                    .ray_intersection(&local, near, far)
+                    .map(|hit| hit.distance)
+                } else {
+                    beveled_bar(&local, near, far, min, max, solid.bevel)
+                }
+            }
             Self::Sphere {
                 center,
                 radius,
@@ -206,6 +233,56 @@ impl PlotHitShape {
             _ => None,
         }
     }
+}
+
+/// Intersect the six box half-spaces and the eight 45-degree cap planes.
+fn beveled_bar(
+    ray: &GeometryRay,
+    near: f64,
+    far: f64,
+    min: [f64; 3],
+    max: [f64; 3],
+    bevel: f32,
+) -> Option<f64> {
+    let mut entry = f64::NEG_INFINITY;
+    let mut exit = f64::INFINITY;
+    let mut clip = |distance: f64, direction: f64| {
+        if direction == 0.0 {
+            return distance >= 0.0;
+        }
+
+        let crossing = distance / direction;
+        if direction > 0.0 {
+            exit = exit.min(crossing);
+        } else {
+            entry = entry.max(crossing);
+        }
+        entry <= exit
+    };
+
+    for axis in 0..3 {
+        if !clip(max[axis] - ray.origin[axis], ray.direction[axis])
+            || !clip(ray.origin[axis] - min[axis], -ray.direction[axis])
+        {
+            return None;
+        }
+    }
+    for axis in [0, 2] {
+        for (side, wall) in [(-1.0, min[axis]), (1.0, max[axis])] {
+            for (vertical, cap) in [(-1.0, min[1]), (1.0, max[1])] {
+                let distance = side * (wall - ray.origin[axis]) + vertical * (cap - ray.origin[1])
+                    - f64::from(bevel);
+                if !clip(
+                    distance,
+                    side * ray.direction[axis] + vertical * ray.direction[1],
+                ) {
+                    return None;
+                }
+            }
+        }
+    }
+
+    [entry, exit].into_iter().find(|t| *t >= near && *t <= far)
 }
 
 fn in_sector(x: f64, z: f64, start: f64, sweep: f64) -> bool {

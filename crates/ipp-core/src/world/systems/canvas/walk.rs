@@ -787,37 +787,32 @@ impl CanvasSystem {
                     layer: style.layer,
                     order: walk.entry_index(),
                 });
-                let marks: std::collections::BTreeSet<_> = geometry
+                use crate::systems::plot::{PlotPrimitiveKind, paint::paint_target as plot_paint};
+                let axes = plot_paint(world, entity, ComponentValue::PLOT_AXIS_PAINT);
+                let panels = plot_paint(world, entity, ComponentValue::PLOT_CALLOUT_PAINT);
+                let paints: std::collections::BTreeMap<_, _> = geometry
                     .canvas
                     .iter()
-                    .filter(|item| item.data_mark)
-                    .map(|item| item.part)
-                    .collect();
-                let callouts: std::collections::BTreeSet<_> = geometry
-                    .canvas
-                    .iter()
-                    .filter(|item| {
-                        matches!(
-                            item.kind,
-                            crate::systems::plot::PlotPrimitiveKind::CalloutBox { .. }
-                        )
+                    .filter_map(|item| {
+                        let target = match &item.kind {
+                            PlotPrimitiveKind::AxisLine {
+                                ..
+                            } => axes,
+                            PlotPrimitiveKind::CalloutBox {
+                                ..
+                            } => panels,
+                            _ if item.data_mark => paint,
+                            _ => None,
+                        }?;
+                        Some((item.part, target))
                     })
-                    .map(|item| item.part)
                     .collect();
-                let callout_paint = crate::systems::plot::callout::paint_target(world, entity);
                 for local in primitives {
                     let mut primitive = local.clone();
                     if let CanvasPart::Plot(part) = local.style().identity.part
-                        && marks.contains(&part)
-                        && let Some(paint) = paint
+                        && let Some(&target) = paints.get(&part)
                     {
-                        primitive = with_paint(primitive, paint);
-                    }
-                    if let CanvasPart::Plot(part) = local.style().identity.part
-                        && callouts.contains(&part)
-                        && let Some(paint) = callout_paint
-                    {
-                        primitive = with_paint(primitive, paint);
+                        primitive = with_paint(primitive, target);
                     }
                     let authored = *local.style();
                     let style = primitive.style_mut();

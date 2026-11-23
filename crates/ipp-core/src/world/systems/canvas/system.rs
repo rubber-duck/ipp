@@ -48,7 +48,11 @@ impl CanvasSystem {
             ComponentValue::CANVAS_STYLE if retained => {
                 patch.subtrees.insert(entity);
             }
-            ComponentValue::CANVAS_PAINT | ComponentValue::PLOT_CALLOUT_PAINT if retained => {
+            ComponentValue::CANVAS_PAINT
+            | ComponentValue::PLOT_CALLOUT_PAINT
+            | ComponentValue::PLOT_AXIS_PAINT
+                if retained =>
+            {
                 patch.paints.insert(entity);
             }
             component if retained && super::walk::LEAF_COMPONENTS.contains(&component) => {
@@ -400,6 +404,7 @@ fn input_component(component: u16) -> bool {
                 | ComponentValue::CANVAS_BOX
                 | ComponentValue::CANVAS_PAINT
                 | ComponentValue::PLOT_CALLOUT_PAINT
+                | ComponentValue::PLOT_AXIS_PAINT
                 | ComponentValue::WORLD_ATTACHMENT
         )
 }

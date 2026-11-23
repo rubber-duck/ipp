@@ -104,7 +104,10 @@ fn dense_chart_paths(count: usize, height: f32) -> Vec<ipp_core::systems::plot::
 
 #[test]
 fn dense_atlas_respects_device_limit_without_losing_paths_or_curves() {
-    let sources = dense_chart_paths(1000, 384.0);
+    let mut sources = dense_chart_paths(1000, 384.0);
+    // Pack a second data path so descriptor offsets are exercised independently of frame geometry.
+    sources.extend(dense_chart_paths(2, 384.0));
+
     let contours: Vec<_> = sources.iter().map(|p| p.quadratic_contours()).collect();
     let paths: Vec<_> = sources
         .iter()

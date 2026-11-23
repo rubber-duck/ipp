@@ -33,6 +33,17 @@ const PanelContext = createContext({
   surface: false,
   padding: [0, 0, 0, 0] as readonly [number, number, number, number],
 });
+/** A framed composite can supply the surrounding surface to its content. */
+export function PanelSurface({ children }: { readonly children: ReactNode }) {
+  return (
+    <PanelContext
+      value={{ minimized: false, surface: true, padding: [0, 0, 0, 0] }}
+    >
+      {children}
+    </PanelContext>
+  );
+}
+
 export function usePanelSurface(): boolean {
   return useContext(PanelContext).surface;
 }

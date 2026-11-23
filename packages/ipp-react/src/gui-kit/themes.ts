@@ -303,6 +303,7 @@ export function kitThemes(contract: GuiKitRecipeInputs) {
     // the text input look, square because it sits on those lines; the
     // scrolling body is the scroll look without a frame, since the grid's
     // lines are its frame.
+    gridHeader: box({ color: CLEAR, paint: false, border_width: 0 }),
     gridFrame: box({ color: CLEAR, border_width: 0, paint: false }),
     gridRow: {
       rows: extend(looks.docked, [
@@ -529,14 +530,14 @@ function choiceThemes(contract: GuiKitRecipeInputs) {
 
   // A bare button: only its label, which `hover` lights while the pointer
   // is over it; disabled, neutral.
-  const bare = (hover: boolean): KitTheme => ({
+  const bare = (hover: boolean, foreground?: GuiKitColor): KitTheme => ({
     rows: [
       { part: background, color: CLEAR, border_width: 0, glow_intensity: 0 },
-      { part: key("label"), color: t.text },
+      { part: key("label"), color: foreground ?? t.text },
       ...(hover
         ? (["hovered", "pressed"] as const).map((state) => ({
             part: key("label", state),
-            color: t.accent,
+            color: foreground ?? t.accent,
           }))
         : []),
       { part: key("label", "disabled"), color: t.neutral },
@@ -631,6 +632,7 @@ function choiceThemes(contract: GuiKitRecipeInputs) {
       em: looks.secondary.em,
     },
     treeChevron: bare(true),
+    treeChevronSelected: bare(true, t.selectedText),
   } satisfies Readonly<Record<string, KitTheme>>;
 }
 

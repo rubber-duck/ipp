@@ -44,3 +44,6 @@ export const GUI_KIT_ICONS = {
 } as const;
 
 export type GuiKitIcon = keyof typeof GUI_KIT_ICONS;
+
+/** Optional shared paint theme for each named icon. */
+export type GuiKitIconThemes = Readonly<Partial<Record<GuiKitIcon, string>>>;

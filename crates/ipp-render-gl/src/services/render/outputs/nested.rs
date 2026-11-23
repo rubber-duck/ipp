@@ -456,19 +456,22 @@ impl<D: RenderDevice> RenderService<D> {
                                 mvp: plane,
                                 clip,
                                 opacity,
+                                mapping,
                             } => {
                                 if let Some(parent) = self.canvas_presentations.get(&job.selection)
                                 {
                                     let features =
                                         paint_features.get(&selection).copied().unwrap_or(0);
-                                    let mapping = attachment
-                                        .child_mapping(child.canvas.logical_extent, view.clip)
-                                        .ok_or(RenderError::InvalidTransform)?;
                                     let coordinate = scene
                                         .canvas
                                         .layer_offset(slot.layer)
                                         .ok_or(RenderError::UnavailableOutput)?;
-                                    let context = parent.child(&mapping, coordinate, features)?;
+                                    let context = parent.child(
+                                        &mapping,
+                                        slot.space.as_deref(),
+                                        coordinate,
+                                        features,
+                                    )?;
                                     self.update_canvas_presentation(selection, context);
                                 }
                                 let canvas = Some(CanvasView {

@@ -10,6 +10,7 @@ import {
 import type { CanvasWorldHandle } from "@ipp/react";
 import { SkinProvider } from "@ipp/react/gui";
 import { Panel, type GuiKitContract } from "@ipp/react/gui-kit";
+import { cartoonSkin } from "@ipp/react/gui-cartoon";
 import { glassSkin } from "@ipp/react/gui-glass";
 import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import type { GallerySkin } from "../../shared/skin-preference.js";
@@ -55,7 +56,11 @@ export function PlatformerMovementPanel({
   readonly onReady: (handle: CanvasWorldHandle) => void;
 }) {
   const skins = useMemo(
-    () => ({ glass: glassSkin(contract), cybertron: cybertronSkin(contract) }),
+    () => ({
+      cartoon: cartoonSkin(contract),
+      glass: glassSkin(contract),
+      cybertron: cybertronSkin(contract),
+    }),
     [contract],
   );
   return (

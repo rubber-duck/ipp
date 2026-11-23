@@ -2,7 +2,7 @@ use crate::services::asset_management::AssetKey;
 use crate::{EntityId, OutputRef, WorldAttachmentToken};
 use std::sync::Arc;
 
-/// Final Canvas-local `[min_x, min_y, max_x, max_y]` bounds in top-left, Y-down space.
+/// Rectangular bounds in minimum/maximum form in a top-left, Y-down coordinate space.
 /// Minimum edges are inclusive and maximum edges exclusive; inverted or zero-area
 /// rectangles are empty. Clips are already intersected, never transformed again.
 pub type CanvasClip = [f32; 4];
@@ -72,7 +72,7 @@ pub struct CanvasPrimitiveId {
 pub struct CanvasPrimitiveStyle {
     /// Stable identity, unrelated to the entry's current ordinal.
     pub identity: CanvasPrimitiveId,
-    /// Final Canvas-local logical origin.
+    /// Logical origin in the paint entry's drawing space.
     pub position: [f32; 2],
     /// Signed visual scale applied to local geometry.
     pub scale: [f32; 2],
@@ -485,6 +485,8 @@ impl CanvasPrimitive {
 /// A nested Surface's one evaluated mapping, shared by composition and paint.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanvasAttachmentSlot {
+    /// Drawing space of the slot and its clip.
+    pub space: Option<Arc<super::CanvasSpace>>,
     /// Join inside the same WorldPublication by anchor, token and containing Canvas selection.
     pub anchor: EntityId,
     /// Exact Surface component lifetime.
@@ -514,6 +516,12 @@ pub struct CanvasAttachmentSlot {
 impl CanvasAttachmentSlot {
     /// Physical Surface-local point to evaluated parent Canvas logical position.
     pub fn to_canvas(&self, point: [f64; 2]) -> [f64; 2] {
+        let p = self.to_drawing(point);
+        self.space.as_ref().map_or(p, |s| s.affine.point_f64(p))
+    }
+
+    /// Physical point in the slot's drawing space before subtree placement.
+    pub fn to_drawing(&self, point: [f64; 2]) -> [f64; 2] {
         [
             self.position[0] + self.scale[0] * point[0],
             self.position[1] + self.scale[1] * point[1],
@@ -533,6 +541,10 @@ impl CanvasAttachmentSlot {
         {
             return None;
         }
+        let point = self
+            .space
+            .as_ref()
+            .map_or(point, |s| s.inverse.point_f64(point));
         Some([
             (point[0] - self.position[0]) / self.scale[0],
             (point[1] - self.position[1]) / self.scale[1],
@@ -543,21 +555,27 @@ impl CanvasAttachmentSlot {
     pub fn parent_affine(&self, logical_extent: [f32; 2], units_per_metre: f32) -> [f64; 16] {
         let units = f64::from(units_per_metre);
         let center = logical_extent.map(|extent| f64::from(extent) / 2.0);
+        let transform = self
+            .space
+            .as_ref()
+            .map_or(super::CanvasAffine::IDENTITY, |s| s.affine);
+        let position = transform.point_f64(self.position);
+        let [[a, b], [c, d]] = transform.axes;
         [
-            self.scale[0] / units,
-            0.0,
-            0.0,
-            0.0,
-            0.0,
-            -self.scale[1] / units,
-            0.0,
-            0.0,
+            f64::from(a) * self.scale[0] / units,
+            -f64::from(b) * self.scale[0] / units,
+            0.,
+            0.,
+            f64::from(c) * self.scale[1] / units,
+            -f64::from(d) * self.scale[1] / units,
+            0.,
+            0.,
             0.0,
             0.0,
             1.0,
             0.0,
-            (self.position[0] - center[0]) / units,
-            (center[1] - self.position[1]) / units,
+            (position[0] - center[0]) / units,
+            (center[1] - position[1]) / units,
             0.0,
             1.0,
         ]
@@ -572,6 +590,8 @@ impl CanvasAttachmentSlot {
 #[allow(missing_docs, clippy::large_enum_variant)]
 pub enum CanvasPaintEntry {
     Primitive {
+        /// Drawing space shared by this subtree.
+        space: Option<Arc<super::CanvasSpace>>,
         /// Local payload revision, including exact resource identity; excludes visual style.
         geometry_revision: u64,
         /// Complete primitive/style revision, including placement, tint, opacity and clip.
@@ -582,6 +602,17 @@ pub enum CanvasPaintEntry {
 }
 
 impl CanvasPaintEntry {
+    /// Rotated drawing space shared by painting and input, if present.
+    pub fn space(&self) -> Option<&Arc<super::CanvasSpace>> {
+        match self {
+            Self::Primitive {
+                space,
+                ..
+            } => space.as_ref(),
+            Self::Attachment(slot) => slot.space.as_ref(),
+        }
+    }
+
     /// Opaque current-publication plane ID of the producing entity.
     pub fn layer(&self) -> u32 {
         match self {
@@ -636,6 +667,8 @@ pub struct CanvasLayerPlane {
 /// Immutable routing geometry supplied after local evaluation.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CanvasHit {
+    /// Drawing space of the bounds, clip and inverse pointer placement.
+    pub space: Option<Arc<super::CanvasSpace>>,
     /// Exact ordinary entity/component incarnation.
     pub target: CanvasTarget,
     /// Local action or nested output classification.
@@ -649,9 +682,9 @@ pub struct CanvasHit {
     pub priority: u32,
     /// Opaque current-publication plane ID, as on its paint.
     pub layer: u32,
-    /// Final logical rectangle in minimum/maximum form.
+    /// Logical rectangle in drawing coordinates, before subtree rotation.
     pub bounds: CanvasClip,
-    /// Fully intersected ancestor clip.
+    /// Drawing-space rectangular clip, intersected with the space's inherited polygon.
     pub clip: CanvasClip,
     /// Logical entity origin for inverse pointer mapping.
     pub position: [f32; 2],
@@ -664,9 +697,18 @@ pub struct CanvasHit {
 }
 
 impl CanvasHit {
+    /// Convert a canvas position to this hit's drawing space, also during capture.
+    pub fn drawing_point(&self, point: [f32; 2]) -> [f32; 2] {
+        self.space
+            .as_ref()
+            .map_or(point, |s| s.inverse.point(point))
+    }
+
     /// Minimum-inclusive, maximum-exclusive geometry shared with Canvas clipping.
     pub fn contains(&self, point: [f32; 2]) -> bool {
+        let point = self.drawing_point(point);
         self.eligible
+            && self.space.as_ref().is_none_or(|s| s.contains(point))
             && [self.bounds, self.clip].iter().all(|bounds| {
                 point[0] >= bounds[0]
                     && point[1] >= bounds[1]

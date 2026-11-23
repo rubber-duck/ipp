@@ -16,7 +16,8 @@ def main() -> None:
     fonts = {name: font_source(name) for name in sources()}
     source = fonts["shure-tech-mono"]
     convert_font(source, output / "shure-tech-mono.ippf")
-    convert_font(fonts["noto-sans"], output / "noto-sans.ippf")
+    for name in ("noto-sans", "lilita-one"):
+        convert_font(fonts[name], output / f"{name}.ippf")
     with TTFont(source) as font:
         cmap = font.getBestCmap()
         metrics = {

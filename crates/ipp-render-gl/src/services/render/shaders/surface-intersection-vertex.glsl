@@ -3,7 +3,7 @@
 uniform vec4 u_intersection; // kind (0 off, 1 cylinder, 2 sphere), curvature, near branch, domain radius
 uniform mat4 u_intersection_projection;
 uniform mat4 u_intersection_inverse;
-flat out vec4 v_intersection_chart; // content origin.xy and scale.xy in centred metres
+
 
 vec3 intersection_sample(vec2 chart) {
     float k = u_intersection.y;
@@ -17,11 +17,8 @@ vec3 intersection_sample(vec2 chart) {
 
 vec4 intersection_vertex(vec2 corner, vec4 rect) {
     mat4 content = u_intersection_inverse * u_mvp;
-    v_intersection_chart = vec4(content[3].xy, content[0].x, content[1].y);
-    vec2 lo = rect.xy * v_intersection_chart.zw + v_intersection_chart.xy;
-    vec2 hi = rect.zw * v_intersection_chart.zw + v_intersection_chart.xy;
-    vec2 chart_centre = (lo+hi)*0.5;
-    vec2 half_extent = abs(hi-lo)*0.5;
+    vec2 chart_centre = mat2(content[0].xy,content[1].xy)*((rect.xy+rect.zw)*0.5)+content[3].xy;
+    vec2 half_extent = mat2(abs(content[0].xy),abs(content[1].xy))*abs(rect.zw-rect.xy)*0.5;
     vec3 centre = intersection_sample(chart_centre);
     // Both chart maps have differential norm <= 1 on their valid domains.
     // Thus every mapped point lies in this ball, also at the chart's centre.

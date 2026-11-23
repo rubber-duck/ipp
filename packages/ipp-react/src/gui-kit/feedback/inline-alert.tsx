@@ -16,8 +16,9 @@ import { useEntityId } from "../../scope/identity.js";
  * that it moves only what lies below.
  */
 import { PresentationGate, Children, Entity } from "../../components.js";
-import { Style, Font } from "../../gui/components.js";
+import { Font } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
+import { NotificationStyle } from "./notification-style.js";
 import type { GuiPressListener } from "../../gui/callbacks.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { useGuiKit, type GuiKitTone } from "../kit.js";
@@ -70,7 +71,7 @@ export function InlineAlert(props: InlineAlertProps) {
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <Style layer={layer} />
+      <NotificationStyle layer={layer} />
       <KitLayout
         kind={LAYOUT_ROW}
         height={kit.unit(t.controlHeight)}

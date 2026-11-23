@@ -6,6 +6,9 @@ use std::cell::Cell;
 #[derive(Default)]
 pub(super) struct GlesSubmissionState {
     pub surface_double_sided: Cell<Option<bool>>,
+    pub clip_planes: Vec<[f32; 4]>,
+    pub clip_epoch: u64,
+    pub clip_uniforms: std::cell::RefCell<std::collections::BTreeMap<u32, (i32, u64)>>,
     pub surface_owner: Cell<u32>,
     pub surface_cutout: Cell<u32>,
     pub owner_uniforms: std::cell::RefCell<std::collections::BTreeMap<u32, (i32, Option<u32>)>>,
@@ -39,6 +42,31 @@ impl GlesRenderDevice {
         }
         if program == 0 {
             return;
+        }
+
+        if self.submission.clip_epoch != 0 {
+            let mut uniforms = self.submission.clip_uniforms.borrow_mut();
+            let (location, epoch) = uniforms.entry(program).or_insert_with(|| {
+                // SAFETY: The context owns the bound program and GL copies the static name.
+                (
+                    unsafe {
+                        self.gl
+                            .uniform_location(program, c"u_canvas_planes[0]".as_ptr())
+                    },
+                    0,
+                )
+            });
+            if *epoch != self.submission.clip_epoch {
+                *epoch = self.submission.clip_epoch;
+                if *location >= 0 {
+                    let values = &self.submission.clip_planes;
+                    // SAFETY: The current program owns this uniform and GL synchronously copies the contiguous vec4s.
+                    unsafe {
+                        self.gl
+                            .uniform_vec4(*location, values.len() as i32, values.as_ptr().cast())
+                    };
+                }
+            }
         }
 
         let owner = self.submission.surface_owner.get();

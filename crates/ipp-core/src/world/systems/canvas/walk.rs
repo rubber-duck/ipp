@@ -29,8 +29,9 @@ pub(super) const LEAF_COMPONENTS: [u16; 6] = [
     ComponentValue::CANVAS_BOX,
 ];
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(super) struct Placement {
+    pub space: Option<Arc<CanvasSpace>>,
     pub position: [f32; 2],
     pub scale: [f32; 2],
     pub color: [f32; 4],
@@ -46,6 +47,7 @@ pub(super) struct Placement {
 impl Placement {
     fn root(extent: [f32; 2]) -> Self {
         Self {
+            space: None,
             position: [0.0; 2],
             scale: [1.0; 2],
             color: [1.0; 4],
@@ -59,12 +61,21 @@ impl Placement {
     }
 
     /// Compose a child's style without changing its inherited clip scope.
-    fn child(self, style: Option<&CanvasStyle>) -> Self {
+    fn child(mut self, style: Option<&CanvasStyle>, size: [f32; 2]) -> Self {
         let Some(style) = style else {
             return self;
         };
-        let (position, scale) = style.compose(self.position, self.scale);
+        let (mut position, mut scale) = style.compose(self.position, self.scale);
+        if style.rotation != 0.0 && !self.scale.contains(&0.0) {
+            let local = CanvasAffine::axis_aligned(self.position, self.scale)
+                .compose(style.rotation_affine(size));
+            self.space = CanvasSpace::child(self.space.as_deref(), local, self.clip);
+            self.clip = self.space.as_ref().map_or([0.; 4], |s| s.clip_bounds());
+            position = [0.; 2];
+            scale = [style.scale_x, style.scale_y];
+        }
         let mut placed = Self {
+            space: self.space,
             position,
             scale,
             color: [
@@ -92,7 +103,7 @@ impl Placement {
         placed
     }
 
-    pub(super) fn bounds(self, local: CanvasClip) -> CanvasClip {
+    pub(super) fn bounds(&self, local: CanvasClip) -> CanvasClip {
         if local[2] <= local[0] || local[3] <= local[1] {
             return [
                 self.position[0],
@@ -117,7 +128,7 @@ impl Placement {
         ]
     }
 
-    fn observed_bounds(self, local: [f32; 2], canvas: [f32; 4]) -> CanvasBounds {
+    fn observed_bounds(&self, local: [f32; 2], canvas: [f32; 4]) -> CanvasBounds {
         CanvasBounds {
             x: canvas[0],
             y: canvas[1],
@@ -130,7 +141,19 @@ impl Placement {
         }
     }
 
-    fn style(self, target: CanvasTarget) -> CanvasPrimitiveStyle {
+    fn to_canvas(&self) -> CanvasAffine {
+        let placement = CanvasAffine::axis_aligned(self.position, self.scale);
+        self.space
+            .as_ref()
+            .map_or(placement, |s| s.affine.compose(placement))
+    }
+
+    fn canvas_bounds(&self, local: CanvasClip) -> CanvasClip {
+        let rect = self.bounds(local);
+        self.space.as_ref().map_or(rect, |s| s.affine.bounds(rect))
+    }
+
+    fn style(&self, target: CanvasTarget) -> CanvasPrimitiveStyle {
         CanvasPrimitiveStyle {
             identity: CanvasPrimitiveId {
                 target,
@@ -232,8 +255,8 @@ impl CanvasWalk {
         self.stack.push(CanvasWalkFrame {
             entity: record.entity,
             position,
-            placed: record.placed,
-            inherited: record.inherited,
+            placed: record.placed.clone(),
+            inherited: record.inherited.clone(),
             bars: record.bars.clone(),
             scope: record.scope,
             inert: record.inert,
@@ -275,7 +298,11 @@ impl CanvasSystem {
                 }) {
                     walk.hits.push(hit);
                 }
-                walk.entries.push(self.state.gui.primitive(primitive));
+                walk.entries.push(
+                    self.state
+                        .gui
+                        .primitive(primitive, frame.placed.space.clone()),
+                );
             }
             let end = walk.marks();
             let record = &mut walk.records[frame.position - walk.first];
@@ -335,7 +362,7 @@ impl CanvasSystem {
                 .is_some_and(|overlay| overlay.mode == GuiOverlay::MODE_HINT);
 
         let mut inherited = parent_frame
-            .map(|frame| frame.inherited)
+            .map(|frame| frame.inherited.clone())
             .unwrap_or_else(|| Placement::root(extent));
         let mapping = layout.and_then(|view| view.placements.get(&entity));
         if let Some(mapping) = mapping {
@@ -349,8 +376,19 @@ impl CanvasSystem {
             .is_some()
         {
             inherited.clip = canvas_clip;
+            if let Some(space) = &inherited.space {
+                // Overlays escape ancestor clips while retaining their visual placement.
+                inherited.space = CanvasSpace::child(None, space.affine, canvas_clip);
+                inherited.clip = inherited
+                    .space
+                    .as_ref()
+                    .map_or([0.; 4], |s| s.clip_bounds());
+            }
         }
-        let mut placed = inherited.child(world.components.canvas_style(entity.index() as usize));
+        let mut placed = inherited.child(
+            world.components.canvas_style(entity.index() as usize),
+            mapping.map_or([0.; 2], |m| m.size),
+        );
         if !walk.presentation.open(world, entity) {
             placed.available = false;
             placed.opacity = 0.0;
@@ -397,7 +435,7 @@ impl CanvasSystem {
                 layer: placed.layer,
                 priority: placed.priority,
                 order: walk.entry_index(),
-                bounds,
+                bounds: placed.canvas_bounds([0., 0., size[0], size[1]]),
             });
 
             // A light overlay's box, and the whole canvas under a modal
@@ -419,6 +457,11 @@ impl CanvasSystem {
                     paint_order: walk.entry_index(),
                     layer: placed.layer,
                     priority: placed.priority,
+                    space: if overlay.mode == GuiOverlay::MODE_MODAL {
+                        None
+                    } else {
+                        placed.space.clone()
+                    },
                     bounds,
                     clip,
                     position: placed.position,
@@ -428,8 +471,8 @@ impl CanvasSystem {
                 });
             }
         }
-        let mut children_placement = placed;
-        let mut content_placement = placed;
+        let mut children_placement = placed.clone();
+        let mut content_placement = placed.clone();
         let mut deferred_paint = Vec::new();
         let mut scroll_bars = Vec::new();
         let mut observation = None;
@@ -444,7 +487,7 @@ impl CanvasSystem {
                 .canvas_bounds(entity.index() as usize)
                 .is_some()
         {
-            let bounds = placed.bounds([0.0, 0.0, mapping.size[0], mapping.size[1]]);
+            let bounds = placed.canvas_bounds([0.0, 0.0, mapping.size[0], mapping.size[1]]);
             walk.bounds.push((
                 entity,
                 placed.observed_bounds(
@@ -486,23 +529,15 @@ impl CanvasSystem {
                     ]),
                 );
                 let mut obstacles = Vec::new();
-                if placed.scale.iter().all(|scale| *scale != 0.0) {
-                    for frame in &walk.stack {
-                        let ancestor = frame.placed;
+                if let Some(inverse) = placed.to_canvas().inverse() {
+                    for frame in walk.stack.iter().filter(|f| !f.bars.is_empty()) {
+                        let into_local = inverse.compose(frame.placed.to_canvas());
                         for bar in &frame.bars {
                             let mut mapped = *bar;
                             for rect in [&mut mapped.track, &mut mapped.thumb] {
-                                for axis in 0..2 {
-                                    let start = (ancestor.position[axis]
-                                        + rect[axis] * ancestor.scale[axis]
-                                        - placed.position[axis])
-                                        / placed.scale[axis];
-                                    let end = start
-                                        + rect[axis + 2] * ancestor.scale[axis]
-                                            / placed.scale[axis];
-                                    rect[axis] = start.min(end);
-                                    rect[axis + 2] = (end - start).abs();
-                                }
+                                let [x, y, w, h] = *rect;
+                                let [l, t, r, b] = into_local.bounds([x, y, x + w, y + h]);
+                                *rect = [l, t, r - l, b - t];
                             }
                             obstacles.push(mapped);
                         }
@@ -560,6 +595,7 @@ impl CanvasSystem {
                 paint_order: walk.entry_index(),
                 layer: placed.layer,
                 priority: placed.priority,
+                space: placed.space.clone(),
                 bounds,
                 clip: placed.clip,
                 position: placed.position,
@@ -673,7 +709,7 @@ impl CanvasSystem {
                     let primitive = with_joined_background(
                         primitive,
                         layout.and_then(|view| view.joined_backgrounds.get(&entity)),
-                        placed,
+                        &placed,
                         layout_size,
                     );
                     if matches!(
@@ -685,7 +721,8 @@ impl CanvasSystem {
                     ) {
                         deferred_paint.push(primitive);
                     } else {
-                        walk.entries.push(self.state.gui.primitive(primitive));
+                        walk.entries
+                            .push(self.state.gui.primitive(primitive, placed.space.clone()));
                     }
                 }
             }
@@ -723,10 +760,11 @@ impl CanvasSystem {
                 let background = with_joined_background(
                     background,
                     layout.and_then(|view| view.joined_backgrounds.get(&entity)),
-                    placed,
+                    &placed,
                     layout_size,
                 );
-                walk.entries.push(self.state.gui.primitive(background));
+                walk.entries
+                    .push(self.state.gui.primitive(background, placed.space.clone()));
             }
         }
 
@@ -738,6 +776,7 @@ impl CanvasSystem {
                 walk.plot_hits.push(crate::systems::plot::PlotCanvasHit {
                     target,
                     geometry: geometry.clone(),
+                    space: placed.space.clone(),
                     placement: [
                         style.position[0],
                         style.position[1],
@@ -791,10 +830,11 @@ impl CanvasSystem {
                     for lane in 0..4 {
                         style.color[lane] *= authored.color[lane];
                     }
-                    walk.entries.push(self.state.gui.primitive(primitive));
+                    walk.entries
+                        .push(self.state.gui.primitive(primitive, placed.space.clone()));
                 }
                 if let Some(frame) = world.components.plot_frame2d(entity.index() as usize) {
-                    let bounds = placed.bounds([0.0, 0.0, frame.width, frame.height]);
+                    let bounds = placed.canvas_bounds([0.0, 0.0, frame.width, frame.height]);
                     walk.bounds.push((
                         entity,
                         placed.observed_bounds(
@@ -894,18 +934,19 @@ impl CanvasSystem {
                     _ => [0.0; 2],
                 };
                 // Keep the line height even for empty text, including reflected scales.
-                let extent = [size[0] * placed.scale[0], size[1] * placed.scale[1]];
+                let rect = [
+                    placed.position[0],
+                    placed.position[1],
+                    placed.position[0] + size[0] * placed.scale[0],
+                    placed.position[1] + size[1] * placed.scale[1],
+                ];
+                let b = placed.space.as_ref().map_or_else(
+                    || CanvasAffine::IDENTITY.bounds(rect),
+                    |s| s.affine.bounds(rect),
+                );
                 walk.bounds.push((
                     entity,
-                    placed.observed_bounds(
-                        size,
-                        [
-                            placed.position[0] + extent[0].min(0.0),
-                            placed.position[1] + extent[1].min(0.0),
-                            extent[0].abs(),
-                            extent[1].abs(),
-                        ],
-                    ),
+                    placed.observed_bounds(size, [b[0], b[1], b[2] - b[0], b[3] - b[1]]),
                 ));
             }
 
@@ -913,9 +954,12 @@ impl CanvasSystem {
                 && previous
                     .as_ref()
                     .is_none_or(|leaf| leaf.geometry != geometry);
-            let changed_style = previous
-                .as_ref()
-                .is_none_or(|leaf| leaf.style != style || leaf.paint != leaf_paint);
+            let changed_style = previous.as_ref().is_none_or(|leaf| {
+                leaf.style != style
+                    || leaf.paint != leaf_paint
+                    || leaf.entry.as_deref().and_then(CanvasPaintEntry::space)
+                        != placed.space.as_ref()
+            });
             let changed_extent = match (
                 previous.as_ref().and_then(|leaf| leaf.geometry.as_ref()),
                 geometry.as_ref(),
@@ -934,7 +978,8 @@ impl CanvasSystem {
             };
             walk.layout_changed |= changed_extent
                 || previous.as_ref().is_none_or(|leaf| {
-                    leaf.style.position != style.position
+                    leaf.entry.as_deref().and_then(CanvasPaintEntry::space) != placed.space.as_ref()
+                        || leaf.style.position != style.position
                         || leaf.style.scale != style.scale
                         || leaf.style.clip != style.clip
                 });
@@ -953,6 +998,7 @@ impl CanvasSystem {
                         geometry_revision,
                         material_revision,
                         primitive: geometry.primitive(style, leaf_paint),
+                        space: placed.space.clone(),
                     })
                 });
                 CanvasPreparedLeaf {
@@ -974,7 +1020,7 @@ impl CanvasSystem {
             self.state.leaves.insert((entity, component), leaf);
         }
         if let Some(slot) =
-            attachment_slot(context, entity, content_placement, density, layout_size)
+            attachment_slot(context, entity, &content_placement, density, layout_size)
         {
             walk.layout_changed |= !self.state.slots.contains_key(&entity);
             let entry = self
@@ -985,6 +1031,7 @@ impl CanvasSystem {
             if entry.as_ref() != &CanvasPaintEntry::Attachment(slot.clone()) {
                 if let CanvasPaintEntry::Attachment(previous) = entry.as_ref() {
                     walk.layout_changed |= previous.physical_extent != slot.physical_extent
+                        || previous.space != slot.space
                         || previous.position != slot.position
                         || previous.scale != slot.scale
                         || previous.clip != slot.clip;
@@ -1005,6 +1052,7 @@ impl CanvasSystem {
                 paint_order: walk.entry_index(),
                 layer: slot.layer,
                 priority: content_placement.priority,
+                space: content_placement.space.clone(),
                 bounds: content_placement.bounds([
                     0.0,
                     0.0,
@@ -1029,8 +1077,8 @@ impl CanvasSystem {
         }
         walk.records.push(CanvasWalkRecord {
             entity,
-            placed,
-            inherited: children_placement,
+            placed: placed.clone(),
+            inherited: children_placement.clone(),
             bars: scroll_bars.clone(),
             scope,
             inert,
@@ -1194,7 +1242,7 @@ pub(in crate::world::systems) fn with_paint(
 fn with_joined_background(
     mut primitive: CanvasPrimitive,
     joined: Option<&[f32; 4]>,
-    placement: Placement,
+    placement: &Placement,
     entity_size: Option<[f32; 2]>,
 ) -> CanvasPrimitive {
     if matches!(

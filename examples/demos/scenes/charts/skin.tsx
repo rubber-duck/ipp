@@ -1,6 +1,7 @@
 import { useSyncExternalStore, type ReactNode } from "react";
 import { Entity, LookAt, Transform, PlotSkinProvider } from "@ipp/react";
 import type { GuiKitContract, GuiSkinDefinition } from "@ipp/react/gui-kit";
+import { cartoonSkin } from "@ipp/react/gui-cartoon";
 import { glassSkin } from "@ipp/react/gui-glass";
 import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import { type GallerySkin } from "../../shared/skin-preference.js";
@@ -14,6 +15,7 @@ export class ChartSkinSelection {
   constructor(readonly contract: GuiKitContract) {
     this.skins = {
       glass: glassSkin(contract),
+      cartoon: cartoonSkin(contract),
       cybertron: cybertronSkin(contract),
     };
   }

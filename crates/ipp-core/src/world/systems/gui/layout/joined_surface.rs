@@ -50,14 +50,19 @@ fn joined_rects(
     b: GuiCanvasTransform,
     b_size: [f32; 2],
 ) -> Option<([f32; 4], [f32; 4])> {
-    if a.scale != b.scale
-        || a.scale.contains(&0.0)
-        || a_size.iter().chain(b_size.iter()).any(|size| *size <= 0.0)
-    {
+    if a.axes != b.axes || a_size.iter().chain(b_size.iter()).any(|size| *size <= 0.0) {
         return None;
     }
-    let aa = a.bounds(a_size);
-    let bb = b.bounds(b_size);
+    let delta = a
+        .inverse()?
+        .vector([b.origin[0] - a.origin[0], b.origin[1] - a.origin[1]]);
+    let aa = [0., 0., a_size[0], a_size[1]];
+    let bb = [
+        delta[0],
+        delta[1],
+        delta[0] + b_size[0],
+        delta[1] + b_size[1],
+    ];
     let near = |x: f32, y: f32| (x - y).abs() <= 1.0e-3;
     let vertical =
         near(aa[0], bb[0]) && near(aa[2], bb[2]) && (near(aa[3], bb[1]) || near(bb[3], aa[1]));
@@ -72,17 +77,12 @@ fn joined_rects(
         aa[2].max(bb[2]),
         aa[3].max(bb[3]),
     ];
-    let local = |transform: GuiCanvasTransform| {
-        let mut rect = [0.0; 4];
-        for axis in 0..2 {
-            let lo = (union[axis] - transform.position[axis]) / transform.scale[axis];
-            let hi = (union[axis + 2] - transform.position[axis]) / transform.scale[axis];
-            rect[axis] = lo.min(hi);
-            rect[axis + 2] = (hi - lo).abs();
-        }
-        rect
-    };
-    Some((local(a), local(b)))
+    let width = union[2] - union[0];
+    let height = union[3] - union[1];
+    Some((
+        [union[0], union[1], width, height],
+        [union[0] - delta[0], union[1] - delta[1], width, height],
+    ))
 }
 
 #[cfg(test)]

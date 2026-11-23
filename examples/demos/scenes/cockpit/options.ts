@@ -1,4 +1,8 @@
 import {
+  isGallerySkin,
+  type GallerySkin,
+} from "../../shared/skin-preference.js";
+import {
   DEFAULT_DEMO_FONT,
   demoFont,
   type GalleryFont,
@@ -16,7 +20,7 @@ export const COCKPIT_PANE_COUNT = COCKPIT_SCREEN_TITLES.length;
 export interface CockpitOptions {
   charge: number;
   panelOpacity: number;
-  skin: "glass" | "cybertron";
+  skin: GallerySkin;
   font: GalleryFont;
   projection: number;
   surface: "flat" | "curved";
@@ -100,7 +104,7 @@ export function cockpitOptions(
   return {
     charge: number("charge", 0, 1),
     panelOpacity: number("panelOpacity", 0.55, 1),
-    skin: value.skin === "cybertron" ? "cybertron" : "glass",
+    skin: isGallerySkin(value.skin) ? value.skin : "glass",
     font: demoFont(value.font).key,
     surface: value.surface === "flat" ? "flat" : "curved",
     exploded: Boolean(value.exploded),

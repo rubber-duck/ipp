@@ -478,7 +478,8 @@ test("a vertical RangeSlider puts each readout right of its thumb", async () => 
   assert.equal(world.fields("dist/slider", "GuiSlider").get("axis"), 1);
   const offset = (g.depth + g.thumb) / 2 + g.gap;
   const box = world.fields("dist/rail", "GuiLayout");
-  near(box.get("width"), offset + lineOf("100 m", 26));
+  near(box.get("width"), offset);
+  near(box.get("margin_right"), g.depth - offset);
   near(world.fields("dist/thumb/1", "GuiLayout").get("align_y"), -0.6);
   near(world.fields("dist/thumb/0", "GuiLayout").get("height"), g.thumb);
   near(world.fields("dist/readout/1", "GuiLayout").get("margin_left"), offset);

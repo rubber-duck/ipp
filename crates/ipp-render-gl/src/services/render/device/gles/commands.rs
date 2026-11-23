@@ -352,6 +352,25 @@ impl RenderDevice for GlesRenderDevice {
         self.set_surface_cache_ownership(target, enabled)
     }
 
+    fn set_canvas_clip(&mut self, planes: &[[f32; 4]]) {
+        let state = &mut self.submission;
+        if (planes.is_empty() && state.clip_planes.is_empty())
+            || state
+                .clip_planes
+                .strip_suffix(&[[0.; 4]])
+                .unwrap_or(&state.clip_planes)
+                == planes
+        {
+            return;
+        }
+        state.clip_planes.clear();
+        state.clip_planes.extend_from_slice(planes);
+        if planes.len() < 16 {
+            state.clip_planes.push([0.; 4]);
+        }
+        state.clip_epoch = state.clip_epoch.wrapping_add(1);
+    }
+
     fn set_surface_owner(&mut self, owner: u32) -> Result<(), RenderError> {
         if owner > 0x00ff_ffff {
             return Err(RenderError::UnavailableOutput);
@@ -1112,6 +1131,10 @@ impl RenderDevice for GlesRenderDevice {
     }
 
     fn delete_program(&mut self, program: GlesRenderProgram) {
+        self.submission
+            .clip_uniforms
+            .borrow_mut()
+            .remove(&program.id);
         self.submission
             .owner_uniforms
             .borrow_mut()

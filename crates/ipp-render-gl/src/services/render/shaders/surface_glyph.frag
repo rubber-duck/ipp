@@ -12,6 +12,7 @@ in vec2 v_uv;
 flat in vec4 v_color;
 flat in vec4 v_clip;
 
+// CANVAS_CLIP
 out vec4 o_color;
 
 void main() {
@@ -24,7 +25,7 @@ void main() {
     // Atlas pages have no mipmaps, so level zero equals implicit-derivative sampling.
     // R8 pages store coverage in red; their alpha always samples as one.
     float coverage = textureLod(u_atlas, v_uv, 0.0).r;
-    float out_alpha = v_color.a * coverage * clip_coverage;
+    float out_alpha = v_color.a * coverage * clip_coverage * canvas_clip(v_surface_position);
     if (out_alpha <= 0.0) discard;
 
     o_color = vec4(v_color.rgb, out_alpha);

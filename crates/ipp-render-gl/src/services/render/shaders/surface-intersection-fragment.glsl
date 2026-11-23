@@ -2,7 +2,8 @@ uniform vec4 u_intersection;
 uniform mat4 u_intersection_projection;
 uniform mat4 u_intersection_inverse;
 uniform vec4 u_viewport;
-flat in vec4 v_intersection_chart;
+uniform mat4 u_mvp;
+// CANVAS_CLIP
 float intersection_coverage = 1.0;
 
 // All invocations, including misses, produce finite coordinates before any
@@ -10,7 +11,7 @@ float intersection_coverage = 1.0;
 // as curvature approaches zero, matching the headless provider's equation.
 vec2 intersection_position(vec2 planar) {
     gl_FragDepth = gl_FragCoord.z;
-    if (u_intersection.x == 0.0) return planar;
+    if (u_intersection.x == 0.0) { intersection_coverage=canvas_clip(planar); return planar; }
     vec2 ndc = gl_FragCoord.xy / u_viewport.xy * 2.0 - 1.0;
     vec4 n = u_intersection_inverse * vec4(ndc,-1.0,1.0);
     vec4 m = u_intersection_inverse * vec4(ndc,0.0,1.0);
@@ -66,5 +67,8 @@ vec2 intersection_position(vec2 planar) {
     float width = max(fwidth(discriminant),1e-20);
     intersection_coverage = clamp(discriminant/width+0.5,0.0,1.0);
     if (!valid_chart || !valid_distance || depth < 0.0 || depth > 1.0 || projected.w <= 0.0) intersection_coverage=0.0;
-    return (chart-v_intersection_chart.xy)/v_intersection_chart.zw;
+    mat4 content = u_intersection_inverse * u_mvp;
+    vec2 local = inverse(mat2(content[0].xy,content[1].xy))*(chart-content[3].xy);
+    intersection_coverage *= canvas_clip(local);
+    return local;
 }

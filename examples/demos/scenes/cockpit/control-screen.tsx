@@ -1,3 +1,4 @@
+import { DEMO_SKINS, type GallerySkin } from "../../shared/skin-preference.js";
 import { COCKPIT_PANE_COUNT } from "./options.js";
 /** The same task-oriented controls are rendered flat for review and on the bridge. */
 import { useState, useSyncExternalStore } from "react";
@@ -291,14 +292,11 @@ function GuiControls({
                 id="cockpit-skin"
                 label="Interface skin"
                 value={application ? settings.skin : state.skin}
-                options={[
-                  { key: "glass", label: "Liquid glass" },
-                  { key: "cybertron", label: "Cybertron" },
-                ]}
+                options={DEMO_SKINS}
                 onChange={(skin) =>
                   application
                     ? application.update({
-                        skin: skin as "glass" | "cybertron",
+                        skin: skin as GallerySkin,
                       })
                     : update({ skin })
                 }

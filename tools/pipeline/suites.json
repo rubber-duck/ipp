@@ -3614,6 +3614,8 @@
       "tests/gallery/drivers/native-application.ts",
       "tests/gallery/scenarios/application.ts",
       "tests/gallery/scenarios/application-layout.ts",
+      "packages/ipp-react/src/gui-cartoon/",
+      "packages/ipp-react/src/gui-kit/compact-skin.ts",
       "tests/gallery/scenarios/application-fonts.ts",
       "tests/gallery/support/application-fonts.ts",
       "tests/gallery/scenarios/gallery-chart-skins.ts",
@@ -4758,8 +4760,13 @@
     "description": "Shared engine GUI application through browser input, worker WASM, composed camera, DPR and owned cleanup",
     "sourceRoots": [
       "examples/demos/main.tsx",
+      "examples/demos/cartoon-controls/",
+      "tests/gallery/cartoon-controls.browser.test.ts",
+      "tests/gallery/scenarios/cartoon-interactions.ts",
       "examples/demos/application.tsx",
       "examples/demos/shared/fonts.ts",
+      "packages/ipp-react/src/gui-cartoon/",
+      "packages/ipp-react/src/gui-kit/compact-skin.ts",
       "tests/gallery/scenarios/application-fonts.ts",
       "tests/gallery/support/application-fonts.ts",
       "tests/gallery/application-fonts.browser.test.ts",
@@ -4788,6 +4795,12 @@
       "tests/gallery/scenarios/gallery-chart-visibility.ts"
     ],
     "commands": [
+      {
+        "name": "cartoon-controls",
+        "command": ["@node", "--test", "dist/tests/gallery/cartoon-controls.browser.test.js"],
+        "builds": ["typescript", "gallery-fixtures", "browser:render", "gallery", "font-assets"],
+        "requirements": ["node", "npm", "browser", "wasm"]
+      },
       {
         "name": "frame-rate",
         "command": ["@node", "--test", "dist/tests/gallery/frame-rate.browser.test.js"],

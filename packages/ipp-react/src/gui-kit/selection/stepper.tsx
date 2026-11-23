@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 /**
  * A wizard's step navigation. Native groups own focus, pointer feedback and
  * selection; arrows move focus without advancing, Enter/Space selects, and
@@ -195,7 +196,8 @@ function Step({
             enabled={!step.disabled}
             semantic_label={`${index + 1} of ${count}: ${step.label}, ${status}`}
           />
-          <Skin
+          <VariantSkin
+            selected={item.selected}
             theme={kit.theme(
               step.completed ? "stepperComplete" : "stepperStep",
             )}

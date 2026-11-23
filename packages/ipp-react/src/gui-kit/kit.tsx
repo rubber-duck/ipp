@@ -25,6 +25,7 @@ import {
   type GuiKitSpacing,
   type GuiKitSpacingOverrides,
 } from "./spacing.js";
+import type { GuiKitIconThemes } from "./icons.js";
 import type { KitThemeName } from "./themes.js";
 
 /** Linear RGBA. */
@@ -39,6 +40,8 @@ export interface GuiKitTokens {
   readonly surface: GuiKitColor;
   readonly accent: GuiKitColor;
   readonly text: GuiKitColor;
+  /** Foreground for labels and icons on a selected row. Defaults to text. */
+  readonly selectedText?: GuiKitColor;
   readonly neutral: GuiKitColor;
   readonly line: GuiKitColor;
   readonly amber: GuiKitColor;
@@ -54,6 +57,8 @@ export interface GuiKitTokens {
   readonly glowFalloff: number;
   readonly frameGlowReach: number;
   readonly controlHeight: number;
+  /** Extra room on each side of a tab for its selection and focus paint. */
+  readonly tabPaintPadding?: readonly [horizontal: number, vertical: number];
   readonly smallHeight: number;
   /** Choice hit-row side; omitted uses the icon size in custom skins. */
   readonly choiceTarget?: number;
@@ -70,6 +75,12 @@ export interface GuiKitTokens {
   readonly dockedHeight: number;
   /** Optional progress-frame inset in em units; omitted uses the ordinary docked clearance. */
   readonly progressInset?: number;
+  /** Optional table row height at the skin's em. */
+  readonly gridRowHeight?: number;
+  /** Draw ruling between grid columns, below the header and between rows. */
+  readonly gridRules?: boolean;
+  /** The expander supplies an outer frame and a rule below its open header. */
+  readonly expanderFrame?: boolean;
   /** Independent progress track height; defaults to smallHeight. */
   readonly progressHeight?: number;
   readonly dockedWidth: number;
@@ -144,6 +155,9 @@ export interface GuiKitContract {
 
 /** Optional authoring appearance; native controls continue to own their state. */
 export interface GuiKitAppearance {
+  readonly iconThemes?: GuiKitIconThemes;
+  readonly notificationAngles?: readonly number[] | undefined;
+  readonly themeVariants?: Readonly<Record<string, readonly string[]>>;
   readonly tokens: GuiKitTokens;
   readonly themes?: Partial<Record<KitThemeName, string>>;
   readonly controls?: Partial<Record<GuiKitControlName, string>>;
@@ -173,10 +187,21 @@ export function GuiKit(props: GuiKitProps) {
 export type GuiKitTypeSize = "small" | "body" | "display";
 
 /** Palette roles kit text and marks are drawn in. */
-export type GuiKitTone = "accent" | "text" | "neutral" | "amber" | "error";
+export type GuiKitTone =
+  | "accent"
+  | "text"
+  | "selectedText"
+  | "neutral"
+  | "amber"
+  | "error";
 
 /** The enclosing kit, resolved for the components of one World. */
 export interface GuiKitScope {
+  readonly iconThemes?: GuiKitIconThemes | undefined;
+  readonly notificationAngles?: readonly number[] | undefined;
+  readonly themeVariants?:
+    | Readonly<Record<string, readonly string[]>>
+    | undefined;
   readonly tokens: GuiKitTokens;
   readonly contract: GuiKitContract;
   readonly font: string | AssetReference;
@@ -225,6 +250,9 @@ export function useGuiKit(): GuiKitScope {
     return {
       tokens,
       contract: kit.contract,
+      themeVariants: kit.appearance.themeVariants,
+      notificationAngles: kit.appearance.notificationAngles,
+      iconThemes: kit.appearance.iconThemes,
       font: kit.font,
       iconFont: kit.iconFont,
       fontSize: kit.fontSize,
@@ -232,7 +260,7 @@ export function useGuiKit(): GuiKitScope {
       reducedMotion: kit.reducedMotion ?? false,
       unit: (length) => length * scale,
       typeSize: (size) => sizes[size] * scale,
-      color: (tone) => tokens[tone],
+      color: (tone) => tokens[tone] ?? tokens.text,
       theme: (name) => {
         const theme = kit.appearance.themes?.[name];
         if (!theme)

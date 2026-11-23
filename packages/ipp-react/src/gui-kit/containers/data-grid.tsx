@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -135,8 +136,8 @@ function columnSize(column: DataGridColumn) {
 function geometry(kit: GuiKitScope, scrolling: boolean) {
   const t = kit.tokens;
   return {
-    row: kit.unit(t.row),
-    line: kit.unit(t.lineWidth),
+    row: kit.unit(t.gridRowHeight ?? t.row),
+    line: t.gridRules === false ? 0 : kit.unit(t.lineWidth),
     lit: kit.unit(t.litLineWidth),
     inset: kit.unit(t.inset),
     gutter: kit.unit(t.selectionGutter),
@@ -191,10 +192,18 @@ export function DataGrid(inputProps: DataGridProps) {
           <PresentationGate open />
           <Layout kind={LAYOUT_STACK} flex={1} />
           <Children>
-            <ColumnLines id={`${id}/lines`} columns={columns} kit={kit} g={g} />
+            {g.line > 0 && (
+              <ColumnLines
+                id={`${id}/lines`}
+                columns={columns}
+                kit={kit}
+                g={g}
+              />
+            )}
             <Entity id={`${id}/header`}>
               <PresentationGate open />
               <Layout kind={LAYOUT_STACK} height={g.row} />
+              <Skin theme={kit.theme("gridHeader")} />
               <Children>
                 <Cells
                   id={`${id}/header`}
@@ -216,15 +225,17 @@ export function DataGrid(inputProps: DataGridProps) {
               emptyText={emptyText}
               {...rowProps}
             />
-            <Separator
-              id={`${id}/bottom-line`}
-              tone="quiet"
-              layout={{
-                align_y: 1,
-                margin_left: g.gutter,
-                margin_right: g.bar,
-              }}
-            />
+            {g.line > 0 && (
+              <Separator
+                id={`${id}/bottom-line`}
+                tone="quiet"
+                layout={{
+                  align_y: 1,
+                  margin_left: g.gutter,
+                  margin_right: g.bar,
+                }}
+              />
+            )}
           </Children>
         </Entity>
         {footer !== undefined && (
@@ -356,11 +367,19 @@ function Body({
           renderItem={(index) => {
             const row = grid.row(index);
             return (
-              <GridRow
-                id={`${grid.id}/row/${row.key}`}
-                row={row}
-                {...rowContext}
-              />
+              <>
+                <Layout kind={LAYOUT_STACK} padding_right={g.bar} />
+                <Children>
+                  <Entity id={`${grid.id}/row/${row.key}`}>
+                    <PresentationGate open />
+                    <GridRow
+                      id={`${grid.id}/row/${row.key}`}
+                      row={row}
+                      {...rowContext}
+                    />
+                  </Entity>
+                </Children>
+              </>
             );
           }}
         />
@@ -416,7 +435,10 @@ function GridRow({
   return (
     <>
       <Layout kind={LAYOUT_STACK} height={g.row} />
-      <Skin theme={kit.theme("gridRow")} />
+      <VariantSkin
+        theme={kit.theme("gridRow")}
+        selected={row.key === selected}
+      />
       {!focusableRows && <Behavior focusable={false} />}
       <Button
         label=""
@@ -430,16 +452,7 @@ function GridRow({
           : {})}
       />
       <Children>
-        <Cells
-          id={id}
-          row={row}
-          // A virtual list's items span its bar's column; a scroll view's
-          // rows end before it.
-          trailing={"rowCount" in grid ? g.bar : 0}
-          grid={grid}
-          kit={kit}
-          g={g}
-        />
+        <Cells id={id} row={row} trailing={0} grid={grid} kit={kit} g={g} />
       </Children>
     </>
   );
@@ -518,7 +531,13 @@ function Cells({
                         <TextLine
                           id={`${cell}/text`}
                           text={text}
-                          tone={header ? "accent" : "text"}
+                          tone={
+                            header
+                              ? "accent"
+                              : grid.selected === row.key
+                                ? "selectedText"
+                                : "text"
+                          }
                           size={header ? "small" : "body"}
                         />
                         {sorted && (
@@ -556,11 +575,13 @@ function Cells({
           })}
         </Children>
       </Entity>
-      <Separator
-        id={`${id}/line`}
-        tone="quiet"
-        layout={{ align_y: 1, margin_left: g.gutter, margin_right: trailing }}
-      />
+      {g.line > 0 && (
+        <Separator
+          id={`${id}/line`}
+          tone="quiet"
+          layout={{ align_y: 1, margin_left: g.gutter, margin_right: trailing }}
+        />
+      )}
     </>
   );
 }

@@ -74,7 +74,7 @@ export interface IconProps extends GuiKitLayoutProps {
   readonly size?: number;
 }
 
-/** One icon glyph of the shared font in a tone of the palette. */
+/** A named skin icon or a glyph of the shared icon font, in the requested palette tone. */
 export function Icon(props: IconProps) {
   const {
     id: providedId,
@@ -87,10 +87,17 @@ export function Icon(props: IconProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const color = kit.color(tone);
+  const theme = kit.iconThemes?.[icon];
+  const extent = kit.unit(size ?? kit.tokens.icon);
   return (
     <Entity id={id}>
       <PresentationGate open />
-      <KitLayout kind={LAYOUT_LEAF} align_y={0} {...layout} />
+      <KitLayout
+        kind={LAYOUT_LEAF}
+        align_y={0}
+        {...(theme && { width: extent, height: extent })}
+        {...layout}
+      />
       <Style
         layer={layer}
         red={color[0]}
@@ -98,11 +105,15 @@ export function Icon(props: IconProps) {
         blue={color[2]}
         alpha={color[3]}
       />
-      <Text
-        text={GUI_KIT_ICONS[icon]}
-        source={kit.iconFont}
-        font_size={kit.unit(size ?? kit.tokens.icon)}
-      />
+      {theme ? (
+        <Skin theme={theme} />
+      ) : (
+        <Text
+          text={GUI_KIT_ICONS[icon]}
+          source={kit.iconFont}
+          font_size={extent}
+        />
+      )}
     </Entity>
   );
 }

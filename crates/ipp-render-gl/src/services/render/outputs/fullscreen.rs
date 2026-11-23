@@ -30,12 +30,16 @@ pub(in crate::services::render) fn select(
     else {
         return Ok(None);
     };
+    if slot.space.is_some() {
+        return Ok(None);
+    }
     let Some(CanvasChild::Camera {
         selection,
         mvp,
         extent,
         clip,
         opacity,
+        ..
     }) = canvas_attachment(
         &scene,
         0,

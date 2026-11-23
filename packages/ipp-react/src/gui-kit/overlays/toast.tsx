@@ -46,6 +46,7 @@ import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Behavior, Font, Overlay, Style } from "../../gui/components.js";
 import { Skin } from "../../gui/theme.js";
+import { NotificationStyle } from "../feedback/notification-style.js";
 import type {
   GuiFocusChangeEvent,
   GuiInteractionEvent,
@@ -168,7 +169,7 @@ export function Toast(props: ToastProps) {
       />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Skin theme={kit.theme(theme)} />
-      <Style layer={layer} opacity={1} />
+      <NotificationStyle layer={layer} opacity={1} />
       <Behavior focusable={false} semantic_label={text} />
       <Button label="" {...feedback("body")} />
       <Children>

@@ -1,6 +1,6 @@
 # IPP demos
 
-The demos are one engine-rendered application shared by the browser and persistent native GLES sessions. Its Canvas GUI selects the scene, appearance, text font and rendering resolution, with compact controls contributed by each scene. Display offers Shure Tech Mono and proportional Noto Sans independently of the skin. The font follows scene navigation and native session reload, including scene controls, cockpit panels and chart labels; icons and terminal cells retain their dedicated monospaced font. The application prepares a replacement scene before changing the visible Camera Surface and explicitly retires the previous scene and its owned Worlds.
+The demos are one engine-rendered application shared by the browser and persistent native GLES sessions. Its Canvas GUI selects the scene, appearance, text font and rendering resolution, with compact controls contributed by each scene. In Display, select **Cartoon** and **Lilita One** for game-style controls. Shure Tech Mono, Noto Sans and Lilita One can each be paired with any skin. Browser links can select the pair on entry with `?skin=cartoon&font=lilita-one#platformer`. The font follows scene navigation and native session reload, including scene controls, cockpit panels and chart labels; icons and terminal cells retain their dedicated monospaced font. The application prepares a replacement scene before changing the visible Camera Surface and explicitly retires the previous scene and its owned Worlds.
 
 The browser provides its canvas, physical input, connection and asset reads. Native development uses the same application declarations, assets and controllers through the [shared development Host](../../docs/development/shared-host.md). Hosts own clocks and animation; applications observe acknowledged state and completed output frames.
 
@@ -13,6 +13,8 @@ Run the browser application from the repository root:
 ```sh
 python tools/ipp.py dev gallery
 ```
+
+Open `/examples/demos/cartoon-controls/` on the same development server for the Cartoon control gallery. Use the section picker or arrows to browse the interactive controls. Each section has a shareable URL fragment.
 
 Run a persistent native application after starting a compatible shared Host:
 

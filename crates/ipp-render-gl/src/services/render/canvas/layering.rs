@@ -105,6 +105,7 @@ pub(in crate::services::render) enum CanvasChild<'a> {
         mvp: [f32; 16],
         clip: CanvasClip,
         opacity: f32,
+        mapping: CanvasMapping,
     },
     Camera {
         selection: ipp_core::OutputRef,
@@ -112,6 +113,7 @@ pub(in crate::services::render) enum CanvasChild<'a> {
         extent: [f32; 2],
         clip: CanvasClip,
         opacity: f32,
+        mapping: CanvasMapping,
     },
 }
 
@@ -216,6 +218,12 @@ pub(in crate::services::render) fn canvas_attachment<'a>(
         return Ok(None);
     };
 
+    let (mvp, clip) = slot.space.as_ref().map_or((mvp, clip), |s| {
+        (
+            math::multiply(mvp, s.affine.matrix()),
+            s.inverse.bounds(clip),
+        )
+    });
     let opacity = opacity * slot.opacity;
     if opacity <= 0.0 {
         return Ok(None);
@@ -252,13 +260,14 @@ pub(in crate::services::render) fn canvas_attachment<'a>(
             Ok(Some(CanvasChild::Canvas {
                 scene: child,
                 mvp: math::multiply(mvp, content),
+                mapping,
                 clip: mapping.clip,
                 opacity,
             }))
         }
         OutputKind::Camera => {
             let extent = slot.physical_extent;
-            let origin = slot.to_canvas([-extent[0] * 0.5, -extent[1] * 0.5]);
+            let origin = slot.to_drawing([-extent[0] * 0.5, -extent[1] * 0.5]);
             let extent = extent.map(|value| value as f32);
             let Some(mapping) = CanvasMapping::new(origin, slot.scale, clip, extent) else {
                 return Err(RenderError::InvalidTransform);
@@ -269,6 +278,7 @@ pub(in crate::services::render) fn canvas_attachment<'a>(
                 selection,
                 mvp: math::multiply(mvp, content),
                 extent,
+                mapping,
                 clip: mapping.clip,
                 opacity,
             }))

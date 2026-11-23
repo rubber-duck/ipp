@@ -34,6 +34,10 @@ const result = await build({
       workspace,
       "packages/ipp-react/src/gui-kit.ts",
     ),
+    "@ipp/react/gui-cartoon": resolve(
+      workspace,
+      "packages/ipp-react/src/gui-cartoon.ts",
+    ),
     "@ipp/react/gui-cybertron": resolve(
       workspace,
       "packages/ipp-react/src/gui-cybertron.ts",

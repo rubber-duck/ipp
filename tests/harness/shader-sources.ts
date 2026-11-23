@@ -15,6 +15,7 @@ export async function renderShaderSource(
   for (const [marker, file] of [
     ["// SURFACE_INTERSECTION_VERTEX", "surface-intersection-vertex.glsl"],
     ["// SURFACE_INTERSECTION_FRAGMENT", "surface-intersection-fragment.glsl"],
+    ["// CANVAS_CLIP", "canvas-clip.glsl"],
   ] as const) {
     if (source.includes(marker))
       source = source.replaceAll(marker, await read(file));

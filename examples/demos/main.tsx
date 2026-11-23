@@ -1,5 +1,7 @@
 /** Browser adapter: surface, physical input, asset fetch and connection lifetime. */
 import { useEffect, useMemo, useState } from "react";
+import { isGallerySkin } from "./shared/skin-preference.js";
+import { DEMO_FONTS } from "./shared/fonts.js";
 import { createRoot } from "react-dom/client";
 import {
   browserRuntime,
@@ -11,7 +13,7 @@ import { IppCanvas, type IppCanvasHandle } from "@ipp/react/web";
 import { createGuiUnhandledInputGate } from "@ipp/react/gui";
 import { DemoApplication, DEMO_SYSTEMS } from "./application.js";
 import { browserGalleryAssets } from "./browser-assets.js";
-import { GALLERY_RUNTIME } from "./shared/runtime.js";
+import { GALLERY_RUNTIME, GALLERY_WHEEL_STEP } from "./shared/runtime.js";
 import { installCameraControls } from "./shared/camera-controls.js";
 import {
   PLATFORMER_ASSETS,
@@ -46,6 +48,9 @@ function BrowserDemos() {
   useEffect(() => {
     if (!canvas) return;
     const lifetime = new AbortController();
+    const params = new URLSearchParams(window.location.search);
+    const skin = params.get("skin");
+    const font = DEMO_FONTS.find(({ key }) => key === params.get("font"));
     const app = new DemoApplication(
       {
         canvas,
@@ -55,7 +60,11 @@ function BrowserDemos() {
         onError: (error) => setFailure(error.message),
         renderScaleChanged: setRenderScale,
       },
-      { scene: window.location.hash.slice(1) || "shapes" },
+      {
+        scene: window.location.hash.slice(1) || "shapes",
+        ...(isGallerySkin(skin) && { skin }),
+        ...(font && { font: font.key }),
+      },
     );
     applications.set(canvas, app);
     setApplication(app);
@@ -155,7 +164,7 @@ function BrowserDemos() {
       renderScale={renderScale}
       guiInput={{
         unhandledInputGate: gate,
-        wheelStep: 40,
+        wheelStep: GALLERY_WHEEL_STEP,
         awaitPointerDown: true,
         onInputOutcome: (input, outcome) => {
           const pending = application?.handlePhysicalInput(input, outcome);

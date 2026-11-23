@@ -10,6 +10,11 @@ export const DEMO_FONTS = [
     label: "Noto Sans",
     path: "/target/font-assets/noto-sans.ippf",
   },
+  {
+    key: "lilita-one",
+    label: "Lilita One",
+    path: "/target/font-assets/lilita-one.ippf",
+  },
 ] as const;
 
 export type GalleryFont = (typeof DEMO_FONTS)[number]["key"];

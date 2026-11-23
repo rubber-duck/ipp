@@ -637,6 +637,11 @@ impl RenderDevice for WebGlRenderDevice {
         self.check(unsafe { set_surface_cache_ownership(*target, u32::from(enabled)) })
     }
 
+    fn set_canvas_clip(&mut self, planes: &[[f32; 4]]) {
+        // SAFETY: The bridge copies these contiguous vec4s during this call and retains no pointer.
+        unsafe { set_canvas_clip(planes.as_ptr().cast(), planes.len() as u32) };
+    }
+
     fn set_surface_owner(&mut self, owner: u32) -> Result<(), RenderError> {
         if owner > 0x00ff_ffff {
             return Err(RenderError::UnavailableOutput);

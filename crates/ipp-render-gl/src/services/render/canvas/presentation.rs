@@ -128,10 +128,14 @@ impl CanvasPresentation {
     pub fn child(
         &self,
         mapping: &super::scene::CanvasMapping,
+        space: Option<&ipp_core::systems::canvas::CanvasSpace>,
         coordinate: f64,
         features: u32,
     ) -> Result<Self, RenderError> {
         let mut result = self.layer(coordinate);
+        if let Some(space) = space {
+            result.content = math::multiply(result.content, space.affine.matrix());
+        }
         result.content = math::multiply(
             result.content,
             super::layering::plane_matrix(mapping.origin, mapping.scale)?,

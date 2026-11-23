@@ -126,6 +126,9 @@ pub trait RenderDevice: 'static {
         frame: &crate::RenderLightingFrame,
     ) -> Result<(), RenderError>;
 
+    /// Drawing-space convex clip for the subsequent Canvas submissions.
+    fn set_canvas_clip(&mut self, _planes: &[[f32; 4]]) {}
+
     /// Select analytic curved-surface intersection for the next Canvas draw.
     /// Parameters are provider kind (zero disables), curvature, far/near branch
     /// and the enclosing radius of the content domain.

@@ -212,6 +212,7 @@ unsafe extern "C" {
         color: *const f32,
     ) -> u32;
 
+    pub(super) fn set_canvas_clip(pointer: *const f32, count: u32);
     pub(super) fn set_surface_owner(owner: u32);
     pub(super) fn set_surface_cutout(owner: u32);
     pub(super) fn set_surface_cache_ownership(target: u32, enabled: u32) -> u32;

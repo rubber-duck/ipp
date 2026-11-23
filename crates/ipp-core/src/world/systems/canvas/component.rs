@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 /// Optional authored placement, tint, rectangular clipping and layer of one
 /// Canvas entity. An entity without it paints with the identity style: no
-/// translation, unit scale, white tint, full opacity, no clip and its parent's
-/// layer. Tint and opacity multiply down the tree; translation and scale
+/// translation or rotation, unit scale, white tint, full opacity, no clip and its parent's
+/// layer. Tint and opacity multiply down the tree; translation, rotation and scale
 /// compose; ordinary clips intersect through every ancestor.
 ///
 /// `layer` is a nonnegative parent-relative offset. Zero inherits its parent's
@@ -30,6 +30,12 @@ pub struct CanvasStyle {
     pub scale_x: f32,
     /// Signed vertical visual scale.
     pub scale_y: f32,
+    /// Clockwise rotation in radians in the parent coordinate system.
+    pub rotation: f32,
+    /// Horizontal rotation pivot as a fraction of the layout width.
+    pub pivot_x: f32,
+    /// Vertical rotation pivot as a fraction of the layout height.
+    pub pivot_y: f32,
     /// Straight linear red tint, multiplied into descendants.
     pub red: f32,
     /// Straight linear green tint.
@@ -62,6 +68,9 @@ impl Default for CanvasStyle {
             y: 0.0,
             scale_x: 1.0,
             scale_y: 1.0,
+            rotation: 0.0,
+            pivot_x: 0.0,
+            pivot_y: 0.0,
             red: 1.0,
             green: 1.0,
             blue: 1.0,
@@ -78,6 +87,31 @@ impl Default for CanvasStyle {
 }
 
 impl CanvasStyle {
+    /// Placement before scaling the geometry. Rotation is around the
+    /// scaled layout pivot, in parent-local coordinates.
+    pub(in crate::world::systems) fn rotation_affine(&self, size: [f32; 2]) -> super::CanvasAffine {
+        let (sin, cos) = self.rotation.sin_cos();
+        let pivot = [
+            size[0] * self.pivot_x * self.scale_x,
+            size[1] * self.pivot_y * self.scale_y,
+        ];
+        super::CanvasAffine {
+            axes: [[cos, sin], [-sin, cos]],
+            origin: [
+                self.x + pivot[0] * (1. - cos) + pivot[1] * sin,
+                self.y + pivot[1] * (1. - cos) - pivot[0] * sin,
+            ],
+        }
+    }
+
+    pub(in crate::world::systems) fn affine(&self, size: [f32; 2]) -> super::CanvasAffine {
+        self.rotation_affine(size)
+            .compose(super::CanvasAffine::axis_aligned(
+                [0.; 2],
+                [self.scale_x, self.scale_y],
+            ))
+    }
+
     /// Compose this style's translation and scale onto a parent's canvas
     /// `position` and `scale`: the translation moves in the parent's scaled
     /// space and the scales multiply.
@@ -113,6 +147,9 @@ impl ComponentLifecycle for CanvasStyle {
             self.y,
             self.scale_x,
             self.scale_y,
+            self.rotation,
+            self.pivot_x,
+            self.pivot_y,
             self.clip_min_x,
             self.clip_min_y,
             self.clip_max_x,

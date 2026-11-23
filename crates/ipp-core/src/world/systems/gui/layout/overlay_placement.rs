@@ -42,33 +42,7 @@ use std::collections::BTreeMap;
 /// rounding in constraint arithmetic.
 const FIT_TOLERANCE: f32 = 1.0e-3;
 
-/// Evaluated canvas position and signed scale of an entity's local space.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::world::systems) struct GuiCanvasTransform {
-    pub position: [f32; 2],
-    pub scale: [f32; 2],
-}
-
-impl GuiCanvasTransform {
-    const IDENTITY: Self = Self {
-        position: [0.0; 2],
-        scale: [1.0; 2],
-    };
-
-    /// Canvas `[min_x, min_y, max_x, max_y]` of a local box at the origin.
-    pub(super) fn bounds(self, size: [f32; 2]) -> [f32; 4] {
-        let end = [
-            self.position[0] + self.scale[0] * size[0],
-            self.position[1] + self.scale[1] * size[1],
-        ];
-        [
-            self.position[0].min(end[0]),
-            self.position[1].min(end[1]),
-            self.position[0].max(end[0]),
-            self.position[1].max(end[1]),
-        ]
-    }
-}
+pub(super) use crate::systems::canvas::CanvasAffine as GuiCanvasTransform;
 
 /// The frame one shown overlay is placed in.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,8 +57,10 @@ pub(in crate::world::systems) struct GuiOverlayFrame {
     pub canvas: bool,
     /// The overlay's own `CanvasStyle` translation, in parent-local units.
     pub translation: [f32; 2],
-    /// The overlay's own `CanvasStyle` scale.
+    /// The overlay's own linear placement and layout-relative pivot.
     pub scale: [f32; 2],
+    pub rotation: f32,
+    pub pivot: [f32; 2],
 }
 
 /// Everything one overlay's placement reads, kept to detect changes.
@@ -122,7 +98,7 @@ impl GuiOverlayInputs {
                 Some(parent) => {
                     let transform = canvas_transform(world, placements, parent);
                     let size = placements.get(&parent).map_or([0.0; 2], |box_| box_.size);
-                    (transform, transform.bounds(size))
+                    (transform, transform.bounds([0., 0., size[0], size[1]]))
                 }
             };
             GuiOverlayFrame {
@@ -131,6 +107,8 @@ impl GuiOverlayInputs {
                 canvas: parent.is_none(),
                 translation: [style.x, style.y],
                 scale: [style.scale_x, style.scale_y],
+                rotation: style.rotation,
+                pivot: [style.pivot_x, style.pivot_y],
             }
         });
         Self {
@@ -165,14 +143,12 @@ pub(super) fn canvas_transform(
     let ancestry = super::super::local::controls::identity::ancestry(&world.state, entity);
     let mut transform = GuiCanvasTransform::IDENTITY;
     for ancestor in ancestry.iter() {
-        if let Some(placement) = placements.get(ancestor) {
-            for axis in 0..2 {
-                transform.position[axis] += placement.origin[axis] * transform.scale[axis];
-            }
+        let placement = placements.get(ancestor);
+        if let Some(placement) = placement {
+            transform.origin = transform.point(placement.origin);
         }
         if let Some(style) = world.components.canvas_style(ancestor.index() as usize) {
-            (transform.position, transform.scale) =
-                style.compose(transform.position, transform.scale);
+            transform = transform.compose(style.affine(placement.map_or([0.; 2], |p| p.size)));
         }
     }
     transform
@@ -212,10 +188,29 @@ impl GuiOverlayPlacement {
             overlay,
             frame,
             extent,
-            scale: std::array::from_fn(|axis| frame.parent.scale[axis] * frame.scale[axis]),
-            offset: std::array::from_fn(|axis| frame.parent.scale[axis] * frame.translation[axis]),
+            scale: std::array::from_fn(|axis| {
+                let v = frame.parent.axes[axis];
+                v[0].hypot(v[1]) * frame.scale[axis]
+            }),
+            offset: frame.parent.vector(frame.translation),
             main: usize::from(!matches!(overlay.side, 2 | 3)),
         }
+    }
+
+    fn visual_bounds(&self, size: [f32; 2]) -> [f32; 4] {
+        let mut frame = self.frame.parent;
+        frame.origin = [0.; 2];
+        let style = crate::systems::canvas::CanvasStyle {
+            rotation: self.frame.rotation,
+            pivot_x: self.frame.pivot[0],
+            pivot_y: self.frame.pivot[1],
+            scale_x: self.frame.scale[0],
+            scale_y: self.frame.scale[1],
+            ..Default::default()
+        };
+        frame
+            .compose(style.affine(size))
+            .bounds([0., 0., size[0], size[1]])
     }
 
     /// Local length of `canvas` units along `axis`; unbounded where the
@@ -302,7 +297,8 @@ impl GuiOverlayPlacement {
         } else {
             (before, past)
         };
-        let needed = size[self.main] * self.scale[self.main].abs();
+        let rect = self.visual_bounds(size);
+        let needed = rect[self.main + 2] - rect[self.main];
         let flipped = needed > preferred + FIT_TOLERANCE && opposite > preferred;
         if after != flipped {
             GuiOverlaySide::After
@@ -353,7 +349,8 @@ impl GuiOverlayPlacement {
     /// `side`, before its own translation, which the Canvas walk adds.
     pub fn origin(&self, size: [f32; 2], side: GuiOverlaySide) -> [f32; 2] {
         let anchor = self.frame.anchor;
-        let canvas: [f32; 2] = std::array::from_fn(|axis| size[axis] * self.scale[axis].abs());
+        let bounds = self.visual_bounds(size);
+        let canvas = [bounds[2] - bounds[0], bounds[3] - bounds[1]];
         let mut start = [0.0_f32; 2];
 
         let main = self.main;
@@ -386,15 +383,12 @@ impl GuiOverlayPlacement {
         // The canvas box starts at the transformed origin plus the signed
         // extent where a negative scale mirrors it; the Canvas walk adds the
         // translation after the origin.
-        std::array::from_fn(|axis| {
-            let position = start[axis] - (self.scale[axis] * size[axis]).min(0.0);
-            let parent = self.frame.parent.scale[axis];
-            if parent == 0.0 || !parent.is_finite() {
-                0.0
-            } else {
-                (position - self.frame.parent.position[axis]) / parent
-                    - self.frame.translation[axis]
-            }
+        self.frame.parent.inverse().map_or([0.; 2], |inverse| {
+            let p = inverse.point([start[0] - bounds[0], start[1] - bounds[1]]);
+            [
+                p[0] - self.frame.translation[0],
+                p[1] - self.frame.translation[1],
+            ]
         })
     }
 }

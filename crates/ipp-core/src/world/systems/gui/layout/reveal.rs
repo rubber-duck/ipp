@@ -98,6 +98,7 @@ impl GuiReveal {
             rect = into_parent(
                 rect,
                 placement.map_or([0.0; 2], |placement| placement.origin),
+                placement.map_or([0.; 2], |p| p.size),
                 world.components.canvas_style(entity.index() as usize),
             );
 
@@ -151,23 +152,19 @@ impl GuiReveal {
 }
 
 /// `rect` in a child's local units in its parent's: the child's layout
-/// origin, then its visual translation and scale, as Canvas places it.
+/// origin and composed visual transform, as Canvas places it.
 fn into_parent(
     rect: GuiRevealBox,
     origin: [f32; 2],
+    size: [f32; 2],
     style: Option<&crate::systems::canvas::CanvasStyle>,
 ) -> GuiRevealBox {
-    let (translation, scale) = style.map_or(([0.0; 2], [1.0; 2]), |style| {
-        ([style.x, style.y], [style.scale_x, style.scale_y])
+    let mut affine = style.map_or(crate::systems::canvas::CanvasAffine::IDENTITY, |s| {
+        s.affine(size)
     });
-    let mut parent = [0.0; 4];
-    for axis in 0..2 {
-        let start = origin[axis] + translation[axis] + rect[axis] * scale[axis];
-        let end = origin[axis] + translation[axis] + rect[axis + 2] * scale[axis];
-        parent[axis] = start.min(end);
-        parent[axis + 2] = start.max(end);
-    }
-    parent
+    affine.origin[0] += origin[0];
+    affine.origin[1] += origin[1];
+    affine.bounds(rect)
 }
 
 /// `rect` limited to `clip`; a box outside it collapses onto its nearest edge.

@@ -263,6 +263,13 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
   let surfaceMultiDraw = gl.getExtension("WEBGL_multi_draw");
   let surfaceDrawCounts = new Int32Array(0);
   let surfaceDrawOffsets = new Int32Array(0);
+  let canvasClipEpoch = 0;
+  let canvasClipCount = 0;
+  const canvasPlanes = new Float32Array(16 * 4);
+  const clipUniforms = new WeakMap<
+    WebGLProgram,
+    { location: WebGLUniformLocation | null; epoch: number }
+  >();
   let surfaceOwner = 0;
   let surfaceCutout = 0;
   const ownerUniforms = new WeakMap<
@@ -276,6 +283,26 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
       boundProgram = program;
     }
     if (program) {
+      if (canvasClipEpoch) {
+        let clip = clipUniforms.get(program);
+        if (!clip) {
+          clip = {
+            location: gl.getUniformLocation(program, "u_canvas_planes[0]"),
+            epoch: 0,
+          };
+          clipUniforms.set(program, clip);
+        }
+        if (clip.epoch !== canvasClipEpoch) {
+          clip.epoch = canvasClipEpoch;
+          if (clip.location)
+            gl.uniform4fv(
+              clip.location,
+              canvasPlanes,
+              0,
+              Math.min(16, canvasClipCount + 1) * 4,
+            );
+        }
+      }
       let owner = ownerUniforms.get(program);
       if (!owner) {
         owner = {
@@ -2109,6 +2136,19 @@ export function createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports {
           checkDraw();
           return 1;
         });
+      },
+      set_canvas_clip(pointer: number, count: number): void {
+        if (!count && !canvasClipCount) return;
+        const planes = floats(pointer, count * 4);
+        if (
+          count === canvasClipCount &&
+          planes.every((v, i) => v === canvasPlanes[i])
+        )
+          return;
+        canvasPlanes.set(planes);
+        if (count < 16) canvasPlanes[count * 4 + 3] = 0;
+        canvasClipCount = count;
+        canvasClipEpoch++;
       },
       set_surface_owner(owner: number): void {
         surfaceOwner = owner >>> 0;

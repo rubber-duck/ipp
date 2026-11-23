@@ -1,3 +1,4 @@
+import { isGallerySkin } from "../../examples/demos/shared/skin-preference.js";
 import {
   DemoApplication,
   DEMO_SYSTEMS,
@@ -410,7 +411,7 @@ export class NativeGallerySession {
           ...(typeof this.options.renderScale === "number"
             ? { renderScale: this.options.renderScale }
             : {}),
-          ...(this.options.skin === "glass" || this.options.skin === "cybertron"
+          ...(isGallerySkin(this.options.skin)
             ? { skin: this.options.skin }
             : {}),
         },

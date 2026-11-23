@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Trail Run · IPP control gallery</title>
+    <link rel="icon" href="data:," />
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #182339;
+      }
+      body {
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+        touch-action: none;
+      }
+      output {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        background: #182339;
+        color: white;
+        padding: 12px;
+        font: 16px sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script
+      type="module"
+      src="/target/gallery-build/cartoon-controls.js"
+    ></script>
+  </body>
+</html>

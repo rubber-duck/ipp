@@ -1236,6 +1236,10 @@ impl GuiInputRouter {
                         hit.bounds[0].max(hit.clip[0]),
                         hit.bounds[3].min(hit.clip[3]),
                     ];
+                    let corner = hit
+                        .space
+                        .as_ref()
+                        .map_or(corner, |s| s.affine.point(corner));
                     self.request_context(host, context, &target, corner, delivery)?;
                     return Ok(GuiRoutingDisposition::Routed {
                         target: target.control.record.target,
@@ -2601,7 +2605,8 @@ pub(super) fn local_point(
     let projected = project_composed_point(host, query, &target.path, point, true, hit.layer)
         .map_err(|_| GuiInputError::StalePath)?
         .ok_or(GuiInputError::Unavailable)?;
+    let point = hit.drawing_point(projected.point);
     Ok(std::array::from_fn(|axis| {
-        (projected.point[axis] - hit.position[axis]) / hit.scale[axis]
+        (point[axis] - hit.position[axis]) / hit.scale[axis]
     }))
 }

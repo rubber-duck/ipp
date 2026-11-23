@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
@@ -95,13 +96,15 @@ export function Tabs(inputProps: TabsProps) {
   const kit = useGuiKit();
   const t = kit.tokens;
   const choice = useChoice(props);
-  const height = kit.unit(t.controlHeight);
+  const [padX, padY] = t.tabPaintPadding ?? [0, 0];
+  const stripHeight = kit.unit(t.controlHeight + 2 * padY);
   const body = kit.typeSize("body");
   const measured = useTextMeasurements(
     tabs.map((tab) => [tab.label, body] as const),
   );
   const widths = tabs.map(
-    (tab) => measured.lineWidth(tab.label, body) + kit.unit(2 * t.inset),
+    (tab) =>
+      measured.lineWidth(tab.label, body) + kit.unit(2 * (t.inset + padX)),
   );
   const strip = useRef<GuiControlHandle>(null);
   const [range, setRange] = useState<GuiVirtualRange | null>(null);
@@ -143,7 +146,11 @@ export function Tabs(inputProps: TabsProps) {
         <Children>
           <Entity id={`${id}/strip`}>
             <PresentationGate open />
-            <Layout kind={LAYOUT_ROW} height={height} />
+            <Layout
+              kind={LAYOUT_ROW}
+              height={stripHeight}
+              align_items={padY ? 0 : 2}
+            />
             <Skin theme={kit.theme("tabRail")} />
             <Children>
               {overflowing && (
@@ -156,7 +163,7 @@ export function Tabs(inputProps: TabsProps) {
               )}
               <Entity id={`${id}/view`}>
                 <PresentationGate open />
-                <Layout kind={LAYOUT_LEAF} flex={1} height={height} />
+                <Layout kind={LAYOUT_LEAF} flex={1} height={stripHeight} />
                 <Skin theme={kit.theme("gridBody")} />
                 <ScrollView
                   axis={SCROLL_HORIZONTAL}
@@ -171,7 +178,9 @@ export function Tabs(inputProps: TabsProps) {
                     <Layout
                       kind={LAYOUT_ROW}
                       width={widths.reduce((sum, width) => sum + width, 0)}
-                      height={height}
+                      height={stripHeight}
+                      padding_top={kit.unit(padY)}
+                      padding_bottom={kit.unit(padY)}
                     />
                     <Group axis={GROUP_HORIZONTAL} selection={SELECT_SINGLE} />
                     <Children>
@@ -244,7 +253,7 @@ function Tab({
         width={width}
         height={kit.unit(kit.tokens.controlHeight)}
       />
-      <Skin theme={kit.theme("tab")} />
+      <VariantSkin theme={kit.theme("tab")} selected={item.selected} />
       <Behavior enabled={!tab.disabled} />
       <Button
         label={tab.label}

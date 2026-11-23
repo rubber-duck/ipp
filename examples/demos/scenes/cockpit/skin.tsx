@@ -1,5 +1,6 @@
 import { useMemo, type ReactNode } from "react";
 import { GuiKit, type GuiKitContract } from "@ipp/react/gui-kit";
+import { cartoonSkin } from "@ipp/react/gui-cartoon";
 import { glassSkin } from "@ipp/react/gui-glass";
 import { cybertronSkin } from "@ipp/react/gui-cybertron";
 import type { GalleryAssets } from "../../shared/scene.js";
@@ -38,20 +39,22 @@ export function CockpitSkin({
 }
 
 export function cockpitSkins(contract: GuiKitContract, panelOpacity: number) {
-  const cybertron = cybertronSkin(contract);
-  const themes = { ...cybertron.themes };
-  for (const role of ["container", "containerUnlit"] as const) {
-    const name = cybertron.kit[role];
-    const theme = themes[name]!;
-    themes[name] = {
-      ...theme,
-      rows: theme.rows.map((row) => {
-        const color = row.color as readonly number[] | undefined;
-        return color
-          ? { ...row, color: [color[0]!, color[1]!, color[2]!, panelOpacity] }
-          : row;
-      }),
-    };
+  function panelSkin(skin: ReturnType<typeof cybertronSkin>) {
+    const themes = { ...skin.themes };
+    for (const role of ["container", "containerUnlit"] as const) {
+      const name = skin.kit[role];
+      const theme = themes[name]!;
+      themes[name] = {
+        ...theme,
+        rows: theme.rows.map((row) => {
+          const color = row.color as readonly number[] | undefined;
+          return color
+            ? { ...row, color: [color[0]!, color[1]!, color[2]!, panelOpacity] }
+            : row;
+        }),
+      };
+    }
+    return { ...skin, themes };
   }
   return {
     glass: glassSkin(contract, {
@@ -70,6 +73,7 @@ export function cockpitSkins(contract: GuiKitContract, panelOpacity: number) {
       },
       light: { x: 0.18, y: 0.12, height: 3.8, intensity: 0.6 },
     }),
-    cybertron: { ...cybertron, themes },
+    cybertron: panelSkin(cybertronSkin(contract)),
+    cartoon: panelSkin(cartoonSkin(contract)),
   };
 }

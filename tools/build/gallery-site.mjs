@@ -143,6 +143,8 @@ export async function buildGallerySite(output) {
     "ShureTechMono-OFL.txt",
     "ShureTechMono-Nerd-Font-README.md",
     "NotoSans-OFL.txt",
+    "LilitaOne-OFL.txt",
+    "LilitaOne-FONTLOG.txt",
   ])
     await copy(`licences/fonts/${name}`, `notices/${name}`);
   for (const name of [

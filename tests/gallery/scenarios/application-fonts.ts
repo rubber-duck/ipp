@@ -51,6 +51,25 @@ export async function exerciseApplicationFonts(driver: ApplicationFontsDriver) {
     /Unknown demo font/,
   );
   assert.equal((await driver.fonts()).options.font, "noto-sans");
+  await driver.press("demo-skin-picker", "demo-skin-picker/options/cartoon");
+  await driver.waitForOption("skin", "cartoon");
+  assert.equal((await driver.fonts()).source, noto.source);
+  await driver.capture("noto-cartoon");
+  assert.ok(
+    (await driver.changedPixels("noto-cybertron", "noto-cartoon")) > 500,
+    "the cartoon panel and control paint reach the rendered frame",
+  );
+  await driver.press("demo-font-picker", "demo-font-picker/options/lilita-one");
+  await driver.waitForOption("font", "lilita-one");
+  const lilita = await driver.fonts();
+  assert.notEqual(lilita.source, noto.source);
+  assert.equal(lilita.icon, mono.icon);
+  assert.equal(lilita.button, mono.button);
+  await driver.capture("lilita-cartoon");
+  assert.ok(
+    (await driver.changedPixels("lilita-cartoon", "noto-cartoon")) > 100,
+    "Lilita One changes rendered glyphs on the same cartoon controls",
+  );
   await driver.action("skin", "glass");
   await driver.press(
     "demo-font-picker",

@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -215,7 +216,8 @@ function OptionRow({
         padding_left={mark === "check" ? row : gap}
         padding_right={kit.unit(t.inset)}
       />
-      <Skin
+      <VariantSkin
+        selected={selected}
         theme={kit.theme(mark === "check" ? "optionCheckRow" : "menuRow")}
       />
       <Behavior
@@ -229,7 +231,9 @@ function OptionRow({
         <TextLine
           id={`${id}/label`}
           text={option.label}
-          tone={option.disabled ? "neutral" : "text"}
+          tone={
+            option.disabled ? "neutral" : selected ? "selectedText" : "text"
+          }
           layout={{ flex: 1, clip: true }}
         />
       </Children>

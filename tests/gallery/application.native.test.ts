@@ -115,7 +115,7 @@ test(
   "native application switches fonts independently of themes",
   { timeout: 120_000 },
   (context) =>
-    runApplicationCase(context, "native-application-fonts", ["fonts"], 3),
+    runApplicationCase(context, "native-application-fonts", ["fonts"], 5),
 );
 
 for (const [name, width, height] of [

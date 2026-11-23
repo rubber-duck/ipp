@@ -6,6 +6,7 @@ import {
   LAYOUT_ROW,
 } from "../layout.js";
 
+import { VariantSkin } from "../variant-skin.js";
 import { useEntityId } from "../../scope/identity.js";
 /**
  * A small set of mutually exclusive modes as adjacent segments, with the
@@ -120,7 +121,7 @@ function Segment({
         flex={1}
         height={kit.unit(kit.tokens.controlHeight)}
       />
-      <Skin theme={kit.theme(theme)} />
+      <VariantSkin theme={kit.theme(theme)} selected={item.selected} />
       <Behavior enabled={!option.disabled} />
       <Button
         label={option.label}

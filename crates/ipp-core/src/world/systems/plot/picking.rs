@@ -21,6 +21,8 @@ pub struct PlotRayHit {
 /// Canvas placement of a retained chart hit list; shares the immutable local result.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlotCanvasHit {
+    /// Rotated drawing space, when inherited.
+    pub space: Option<Arc<crate::systems::canvas::CanvasSpace>>,
     /// Producing chart lifetime.
     pub target: CanvasTarget,
     /// Shared local shape and row identity data.
@@ -38,7 +40,12 @@ pub struct PlotCanvasHit {
 impl PlotCanvasHit {
     /// First local authored mark under the point; no numeric row conversion.
     pub fn pick(&self, point: [f32; 2]) -> Option<PlotRowIdentity> {
-        if point.iter().any(|value| !value.is_finite())
+        let point = self
+            .space
+            .as_ref()
+            .map_or(point, |s| s.inverse.point(point));
+        if self.space.as_ref().is_some_and(|s| !s.contains(point))
+            || point.iter().any(|value| !value.is_finite())
             || point[0] < self.clip[0]
             || point[1] < self.clip[1]
             || point[0] >= self.clip[2]

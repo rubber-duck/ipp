@@ -9,6 +9,11 @@
     "url": "https://gitlab.gnome.org/GNOME/adwaita-fonts/-/raw/bd828c71418f7ae3af76687d6ca2a809111770f2/mono/AdwaitaMono-Regular.ttf",
     "sha256": "0edc6a8d8ca249f594dee661b2f57f1a3baa33bc7aca826c6a9fe27b06f9f930"
   },
+  "lilita-one": {
+    "version": "Lilita One 1.002",
+    "url": "https://raw.githubusercontent.com/google/fonts/0b03411188731f960e8fa7064e940407ade0e6d4/ofl/lilitaone/LilitaOne-Regular.ttf",
+    "sha256": "f5b641c45c69d772ee4eda687bc9fda411d5cad6b0b45371491da4580cbc8d59"
+  },
   "noto-sans": {
     "version": "Noto Sans 2.015",
     "url": "https://raw.githubusercontent.com/google/fonts/2984c575fdce412ee02b2baaba67672b9a9434d8/ofl/notosans/NotoSans%5Bwdth,wght%5D.ttf",

@@ -128,4 +128,34 @@ compositeTests<typeof prepare>("toast", { budget: 60 }, async (run) => {
     const reached = await step("expectEffects", "a", "pressed", cut);
     return { before, dismissed, remaining, elapsed, reached };
   });
+  await run.case("the whole toast rotates in the clipped panel", async () => {
+    // Deliberately use a larger angle than the gallery so pixel locations and
+    // the two sides of the rotated close target are distinguishable at this scale.
+    const angle = -0.22;
+    const [x, y, w, h] = await step("showToast", angle);
+    const frame = await run.capture("tilted-toast");
+    const cx = x! + w! / 2,
+      cy = y! + h! / 2;
+    const dx = -w! / 2 + 9;
+    const px = cx + dx * Math.cos(angle),
+      py = cy + dx * Math.sin(angle);
+    check(
+      accentPixels(frame, [px - 4, py - 4, 8, 8]) > 0,
+      "the check mark follows the rotated card",
+    );
+    const close = await step("closeBounds");
+    check(!!close, "the close button was laid out");
+    const [left, top, width, height] = close!;
+    const click = async (x: number, y: number) => {
+      const p = await pageAt([x, y]);
+      await page.mouse.click(p[0], p[1]);
+    };
+    await click(left! + 1, top! + 1);
+    check(
+      !!(await step("closeBounds")),
+      "the empty AABB corner dismissed the toast",
+    );
+    await click(left! + width! / 2, top! + height! / 2);
+    await step("expectToastDismissed");
+  });
 });

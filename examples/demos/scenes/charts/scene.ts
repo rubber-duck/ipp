@@ -1,3 +1,4 @@
+import { isGallerySkin } from "../../shared/skin-preference.js";
 import { ChartControls } from "./controls.js";
 import type {
   CameraViewMotion,
@@ -173,10 +174,7 @@ export const chartScene: GallerySceneDefinition = {
       ...chartScene.defaultOptions,
       ...input,
       font: demoFont(input.font).key,
-      skin:
-        input.skin === "glass" || input.skin === "cybertron"
-          ? input.skin
-          : "glass",
+      skin: isGallerySkin(input.skin) ? input.skin : "glass",
       focused: "center",
       navigation: "look",
       hover: null,
@@ -562,8 +560,7 @@ export const chartScene: GallerySceneDefinition = {
         options = { ...options, font };
       },
       async skin(args) {
-        if (args !== "glass" && args !== "cybertron")
-          throw new Error("Unknown chart skin");
+        if (!isGallerySkin(args)) throw new Error("Unknown chart skin");
         await content.setSkin(args);
         options = { ...options, skin: args };
       },
@@ -775,7 +772,7 @@ export const chartScene: GallerySceneDefinition = {
           })),
         ),
       );
-      content.skin.select(options.skin === "glass" ? "glass" : "cybertron");
+      content.skin.select(isGallerySkin(options.skin) ? options.skin : "glass");
       await content.open(demoFont(options.font).key);
       ready = content
         .ready()

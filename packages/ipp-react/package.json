@@ -34,6 +34,11 @@
       "development": "./src/gui-glass.ts",
       "default": "./dist/gui-glass.js"
     },
+    "./gui-cartoon": {
+      "types": "./src/gui-cartoon.ts",
+      "development": "./src/gui-cartoon.ts",
+      "default": "./dist/gui-cartoon.js"
+    },
     "./gui-cybertron": {
       "types": "./src/gui-cybertron.ts",
       "development": "./src/gui-cybertron.ts",

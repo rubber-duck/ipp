@@ -257,8 +257,14 @@ if (selection === "assets") {
     resolve(output, "demos.js"),
   );
 
+  await bundleGallery(
+    resolve(workspace, "examples/demos/cartoon-controls/browser.tsx"),
+    resolve(output, "cartoon-controls.js"),
+  );
+
   const artifacts = await Promise.all([
     artifact(resolve(output, "demos.js")),
+    artifact(resolve(output, "cartoon-controls.js")),
     ...["cube.mesh", "spot-marker.mesh", "sun-marker.mesh"].map((name) =>
       artifact(resolve(workspace, "target/gallery-assets", name)),
     ),

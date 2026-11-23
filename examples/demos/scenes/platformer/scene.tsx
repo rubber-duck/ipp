@@ -1,3 +1,4 @@
+import { isGallerySkin } from "../../shared/skin-preference.js";
 import type { CameraWorldClient, WorldReference } from "@ipp/client";
 import type { CanvasWorldHandle, ReactWorldRoot } from "@ipp/react";
 import { mountGalleryScene } from "../../shared/scene-mount.js";
@@ -164,7 +165,7 @@ export const platformerScene: GallerySceneDefinition = {
             contract: context.contract as unknown as GuiKitContract,
             font: context.assets.url(demoFont(current.font).path),
             iconFont: context.assets.url(DEMO_ICON_FONT),
-            skin: current.skin === "cybertron" ? "cybertron" : "glass",
+            skin: isGallerySkin(current.skin) ? current.skin : "glass",
             movement,
             onReady: movementOpened,
           }}

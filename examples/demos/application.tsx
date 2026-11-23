@@ -69,7 +69,11 @@ import type {
   GalleryApplicationControl,
   GalleryApplicationSettings,
 } from "./shared/scene.js";
-import type { GallerySkin } from "./shared/skin-preference.js";
+import {
+  DEMO_SKINS,
+  isGallerySkin,
+  type GallerySkin,
+} from "./shared/skin-preference.js";
 import {
   DEFAULT_DEMO_FONT,
   DEMO_FONTS,
@@ -449,10 +453,7 @@ export class DemoApplication implements GallerySceneMount {
               <Dropdown
                 id="demo-skin-picker"
                 label="Skin"
-                options={[
-                  { key: "glass", label: "Glass" },
-                  { key: "cybertron", label: "Cybertron" },
-                ]}
+                options={DEMO_SKINS}
                 value={this.skin}
                 onChange={(value) => run(this.action("skin", value))}
               />
@@ -1023,8 +1024,7 @@ export class DemoApplication implements GallerySceneMount {
       return this.sceneOperation((scene) => scene.mount.action(name, args));
     return this.ordered(async () => {
       if (name === "skin") {
-        if (args !== "glass" && args !== "cybertron")
-          throw new Error("Unknown demo skin");
+        if (!isGallerySkin(args)) throw new Error("Unknown demo skin");
         this.skin = args;
         await this.active?.mount.update({ skin: args });
         if (this.active?.definition.id === "cockpit")

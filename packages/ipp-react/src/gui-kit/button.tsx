@@ -1,12 +1,12 @@
+import { VariantSkin } from "./variant-skin.js";
 import { useEntityId } from "../scope/identity.js";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../components.js";
 import {
   Button as NativeButton,
   type ButtonProps as NativeButtonProps,
 } from "../gui/controls.js";
 import { Behavior, Font, Layout, Style } from "../gui/components.js";
-import { Skin } from "../gui/theme.js";
 import { useGuiKit } from "./kit.js";
 import {
   LAYOUT_LEAF,
@@ -54,6 +54,7 @@ export function Button({
 }: ButtonProps) {
   const id = useEntityId(providedId);
   const kit = useGuiKit();
+  const [nativeSelection, observeSelection] = useState(selected);
   const text =
     label ??
     (typeof children === "string" || typeof children === "number"
@@ -99,8 +100,21 @@ export function Button({
       <Style layer={layer} />
       <Font source={kit.font} font_size={kit.fontSize} />
       <Behavior enabled={!disabled} semantic_label={semanticLabel ?? text} />
-      {theme && control.skin !== false && <Skin theme={theme} />}
-      <NativeButton {...control} selected={selected} label={text} />
+      {theme && control.skin !== false && (
+        <VariantSkin theme={theme} selected={nativeSelection} />
+      )}
+      <NativeButton
+        {...control}
+        {...(theme &&
+          kit.themeVariants?.[theme] && {
+            onSelectedChange: (event) => {
+              observeSelection(event.value);
+              control.onSelectedChange?.(event);
+            },
+          })}
+        selected={selected}
+        label={text}
+      />
       {custom && <Children>{children}</Children>}
     </Entity>
   );

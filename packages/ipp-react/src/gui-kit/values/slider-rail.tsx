@@ -23,7 +23,7 @@ import { useEntityId } from "../../scope/identity.js";
  * An appearance can supply a slider or dial theme; without one, native
  * presentation uses the selected skin.
  */
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import type { GuiFocusChangeListener } from "../../gui/callbacks.js";
 import { Behavior, Layout } from "../../gui/components.js";
@@ -162,8 +162,20 @@ export function MarkText({
   const id = useEntityId(providedId);
   const kit = useGuiKit();
   const { thumb, row } = railGeometry(kit);
-  const measured = useTextMeasurements([[text, kit.typeSize(size)]]);
-  const width = measured.lineWidth(text, kit.typeSize(size));
+  // Keep the visible text and its width together. Finish one measurement
+  // before requesting the latest drag value so rapid events cannot starve it.
+  const fontSize = kit.typeSize(size);
+  const [pending, setPending] = useState({
+    text,
+    previous: { text: "", width: 0 },
+  });
+  const measured = useTextMeasurements([[pending.text, fontSize]]);
+  const line = measured.ready
+    ? { text: pending.text, width: measured.lineWidth(pending.text, fontSize) }
+    : pending.previous;
+  if (measured.ready && pending.text !== text)
+    setPending({ text, previous: line });
+  const width = line.width;
   // The row's extent along the rail and its start from the mark's start,
   // where the minimum lies at the start horizontally and the end vertically.
   const length = vertical ? row : width;
@@ -202,9 +214,7 @@ export function MarkText({
               }
         }
       >
-        {measured.ready && (
-          <TextLine id={`${id}/text`} text={text} tone={tone} size={size} />
-        )}
+        <TextLine id={`${id}/text`} text={line.text} tone={tone} size={size} />
       </Row>
     </>
   );

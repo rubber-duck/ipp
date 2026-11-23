@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 import {
   KitLayout,
   useGuiKitLayout,
@@ -63,6 +64,7 @@ import {
 import { GUI_KIT_ICONS } from "../icons.js";
 import { useGuiKit, type GuiKitScope } from "../kit.js";
 
+import { usePanelSurface } from "../containers/panel.js";
 import { TextLine } from "../text.js";
 
 export interface TreeNode {
@@ -92,6 +94,8 @@ export interface TreeViewProps extends ChoiceProps, GuiKitLayoutProps {
   /** Symbolic id of the frame; rows extend it with their keys. */
   readonly id?: string;
   readonly nodes: readonly TreeNode[];
+  /** A standalone tree has a frame. An embedded tree can share the surrounding surface. */
+  readonly framed?: boolean;
   /** Keys of the expanded branches, controlled. */
   readonly expanded?: readonly string[];
   readonly defaultExpanded?: readonly string[];
@@ -151,6 +155,7 @@ export function TreeView(inputProps: TreeViewProps) {
     id: providedId,
     layer = 0,
     nodes,
+    framed,
     expanded,
     defaultExpanded = [],
     onExpandedChange,
@@ -160,6 +165,8 @@ export function TreeView(inputProps: TreeViewProps) {
   } = useGuiKitLayout(inputProps);
   const id = useEntityId(providedId);
   const kit = useGuiKit();
+  const parentSurface = usePanelSurface();
+  const frame = framed ?? !parentSurface;
   const g = geometry(kit);
   const choice = useChoice(props);
   const [ownExpanded, setOwnExpanded] = useState(defaultExpanded);
@@ -224,6 +231,7 @@ export function TreeView(inputProps: TreeViewProps) {
       <Style layer={layer} />
       <KitLayout kind={LAYOUT_STACK} {...layout} />
       <Font source={kit.font} font_size={kit.fontSize} />
+      {!frame && <Skin theme={kit.theme("gridBody")} />}
       <ScrollView
         bar_thickness={scrolling ? g.bar : 0}
         bar_inset={g.bar}
@@ -282,7 +290,11 @@ function TreeRow({
   const { node } = row;
   const item = choice.item(node.key);
   const selected = useMountSelection(item.selected);
-  const tone = node.disabled ? "neutral" : "text";
+  const tone = node.disabled
+    ? "neutral"
+    : item.selected
+      ? "selectedText"
+      : "text";
   const color = kit.color(tone);
   return (
     <Entity id={id}>
@@ -293,7 +305,7 @@ function TreeRow({
         padding_left={g.gap + row.depth * g.indent}
         padding_right={g.gap}
       />
-      <Skin theme={kit.theme("gridRow")} />
+      <VariantSkin theme={kit.theme("gridRow")} selected={item.selected} />
       <Behavior semantic_label={node.label} enabled={!node.disabled} />
       <Button
         label=""
@@ -314,7 +326,13 @@ function TreeRow({
               align_y={0}
             />
             <Font source={kit.iconFont} font_size={g.icon} />
-            <Skin theme={kit.theme("treeChevron")} />
+            <Skin
+              theme={kit.theme(
+                item.selected && kit.tokens.selectedText
+                  ? "treeChevronSelected"
+                  : "treeChevron",
+              )}
+            />
             <Behavior
               focusable={false}
               semantic_label={row.open ? "Collapse" : "Expand"}

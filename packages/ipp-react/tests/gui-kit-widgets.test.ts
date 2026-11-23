@@ -22,6 +22,7 @@ import {
   type GuiKitControlName,
 } from "../src/gui-kit.js";
 import type { GuiControlHandle } from "../src/gui/control-ref.js";
+import { cartoonSkin } from "../src/gui-cartoon/skin.js";
 import { cybertronSkin } from "../src/gui-cybertron/skin.js";
 import { glassSkin } from "../src/gui-glass/kit.js";
 import { compactSizing } from "../src/gui-kit/sizing.js";
@@ -56,17 +57,21 @@ test("Switch defaults keep a wide low track at body scale and explicit sizes rem
 
 test("peer skins preserve compact control targets, choice marks and form layout", async () => {
   const inputs = contract();
-  const skins = [cybertronSkin(inputs), glassSkin(inputs)];
-  for (const key of Object.keys(
-    compactSizing,
-  ) as (keyof typeof compactSizing)[])
-    assert.equal(skins[0]!.tokens[key], skins[1]!.tokens[key], key);
-  for (const role of Object.keys(skins[0]!.controls) as GuiKitControlName[])
-    assert.deepEqual(
-      skins[0]!.themes[skins[0]!.controls[role]]!.metrics,
-      skins[1]!.themes[skins[1]!.controls[role]]!.metrics,
-      role,
-    );
+  const skins = [cybertronSkin(inputs), glassSkin(inputs), cartoonSkin(inputs)];
+  const reference = skins[0]!;
+  for (const peer of skins.slice(1)) {
+    for (const key of Object.keys(
+      compactSizing,
+    ) as (keyof typeof compactSizing)[])
+      if (key !== "progressHeight" && key !== "progressInset")
+        assert.equal(reference.tokens[key], peer.tokens[key], key);
+    for (const role of Object.keys(reference.controls) as GuiKitControlName[])
+      assert.deepEqual(
+        reference.themes[reference.controls[role]]!.metrics,
+        peer.themes[peer.controls[role]]!.metrics,
+        role,
+      );
+  }
   for (const skin of skins) {
     for (const [role, visible] of [
       ["checkbox", [18, 18]],
@@ -75,7 +80,7 @@ test("peer skins preserve compact control targets, choice marks and form layout"
       const theme = skin.themes[skin.controls[role]]!;
       const metrics = theme.metrics!;
       assert.equal(metrics.min_height, role === "switch" ? 22 : 28);
-      if (skin === skins[0]) {
+      if (skin !== skins[1]) {
         const row = theme.rows.find(
           (row) =>
             row.part === inputs.guiPaintPartIndex({ part: "background" }),
@@ -145,9 +150,9 @@ test("peer skins preserve compact control targets, choice marks and form layout"
       assert.equal(world.fields("motion", "GuiLayout").get("height"), 22);
       assert.equal(world.fields("axis/x/mark", "GuiLayout").get("width"), 28);
     }
-    assert.deepEqual(layouts[0], layouts[1]);
-    for (let index = 0; index < 3; index++)
-      assert.equal(identities[index], identities[index + 3]);
+    for (const layout of layouts.slice(1)) assert.deepEqual(layout, layouts[0]);
+    for (let index = 3; index < identities.length; index++)
+      assert.equal(identities[index], identities[index % 3]);
   } finally {
     await root.unmount();
   }

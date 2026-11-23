@@ -1,3 +1,4 @@
+import { VariantSkin } from "../variant-skin.js";
 import { useTextMeasurements } from "../text-measurement.js";
 import {
   KitLayout,
@@ -206,7 +207,7 @@ function Option({
             height={g.mark}
             align_y={0}
           />
-          <Skin theme={kit.theme("radio")} />
+          <VariantSkin theme={kit.theme("radio")} selected={item.selected} />
           <Behavior semantic_label={option.label} enabled={!disabled} />
           <Button
             label=""

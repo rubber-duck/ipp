@@ -6,6 +6,7 @@ import type {
   GuiKitRow,
   GuiKitTokens,
 } from "../gui-kit/kit.js";
+import type { GuiKitIconThemes } from "../gui-kit/icons.js";
 import type { KitThemeName } from "../gui-kit/themes.js";
 
 /** Shared native data, declared once for any number of controls. */
@@ -27,6 +28,10 @@ export interface GuiSkinDefinition {
   readonly themes: Readonly<Record<string, GuiSkinTheme>>;
   readonly controls: Readonly<Record<GuiKitControlName, string>>;
   readonly kit: Readonly<Record<KitThemeName, string>>;
+  readonly iconThemes?: GuiKitIconThemes;
+  /** Whole-card notification rotations in clockwise radians, sampled on mount. */
+  readonly notificationAngles?: readonly number[] | undefined;
+  readonly themeVariants?: Readonly<Record<string, readonly string[]>>;
   /** IDs relative to the resource scope, required before the skin becomes visible. */
   readonly assetIds?: readonly string[];
   /** Immutable resources. Keep this function stable until the bundle changes. */

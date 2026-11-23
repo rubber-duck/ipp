@@ -13,7 +13,7 @@ use ipp_core::systems::canvas::{CanvasClip, CanvasPaintEntry, CanvasPrimitive};
 #[derive(Clone)]
 pub(in crate::services::render) enum SurfaceOp {
     /// Committed GUI batches; a range never spans two layers.
-    Gui(std::ops::Range<usize>, u32),
+    Gui(std::ops::Range<usize>, u32, usize),
     Primitive(usize, CanvasClip, u32),
     Attachment(usize, u32),
 }
@@ -21,7 +21,7 @@ pub(in crate::services::render) enum SurfaceOp {
 impl SurfaceOp {
     fn layer(&self) -> u32 {
         match self {
-            Self::Gui(_, layer) | Self::Primitive(_, _, layer) | Self::Attachment(_, layer) => {
+            Self::Gui(_, layer, _) | Self::Primitive(_, _, layer) | Self::Attachment(_, layer) => {
                 *layer
             }
         }
@@ -48,6 +48,7 @@ impl<'a> PrimitiveScene<'a> {
 
 pub(in crate::services::render) struct CanvasDrawFrame<'a> {
     scene: CanvasScene<'a>,
+    polygon: Option<Vec<[f32; 2]>>,
     mvp: [f32; 16],
     clip: CanvasClip,
     opacity: f32,
@@ -169,83 +170,124 @@ impl<D: RenderDevice> RenderService<D> {
                     .ok_or(RenderError::UnavailableOutput)?;
                 let mvp = frame.layering.layer_mvp(&frame.mvp, coordinate);
                 let presentation = frame.presentation.layer(coordinate);
-                match op {
-                    SurfaceOp::Gui(range, _) => self.draw_gui_work(
-                        frame.scene.canvas.selection,
-                        range,
-                        frame.clip,
-                        damage,
-                        &mvp,
-                        &presentation,
-                        stats,
-                    )?,
-                    SurfaceOp::Primitive(index, clip, _) => {
-                        if let Some(primitive) = frame.scene.primitive(index) {
-                            self.draw_surface_primitive(
-                                &PrimitiveScene {
-                                    host: frame.scene.host,
-                                    publication: frame.scene.publication.id,
-                                    world: frame.scene.publication.world,
-                                    selection: Some(frame.scene.canvas.selection),
-                                    plane: None,
-                                    presentation: Some(&presentation),
-                                },
-                                primitive,
-                                clip,
-                                frame.paint.entry(frame.scene.replaced(index)),
-                                &mvp,
-                                stats,
-                                &mut instances,
-                            )?;
-                        }
+                let entry_index = match &op {
+                    SurfaceOp::Gui(_, _, i)
+                    | SurfaceOp::Primitive(i, _, _)
+                    | SurfaceOp::Attachment(i, _) => *i,
+                };
+                let space = frame.scene.canvas.entries[entry_index].space();
+                let local_clip = space.map_or(frame.clip, |s| s.inverse.bounds(frame.clip));
+                let local_damage = damage.map(|d| space.map_or(d, |s| s.inverse.bounds(d)));
+                let polygon = super::clipping::in_space(
+                    space.map(|s| s.as_ref()),
+                    frame.clip,
+                    frame.polygon.as_deref(),
+                );
+                let plane = mvp;
+                let mut presentation = presentation;
+                let mvp = if let Some(space) = space {
+                    let transform = space.affine.matrix();
+                    presentation.content =
+                        ipp_core::math::multiply(presentation.content, transform);
+                    ipp_core::math::multiply(mvp, transform)
+                } else {
+                    mvp
+                };
+                if let SurfaceOp::Attachment(index, _) = op {
+                    if index == 0
+                        && self
+                            .fullscreen_camera
+                            .is_some_and(|camera| camera.root == frame.scene.canvas.selection)
+                    {
+                        continue;
                     }
-                    SurfaceOp::Attachment(index, _) => {
-                        if index == 0
-                            && self
-                                .fullscreen_camera
-                                .is_some_and(|camera| camera.root == frame.scene.canvas.selection)
-                        {
-                            continue;
-                        }
-                        match canvas_attachment(
-                            &frame.scene,
-                            index,
+                    match canvas_attachment(&frame.scene, index, plane, frame.clip, frame.opacity)?
+                    {
+                        Some(CanvasChild::Canvas {
+                            scene,
                             mvp,
-                            frame.clip,
-                            frame.opacity,
-                        )? {
-                            Some(CanvasChild::Canvas {
+                            clip,
+                            opacity,
+                            mapping,
+                        }) => {
+                            let polygon = super::clipping::child_polygon(polygon, &mapping);
+                            self.device.borrow_mut().set_canvas_clip(&[]);
+                            if polygon.is_none()
+                                && self.draw_cached_canvas(&scene, &mvp, clip, opacity, stats)?
+                            {
+                                continue;
+                            }
+                            let mut frame = self.prepare_canvas_frame(
                                 scene,
                                 mvp,
                                 clip,
                                 opacity,
-                            }) => {
-                                if self.draw_cached_canvas(&scene, &mvp, clip, opacity, stats)? {
-                                    continue;
-                                }
-                                let frame = self.prepare_canvas_frame(
-                                    scene,
-                                    mvp,
-                                    clip,
-                                    opacity,
-                                    CanvasLayering::FLAT,
-                                    viewport,
-                                    stats,
-                                )?;
-                                frames.push(frame);
-                            }
-                            Some(CanvasChild::Camera {
-                                selection,
-                                mvp,
-                                extent,
-                                clip,
-                                opacity,
-                            }) => {
+                                CanvasLayering::FLAT,
+                                viewport,
+                                stats,
+                            )?;
+                            frame.polygon = polygon;
+                            frames.push(frame);
+                        }
+                        Some(CanvasChild::Camera {
+                            selection,
+                            mvp,
+                            extent,
+                            clip,
+                            opacity,
+                            mapping,
+                        }) => {
+                            let polygon = super::clipping::child_polygon(polygon, &mapping);
+                            let batches = polygon.as_deref().map(super::clipping::batches);
+                            let empty = Vec::new();
+                            for planes in batches.as_deref().unwrap_or(std::slice::from_ref(&empty))
+                            {
+                                self.device.borrow_mut().set_canvas_clip(planes);
                                 self.draw_camera_image(
                                     selection, mvp, extent, clip, opacity, stats,
                                 )?;
                             }
-                            None => {}
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
+                let batches = polygon.as_deref().map(super::clipping::batches);
+                let no_clip = Vec::new();
+                for planes in batches.as_deref().unwrap_or(std::slice::from_ref(&no_clip)) {
+                    self.device.borrow_mut().set_canvas_clip(planes);
+                    match &op {
+                        SurfaceOp::Gui(range, _, _) => self.draw_gui_work(
+                            frame.scene.canvas.selection,
+                            range.clone(),
+                            local_clip,
+                            local_damage,
+                            &mvp,
+                            &presentation,
+                            stats,
+                        )?,
+                        SurfaceOp::Primitive(index, clip, _) => {
+                            if let Some(primitive) = frame.scene.primitive(*index) {
+                                self.draw_surface_primitive(
+                                    &PrimitiveScene {
+                                        host: frame.scene.host,
+                                        publication: frame.scene.publication.id,
+                                        world: frame.scene.publication.world,
+                                        selection: Some(frame.scene.canvas.selection),
+                                        plane: None,
+                                        presentation: Some(&presentation),
+                                    },
+                                    primitive,
+                                    *clip,
+                                    frame.paint.entry(frame.scene.replaced(*index)),
+                                    &mvp,
+                                    stats,
+                                    &mut instances,
+                                )?;
+                            }
+                        }
+                        SurfaceOp::Attachment(..) => {
+                            unreachable!("attachments enter their own frame")
                         }
                     }
                 }
@@ -254,6 +296,7 @@ impl<D: RenderDevice> RenderService<D> {
         })();
         self.canvas_draw_frames = empty_buffer(frames);
         self.canvas_draw_instances = instances;
+        self.device.borrow_mut().set_canvas_clip(&[]);
         let restored = self.device.borrow_mut().set_surface_double_sided(false);
         result.and(restored)
     }
@@ -349,6 +392,7 @@ impl<D: RenderDevice> RenderService<D> {
             ops.extend(self.surface_sorted.drain(..).map(|(_, op)| op));
         }
         Ok(CanvasDrawFrame {
+            polygon: None,
             scene,
             mvp,
             clip,
@@ -893,15 +937,22 @@ impl<D: RenderDevice> RenderService<D> {
             empty_buffer(std::mem::take(&mut self.canvas_boxes));
         let mut gui_start = 0;
         let mut layer = 0;
+        let mut space_entry = 0;
         for (index, entry) in scene.canvas.entries.iter().enumerate() {
-            if entry.layer() != layer {
+            if entry.layer() != layer || entry.space() != scene.canvas.entries[space_entry].space()
+            {
                 cache.push_boxes(&boxes, stats);
                 boxes.clear();
                 if cache.piece_count() > gui_start {
-                    ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
+                    ops.push(SurfaceOp::Gui(
+                        gui_start..cache.piece_count(),
+                        layer,
+                        space_entry,
+                    ));
                     gui_start = cache.piece_count();
                 }
                 layer = entry.layer();
+                space_entry = index;
             }
             let CanvasPaintEntry::Primitive {
                 primitive,
@@ -911,7 +962,11 @@ impl<D: RenderDevice> RenderService<D> {
                 cache.push_boxes(&boxes, stats);
                 boxes.clear();
                 if cache.piece_count() > gui_start {
-                    ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
+                    ops.push(SurfaceOp::Gui(
+                        gui_start..cache.piece_count(),
+                        layer,
+                        space_entry,
+                    ));
                     gui_start = cache.piece_count();
                 }
                 ops.push(SurfaceOp::Attachment(index, layer));
@@ -920,7 +975,12 @@ impl<D: RenderDevice> RenderService<D> {
             // Intersect the per-primitive clip with the root content rectangle
             // on every path. An empty intersection suppresses the primitive:
             // no draw call, no triangles, no effect on painter order or depth.
-            let Some(clip) = effective_clip(primitive.style(), parent_clip) else {
+            let Some(clip) = effective_clip(
+                primitive.style(),
+                entry
+                    .space()
+                    .map_or(parent_clip, |s| s.inverse.bounds(parent_clip)),
+            ) else {
                 continue;
             };
 
@@ -978,7 +1038,11 @@ impl<D: RenderDevice> RenderService<D> {
             cache.push_boxes(&boxes, stats);
             boxes.clear();
             if cache.piece_count() > gui_start {
-                ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
+                ops.push(SurfaceOp::Gui(
+                    gui_start..cache.piece_count(),
+                    layer,
+                    space_entry,
+                ));
                 gui_start = cache.piece_count();
             }
             ops.push(SurfaceOp::Primitive(index, clip, layer));
@@ -986,7 +1050,11 @@ impl<D: RenderDevice> RenderService<D> {
 
         cache.push_boxes(&boxes, stats);
         if cache.piece_count() > gui_start {
-            ops.push(SurfaceOp::Gui(gui_start..cache.piece_count(), layer));
+            ops.push(SurfaceOp::Gui(
+                gui_start..cache.piece_count(),
+                layer,
+                space_entry,
+            ));
         }
 
         self.canvas_boxes = empty_buffer(boxes);
@@ -1015,7 +1083,12 @@ impl<D: RenderDevice> RenderService<D> {
                 ops.push(SurfaceOp::Attachment(index, entry.layer()));
                 continue;
             };
-            let Some(clip) = effective_clip(primitive.style(), parent_clip) else {
+            let Some(clip) = effective_clip(
+                primitive.style(),
+                entry
+                    .space()
+                    .map_or(parent_clip, |s| s.inverse.bounds(parent_clip)),
+            ) else {
                 continue;
             };
 
@@ -1129,7 +1202,10 @@ impl<D: RenderDevice> RenderService<D> {
             else {
                 continue;
             };
-            let Some(clip) = effective_clip(style, clip) else {
+            let Some(clip) = effective_clip(
+                style,
+                entry.space().map_or(clip, |s| s.inverse.bounds(clip)),
+            ) else {
                 continue;
             };
             let Some(data) = scene

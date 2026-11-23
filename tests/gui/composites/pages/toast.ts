@@ -48,6 +48,8 @@ export async function prepare(setup: CompositeSetup) {
 
   let toasts: readonly ToastItem[] = [];
   const dismissals: string[] = [];
+  let rotation = 0;
+  const skin = cybertronSkin(setup.contract);
   const root = createRoot(client as unknown as ReactWorldClient, {
     onError: page.report,
   });
@@ -57,7 +59,7 @@ export async function prepare(setup: CompositeSetup) {
         GuiKit,
         {
           contract: setup.contract,
-          skin: cybertronSkin(setup.contract),
+          skin: { ...skin, notificationAngles: [rotation] },
           font,
           fontSize: TOAST_FONT_SIZE,
         },
@@ -85,7 +87,7 @@ export async function prepare(setup: CompositeSetup) {
    * The toast body's entity, while declared, and the World time of the read
    * that settled it.
    */
-  const find = async () => {
+  const find = async (symbol = SYMBOL) => {
     let after = 0n;
     let time = 0;
     do {
@@ -96,7 +98,7 @@ export async function prepare(setup: CompositeSetup) {
       });
       time = page.time;
       const entity = page.entities.find(
-        (entry) => entry.metadata.symbolicId === SYMBOL,
+        (entry) => entry.metadata.symbolicId === symbol,
       )?.id;
       if (entity !== undefined) return { entity, time };
       after = page.next;
@@ -116,8 +118,9 @@ export async function prepare(setup: CompositeSetup) {
      * Show the toast and wait until it is laid out; returns its evaluated box
      * in the panel's canvas.
      */
-    async showToast() {
-      toasts = [TOAST];
+    async showToast(angle = 0) {
+      rotation = angle;
+      toasts = angle === 0 ? [TOAST] : [{ ...TOAST, persistent: true }];
       await render();
       let bounds: readonly number[] | undefined;
       await page.until(
@@ -139,6 +142,12 @@ export async function prepare(setup: CompositeSetup) {
      * Effects of `kind` on the shown toast's body since `from`, once there
      * are at least `count`.
      */
+    async closeBounds() {
+      const { entity } = await find(SYMBOL + "/close");
+      return entity === undefined
+        ? undefined
+        : (await readControl(client, entity))?.bounds;
+    },
     async toastEffects(
       kind: Parameters<typeof page.effectsOn>[2],
       from: Parameters<typeof page.effectsOn>[3],

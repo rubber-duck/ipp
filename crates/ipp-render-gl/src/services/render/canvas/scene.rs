@@ -145,7 +145,9 @@ impl CanvasAttachment<'_> {
             self.slot.scale[0] * physical[0] / f64::from(extent[0]),
             -self.slot.scale[1] * physical[1] / f64::from(extent[1]),
         ];
-        let origin = self.slot.to_canvas([-physical[0] * 0.5, physical[1] * 0.5]);
+        let origin = self
+            .slot
+            .to_drawing([-physical[0] * 0.5, physical[1] * 0.5]);
         CanvasMapping::new(origin, scale, clip, extent)
     }
 }

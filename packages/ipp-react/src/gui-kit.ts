@@ -258,6 +258,7 @@ export {
 export {
   formatHex,
   hsvaToRgba,
+  linearColor,
   parseHex,
   rgbaToHsva,
   type ColorRgba,

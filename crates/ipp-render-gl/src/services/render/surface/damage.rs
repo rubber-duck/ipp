@@ -250,10 +250,11 @@ fn bounds<D: RenderDevice>(scene: &CanvasScene<'_>, entry: &CanvasPaintEntry) ->
             rect.unwrap_or([0.0; 4])
         }
     };
-    [
+    let clipped = [
         rect[0].max(style.clip[0]),
         rect[1].max(style.clip[1]),
         rect[2].min(style.clip[2]),
         rect[3].min(style.clip[3]),
-    ]
+    ];
+    entry.space().map_or(clipped, |s| s.affine.bounds(clipped))
 }

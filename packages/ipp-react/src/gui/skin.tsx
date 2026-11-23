@@ -20,6 +20,16 @@ export function skinAppearance(
   return {
     tokens: skin.tokens,
     themes: refs(skin.kit),
+    notificationAngles: skin.notificationAngles,
+    ...(skin.iconThemes && { iconThemes: refs(skin.iconThemes) }),
+    ...(skin.themeVariants && {
+      themeVariants: Object.fromEntries(
+        Object.entries(skin.themeVariants).map(([name, variants]) => [
+          `${id}/theme/${name}`,
+          variants.map((name) => `${id}/theme/${name}`),
+        ]),
+      ),
+    }),
     controls: refs(skin.controls),
     metrics: Object.fromEntries(
       Object.entries(skin.controls).flatMap(([role, name]) => {

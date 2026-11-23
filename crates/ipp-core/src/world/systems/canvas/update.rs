@@ -840,7 +840,7 @@ pub(super) fn retained_resources(
 pub(super) fn attachment_slot(
     context: &SystemRuntimeAccess<'_>,
     entity: EntityId,
-    placed: Placement,
+    placed: &Placement,
     density: f32,
     layout_size: Option<[f32; 2]>,
 ) -> Option<CanvasAttachmentSlot> {
@@ -863,6 +863,7 @@ pub(super) fn attachment_slot(
             * layout_size.map_or(units, |size| f64::from(size[1]) / physical_extent[1]),
     ];
     Some(CanvasAttachmentSlot {
+        space: placed.space.clone(),
         anchor: entity,
         surface_incarnation: incarnation(world, entity, surface.component())?,
         surface_component: surface.component(),

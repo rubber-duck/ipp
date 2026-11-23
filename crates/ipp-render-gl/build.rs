@@ -49,6 +49,7 @@ fn main() {
                     "// SURFACE_INTERSECTION_FRAGMENT",
                     "surface-intersection-fragment.glsl",
                 ),
+                ("// CANVAS_CLIP", "canvas-clip.glsl"),
             ] {
                 if source.contains(marker) {
                     let shared = std::fs::read_to_string(source_directory.join(file))

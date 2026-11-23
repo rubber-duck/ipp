@@ -357,7 +357,10 @@ test("the release gallery is complete and renders at root and project URLs", {
   }
   for (const path of [
     "assets/shared/noto-sans.ippf",
+    "assets/shared/lilita-one.ippf",
     "notices/NotoSans-OFL.txt",
+    "notices/LilitaOne-OFL.txt",
+    "notices/LilitaOne-FONTLOG.txt",
   ])
     assert.ok(
       report.artifacts.some((entry) => entry.path === path),
@@ -507,7 +510,7 @@ test("the release gallery is complete and renders at root and project URLs", {
               ...frame.cockpit.panels.map(({ world }) => world),
             ];
             await press(page, "demo-display");
-            for (const font of ["noto-sans", "shure-tech-mono"]) {
+            for (const font of ["noto-sans", "lilita-one", "shure-tech-mono"]) {
               await press(page, "demo-font-picker");
               await press(page, `demo-font-picker/options/${font}`);
               await page.waitForFunction(
@@ -564,7 +567,9 @@ test("the release gallery is complete and renders at root and project URLs", {
                 selected.font.width - frame.font.width,
               );
               assert.ok(
-                font === "noto-sans" ? widthChange > 2 : widthChange < 0.1,
+                font === "shure-tech-mono"
+                  ? widthChange < 0.1
+                  : widthChange > 2,
                 "native font metrics change and restore the shell label width",
               );
               assert.ok(
@@ -601,6 +606,7 @@ test("the release gallery is complete and renders at root and project URLs", {
           "runtime/runtime.wasm",
           "assets/shared/shure-tech-mono.ippf",
           "assets/shared/noto-sans.ippf",
+          "assets/shared/lilita-one.ippf",
           "assets/platformer/platformer.ipp",
           "assets/platformer/pose-origins.json",
           "assets/cockpit/cockpit.ipp",

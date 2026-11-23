@@ -23,10 +23,12 @@ import { useEntityId } from "../../scope/identity.js";
  * The expansion is the application's: pass `expanded` with
  * `onExpandedChange`, or only `defaultExpanded` to let the expander keep it.
  */
-import { useState, type ReactNode } from "react";
+import { Children as ReactChildren, useState, type ReactNode } from "react";
 import { PresentationGate, Children, Entity } from "../../components.js";
 import { Button } from "../../gui/controls.js";
 import { Style, Behavior, Font, Layout } from "../../gui/components.js";
+import { PanelSurface } from "./panel.js";
+import { Separator } from "../separator.js";
 import { Skin } from "../../gui/theme.js";
 import type { GuiControlRef } from "../../gui/control-ref.js";
 import { useGuiKit } from "../kit.js";
@@ -120,7 +122,13 @@ export function Expander(props: ExpanderProps) {
             )}
           </Children>
         </Entity>
-        {open && children}
+        {open && t.expanderFrame && <Separator id={`${id}/division`} />}
+        {open &&
+          (t.expanderFrame && ReactChildren.count(children) === 1 ? (
+            <PanelSurface>{children}</PanelSurface>
+          ) : (
+            children
+          ))}
       </Children>
     </Entity>
   );

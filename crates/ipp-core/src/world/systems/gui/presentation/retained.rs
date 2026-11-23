@@ -34,9 +34,14 @@ impl GuiCanvasState {
         self.entries.retain(|_, entry| !matches!(entry.as_ref(), CanvasPaintEntry::Primitive { primitive, .. } if primitive.resource() == Some(key)));
     }
 
-    pub fn primitive(&mut self, primitive: CanvasPrimitive) -> Arc<CanvasPaintEntry> {
+    pub fn primitive(
+        &mut self,
+        primitive: CanvasPrimitive,
+        space: Option<Arc<crate::systems::canvas::CanvasSpace>>,
+    ) -> Arc<CanvasPaintEntry> {
         let key = primitive.style().identity;
         if let Some(previous) = self.entries.get(&key)
+            && previous.space() == space.as_ref()
             && matches!(previous.as_ref(), CanvasPaintEntry::Primitive { primitive: old, .. } if old == &primitive)
         {
             return previous.clone();
@@ -58,6 +63,7 @@ impl GuiCanvasState {
             })
             .unwrap_or(self.revision);
         let entry = Arc::new(CanvasPaintEntry::Primitive {
+            space,
             geometry_revision,
             material_revision: self.revision,
             primitive,

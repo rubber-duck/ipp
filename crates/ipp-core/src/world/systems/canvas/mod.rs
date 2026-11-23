@@ -62,8 +62,10 @@ mod system;
 mod system_state;
 #[cfg(test)]
 pub(crate) mod test_support;
+mod transform;
 pub(in crate::world::systems) mod update;
 pub(in crate::world::systems) mod walk;
+pub use transform::{CanvasAffine, CanvasSpace};
 mod web_content;
 
 pub use component::CanvasBounds;

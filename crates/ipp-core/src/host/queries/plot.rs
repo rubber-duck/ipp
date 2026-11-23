@@ -64,11 +64,16 @@ impl HostRuntime {
             let CanvasPaintEntry::Attachment(slot) = canvas.entries[index].as_ref() else {
                 continue;
             };
-            if slot.opacity <= 0.0
-                || point[0] < slot.clip[0]
-                || point[1] < slot.clip[1]
-                || point[0] >= slot.clip[2]
-                || point[1] >= slot.clip[3]
+            let drawing = slot
+                .space
+                .as_ref()
+                .map_or(point, |s| s.inverse.point(point));
+            if slot.space.as_ref().is_some_and(|s| !s.contains(drawing))
+                || slot.opacity <= 0.0
+                || drawing[0] < slot.clip[0]
+                || drawing[1] < slot.clip[1]
+                || drawing[0] >= slot.clip[2]
+                || drawing[1] >= slot.clip[3]
             {
                 continue;
             }

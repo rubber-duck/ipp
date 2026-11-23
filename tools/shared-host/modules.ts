@@ -20,6 +20,7 @@ import * as IppReactCanvas from "@ipp/react/canvas";
 import * as IppReactGui from "@ipp/react/gui";
 import * as IppReactGuiKit from "@ipp/react/gui-kit";
 import * as IppReactGuiCybertron from "@ipp/react/gui-cybertron";
+import * as IppReactGuiCartoon from "@ipp/react/gui-cartoon";
 import * as IppReactGuiGlass from "@ipp/react/gui-glass";
 import type { LoadedModule } from "./client.js";
 
@@ -32,6 +33,7 @@ const modules: Record<string, unknown> = {
   "@ipp/react/canvas": IppReactCanvas,
   "@ipp/react/gui": IppReactGui,
   "@ipp/react/gui-kit": IppReactGuiKit,
+  "@ipp/react/gui-cartoon": IppReactGuiCartoon,
   "@ipp/react/gui-glass": IppReactGuiGlass,
   "@ipp/react/gui-cybertron": IppReactGuiCybertron,
 };
@@ -48,7 +50,7 @@ const shared: Plugin = {
     build.onResolve(
       {
         filter:
-          /^(react|react\/jsx-runtime|@ipp\/client|@ipp\/react(\/(canvas|gui(-(kit|glass|cybertron))?))?|@ipp\/host-contract)$/,
+          /^(react|react\/jsx-runtime|@ipp\/client|@ipp\/react(\/(canvas|gui(-(kit|glass|cybertron|cartoon))?))?|@ipp\/host-contract)$/,
       },
       (args) => ({ path: args.path, namespace: "shared-host-modules" }),
     );

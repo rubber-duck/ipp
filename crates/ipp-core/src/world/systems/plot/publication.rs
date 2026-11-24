@@ -286,7 +286,7 @@ pub struct PlotPlane {
     pub primitives: Vec<PlotPrimitive>,
 }
 
-/// Independent analytic hit geometry; no CPU triangle picking is introduced.
+/// Independent analytic hit geometry for an individual data mark.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlotHit {
     /// Reported data mark identity.
@@ -364,6 +364,13 @@ pub enum PlotHitShape {
     },
 }
 
+/// Compact source topology for depth-aware height-surface picking.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct PlotHeightPicking {
+    pub(super) sites: Vec<([f32; 3], PlotRowIdentity)>,
+    pub(super) faces: Vec<[usize; 3]>,
+}
+
 /// Complete local result. A successful result replaces all retained geometry atomically;
 /// errors suppress stale output and never acknowledge the binding dirty flag.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -376,6 +383,8 @@ pub struct PlotPreparedGeometry {
     pub planes: Vec<PlotPlane>,
     /// Independent compact row-picking shapes.
     pub hits: Vec<PlotHit>,
+    /// Height samples and the connected faces shared with the displayed sheet.
+    pub height_surface: PlotHeightPicking,
     /// Conservative chart-local 3D enclosure when scene geometry is present.
     pub bounds: Option<[[f32; 3]; 2]>,
 }

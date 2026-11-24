@@ -26,6 +26,40 @@ face = mix(face, face * .72, foot);
 return vec4(mix(mix(face, p_ink.rgb, .46), face, rim), color.a);
 `;
 
+// Each box is one native block. Size the rails from its width so a fitted cap
+// keeps the same joinery as the full crates beneath it.
+const crate = `
+${pigment("color.rgb")}
+vec2 p = position / max(size.x, .001);
+float h = size.y / max(size.x, .001);
+vec2 aa = max(fwidth(p) * .5, vec2(.0001));
+float rail = 1. / 6.;
+vec2 inset = min(p, vec2(1., h) - p);
+float fullPanel = smoothstep(2. * rail + .01, 2. * rail + .09, h);
+vec2 panelMask = smoothstep(vec2(rail) - aa, vec2(rail) + aa, inset);
+float panel = panelMask.x * panelMask.y * fullPanel;
+
+// Three upright boards sit behind the two posts. A shallow lip catches the
+// light on the upper edge of each rail and casts a shadow onto the boards.
+float first = .36 + .018 * (p.y / max(h,.001) - .5);
+float second = .66 - .012 * (p.y / max(h,.001) - .5);
+float joint = min(abs(p.x-first), abs(p.x-second));
+float groove = 1. - smoothstep(.009-aa.x, .009+aa.x, joint);
+float tone = .77 + .07 * smoothstep(first-aa.x,first+aa.x,p.x)
+                 - .10 * smoothstep(second-aa.x,second+aa.x,p.x);
+float recess = smoothstep(rail, rail+.06, min(p.x, p.y));
+vec3 boards = face * tone * mix(.79,1.,recess) * mix(1.,.63,groove);
+vec3 timber = mix(face, boards, panel);
+float top = 1. - smoothstep(.033-aa.y, .033+aa.y, p.y);
+float sill = 1. - smoothstep(.018-aa.y, .018+aa.y, abs(p.y - (h-rail)));
+timber = mix(timber, mix(face, p_cream.rgb, .20), max(top, sill*fullPanel));
+float foot = 1. - smoothstep(.038-aa.y, .038+aa.y, h-p.y);
+float side = 1. - smoothstep(.024-aa.x, .024+aa.x, 1.-p.x);
+timber = mix(timber, mix(face,p_ink.rgb,.40), max(foot,side*.7));
+float readable = smoothstep(4., 10., 1. / max(2.*aa.x,.0001));
+return vec4(mix(face,timber,readable), color.a);
+`;
+
 const card = `
 vec2 halfSize = size * .5;
 float radius = min(7.0, min(halfSize.x, halfSize.y) * .38);
@@ -96,6 +130,13 @@ export function cartoonChartAssets(scope: string) {
         <PaintShader>{mark}</PaintShader>
       </ShaderAsset>
       <ShaderAsset
+        id={`${scope}/chart-crate`}
+        recipe={{}}
+        parameters={{ cream: "vec4", ink: "vec4" }}
+      >
+        <PaintShader>{crate}</PaintShader>
+      </ShaderAsset>
+      <ShaderAsset
         id={`${scope}/chart-card`}
         recipe={{}}
         parameters={{ ink: "vec4", body: "vec4" }}
@@ -137,8 +178,12 @@ export function cartoonPlots(scope: string): PlotSkinAppearance {
   };
   return {
     paint,
+    chartPaints: {
+      PlotBars2d: { source: assetRef(`${scope}/chart-crate`), cream, ink },
+    },
     axisPaint: { source: assetRef(`${scope}/pencil-axis`), pressure: 0.7 },
     marks: {
+      PlotBars2d: { stacked_blocks: true, block_offset: 0.048 },
       PlotGridBars3d: { stacked_blocks: true, block_yaw: (9 * Math.PI) / 180 },
       PlotLine2d: { line_width: 4.5, marker_size: 9 },
       PlotHeightSurface3d: { wireframe: false },

@@ -75,3 +75,56 @@ fn canonical_label_identity_retains_all_u64_bits() {
         );
     }
 }
+
+#[test]
+fn height_hover_resolves_the_front_face_and_rejects_a_hidden_corner() {
+    use crate::services::data::DataRowId;
+
+    // The eye looks down -Z. The rear sheet has a sample exactly under the cursor.
+    // A second, small foreground face covers the right corner of the middle sheet
+    // without touching the cursor itself.
+    let points = [
+        [0., 0., -6.],
+        [1., 0., -6.],
+        [0., 1., -6.],
+        [0.12, 0., -4.],
+        [-1., 1., -4.],
+        [-1., -1., -4.],
+        [0.015, -0.07, -2.],
+        [0.18, -0.07, -2.],
+        [0.09, 0.1, -2.],
+    ];
+    let mut sheet = PlotHeightPicking {
+        sites: points
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| {
+                (
+                    p,
+                    PlotRowIdentity {
+                        series: 3,
+                        row_id: DataRowId(u64::MAX - i as u64),
+                    },
+                )
+            })
+            .collect(),
+        faces: vec![[0, 1, 2], [3, 4, 5]],
+    };
+    let ray = GeometryRay {
+        origin: [0.; 3],
+        direction: [0., 0., -2.],
+    };
+    let view = GeometryShapeTransform::default();
+    for parallel in [false, true] {
+        let pick = |sheet: &PlotHeightPicking, near, far| {
+            sheet.pick(&ray, near, far, &view, Some(parallel))
+        };
+        assert_eq!(pick(&sheet, 0., 5.), Some((3, sheet.sites[3].1, 2.)));
+        sheet.faces.push([6, 7, 8]);
+        assert_eq!(pick(&sheet, 0., 5.), Some((5, sheet.sites[5].1, 2.)));
+        // Clipping away the blocker makes the right corner visible again.
+        assert_eq!(pick(&sheet, 1.5, 5.), Some((3, sheet.sites[3].1, 2.)));
+        assert!(pick(&sheet, 0., 1.9).is_none());
+        sheet.faces.pop();
+    }
+}

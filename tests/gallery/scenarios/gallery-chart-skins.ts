@@ -220,6 +220,15 @@ export async function exerciseChartSkins(driver: GalleryChartsDriver) {
         !chart.component.startsWith("PlotPie"),
       `${chart.id}: only Cartesian axes receive the pencil paint`,
     );
+    if (chart.component === "PlotBars2d")
+      chartCheck(
+        entity.components.some(
+          (c) =>
+            c.fields.stacked_blocks === true &&
+            Number(c.fields.block_offset) > 0,
+        ),
+        `${chart.id}: Cartoon offsets the blocks inside each planar bar slot`,
+      );
     if (chart.component === "PlotGridBars3d")
       chartCheck(
         entity.components.some(
@@ -241,6 +250,21 @@ export async function exerciseChartSkins(driver: GalleryChartsDriver) {
     );
   }
   const bars = await driver.capture("skin-cartoon-bars");
+  // The pink stack's ground crate has a raised post and a recessed board at the same height.
+  const barPixel = (x: number) => {
+    const p = baselineBarPointer(cartoon, bars.width / bars.height, x, 12);
+    const index =
+      4 *
+      (Math.round(p.y * bars.height) * bars.width +
+        Math.round(p.x * bars.width));
+    return bars.pixels.subarray(index, index + 3);
+  };
+  const post = barPixel(3.72);
+  const board = barPixel(4);
+  chartCheck(
+    post[0]! > board[0]! + 8 && board[0]! > board[1]! + 40,
+    "The raised rail and recessed boards retain the pink series colour",
+  );
   assertChartImageChanged(
     planar,
     bars,
@@ -363,6 +387,7 @@ export async function exerciseChartSkins(driver: GalleryChartsDriver) {
         (c) =>
           "pressure" in (c.properties ?? {}) ||
           c.fields.stacked_blocks === true ||
+          Number(c.fields.block_offset) > 0 ||
           Number(c.fields.block_yaw) > 0,
       ),
       `${chart.id}: the pencil and stacked blocks clear when leaving Cartoon`,

@@ -501,7 +501,24 @@ fn invalid_grid_height_removes_incident_faces_and_retains_other_cells() {
         }
         assert!(material.uvs.iter().all(|uv| uv[0] >= 6.0 && uv[0] <= 7.0));
     }
-    assert_eq!(output.hits.len(), 15);
+    assert_eq!(output.height_surface.faces.len(), 12);
+    assert!(
+        output
+            .height_surface
+            .sites
+            .iter()
+            .all(|(_, row)| row.row_id != rows[5])
+    );
+    let down = crate::systems::geometry::GeometryRay {
+        origin: [1., 12., 1.],
+        direction: [0., -1., 0.],
+    };
+    assert!(
+        output
+            .height_surface
+            .pick(&down, 0., 20., &Default::default(), None)
+            .is_none()
+    );
     // A cell diagonal can leave its unaffected face; six faces touch this site.
     assert_eq!(
         output
@@ -521,7 +538,7 @@ fn invalid_grid_height_removes_incident_faces_and_retains_other_cells() {
             .decoration_indices
             .is_empty()
     }));
-    assert_eq!(outlined.hits, output.hits);
+    assert_eq!(outlined.height_surface, output.height_surface);
 }
 
 #[test]

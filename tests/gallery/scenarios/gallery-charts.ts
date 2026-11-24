@@ -1414,6 +1414,12 @@ export async function exerciseGalleryCharts(driver: GalleryChartsDriver) {
       "Focusing preserves the child Camera World and session",
     );
     const focused = await driver.capture(`charts-focus-${id}`);
+    if (id === "height-surface")
+      await exerciseHeightHover(
+        driver,
+        current,
+        focused.width / focused.height,
+      );
     const measurement = assertFocusedChartImage(focused, id);
     await driver.record(`charts-focus-${id}-pixels`, measurement);
     await driver.record(
@@ -1863,6 +1869,32 @@ export function projectChartPoint(
     x: 0.5 + view[0]! / (2 * halfHeight * aspect),
     y: 0.5 - view[1]! / (2 * halfHeight),
   };
+}
+
+/** The focused camera sees row 94 on the near hillside directly in front of row 71. */
+export async function exerciseHeightHover(
+  driver: GalleryChartsDriver,
+  state: GalleryChartsState,
+  aspect: number,
+) {
+  const chart = state.charts.find((item) => item.id === "height-surface")!;
+  const pose = chartTransform(state, chart);
+  // Project the actual obscured sample and its visible neighbour independently.
+  for (const local of [
+    [2.5, 1.030036, 1.25],
+    [3.125, 2.931679, 5],
+  ]) {
+    await driver.action(
+      "hover",
+      projectChartPoint(state, placePoint(pose, local), aspect),
+    );
+    await waitForCharts(
+      driver,
+      (s) => s.hover?.chart === chart.id && String(s.hover.rowId) === "94",
+      "The visible hillside owns hover across its face and at its nearest sample",
+    );
+  }
+  await driver.action("hover", null);
 }
 
 /** Grid row six is independently known to be (x1,z1,y85) in fixed 10×5×10 axes. */

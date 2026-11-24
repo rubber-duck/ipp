@@ -37,6 +37,7 @@ export function cartoonSkin(contract: GuiKitContract): GuiSkinDefinition {
       "notice-icon",
       "pencil-axis",
       "chart-mark",
+      "chart-crate",
       "chart-mesh",
       "chart-card",
       "chart-paper",

@@ -71,6 +71,17 @@ impl PlotCanvasHit {
 impl PlotPublication {
     /// Nearest scene mark, preserving the ray parameter through entity transforms.
     pub fn pick(&self, ray: &GeometryRay, near: f64, far: f64) -> Option<PlotRayHit> {
+        self.pick_in_view(ray, near, far, None)
+    }
+
+    /// The completed camera supplies projection and the containing World's view transform.
+    pub(crate) fn pick_in_view(
+        &self,
+        ray: &GeometryRay,
+        near: f64,
+        far: f64,
+        view: Option<(&GeometryShapeTransform, bool)>,
+    ) -> Option<PlotRayHit> {
         if ray
             .origin
             .iter()
@@ -90,14 +101,44 @@ impl PlotPublication {
                 continue;
             };
             let local = transform.inverse_ray(ray);
-            for (part, mark) in chart.geometry.hits.iter().enumerate() {
-                let limit = nearest.map_or(far, |hit| hit.hit.distance);
-                let Some(distance) = mark.shape.ray_intersection(&local, near, limit) else {
-                    continue;
+            let limit = nearest.map_or(far, |hit| hit.hit.distance);
+            let surface = &chart.geometry.height_surface;
+            let surface_hit = if surface.faces.is_empty() {
+                None
+            } else {
+                let chart_to_view = match view {
+                    Some((world_to_view, _)) => {
+                        let Ok(placement) = transform.then(world_to_view) else {
+                            continue;
+                        };
+                        placement
+                    }
+                    None => transform,
                 };
+                surface.pick(
+                    &local,
+                    near,
+                    far,
+                    &chart_to_view,
+                    view.map(|(_, parallel)| parallel),
+                )
+            };
+            let marks = chart
+                .geometry
+                .hits
+                .iter()
+                .enumerate()
+                .filter_map(|(part, mark)| {
+                    Some((
+                        part,
+                        mark.row,
+                        mark.shape.ray_intersection(&local, near, limit)?,
+                    ))
+                });
+            for (part, row, distance) in marks.chain(surface_hit) {
                 let candidate = PlotRayHit {
                     target: chart.target,
-                    row: mark.row,
+                    row,
                     hit: GeometryRayHit {
                         distance,
                         part: part as u32,

@@ -138,13 +138,6 @@ fn ranges(frame: &PlotFrame3d, samples: &[Vec<Sample>], baseline: bool) -> ([f64
     (min, max)
 }
 
-/// A stable starting phase for each stack, independent of row order and value.
-fn stack_phase(row: PlotRowIdentity) -> u64 {
-    let key = row.row_id.0 ^ (u64::from(row.series) << 32);
-    let mixed = (key ^ (key >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    (mixed ^ (mixed >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb)
-}
-
 /// Prepare grid-positioned bars, including a single depth row.
 pub fn prepare_bars(
     chart: &PlotGridBars3d,
@@ -186,24 +179,17 @@ pub fn prepare_bars(
         // Keep a sub-plank remainder on the outermost cube. All blocks nearer
         // the baseline stay cubic, including columns that grow down from zero.
         let count = if chart.stacked_blocks {
-            let units = f64::from(height) / f64::from(edge);
-            let count = units.floor()
-                + if units.fract() >= 1.0 / 6.0 {
-                    1.0
-                } else {
-                    0.0
-                };
+            let count = block_stack::fitted_count(f64::from(height), f64::from(edge));
             // A pathological aspect ratio must not trigger unbounded tessellation.
             if count > 1024.0 {
                 return Err(ErrorReason::Capacity);
             }
-            (count as u32).max(1)
+            count as u32
         } else {
             1
         };
         let direction = (point[1] - baseline).signum();
         let mut near = baseline;
-        let mut phase = stack_phase(sample.row);
         for layer in 1..=count {
             let far = if layer == count {
                 point[1]
@@ -229,11 +215,8 @@ pub fn prepare_bars(
                 frame.bar_bevel * edge.min(thickness)
             };
             let shape = if bevel > 0.0 || chart.stacked_blocks {
-                // A golden-ratio step keeps adjacent blocks visibly distinct without
-                // accumulating twist as the column grows.
-                phase = phase.wrapping_add(0x9e37_79b9_7f4a_7c15);
                 let yaw = if chart.stacked_blocks {
-                    chart.block_yaw * ((phase >> 48) as f32 / 32768.0 - 1.0)
+                    chart.block_yaw * block_stack::variation(sample.row, u64::from(layer - 1))
                 } else {
                     0.0
                 };
@@ -308,13 +291,23 @@ pub fn prepare_surface(
             .collect();
         let normals = surface_normals(&points, &triangles);
         let mut edges = BTreeSet::new();
+        let mut pick_sites = vec![None; points.len()];
         for [a, b, c] in triangles {
             // Positive X/Z orientation faces downward in the right-handed 3D frame.
             // A height surface has one continuous chart-plane paint domain.
             // Triangle boundaries are decoration only when wireframe is authored.
             meshes.highlighted = [a, b, c].iter().any(|&i| labels.highlighted(series[i].row));
+            let face = [a, c, b];
+            let pick = &mut output.height_surface;
+            pick.faces.push(face.map(|i| {
+                *pick_sites[i].get_or_insert_with(|| {
+                    let index = pick.sites.len();
+                    pick.sites.push((points[i], series[i].row));
+                    index
+                })
+            }));
             meshes.triangle_normals(
-                [points[a], points[c], points[b]],
+                face.map(|i| points[i]),
                 [series[a].color, series[c].color, series[b].color],
                 true,
                 [points[a], points[c], points[b]]
@@ -340,13 +333,6 @@ pub fn prepare_surface(
             .zip(&points)
             .filter(|(sample, _)| sample.valid)
         {
-            output.hits.push(PlotHit {
-                row: sample.row,
-                shape: PlotHitShape::Sphere {
-                    center: point,
-                    radius: frame.font_size * 0.4,
-                },
-            });
             annotate(
                 &mut output,
                 &mut meshes,

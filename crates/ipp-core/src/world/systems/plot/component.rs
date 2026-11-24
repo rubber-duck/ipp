@@ -453,6 +453,10 @@ chart_component!(PlotLine2d, PLOT_FRAME2D, CANVAS_BOUNDS, {
 chart_component!(PlotBars2d, PLOT_FRAME2D, CANVAS_BOUNDS, {
     /// Fraction of each category cell left empty, in [0,1).
     gap: f32 = 0.2,
+    /// Fit square blocks from zero to the value; the last block takes the remainder.
+    stacked_blocks: bool = false,
+    /// Maximum horizontal shift as a fraction of one block width.
+    block_offset: f32 = 0.0,
 });
 
 chart_component!(PlotPie2d, PLOT_FRAME2D, CANVAS_BOUNDS, {
@@ -515,7 +519,8 @@ impl PlotLine2d {
 
 impl PlotBars2d {
     fn validate_chart(&self) -> Result<(), ErrorReason> {
-        fraction(self.gap)
+        fraction(self.gap)?;
+        fraction(self.block_offset)
     }
 }
 

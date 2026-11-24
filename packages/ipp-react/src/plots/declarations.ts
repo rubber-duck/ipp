@@ -178,6 +178,7 @@ export function plotLabelRows(table: RowsInput<PlotLabel>) {
 // Omitted fields on a retained component keep their value. Reassert native mark
 // defaults when switching to a skin that doesn't customize these shapes.
 const nativeMarks: NonNullable<PlotSkinAppearance["marks"]> = {
+  PlotBars2d: { stacked_blocks: false, block_offset: 0 },
   PlotGridBars3d: { stacked_blocks: false, block_yaw: 0 },
   PlotLine2d: { line_width: 2, marker_size: 6 },
   PlotHeightSurface3d: { wireframe: true },

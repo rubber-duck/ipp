@@ -92,6 +92,15 @@ impl HostRuntime {
         far: f64,
     ) -> Result<Option<PublishedSceneHit>, ErrorReason> {
         let contributions = self.spatial_contributions_for_output(publication, selection)?;
+        let camera = self
+            .output(publication, selection)
+            .and_then(|output| output.data::<crate::systems::camera::CameraPublication>());
+        let world_to_view = camera.map(|camera| {
+            GeometryShapeTransform::from_inverse_pair(
+                camera.pose.inverse_matrix(),
+                camera.pose.matrix(),
+            )
+        });
         let mut nearest: Option<PublishedSceneHit> = None;
         for contribution in contributions {
             let local = contribution.placement.inverse_ray(ray);
@@ -123,7 +132,19 @@ impl HostRuntime {
                 .publication
                 .chunk(crate::systems::plot::PlotSystem::ID)
                 .and_then(|chunk| chunk.data::<crate::systems::plot::PlotPublication>())
-                && let Some(pick) = plot.pick(&local, near, far)
+                && let Some(pick) = {
+                    let view = world_to_view
+                        .as_ref()
+                        .map(|view| contribution.placement.then(view))
+                        .transpose()?;
+                    plot.pick_in_view(
+                        &local,
+                        near,
+                        far,
+                        view.as_ref()
+                            .zip(camera.map(|c| c.projection.projection != 0)),
+                    )
+                }
             {
                 candidates.push(PublishedSceneHit {
                     publication: contribution.publication.id,

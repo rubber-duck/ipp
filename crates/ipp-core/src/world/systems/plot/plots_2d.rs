@@ -188,6 +188,33 @@ pub fn prepare_bars(
             if rect[0] >= rect[2] || rect[1] >= rect[3] {
                 continue;
             }
+            if chart.stacked_blocks {
+                let mut color = sample.color;
+                if highlighted.contains(&row_key(sample.row)) {
+                    let tint = frame.highlight_color();
+                    for (channel, target) in color[..3].iter_mut().zip(tint) {
+                        *channel += (target - *channel) * tint[3];
+                    }
+                }
+                if let Some(point) = stacked_bar(
+                    &mut geometry,
+                    sample.row,
+                    color,
+                    a,
+                    b,
+                    rect,
+                    chart.block_offset,
+                ) {
+                    anchors.insert(
+                        row_key(sample.row),
+                        Anchor {
+                            point,
+                            radius: 4.0,
+                        },
+                    );
+                }
+                continue;
+            }
             let corners = bar_corners(rect, a[1], sample.row, frame);
             let shape = if frame.bar_lean == 0.0 {
                 push_data_box(
@@ -239,6 +266,87 @@ pub fn prepare_bars(
     }
     labels(&mut geometry, frame, &chart.labels, &anchors, callout)?;
     Ok(geometry)
+}
+
+/// Clip individual blocks to the plot, retaining the phase and pitch of the stack at zero.
+fn stacked_bar(
+    geometry: &mut PlotPreparedGeometry,
+    row: PlotRowIdentity,
+    color: [f32; 4],
+    base: [f32; 2],
+    value: [f32; 2],
+    clip: [f32; 4],
+    offset: f32,
+) -> Option<[f32; 2]> {
+    // Reserve the offset within the category slot, including when neighbouring bins touch.
+    let edge = (f64::from(value[0]) - f64::from(base[0])) / (1.0 + 2.0 * f64::from(offset));
+    let baseline = f64::from(base[1]);
+    let height = (f64::from(value[1]) - baseline).abs();
+    let down = value[1] > base[1];
+    let (near, far) = if down {
+        (clip[1], clip[3])
+    } else {
+        (clip[3], clip[1])
+    };
+    let count = block_stack::fitted_count(height, edge);
+    let distance_in_blocks = |y: f32| (f64::from(y) - baseline).abs() / edge;
+    let first = distance_in_blocks(near).floor().min(count - 1.0);
+    let end = distance_in_blocks(far).ceil().min(count);
+
+    // At extreme aspect ratios an unresolved stack reads as one continuous mark.
+    // Bound the work even for fixed frames looking at a tiny part of an enormous value.
+    if !(1.0..=1024.0).contains(&(end - first)) || first >= (1_u64 << 52) as f64 {
+        push_block(geometry, row, color, clip);
+        return Some([clip[0].midpoint(clip[2]), far]);
+    }
+
+    let mut anchor = None;
+    let pitch = edge.copysign(f64::from(value[1]) - baseline);
+    for layer in first as u64..end as u64 {
+        let side = if layer == 0 {
+            0.0
+        } else {
+            block_stack::variation(row, layer)
+        };
+        let left = f64::from(base[0]) + edge * f64::from(offset) * (1.0 + f64::from(side));
+        let y0 = (baseline + pitch * layer as f64) as f32;
+        let y1 = if (layer + 1) as f64 == count {
+            value[1]
+        } else {
+            (baseline + pitch * (layer + 1) as f64) as f32
+        };
+        let bounds = [
+            (left as f32).max(clip[0]),
+            y0.min(y1).max(clip[1]),
+            ((left + edge) as f32).min(clip[2]),
+            y0.max(y1).min(clip[3]),
+        ];
+        if bounds[0] < bounds[2] && bounds[1] < bounds[3] {
+            push_block(geometry, row, color, bounds);
+            anchor = Some([
+                bounds[0].midpoint(bounds[2]),
+                if down {
+                    bounds[3]
+                } else {
+                    bounds[1]
+                },
+            ]);
+        }
+    }
+    anchor
+}
+
+fn push_block(
+    geometry: &mut PlotPreparedGeometry,
+    row: PlotRowIdentity,
+    color: [f32; 4],
+    [left, top, right, bottom]: [f32; 4],
+) {
+    push_data_box(geometry, [left, top], [right - left, bottom - top], color);
+    geometry.hits.push(PlotHit {
+        row,
+        shape: PlotHitShape::Rect([left, top, right, bottom]),
+    });
 }
 
 /// Clockwise in Canvas coordinates. Only the true zero end straddles the baseline;

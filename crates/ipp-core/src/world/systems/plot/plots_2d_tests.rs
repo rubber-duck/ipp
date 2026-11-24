@@ -188,6 +188,124 @@ fn automatic_bar_range_includes_zero_and_keeps_negative_direction() {
 }
 
 #[test]
+fn crate_layers_fit_both_signs_and_pick_only_the_visible_wood() {
+    let ids = [DataRowId(11), DataRowId(27)];
+    let x = values(&[1.0, 3.0]);
+    let mut chart = PlotBars2d {
+        stacked_blocks: true,
+        block_offset: 0.125,
+        gap: 0.375,
+        ..Default::default()
+    };
+    chart.series.push(PlotSeriesRow::default()).unwrap();
+    let frame = PlotFrame2d {
+        width: 400.,
+        height: 100.,
+        padding_left: 0.,
+        padding_right: 0.,
+        padding_top: 0.,
+        padding_bottom: 0.,
+        min_x: 0.,
+        max_x: 20.,
+        min_y: -50.,
+        max_y: 50.,
+        ..fixed_frame()
+    };
+    // The 25-unit slot holds a 20-unit square and 2.5 units of offset per side.
+    for (value, heights) in [
+        (47., vec![20., 20., 7.]),
+        (42., vec![20., 22.]),
+        (3., vec![3.]),
+    ] {
+        let y = values(&[value, -value]);
+        let g = prepare_bars(&chart, &frame, &input(&ids, &x, &y), None).unwrap();
+        assert_eq!(g.hits.len(), 2 * heights.len());
+        let marks: Vec<_> = g.canvas.iter().filter(|item| item.data_mark).collect();
+        assert_eq!(marks.len(), g.hits.len());
+        for (row, &id) in ids.iter().enumerate() {
+            let mid = [20., 60.][row];
+            let mut near = 50.;
+            for (layer, &height) in heights.iter().enumerate() {
+                let index = row * heights.len() + layer;
+                let hit = &g.hits[index];
+                assert_eq!(
+                    hit.row,
+                    PlotRowIdentity {
+                        row_id: id,
+                        series: 0
+                    }
+                );
+                let PlotHitShape::Rect([l, t, r, b]) = hit.shape else {
+                    panic!("crate hit")
+                };
+                assert!((r - l - 20.).abs() < 1e-5);
+                assert_eq!(b - t, height);
+                assert_eq!(marks[index].position, [l, t]);
+                assert!(
+                    matches!(marks[index].kind, PlotPrimitiveKind::Box { size, .. } if size == [r-l,b-t])
+                );
+                let center = (l + r) * 0.5;
+                if layer == 0 {
+                    assert_eq!(center, mid);
+                } else {
+                    assert!(center != mid && (center - mid).abs() <= 2.5);
+                }
+                assert!(hit.shape.contains_canvas_point([center, (t + b) * 0.5]));
+                assert!(!hit.shape.contains_canvas_point([l - 0.1, (t + b) * 0.5]));
+                let (base, end) = if row == 0 {
+                    (b, t)
+                } else {
+                    (t, b)
+                };
+                assert_eq!(base, near);
+                near = end;
+            }
+            assert_eq!(
+                near,
+                if row == 0 {
+                    50. - value
+                } else {
+                    50. + value
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn clipped_crate_stacks_keep_their_original_layer_boundaries_and_offsets() {
+    let row = PlotRowIdentity {
+        row_id: DataRowId(1),
+        series: 0,
+    };
+    let mut full = PlotPreparedGeometry::default();
+    let mut clipped = PlotPreparedGeometry::default();
+    let draw = |g: &mut PlotPreparedGeometry, clip| {
+        stacked_bar(g, row, [1.; 4], [0., 100.], [24., 10.], clip, 0.1)
+    };
+    draw(&mut full, [0., 10., 24., 100.]);
+    draw(&mut clipped, [0., 27., 24., 69.]);
+    let expected: Vec<_> = full
+        .hits
+        .iter()
+        .filter_map(|hit| {
+            let PlotHitShape::Rect([l, t, r, b]) = hit.shape else {
+                panic!("crate hit")
+            };
+            (t < 69. && b > 27.).then_some(PlotHitShape::Rect([l, t.max(27.), r, b.min(69.)]))
+        })
+        .collect();
+    assert_eq!(
+        expected,
+        clipped
+            .hits
+            .iter()
+            .map(|hit| hit.shape.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn leaning_bars_keep_value_edges_and_pick_their_silhouette() {
     let ids = [DataRowId(14), DataRowId(27)];
     let x = values(&[1.0, 2.0]);

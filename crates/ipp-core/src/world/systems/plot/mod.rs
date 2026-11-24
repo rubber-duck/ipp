@@ -1,9 +1,11 @@
 //! Plot consumes completed entity-local bindings and publishes compact retained geometry.
 //! Authored components remain the sole values; System state contains derived geometry only.
 
+mod block_stack;
 mod callout;
 mod component;
 mod frame_mapping;
+mod height_picking;
 mod line_fills;
 pub(in crate::world::systems) mod paint;
 mod picking;

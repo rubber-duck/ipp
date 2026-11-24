@@ -123,6 +123,8 @@ export const plotComponentContract = {
       series: "bytes",
       labels: "bytes",
       gap: "number",
+      stacked_blocks: "boolean",
+      block_offset: "number",
     },
   },
   PlotPie2d: {

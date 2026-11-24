@@ -131,7 +131,12 @@ export function createGuiUnhandledInputGate(): GuiUnhandledInputGate {
     });
   const gate: GuiUnhandledInputGate = {
     pointerDown(pointer, button, signal) {
-      return wait({ kind: "pointerDown", pointer, button, signal });
+      return wait({
+        kind: "pointerDown",
+        pointer: pointer >>> 0,
+        button,
+        signal,
+      });
     },
     scroll(signal) {
       return wait({ kind: "scroll", signal });

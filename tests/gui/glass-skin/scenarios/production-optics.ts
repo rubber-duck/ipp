@@ -108,6 +108,29 @@ export async function exerciseProductionOptics(
     });
   };
   try {
+    // Radio captions start at zero width until their font measurements cross
+    // the client connection. Two matching frames can still show that layout.
+    const deadline = Date.now() + 15000;
+    const layout = session.canvasClient.components.GuiLayout!.id;
+    for (;;) {
+      const { entities } = await session.canvasClient.inspect();
+      const ready = ["clear", "frosted"].every((value) => {
+        const label = entities.find(
+          (e) => e.metadata.symbolicId === `production-radio/${value}/label`,
+        );
+        return (
+          Number(
+            label?.components.find((c) => c.component === layout)?.fields.width,
+          ) > 0
+        );
+      });
+      if (ready) break;
+      check(
+        Date.now() < deadline,
+        "Radio captions receive their measured widths",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     const front = await captureOpticalComponents(session, present);
     await save("production-glass", front);
     const green = (x: number, y: number) =>

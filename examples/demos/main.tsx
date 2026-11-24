@@ -168,21 +168,38 @@ function BrowserDemos() {
         awaitPointerDown: true,
         onInputOutcome: (input, outcome) => {
           const pending = application?.handlePhysicalInput(input, outcome);
-          const element =
-            document.querySelector<HTMLCanvasElement>("#ipp-demo-canvas");
-          if (
-            input.kind === "pointerDown" &&
-            application?.capturingSceneInput
-          ) {
-            element?.setPointerCapture(Number(input.pointer));
-            scenePointers.add(Number(input.pointer));
-          }
-          if (
-            (input.kind === "pointerUp" || input.kind === "pointerCancel") &&
-            element?.hasPointerCapture(Number(input.pointer))
-          ) {
-            element.releasePointerCapture(Number(input.pointer));
-            scenePointers.delete(Number(input.pointer));
+          if ("pointer" in input) {
+            const element =
+              document.querySelector<HTMLCanvasElement>("#ipp-demo-canvas");
+            const pointer = Number(BigInt.asIntN(32, input.pointer));
+            if (
+              input.kind === "pointerDown" &&
+              outcome.disposition !== "routed" &&
+              application?.capturingSceneInput &&
+              element
+            ) {
+              // Routed presses already have GUI capture. On a scene handoff,
+              // a touch may have ended while the Host was deciding the press.
+              try {
+                element.setPointerCapture(pointer);
+                scenePointers.add(pointer);
+              } catch (error) {
+                if (
+                  !(
+                    error instanceof DOMException &&
+                    error.name === "NotFoundError"
+                  )
+                )
+                  throw error;
+              }
+            }
+            if (
+              (input.kind === "pointerUp" || input.kind === "pointerCancel") &&
+              scenePointers.delete(pointer) &&
+              element?.hasPointerCapture(pointer)
+            ) {
+              element.releasePointerCapture(pointer);
+            }
           }
           return pending?.catch((error) => setFailure(String(error)));
         },

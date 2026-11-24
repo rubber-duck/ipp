@@ -794,6 +794,19 @@ async function exerciseRetainedControls(
 
   // Sparse and filled controls under identical camera, viewport and DPR.
   const empty = await panel("empty", "gui-empty");
+  await call("guiPanel", [
+    { variant: "sparse", shape: { ...GUI_SHAPE, borderWidth: 0 }, angle: 0 },
+  ]);
+  const { frame: clear } = await settle("gui-transparent-borderless");
+  assert.equal(clear.triangles, empty.frame.triangles);
+  assert.equal(clear.drawCalls, empty.frame.drawCalls);
+  assert.equal(
+    compareFrames(empty.pixels, driver.pixels("gui-transparent-borderless"), 0)
+      .changedPixels,
+    0,
+    "a transparent control with a zero-width border must leave the backing visible",
+  );
+
   const filled = await panel("filled", "gui-filled");
   const sparse = await panel("sparse", "gui-sparse");
   for (const frame of [filled.frame, sparse.frame])

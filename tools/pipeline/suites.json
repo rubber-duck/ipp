@@ -4778,6 +4778,7 @@
       "tests/gallery/platformer.browser.test.ts",
       "tests/gallery/cockpit-lights.browser.test.ts",
       "tests/gallery/cockpit-camera.browser.test.ts",
+      "tests/gallery/render-scale.browser.test.ts",
       "tests/gallery/scenarios/cockpit-lights.ts",
       "tests/gallery/scenarios/platformer-startup.ts",
       "tests/gallery/scenarios/platformer-controls.ts",
@@ -4798,6 +4799,18 @@
       {
         "name": "cartoon-controls",
         "command": ["@node", "--test", "dist/tests/gallery/cartoon-controls.browser.test.js"],
+        "builds": ["typescript", "gallery-fixtures", "browser:render", "gallery", "font-assets"],
+        "requirements": ["node", "npm", "browser", "wasm"]
+      },
+      {
+        "name": "cockpit-drags",
+        "command": ["@node", "--test", "dist/tests/gallery/cockpit-camera.browser.test.js"],
+        "builds": ["typescript", "gallery-fixtures", "browser:render", "gallery", "font-assets"],
+        "requirements": ["node", "npm", "browser", "wasm"]
+      },
+      {
+        "name": "cockpit-input",
+        "command": ["@node", "--test", "dist/tests/gallery/render-scale.browser.test.js"],
         "builds": ["typescript", "gallery-fixtures", "browser:render", "gallery", "font-assets"],
         "requirements": ["node", "npm", "browser", "wasm"]
       },

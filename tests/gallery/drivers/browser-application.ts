@@ -33,9 +33,9 @@ export async function openApplication(
   await page.goto(
     `${environment.urls.origin}${options.entryPath ?? "/examples/demos/index.html"}`,
   );
-  await page.waitForFunction(
-    () => !!window.ippDemoApplication && !!window.ippDemoCanvas,
-  );
+  // settle() awaits the application's startup promise, including any failure,
+  // before it reads the scene canvas or requests a completed frame.
+  await page.waitForFunction(() => !!window.ippDemoApplication);
   const call = <T>(name: string, ...args: unknown[]) =>
     invoke<T>(page, helper, name, args);
   const settle = () => call("settle");

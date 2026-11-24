@@ -383,7 +383,7 @@ export function installCameraControls(
     if (gesture.ownsCapture) canvas.setPointerCapture(event.pointerId);
     if (controls.admitPointer) {
       void controls
-        .admitPointer(event.pointerId >>> 0, event.button, gesture.abort.signal)
+        .admitPointer(event.pointerId, event.button, gesture.abort.signal)
         .then((admitted) => {
           if (!gestureIsCurrent(gesture) || !admitted) {
             cancelGesture(gesture);

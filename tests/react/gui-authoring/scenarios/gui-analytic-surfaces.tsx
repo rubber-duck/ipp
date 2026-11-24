@@ -119,13 +119,21 @@ export async function guiAnalyticSurfaces(
     reference: boolean,
     depth = false,
     low = false,
-    view = { z: 2.5, near: 0.05, projection: 0 },
+    view: { z: number; near: number; projection: number; roll?: number } = {
+      z: 2.5,
+      near: 0.05,
+      projection: 0,
+    },
   ) => {
     const placement = pose.placement ?? { yaw: 0, scale: [1, 1, 1] };
     return (
       <>
         <Entity id="analytic-camera">
-          <Transform z={view.z} />
+          <Transform
+            z={view.z}
+            qz={Math.sin((view.roll ?? 0) / 2)}
+            qw={Math.cos((view.roll ?? 0) / 2)}
+          />
           <Camera
             projection={view.projection}
             ortho_height={2}
@@ -406,6 +414,16 @@ export async function guiAnalyticSurfaces(
     );
     const variants = [
       {
+        label: "rolled-cylinder",
+        pose: {
+          shape: "cylinder",
+          curvature: -0.9,
+          spacing: 0,
+          placement: { yaw: 0.75, scale: [1.1, 0.9, 1] },
+        } as Pose,
+        view: { z: 2.5, near: 0.05, projection: 0, roll: 1.25 },
+      },
+      {
         label: "inside-cylinder",
         pose: { shape: "cylinder", curvature: -0.8, spacing: 0 } as Pose,
         view: { z: 1.25, near: 0.05, projection: 0 },
@@ -469,6 +487,22 @@ export async function guiAnalyticSurfaces(
     for (const variant of variants) {
       await root.render(scene(variant.pose, false, false, false, variant.view));
       const direct = await capture(`analytic-${variant.label}`);
+      if (variant.view?.roll) {
+        // Probe both ends and the midpoint of the curved top and bottom edges.
+        const c = Math.cos(variant.view.roll);
+        const s = Math.sin(variant.view.roll);
+        for (const u of [8, 80, 152]) {
+          for (const v of [8, 112]) {
+            const [x, y, z] = projectedSurfacePoint(variant.pose, [u, v]);
+            const p = pixelFor([c * x + s * y, c * y - s * x, z]);
+            const [red, green] = pixel(direct, p);
+            check(
+              green! > 150 && green! > red! + 60,
+              `Rolled cylinder lost coverage at chart point ${u}, ${v}`,
+            );
+          }
+        }
+      }
       if (variant.label.startsWith("inside-"))
         check(
           direct.drawCalls < twoBranchDrawCalls * 0.75,

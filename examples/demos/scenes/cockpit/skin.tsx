@@ -39,6 +39,9 @@ export function CockpitSkin({
 }
 
 export function cockpitSkins(contract: GuiKitContract, panelOpacity: number) {
+  // The 24-unit slider thumb and scroll grip share a touch target across skins.
+  const targets = { sliderDepth: 32, scrollBarThickness: 24 };
+
   function panelSkin(skin: ReturnType<typeof cybertronSkin>) {
     const themes = { ...skin.themes };
     for (const role of ["container", "containerUnlit"] as const) {
@@ -54,25 +57,26 @@ export function cockpitSkins(contract: GuiKitContract, panelOpacity: number) {
         }),
       };
     }
-    return { ...skin, themes };
+    return { ...skin, themes, tokens: { ...skin.tokens, ...targets } };
   }
+  const glass = glassSkin(contract, {
+    appearance: "liquid",
+    sceneLighting: false,
+    panelOpacity,
+    reflectionStrength: 0,
+    material: { ior: 1.47, roughness: 0.36, thickness: 4, edge: 1 },
+    palette: {
+      text: "#F2F8FC",
+      mutedText: "#CFDDE3",
+      neutral: "#A6C1CE",
+      primary: "#B4E7FF",
+      surface: "#303942",
+      background: "#19232D",
+    },
+    light: { x: 0.18, y: 0.12, height: 3.8, intensity: 0.6 },
+  });
   return {
-    glass: glassSkin(contract, {
-      appearance: "liquid",
-      sceneLighting: false,
-      panelOpacity,
-      reflectionStrength: 0,
-      material: { ior: 1.47, roughness: 0.36, thickness: 4, edge: 1 },
-      palette: {
-        text: "#F2F8FC",
-        mutedText: "#CFDDE3",
-        neutral: "#A6C1CE",
-        primary: "#B4E7FF",
-        surface: "#303942",
-        background: "#19232D",
-      },
-      light: { x: 0.18, y: 0.12, height: 3.8, intensity: 0.6 },
-    }),
+    glass: { ...glass, tokens: { ...glass.tokens, ...targets } },
     cybertron: panelSkin(cybertronSkin(contract)),
     cartoon: panelSkin(cartoonSkin(contract)),
   };

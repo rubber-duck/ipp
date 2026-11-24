@@ -1862,6 +1862,30 @@ fn draw_run_frame(
 const RUN_CLIP: CanvasClip = [0.0, 0.0, 8.0, 2.0];
 
 #[test]
+fn a_retained_box_can_grow_and_lose_its_only_paint() {
+    let device = Rc::new(RefCell::new(MockGuiDevice::default()));
+    let mut cache = GuiBatchRenderCache::new(device);
+    let mut boxes = box_run(1..=1);
+
+    for (alpha, triangles) in [(0.0, 0), (1.0, 2), (0.0, 0)] {
+        let CanvasPrimitive::Box {
+            style,
+            ..
+        } = &mut boxes[0]
+        else {
+            unreachable!()
+        };
+        style.color[3] = alpha;
+        let stats = draw_run_frame(&mut cache, &boxes, RUN_CLIP);
+        assert_eq!(stats.summary.triangles, triangles);
+        assert_eq!(stats.summary.draw_calls, u32::from(triangles > 0));
+        if triangles == 0 {
+            assert_eq!(stats.statistics.uploaded_bytes, 0);
+        }
+    }
+}
+
+#[test]
 fn large_runs_split_into_bounded_batches_at_identity_boundaries() {
     let device = Rc::new(RefCell::new(MockGuiDevice::default()));
     let mut cache = GuiBatchRenderCache::new(device.clone());

@@ -77,7 +77,7 @@ export interface SliderCompositeProps extends GuiKitLayoutProps {
 /** The rail geometry in the World's units. */
 export function railGeometry(kit: GuiKitScope) {
   const t = kit.tokens;
-  const depth = kit.unit(t.em * DEPTH_EMS);
+  const depth = kit.unit(t.sliderDepth ?? t.em * DEPTH_EMS);
   return {
     depth,
     thumb: THUMB_EDGE * depth,

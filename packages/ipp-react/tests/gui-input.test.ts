@@ -383,6 +383,47 @@ test("pointer, wheel and keys submit immediately in DOM order", async (context) 
   assert.deepEqual(state.errors, []);
 });
 
+test("signed DOM pointer IDs survive Host routing and capture release", async (context) => {
+  const state = harness(context);
+  const event = { pointerId: -2, button: 0, clientX: 110, clientY: 45 };
+  const wireId = 0xffff_fffen;
+  state.canvas.dispatch("pointerdown", event);
+  assert.ok(state.canvas.hasPointerCapture(-2));
+  state.canvas.dispatch("pointermove", event);
+  state.canvas.dispatch("pointerup", event);
+  assert.deepEqual(
+    state.sent.map(
+      (input) => "pointer" in input && [input.kind, input.pointer],
+    ),
+    [
+      ["pointerDown", wireId],
+      ["pointerMove", wireId],
+      ["pointerUp", wireId],
+    ],
+  );
+  assert.equal(state.canvas.captures.size, 0);
+  state.canvas.dispatch("pointerdown", event);
+  state.input.cancel({ pointers: [wireId], focus: false });
+  assert.equal(state.canvas.captures.size, 0);
+  state.canvas.dispatch("pointerdown", event);
+  state.canvas.dispatch("pointercancel", event);
+  assert.deepEqual(state.sent.at(-1), {
+    kind: "pointerCancel",
+    pointer: wireId,
+  });
+  await flush();
+  state.route(async () => miss);
+  const admitted = state.gate.pointerDown(
+    event.pointerId,
+    "primary",
+    context.signal,
+  );
+  state.canvas.dispatch("pointerdown", event);
+  assert.equal(await admitted, true);
+  assert.equal(state.canvas.captures.size, 0);
+  assert.deepEqual(state.errors, []);
+});
+
 test("async pointer-down admission holds same-pointer moves and release while other input flows", async (context) => {
   let admit!: () => void;
   const admission = new Promise<void>((resolve) => {

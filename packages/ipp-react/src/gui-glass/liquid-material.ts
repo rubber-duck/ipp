@@ -51,7 +51,14 @@ float f0=pow((eta-1.0)/(eta+1.0),2.0);
 // premultiplied radiance with coverage, so a thin highlight contributes even when
 // the pixel center misses it. Flat interiors retain a single optical evaluation.
 float rimWidth=clamp(minor*.04,1.25,5.0)*p_optics.w;
-float grid=depth<6.0*rimWidth+length(pixelX)+length(pixelY)?4.0:1.0;
+float pixelSpan=length(pixelX)+length(pixelY);
+float footprint=max(length(pixelX),length(pixelY));
+float grid=1.0;
+if(depth<6.0*rimWidth+pixelSpan) {
+  // The silhouette and radio dot each have their own subpixel contour.
+  // In the interior, resolve the narrowest highlight at its .35-unit width.
+  grid=p_geometry.w<-.5 || abs(d)<=pixelSpan ? 4.0 : clamp(ceil(footprint/.35),1.0,4.0);
+}
 vec4 integrated=vec4(0.0);
 for(int sy=0;sy<4;sy++) {
   if(float(sy)>=grid) break;

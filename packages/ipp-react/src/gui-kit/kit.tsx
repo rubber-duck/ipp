@@ -84,6 +84,10 @@ export interface GuiKitTokens {
   /** Independent progress track height; defaults to smallHeight. */
   readonly progressHeight?: number;
   readonly dockedWidth: number;
+  /** Cross-axis size of a slider control, including its draggable thumb. */
+  readonly sliderDepth?: number;
+  /** Width of the track and draggable thumb in a ScrollArea. */
+  readonly scrollBarThickness?: number;
   readonly bar: number;
   readonly inset: number;
   /** Form spacing roles at em; omitted roles derive from inset. */

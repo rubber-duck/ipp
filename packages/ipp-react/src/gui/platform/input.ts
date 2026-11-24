@@ -338,7 +338,10 @@ export function attachCanvasGuiInput(
     else if (ownedFocus && !context.isClosed && document.hasFocus())
       canvas.focus({ preventScroll: true });
   });
-  const captures = new Set<number>();
+  // DOM pointer IDs are signed Web IDL longs. Preserve their bits on the
+  // unsigned Host protocol and keep the original ID for DOM capture calls.
+  const pointerId = (event: PointerEvent) => BigInt(event.pointerId >>> 0);
+  const captures = new Map<bigint, number>();
   const originalTabIndex = canvas.getAttribute("tabindex");
   if (originalTabIndex === null) canvas.tabIndex = 0;
   const originalTouchAction = canvas.style.touchAction;
@@ -350,10 +353,11 @@ export function attachCanvasGuiInput(
       (event.clientY - rect.top) / rect.height,
     ];
   };
-  const release = (pointer: number) => {
+  const release = (pointer: bigint) => {
+    const domId = captures.get(pointer);
+    if (domId === undefined) return;
     captures.delete(pointer);
-    if (canvas.hasPointerCapture(pointer))
-      canvas.releasePointerCapture(pointer);
+    if (canvas.hasPointerCapture(domId)) canvas.releasePointerCapture(domId);
   };
   interface HoverInput {
     readonly pointer: bigint;
@@ -483,14 +487,14 @@ export function attachCanvasGuiInput(
             outcome.error !== undefined
           ) {
             cancelAdmissions("pointer" in input ? input.pointer : undefined);
-            for (const pointer of [...captures]) release(pointer);
+            for (const pointer of captures.keys()) release(pointer);
             const completion = options.onInputOutcome?.(input, outcome);
             wheel?.release();
             await completion;
             return;
           }
           if (input.kind === "pointerDown" && outcome.disposition !== "routed")
-            release(Number(input.pointer));
+            release(input.pointer);
           if (
             input.kind === "wheel" &&
             outcome.remaining?.some((value) => value !== 0)
@@ -525,10 +529,10 @@ export function attachCanvasGuiInput(
           return;
         if (wheel) notifyCancellation();
         const pointers =
-          "pointer" in input ? [input.pointer] : [...captures].map(BigInt);
+          "pointer" in input ? [input.pointer] : [...captures.keys()];
         cancelAdmissions("pointer" in input ? input.pointer : undefined);
         for (const pointer of pointers) notifyCancellation(pointer);
-        for (const pointer of [...captures]) release(pointer);
+        for (const pointer of captures.keys()) release(pointer);
         if (live)
           options.onError(
             error instanceof Error ? error : new Error(String(error)),
@@ -598,7 +602,7 @@ export function attachCanvasGuiInput(
       event.preventDefault();
       send({
         kind: "pointerDown",
-        pointer: BigInt(event.pointerId),
+        pointer: pointerId(event),
         point: point(event),
         button: event.button === 1 ? "auxiliary" : "secondary",
       });
@@ -609,11 +613,11 @@ export function attachCanvasGuiInput(
     nativePending.length = 0;
     nativePendingBytes = 0;
     model.noteActivation();
-    captures.add(event.pointerId);
+    captures.set(pointerId(event), event.pointerId);
     canvas.setPointerCapture(event.pointerId);
     send({
       kind: "pointerDown",
-      pointer: BigInt(event.pointerId),
+      pointer: pointerId(event),
       point: point(event),
     });
     event.preventDefault();
@@ -621,7 +625,7 @@ export function attachCanvasGuiInput(
   const move = (event: PointerEvent) => {
     const input: GuiPhysicalInput = {
       kind: "pointerMove",
-      pointer: BigInt(event.pointerId),
+      pointer: pointerId(event),
       point: point(event),
     };
     // Classify when the DOM event arrives, before an admission queue can outlive
@@ -638,7 +642,7 @@ export function attachCanvasGuiInput(
     if (event.button !== 0) {
       send({
         kind: "pointerUp",
-        pointer: BigInt(event.pointerId),
+        pointer: pointerId(event),
         point: point(event),
         button: event.button === 1 ? "auxiliary" : "secondary",
       });
@@ -646,10 +650,10 @@ export function attachCanvasGuiInput(
     }
     send({
       kind: "pointerUp",
-      pointer: BigInt(event.pointerId),
+      pointer: pointerId(event),
       point: point(event),
     });
-    release(event.pointerId);
+    release(pointerId(event));
     if (context.nativeText && !htmlInput) {
       const container = canvas.parentElement ?? document.body;
       const offset = viewportToBridgeOffset(
@@ -662,9 +666,9 @@ export function attachCanvasGuiInput(
     }
   };
   const cancel = (event: PointerEvent) => {
-    if (!captures.has(event.pointerId)) return;
-    send({ kind: "pointerCancel", pointer: BigInt(event.pointerId) });
-    release(event.pointerId);
+    if (!captures.has(pointerId(event))) return;
+    send({ kind: "pointerCancel", pointer: pointerId(event) });
+    release(pointerId(event));
   };
   const wheel = (event: WheelEvent) => {
     const [x, y] = wheelDeltaToLogical(
@@ -702,7 +706,7 @@ export function attachCanvasGuiInput(
   const contextMenu = (event: Event) => event.preventDefault();
   const blur = () => {
     send({ kind: "blur" });
-    for (const pointer of [...captures]) release(pointer);
+    for (const pointer of captures.keys()) release(pointer);
   };
   const canvasBlur = (event: FocusEvent) => {
     if (
@@ -734,7 +738,7 @@ export function attachCanvasGuiInput(
     retireHovers();
     if (wheelSeen) notifyCancellation();
     retireWheels();
-    const pointers = new Set([...captures].map(BigInt));
+    const pointers = new Set(captures.keys());
     for (const pointer of admissions.keys()) pointers.add(pointer);
     for (const pointer of endings.keys()) pointers.add(pointer);
     for (const pointer of pointers) notifyCancellation(pointer);
@@ -751,7 +755,7 @@ export function attachCanvasGuiInput(
     bridge.element.removeEventListener("contextmenu", contextMenu);
     canvas.removeEventListener("contextmenu", contextMenu);
     bridge.dispose();
-    for (const pointer of [...captures]) release(pointer);
+    for (const pointer of captures.keys()) release(pointer);
     canvas.removeEventListener("pointerdown", down);
     canvas.removeEventListener("pointermove", move);
     canvas.removeEventListener("pointerup", up);
@@ -772,7 +776,7 @@ export function attachCanvasGuiInput(
     retireWheels();
     for (const pointer of event.pointers) {
       cancelAdmissions(pointer);
-      release(Number(pointer));
+      release(pointer);
       notifyCancellation(pointer);
     }
   });

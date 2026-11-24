@@ -94,7 +94,8 @@ export function CockpitPane({
           layer={2}
           id={`cockpit-content-${index}`}
           ref={(handle) => wheelTarget?.("content", handle?.target ?? null)}
-          padding="inset"
+          margin="inset"
+          padding={0}
           fitHeight={false}
           gap={0}
           flex={1}

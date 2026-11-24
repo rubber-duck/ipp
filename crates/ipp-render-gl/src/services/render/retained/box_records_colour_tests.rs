@@ -15,7 +15,7 @@ use super::{
 use crate::services::render::canvas::paint::GuiPaintLanes;
 use ipp_core::systems::canvas::{
     CanvasBoxShape, CanvasClip, CanvasPart, CanvasPrimitiveId, CanvasPrimitiveStyle,
-    CanvasShapeChecker, CanvasShapeFill, CanvasTarget,
+    CanvasShapeChecker, CanvasShapeFill, CanvasShapeGlow, CanvasTarget,
 };
 
 const CLIP: CanvasClip = [-1000.0, -1000.0, 1000.0, 1000.0];
@@ -78,6 +78,76 @@ const GREYS: CanvasShapeChecker = CanvasShapeChecker {
     size: 6.0,
     colors: [[0.6, 0.6, 0.6, 1.0], [0.3, 0.3, 0.3, 1.0]],
 };
+
+#[test]
+fn transparent_fill_only_skips_shapes_without_another_paint_contribution() {
+    let style = style([0.0; 2], [1.0; 2]);
+    let clear = CanvasShapeFill::Solid([0.0; 4]);
+    let rect = CanvasBoxShape::RECT;
+    let emits = |shape: &CanvasBoxShape, fill: &CanvasShapeFill, width, glow| {
+        !generate_box_records(
+            &style, &[40.0; 2], &[4.0; 2], width, &[1.0; 4], fill, glow, shape, CLIP,
+        )
+        .is_empty()
+    };
+    let gradient = |end_alpha| CanvasShapeFill::LinearGradient {
+        start: [0.0; 2],
+        end: [1.0; 2],
+        start_color: [1.0, 1.0, 1.0, 0.0],
+        end_color: [0.0, 0.0, 0.0, end_alpha],
+    };
+    let glow = CanvasShapeGlow {
+        color: [1.0; 4],
+        radius: 3.0,
+        inner_radius: 0.0,
+        intensity: 1.0,
+        falloff: 1.0,
+    };
+
+    assert!(!emits(&rect, &clear, 0.0, None));
+    assert!(!emits(&rect, &gradient(0.0), 0.0, None));
+    assert!(emits(&rect, &gradient(0.0001), 0.0, None));
+    assert!(emits(&rect, &clear, 1.0, None));
+    assert!(emits(&checker_rect(None, [3.0; 4]), &clear, 0.0, None));
+    assert!(emits(
+        &checker_rect(Some(GREYS), [0.0; 4]),
+        &clear,
+        0.0,
+        None
+    ));
+    assert!(emits(&rect, &clear, 0.0, Some(&glow)));
+
+    for shape in [
+        CanvasBoxShape::Stroke {
+            segments: [[0.0, 0.0, 1.0, 1.0]; 2],
+        },
+        CanvasBoxShape::Arc {
+            start: 0.0,
+            sweep: 0.5,
+            dashes: 0.0,
+            dash_duty: 1.0,
+        },
+    ] {
+        assert!(!emits(&shape, &clear, 1.0, None));
+        assert!(emits(&shape, &clear, 1.0, Some(&glow)));
+    }
+}
+
+#[test]
+fn custom_paint_can_draw_with_a_transparent_tint() {
+    let mut style = style([0.0; 2], [1.0; 2]);
+    style.color[3] = 0.0;
+    let lanes = Some(GuiPaintLanes {
+        slot: 1,
+        block: 3,
+    });
+
+    assert!(painted(&style, [40.0; 2], CanvasBoxShape::RECT, None).is_empty());
+    assert!(!painted(&style, [40.0; 2], CanvasBoxShape::RECT, lanes).is_empty());
+
+    style.opacity = 0.0;
+    assert!(painted(&style, [40.0; 2], CanvasBoxShape::RECT, lanes).is_empty());
+}
 
 // ---- Independent references ----
 

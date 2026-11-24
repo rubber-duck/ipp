@@ -446,7 +446,8 @@ export class DemoApplication implements GallerySceneMount {
           label="Display"
           title="DISPLAY"
           contentWidth={248}
-          {...(narrow ? { width: 0, flex: 1 } : {})}
+          flex={narrow ? 1 : 0}
+          fitWidth={!narrow}
         >
           <Form id="demo-display-content">
             <Field id="demo-skin-field" label="Skin">

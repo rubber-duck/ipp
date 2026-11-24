@@ -306,6 +306,16 @@ pub(crate) fn painted_box_records(
             _ => [0.0; 4],
         },
     };
+    // A bound custom paint chooses its own alpha from its inputs; only the
+    // opacity applied to its output can rule it out. Other fills interpolate
+    // the resolved alphas or take the first one directly.
+    let fill_visible = if fill_type == GUI_FILL_PAINT {
+        style.opacity > 0.0
+    } else {
+        color0[3] > 0.0 || color1[3] > 0.0
+    };
+    let glow_visible = record.glow_color[3] > 0.0 && (glow_inner_radius > 0.0 || glow_radius > 0.0);
+
     match *shape {
         CanvasBoxShape::Rect {
             section,
@@ -346,10 +356,27 @@ pub(crate) fn painted_box_records(
                 material_params,
                 ..record
             };
+            // A plain zero-width border has identical outer and fill coverage.
+            // Cut endpoints and corner accents evaluate separate contours.
+            let border_visible = border[3] > 0.0
+                && (border_width > 0.0
+                    || record.corner_cut.iter().any(|cut| *cut > 0.0)
+                    || (checker.is_none() && corner_accent.iter().any(|span| *span > 0.0)));
+            let checker_visible = checker.is_some_and(|lanes| lanes[3] > 0.0);
+            if !(fill_visible || glow_visible || border_visible || checker_visible) {
+                return Vec::new();
+            }
+
             let transparent = checker.is_none()
                 && matches!(fill, CanvasShapeFill::Solid(color) if color[3] <= 0.0 || style.opacity <= 0.0);
             section_records(outline_records(&record, transparent), section, pos, scale)
         }
+        CanvasBoxShape::Stroke {
+            ..
+        }
+        | CanvasBoxShape::Arc {
+            ..
+        } if !fill_visible && !glow_visible => Vec::new(),
         CanvasBoxShape::Stroke {
             segments,
         } => stroke_records(&record, &segments),

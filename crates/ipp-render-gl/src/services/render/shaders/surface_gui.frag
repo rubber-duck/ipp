@@ -249,32 +249,37 @@ void box_coverage(bool checker, out float outer, out float shape_cov, out float 
         outer = exact;
     }
 
-    float inner = max(
-        sd_round_box(p, max(half_size - border_width, vec2(0.0)), max(corner - border_width, vec2(0.0))),
-        cut_plane + border_width
-    );
-    // Each distance spans one pixel across its footprint. A two-footprint
-    // smoothstep blurs subpixel rails and borders into the surrounding halo.
-    float edge = max(length(vec2(dFdx(outer), dFdy(outer))), 1.0 / 65536.0);
-    float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
-
-    // Shape interior coverage [0.0, 1.0]; the fill ends at the inner border contour.
-    shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
-    fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
-
     // Differentiating abs(p) can cancel across a quad straddling a thin box's
     // centre: both neighboring fragments report the same distance, so the box
     // disappears or overestimates its area. Differentiate unfolded coordinates
     // and integrate the two opposing edges instead. Rounded/cut contours keep
     // their distance coverage; only the limiting sharp rectangle is separable.
     bool sharp = max4(cut) <= 0.0 && min(corner.x, corner.y) <= 1.0 / 65536.0;
-    vec2 footprint = max(vec2(
-        length(vec2(dFdx(p.x), dFdy(p.x))),
-        length(vec2(dFdx(p.y), dFdy(p.y)))
-    ), vec2(1.0 / 65536.0));
+    vec2 footprint = vec2(0.0);
     if (sharp) {
+        footprint = max(vec2(
+            length(vec2(dFdx(p.x), dFdy(p.x))),
+            length(vec2(dFdx(p.y), dFdy(p.y)))
+        ), vec2(1.0 / 65536.0));
         shape_cov = rectangle_coverage(p, half_size, footprint);
-        fill_cov = min(shape_cov, rectangle_coverage(p, max(half_size - border_width, vec2(0.0)), footprint));
+        fill_cov = shape_cov;
+        if (border_width > 0.0) {
+            fill_cov = min(shape_cov, rectangle_coverage(p, max(half_size - border_width, vec2(0.0)), footprint));
+        }
+    } else {
+        // An uncut, borderless box has one contour for its fill and its shape.
+        // Cut endpoints retain their separate distance calculation above.
+        float edge = max(length(vec2(dFdx(outer), dFdy(outer))), 1.0 / 65536.0);
+        shape_cov = clamp(0.5 - outer / edge, 0.0, 1.0);
+        fill_cov = shape_cov;
+        if (border_width > 0.0 || max4(cut) > 0.0) {
+            float inner = max(
+                sd_round_box(p, max(half_size - border_width, vec2(0.0)), max(corner - border_width, vec2(0.0))),
+                cut_plane + border_width
+            );
+            float inner_edge = max(length(vec2(dFdx(inner), dFdy(inner))), 1.0 / 65536.0);
+            fill_cov = min(shape_cov, clamp(0.5 - inner / inner_edge, 0.0, 1.0));
+        }
     }
 
     vec4 span = v_corner_accent;

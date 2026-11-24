@@ -379,6 +379,9 @@ impl<D: RenderDevice> GuiBatchRenderCache<D> {
                 }
             };
             cached.seen = self.frame;
+            if cached.records.is_empty() {
+                continue;
+            }
 
             self.run_boxes.push(RunBox {
                 identity: style.identity,

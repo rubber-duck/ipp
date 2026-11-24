@@ -63,6 +63,7 @@ export function ScrollArea({
   );
   const theme = frame ? kit.controlTheme("scroll") : kit.theme("gridBody");
   const bar = kit.unit(kit.tokens.bar);
+  const thickness = kit.unit(kit.tokens.scrollBarThickness ?? kit.tokens.bar);
   const [scrolling, setScrolling] = useState(false);
   return (
     <Entity id={id}>
@@ -77,7 +78,7 @@ export function ScrollArea({
       <ScrollView
         {...(ref === undefined ? {} : { ref })}
         axis={1}
-        bar_thickness={scrolling ? bar : 0}
+        bar_thickness={scrolling ? thickness : 0}
         bar_inset={bar}
         {...(onScroll === undefined ? {} : { onScroll })}
         onRangeChange={(event) => {
@@ -91,7 +92,7 @@ export function ScrollArea({
           gap={gap ?? kit.spacing.field}
           layout={{
             padding_top: insets[0]!,
-            padding_right: insets[1]! + (scrolling ? 3 * bar : 0),
+            padding_right: insets[1]! + (scrolling ? thickness + 2 * bar : 0),
             padding_bottom: insets[2]!,
             padding_left: insets[3]!,
           }}

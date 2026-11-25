@@ -97,9 +97,12 @@ export interface GallerySceneMount {
   /** Authoring/resource readiness; presentation completion is a runner barrier. */
   readonly ready: Promise<void>;
   readonly options: GalleryOptions;
+  /** Actions that update their own presentation and controls. */
+  readonly localActions?: readonly string[];
   /** Scene-specific live controller consumed by browser inspectors. */
   readonly controller?: unknown;
-  subscribe?(listener: () => void): () => void;
+  /** Pass false when mounted controls observe the change directly. */
+  subscribe?(listener: (renderShell?: boolean) => void): () => void;
   /** Adapt authored layout before a completed frame at this viewport. */
   resize?(viewport: PresentationViewport): Promise<void>;
   update(patch: GalleryOptions): Promise<void>;

@@ -674,6 +674,30 @@ export async function exerciseCockpit(
   }
   if (part === "carousel") {
     const tracking = await exerciseCockpitTracking(driver);
+    await Promise.all(
+      [1, 1, -1].map((direction) => driver.action("carousel", direction)),
+    );
+    const retargeted = await driver.state();
+    assert.equal(
+      retargeted.options.carousel,
+      2,
+      "rapid actions use the latest selection",
+    );
+    assert.equal(retargeted.options.carouselDragging, false);
+    const rotor = retargeted.scene.controllers?.find(
+      (controller) => controller.id.toString() === tracking.controller,
+    );
+    const motion = rotor?.motion?.mode;
+    assert.ok(
+      motion?.kind === "spring",
+      "actions retarget the existing Host spring",
+    );
+    assert.equal(
+      motion.target,
+      2,
+      "an earlier action cannot restore an older target",
+    );
+    await driver.options({ carousel: 1 });
     await driver.action("projection", 8);
     await driver.advance(0.3);
     const near = await driver.state();

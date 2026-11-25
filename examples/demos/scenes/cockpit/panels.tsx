@@ -1,4 +1,5 @@
 import { Entity } from "@ipp/react";
+import { useSyncExternalStore } from "react";
 import type { GuiTarget } from "@ipp/client";
 import { Button as GrabButton, Behavior, Layout } from "@ipp/react/gui";
 import {
@@ -23,11 +24,7 @@ import {
   RadarInstrument,
   type InstrumentContract,
 } from "./instruments.js";
-import {
-  cockpitOptions,
-  COCKPIT_SCREEN_TITLES,
-  type CockpitOptions,
-} from "./options.js";
+import { COCKPIT_SCREEN_TITLES, type CockpitOptions } from "./options.js";
 import {
   ControlScreen,
   type CockpitNavigationSource,
@@ -184,7 +181,10 @@ export function DashboardInstrument({
 }
 
 export function CockpitControls(props: GallerySceneControlsProps) {
-  const state = cockpitOptions(props.mount.options);
+  const { navigation } = props.mount.controller as {
+    navigation: CockpitNavigationSource;
+  };
+  const focus = useSyncExternalStore(navigation.subscribe, navigation.focus);
   const { update } = sceneActions(props);
   return (
     <Column>
@@ -196,7 +196,7 @@ export function CockpitControls(props: GallerySceneControlsProps) {
       <SceneChoice
         id="cockpit-settings-screen"
         label="Screen"
-        value={String(Math.round(state.carousel))}
+        value={String(Math.round(focus))}
         choices={COCKPIT_SCREEN_TITLES.map((label, index) => ({
           key: String(index),
           label,

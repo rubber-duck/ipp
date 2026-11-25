@@ -834,13 +834,13 @@ export class DemoApplication implements GallerySceneMount {
         });
         this.active = candidate;
         this.preparing = undefined;
-        candidate.unsubscribe = candidate.mount.subscribe?.(() => {
+        candidate.unsubscribe = candidate.mount.subscribe?.((renderShell) => {
           if (
             !this.closing &&
             this.active === candidate &&
             !candidate!.lifetime.signal.aborted
           ) {
-            void this.render();
+            if (renderShell !== false) void this.render();
             this.changed();
           }
         });
@@ -978,6 +978,7 @@ export class DemoApplication implements GallerySceneMount {
 
   private async sceneOperation<T>(
     operation: (scene: OwnedScene) => Promise<T>,
+    action?: string,
   ) {
     // Admit against one lifetime in lifecycle order, without holding navigation
     // or capture behind a scene-owned asynchronous resource preparation.
@@ -993,7 +994,8 @@ export class DemoApplication implements GallerySceneMount {
       this.active === admitted.scene &&
       !admitted.scene.lifetime.signal.aborted
     ) {
-      await this.render();
+      if (!action || !admitted.scene.mount.localActions?.includes(action))
+        await this.render();
       this.changed();
     }
     return result;
@@ -1022,7 +1024,10 @@ export class DemoApplication implements GallerySceneMount {
     if (name === "retryCleanup") return this.ordered(() => this.retryCleanup());
     if (name === "scene") return this.navigate(String(args));
     if (name !== "skin" && name !== "font" && name !== "renderScale")
-      return this.sceneOperation((scene) => scene.mount.action(name, args));
+      return this.sceneOperation(
+        (scene) => scene.mount.action(name, args),
+        name,
+      );
     return this.ordered(async () => {
       if (name === "skin") {
         if (!isGallerySkin(args)) throw new Error("Unknown demo skin");

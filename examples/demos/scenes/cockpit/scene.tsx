@@ -468,7 +468,7 @@ export const cockpitScene: GallerySceneDefinition = {
     let viewAspect = viewport
       ? viewport.width / viewport.height
       : Number.POSITIVE_INFINITY;
-    const listeners = new Set<() => void>();
+    const listeners = new Set<(renderShell?: boolean) => void>();
     const navigationListeners = new Set<() => void>();
     let resolvePanels!: () => void;
     let rejectPanels!: (error: unknown) => void;
@@ -500,6 +500,10 @@ export const cockpitScene: GallerySceneDefinition = {
       for (const listener of listeners) listener();
       notifyNavigation();
       scheduleMonitor();
+    };
+    const notifySelection = () => {
+      notifyNavigation();
+      for (const listener of listeners) listener(false);
     };
     const setMonitorActive = (active: boolean) => {
       if (monitorActive === active) return;
@@ -546,15 +550,16 @@ export const cockpitScene: GallerySceneDefinition = {
         });
       }, 200);
     };
-    let mounted: GallerySceneMount | undefined;
+    const {
+      carousel: initialFocus,
+      carouselDragging: _initialDrag,
+      ...initialSettings
+    } = cockpitOptions({ ...COCKPIT_DEFAULTS, ...options });
+    let selectedFocus = initialFocus;
+    let trackingFocus: number | undefined;
     const navigation: CockpitNavigationSource = {
       monitorActive: () => monitorActive,
-      focus: () =>
-        Number(
-          mounted?.options.carousel ??
-            options.carousel ??
-            COCKPIT_DEFAULTS.carousel,
-        ),
+      focus: () => trackingFocus ?? selectedFocus,
       subscribe(listener) {
         navigationListeners.add(listener);
         return () => {
@@ -570,14 +575,14 @@ export const cockpitScene: GallerySceneDefinition = {
         // The Earth textures can take longer on a cold software renderer.
         // The application's scene-preparation deadline still bounds startup.
         resourceTimeoutMs: 60_000,
-        options: { ...cockpitOptions({ ...COCKPIT_DEFAULTS, ...options }) },
+        options: initialSettings,
         render: (value) => (
           <CockpitWorld
             runtime={runtime}
             context={context}
             anchors={anchors}
             material={client.components.CustomMaterial!.id}
-            state={cockpitOptions(value)}
+            state={cockpitOptions({ ...value, carousel: navigation.focus() })}
             update={update}
             report={report}
             ready={onReady}
@@ -595,17 +600,11 @@ export const cockpitScene: GallerySceneDefinition = {
           pulse: () => mount.update({ pulse: Number(mount.options.pulse) + 1 }),
           scan: (value) => mount.update({ scanning: Boolean(value) }),
           carousel: (direction) =>
-            mount.update({
-              carouselDragging: false,
-              carousel: Math.max(
-                0,
-                Math.min(
-                  COCKPIT_PANE_COUNT - 1,
-                  Math.round(Number(mount.options.carousel)) +
-                    (Number(direction) || 1),
-                ),
+            retarget(
+              boundFocus(
+                Math.round(navigation.focus()) + (Number(direction) || 1),
               ),
-            }),
+            ),
           projection: (value) => mount.update({ projection: Number(value) }),
           atmosphere: (value) => mount.update({ atmosphere: Number(value) }),
           atmospherePlayback: (value) =>
@@ -646,7 +645,6 @@ export const cockpitScene: GallerySceneDefinition = {
     });
     let carouselController: bigint | undefined;
     let carouselReady = false;
-    let trackingFocus: number | undefined;
     let trackingEpoch = 0;
     let trackingKind: "drag" | "wheel" | undefined;
     const pendingTracking = new Set<Promise<void>>();
@@ -682,6 +680,22 @@ export const cockpitScene: GallerySceneDefinition = {
         },
         ...(velocity === undefined ? {} : { velocity }),
       });
+    const retarget = async (focus: number, declarations?: GalleryOptions) => {
+      context.signal.throwIfAborted();
+      const epoch = ++trackingEpoch;
+      mount.sceneInput?.cancel();
+      trackingFocus = undefined;
+      trackingKind = undefined;
+      selectedFocus = focus;
+      wakeMonitor();
+      notifySelection();
+
+      if (declarations) await base.update(declarations);
+      await ready;
+      if (epoch !== trackingEpoch || context.signal.aborted) return;
+      await spring(focus);
+      if (epoch === trackingEpoch) scheduleMonitor();
+    };
     const readMotion = async () => {
       const page = await client.inspectPage({ collection: "controllers" });
       const state = page.controllers?.find(
@@ -734,14 +748,9 @@ export const cockpitScene: GallerySceneDefinition = {
         return;
       trackingKind = undefined;
       trackingFocus = undefined;
-      await base.update({
-        ...cockpitOptions({
-          ...base.options,
-          carousel: selected,
-          carouselDragging: false,
-        }),
-      });
-      notifyNavigation();
+      selectedFocus = selected;
+      notifySelection();
+      scheduleMonitor();
     };
     const ready = Promise.all([base.ready, panelReady]).then(async () => {
       for (const [, world] of [...panels].sort((a, b) => a[0] - b[0])) {
@@ -773,7 +782,7 @@ export const cockpitScene: GallerySceneDefinition = {
       const animation = client as AnimationWorldClient;
       await animation.controlAnimationController(rotation.id, {
         action: "seek",
-        time: Number(base.options.carousel),
+        time: selectedFocus,
       });
       await animation.controlAnimationController(rotation.id, {
         action: "playAtSpeed",
@@ -823,14 +832,13 @@ export const cockpitScene: GallerySceneDefinition = {
     const mount: GallerySceneMount = {
       ...base,
       ready,
+      localActions: ["carousel"],
       get options() {
-        return trackingFocus === undefined
-          ? base.options
-          : {
-              ...base.options,
-              carousel: trackingFocus,
-              carouselDragging: trackingKind === "drag",
-            };
+        return {
+          ...base.options,
+          carousel: navigation.focus(),
+          carouselDragging: trackingKind === "drag",
+        };
       },
       sceneInput: new CockpitCarouselInput({
         signal: context.signal,
@@ -948,11 +956,12 @@ export const cockpitScene: GallerySceneDefinition = {
         },
       }),
       controller: {
+        navigation,
         get panels() {
           return [...panels].map(([index, world]) => ({ index, world }));
         },
       },
-      subscribe(listener: () => void) {
+      subscribe(listener) {
         listeners.add(listener);
         return () => {
           listeners.delete(listener);
@@ -983,18 +992,16 @@ export const cockpitScene: GallerySceneDefinition = {
         ]);
         if (!result.ok) throw new Error(result.error.reason);
       },
-      async update(patch: GalleryOptions) {
-        wakeMonitor();
-        const value = cockpitOptions({ ...mount.options, ...patch });
-        // External navigation retargets the same Host-owned motion. Existing
-        // samples precede it in the ordered transport; no component pose is reset.
-        ++trackingEpoch;
-        trackingFocus = undefined;
-        trackingKind = undefined;
-        mount.sceneInput?.cancel();
-        await base.update({ ...value, carouselDragging: false });
-        await ready;
-        await spring(value.carousel);
+      update(patch: GalleryOptions) {
+        const {
+          carousel,
+          carouselDragging: _dragging,
+          ...settings
+        } = cockpitOptions({ ...mount.options, ...patch });
+        const changesSettings = Object.keys(patch).some(
+          (key) => key !== "carousel" && key !== "carouselDragging",
+        );
+        return retarget(carousel, changesSettings ? settings : undefined);
       },
       async inspect() {
         return {
@@ -1061,7 +1068,6 @@ export const cockpitScene: GallerySceneDefinition = {
           throw new AggregateError(failures, "Cockpit cleanup failed");
       },
     };
-    mounted = mount;
     return mount;
   },
 };

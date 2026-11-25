@@ -145,8 +145,8 @@ export async function startBlender(
     ...ready,
     token: "[redacted]",
   });
-  if (!/^5\.2\./.test(ready.blender_version))
-    throw new Error(`Expected Blender 5.2 LTS, got ${ready.blender_version}`);
+  if (!/^5\.3\./.test(ready.blender_version))
+    throw new Error(`Expected Blender 5.3, got ${ready.blender_version}`);
   let sequence = 0;
   return {
     ready,

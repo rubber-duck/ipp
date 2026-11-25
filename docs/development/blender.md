@@ -6,15 +6,12 @@ This guide owns development prerequisites, local launchers and certificate setup
 
 ## Local Blender installation
 
-Use Blender 5.2 LTS. [Pipeline setup](../../tools/pipeline/toolchains.json) pins the optional local Linux x64 archive and checksum; Pages CI uses the Blender Foundation Snap and verifies its 5.2 version. [Addon wheels](../../integrations/blender/wheels-linux-x64.json) target Blender Python 3.13. General repository tools use the [build-guide toolchain](building.md). Set `BLENDER_BIN` when `blender` is not on PATH; the invoking Python interpreter is propagated to maintained harnesses.
+Use Blender 5.3. Pages CI and local Linux x64 builds share the [archive and checksum](../../tools/pipeline/toolchains.json) used by pipeline setup. [Addon wheels](../../integrations/blender/wheels-linux-x64.json) target Blender Python 3.13. General repository tools use the [build-guide toolchain](building.md). Set `BLENDER_BIN` to select a specific Blender 5.3 executable. Otherwise the pipeline prefers its checkout-local installation under `target/tools/`, then searches PATH.
 
 ```sh
-blender --version
-blender --background --factory-startup --python-exit-code 1 --python-expr 'import bpy; print(bpy.app.version_string, bpy.app.background)'
 python tools/ipp.py setup blender
+python tools/ipp.py doctor --build gallery-site
 ```
-
-On the development VM, `/home/dev/.local/bin/blender` wraps `/home/dev/.local/opt/blender-5.2.1-linux-x64` with private support libraries from `/home/dev/.local/opt/ipp-blender-support`. These paths are local setup, not repository-installed dependencies.
 
 Background extraction uses main-thread data APIs. Blocking command loops do not run Blender timers; explicitly pump the same addon export/flush logic used by the GUI. GUI behavior needs a normal application event loop.
 
@@ -47,8 +44,8 @@ The VM's `/home/dev/.local/bin/blender-xvfb` owns an Xvfb display and Blender's 
 Use the checked native framebuffer capture rather than assuming `Window.screenshot` contains rendered pixels. Repeat the maintained local smoke probe with an isolated configuration:
 
 ```sh
-IPP_BLENDER_PROBE_OUTPUT=/home/dev/.local/state/ipp-blender/validation-5.2.1 \
-BLENDER_USER_CONFIG=/home/dev/.local/state/ipp-blender/validation-5.2.1/config \
+IPP_BLENDER_PROBE_OUTPUT=/home/dev/.local/state/ipp-blender/gui-smoke \
+BLENDER_USER_CONFIG=/home/dev/.local/state/ipp-blender/gui-smoke/config \
 /home/dev/.local/bin/blender-xvfb --factory-startup -noaudio --window-geometry 0 0 1280 800 \
   --python-exit-code 17 \
   --python /home/dev/.local/opt/ipp-blender-support/probes/gui_smoke.py

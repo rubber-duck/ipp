@@ -78,7 +78,7 @@ def setup(args: list[str]) -> None:
                 check=True,
                 timeout=30,
             )
-            installed = version.stdout.startswith("Blender 5.2.")
+            installed = version.stdout.startswith("Blender 5.3.")
         except OSError, subprocess.SubprocessError:
             installed = False
         if not (destination / "blender").is_file() and not installed:

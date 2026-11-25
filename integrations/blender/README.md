@@ -4,7 +4,7 @@ The addon serves detached scene descriptions over WSS and immutable assets over 
 
 ## Build and use
 
-The maintained extension targets Blender 5.2 on Linux x64 with its Python 3.13 wheel set. Other platforms need verified dependency locks and extension builds. The [extension manifest](ipp_blender/blender_manifest.toml) owns the Blender version range; the [development guide](../../docs/development/blender.md) owns installation and environment setup.
+The maintained extension targets Blender 5.3 on Linux x64 with its Python 3.13 wheel set. Other platforms need verified dependency locks and extension builds. The [extension manifest](ipp_blender/blender_manifest.toml) owns the Blender version range; the [development guide](../../docs/development/blender.md) owns installation and environment setup.
 
 From the repository root:
 

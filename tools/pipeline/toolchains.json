@@ -15,8 +15,8 @@
     }
   },
   "blenderLinuxX64": {
-    "directory": "blender-5.2.1-linux-x64",
-    "url": "https://mirrors.ocf.berkeley.edu/blender/release/Blender5.2/blender-5.2.1-linux-x64.tar.xz",
-    "sha256": "a31f524fa99a527d3d52b7f5aaa68c34e1a19d5a1c9473f79c5cc610fd5b10e9"
+    "directory": "blender-5.3.0-linux-x64",
+    "url": "https://mirrors.ocf.berkeley.edu/blender/release/Blender5.3/blender-5.3.0-linux-x64.tar.xz",
+    "sha256": "dacb8264197a3f7fda6001285a5a506fc97ee943881261c2c3bd63c882f22e05"
   }
 }

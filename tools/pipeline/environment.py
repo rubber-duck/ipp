@@ -236,8 +236,8 @@ def inspect(
             elif name == "blender":
                 remedy = "python tools/ipp.py setup blender, or set BLENDER_BIN."
                 detail = inspect_command([blender(), "--version"])
-                if not re.search(r"Blender 5\.2\.", detail):
-                    raise ValueError(f"requires Blender 5.2; found {detail[:200]}")
+                if not re.search(r"Blender 5\.3\.", detail):
+                    raise ValueError(f"requires Blender 5.3; found {detail[:200]}")
                 detail = detail.splitlines()[0]
             elif name == "blender-wheels":
                 remedy = "python tools/ipp.py setup blender"

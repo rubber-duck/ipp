@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def main():
     binary = os.environ.get("BLENDER_BIN") or shutil.which("blender")
     if not binary:
-        raise SystemExit("Blender 5.2 LTS is required")
+        raise SystemExit("Blender 5.3 is required")
     archive = ROOT / "target/blender/ipp_blender-0.1.0-linux-x64.zip"
     evidence = ROOT / "target/integration-artifacts/blender-package"
     evidence.mkdir(parents=True, exist_ok=True)

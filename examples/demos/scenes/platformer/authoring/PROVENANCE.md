@@ -9,7 +9,7 @@ The editable scene is built from the free downloads available from [KayKit - Pla
 
 The scene uses the medium mannequin and its `Walking_A`, `Running_A`, and `Crawling` actions, renamed to the stable application clip names. The rig has 23 deform/control bones, within IPP's 32-joint export limit. Root-bone translation is held at the source action's first sample because `platformer-root` owns travel around the route.
 
-Run `build_platformer.py` through Blender 5.2 or newer with `--factory-startup`. Pass the output blend, extracted Platformer Pack directory, extracted Character Animations directory, preview image, and output route JSON as the five arguments after `--`. The builder generates both the authoring curve and runtime route from one waypoint list, then ray-casts 136 samples against evaluated course meshes. It rejects a route whose support height differs by more than eight centimetres.
+Run `build_platformer.py` through Blender 5.3 with `--factory-startup`. Pass the output blend, extracted Platformer Pack directory, extracted Character Animations directory, preview image, and output route JSON as the five arguments after `--`. The builder generates both the authoring curve and runtime route from one waypoint list, then ray-casts 136 samples against evaluated course meshes. It rejects a route whose support height differs by more than eight centimetres.
 
 Ordinary gallery builds export the packed scene through the standard Blender exporter and import it through the matching worker/WASM runtime. They write the saved World, clips, meshes, textures and companion metadata to ignored `target/gallery-platformer-assets/`. Neither upstream pack is needed. To generate only that product:
 

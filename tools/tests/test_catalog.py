@@ -38,6 +38,7 @@ class CatalogTests(unittest.TestCase):
         build = jobs["build"]
         self.assertTrue(any(line.startswith("timeout-minutes: ") for line in build))
         for step in (
+            "python tools/ipp.py setup blender",
             "run: python tools/ipp.py build gallery-site",
             "~/.cargo/registry/cache/",
             "target/wasm32-unknown-unknown/",

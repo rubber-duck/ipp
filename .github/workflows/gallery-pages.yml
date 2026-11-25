@@ -16,8 +16,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    env:
-      BLENDER_BIN: /snap/bin/blender
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,7 +41,7 @@ jobs:
           restore-keys: |
             gallery-pages-cargo-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', 'Cargo.lock') }}-
             gallery-pages-cargo-${{ runner.os }}-${{ runner.arch }}-
-      - name: Install build tools and Blender 5.2
+      - name: Install build tools and Blender 5.3
         # Chromium serializes the Blender exports with the matching WASM runtime.
         run: |
           python tools/ipp.py setup rust
@@ -51,11 +49,8 @@ jobs:
           python tools/ipp.py setup python
           python tools/ipp.py setup browser --with-deps
           sudo apt-get update
-          sudo apt-get install -y libxi6 libxrender1 libxkbcommon0 libgl1 libegl1 snapd
-          sudo systemctl start snapd.socket
-          sudo snap wait system seed.loaded
-          sudo snap install blender --classic --channel=latest/stable
-          /snap/bin/blender --version | head -1 | grep '^Blender 5\.2\.'
+          sudo apt-get install -y libxi6 libxrender1 libxkbcommon0 libgl1 libegl1 libsm6 libice6
+          python tools/ipp.py setup blender
       - name: Build the gallery artifact
         # The build graph fetches pinned fonts and exports the packed Blender scenes.
         run: python tools/ipp.py build gallery-site

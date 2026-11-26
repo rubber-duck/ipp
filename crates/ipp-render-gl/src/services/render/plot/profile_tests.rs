@@ -2,13 +2,17 @@
 //! Run this exact ignored test alone, in release, without concurrent workloads.
 //! Normal builds time work; instrumentation builds count allocation calls/bytes.
 
-use super::*;
 use ipp_core::expressions::ExpressionResult;
 use ipp_core::services::data::DataRowId;
 use ipp_core::systems::data_bindings::DataBindingColumnView;
 use ipp_core::systems::plot::*;
+use ipp_core::systems::render::plot_presentation::{
+    ScenePlotPlane, label_layout::PlotLabelLayoutState,
+};
 use ipp_core::{DynamicPropertyKind, DynamicValue};
+use ipp_core::{WorldViewport, systems::canvas::CanvasTarget};
 use std::hint::black_box;
+use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "instrumentation")]

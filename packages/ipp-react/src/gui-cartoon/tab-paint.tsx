@@ -13,9 +13,9 @@ float unit = size.y / ${compactSizing.controlHeight.toFixed(1)};
 bool ring = data.x < 0.0;
 float selected = ring ? 1.0 : clamp(data.x, 0.0, 1.0);
 vec2 halfSize = max(0.5 * size + mix(p_tilt.zw, p_shape.xy, selected) * unit, vec2(0.001));
-float angle = selected * sign(p_tilt.x) * min(radians(abs(p_tilt.x)), p_shape.w * unit / halfSize.x);
+float angle = selected * sign(p_tilt.x) * min((abs(p_tilt.x) * 0.01745329252), p_shape.w * unit / halfSize.x);
 float c = cos(angle), s = sin(angle);
-vec2 point = mat2(c, s, -s, c) * (position - 0.5 * size);
+vec2 point = mat2(vec2(c, s), vec2(-s, c)) * (position - 0.5 * size);
 float radius = min(p_shape.z * unit, min(halfSize.x, halfSize.y));
 vec2 q = abs(point) - halfSize + radius;
 float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
@@ -38,7 +38,7 @@ export const tabAsset = (scope: string) => (
     recipe={{ presentation: true }}
     parameters={{ shape: "vec4", tilt: "vec4" }}
   >
-    <PaintShader>{tabPaint}</PaintShader>
+    <PaintShader backend="ipp">{tabPaint}</PaintShader>
   </ShaderAsset>
 );
 

@@ -1,5 +1,5 @@
 use super::*;
-use ipp_core::systems::plot::{PlotMesh, PlotPlaneFacing, PlotPlaneLayout, PlotPublishedPlane};
+use crate::systems::plot::{PlotMesh, PlotPlaneFacing, PlotPlaneLayout, PlotPublishedPlane};
 
 const IDENTITY: [f32; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -226,14 +226,14 @@ fn content_visibility_distinguishes_hidden_and_clear_enclosure_edges() {
 
 #[test]
 fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
     let world = host.world_ref(id).unwrap();
-    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let entity = crate::EntityId::from_bits((1 << 32) | 1);
     let target = CanvasTarget {
         entity,
-        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        component: crate::ComponentValue::PLOT_POINTS3D,
         incarnation: 1,
     };
     let publication = host.latest_publication(id).unwrap();
@@ -283,7 +283,7 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
             .iter()
             .map(|plane| ScenePlotPlane {
                 paint: None,
-                entity: crate::services::render::outputs::scene::RenderEntity {
+                entity: crate::systems::render::plot_presentation::RenderEntity {
                     world,
                     entity,
                     incarnation: 1,
@@ -372,7 +372,7 @@ fn shared_axis_driver_preserves_stations_streaming_and_view_lifetimes() {
             .iter()
             .map(|plane| ScenePlotPlane {
                 paint: None,
-                entity: crate::services::render::outputs::scene::RenderEntity {
+                entity: crate::systems::render::plot_presentation::RenderEntity {
                     world,
                     entity,
                     incarnation: 1,

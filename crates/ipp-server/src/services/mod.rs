@@ -4,4 +4,7 @@
 mod host_services;
 pub use host_services::NativeHostServices;
 
+#[cfg(target_os = "macos")]
+pub mod cef;
+
 pub mod io;

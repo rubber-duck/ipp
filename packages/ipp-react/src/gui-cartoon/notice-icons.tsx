@@ -40,7 +40,7 @@ export const noticeIconAsset = (scope: string) => (
     recipe={{ presentation: true }}
     parameters={{ ink: "vec4" }}
   >
-    <PaintShader>{noticeIcon}</PaintShader>
+    <PaintShader backend="ipp">{noticeIcon}</PaintShader>
   </ShaderAsset>
 );
 

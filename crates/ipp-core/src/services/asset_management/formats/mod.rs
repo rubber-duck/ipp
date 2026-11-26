@@ -1,6 +1,7 @@
 //! Typed CPU asset formats with their decoders, encoders and shared building blocks.
 //! Binary layouts are documented in the adjacent `*_FORMAT.md` and `*_FORMATS.md` files.
 
+pub mod ipp_shader;
 pub mod mesh;
 
 pub mod quadratic;

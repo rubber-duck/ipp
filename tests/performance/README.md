@@ -6,6 +6,22 @@ Use the [stress scene guide](stress.md) for maintained native/GLES and browser c
 
 The `instrumentation` feature adds stage timing and allocation counters without changing runtime behavior; it is absent from normal builds, which timing runs measure. Timing windows disable counters, and allocation windows run separately. Core measurements identify the Host, World incarnation, composition, System and phase; equally composed Worlds remain distinct, and shared work is explicitly unattributed to a World. Captured metadata survives World retirement until capture release, while live prepared indices remain stable. [Profiling source](../../crates/ipp-core/src/profiling/mod.rs) owns counter semantics, storage retention and the single-evaluation-thread capture contract; consumers must read exported metadata rather than infer identity from offsets. Native hardware GLES timing is the primary rendering baseline; software browser timing does not predict hardware performance.
 
+## Native Metal and GLES
+
+The [GUI renderer stress board](gui-rendering.md) compares individual controls, chart families, open overlays and the complete GUI across all gallery skins and flat, cylindrical and spherical presentation.
+
+Use the matched release Hosts on an idle Mac with hardware ANGLE. The gallery workload mounts each registered demo and includes Charts with buffered and streaming data. Each repetition alternates the two backends and starts owned offscreen Hosts with the same assets and application settings.
+
+```sh
+export IPP_EGL_LIBRARY_DIR=/path/to/angle/lib
+python tools/ipp.py benchmark native --scene metal-camera --repetitions 3
+python tools/ipp.py benchmark native --scene metal-gallery --repetitions 3 --frames 60
+python tools/ipp.py benchmark native --scene metal-gallery --instrumented --repetitions 1 --frames 40
+python tools/ipp.py benchmark native --scene metal-gallery --cases shapes,platformer,particles,cockpit --repetitions 3 --frames 60
+```
+
+The release report measures presentation sequence changes per second and intervals between completed-frame responses. Those intervals include Host scheduling and transport, and presentation sequences count Host submissions. GPU diagnostic windows use command-buffer elapsed time on Metal and frame queries on GLES. Inspect each backend's available samples and clock scope separately. The reports retain source and executable identity, per-case samples, asset hashes and frame captures. Animated gallery captures document the rendered workloads. The paired correctness suite supplies deterministic pixel assertions.
+
 ## Measurements
 
 - [Expanded feature coverage baseline](feature-results.md)

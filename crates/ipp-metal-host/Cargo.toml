@@ -1,0 +1,21 @@
+[package]
+name = "ipp-metal-host"
+description = "IPP native Metal WebSocket Host"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ipp-core.workspace = true
+ipp-host-session.workspace = true
+ipp-protocol.workspace = true
+ipp-render-metal.workspace = true
+ipp-server.workspace = true
+
+[features]
+default = []
+instrumentation = ["ipp-core/instrumentation", "ipp-render-metal/instrumentation", "ipp-server/instrumentation"]
+
+[lints]
+workspace = true

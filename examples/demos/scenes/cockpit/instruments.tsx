@@ -120,7 +120,7 @@ export function InstrumentAssets({
           active: "f32",
         }}
       >
-        <PaintShader>{RADAR}</PaintShader>
+        <PaintShader backend="ipp">{RADAR}</PaintShader>
       </ShaderAsset>
       <AnimationAsset id="cockpit-sweep" clip={sweep} />
       <AnimationAsset id="cockpit-pulse" clip={pulse} />

@@ -1,11 +1,11 @@
 //! Selected-camera stations over retained Cartesian paint. Bases and increasing
 //! data coordinates never reflect; composed chart depth chooses enclosure sides.
 
-use super::super::outputs::scene::ScenePlotPlane;
+use super::ScenePlotPlane;
 use super::math::point;
-use crate::RenderError;
-use ipp_core::systems::plot::{PlotPlanePlacement, PlotPreparedGeometry};
-use ipp_core::{WorldRef, WorldViewport, systems::canvas::CanvasTarget};
+use crate::ErrorReason;
+use crate::systems::plot::{PlotPlanePlacement, PlotPreparedGeometry};
+use crate::{WorldRef, WorldViewport, systems::canvas::CanvasTarget};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
@@ -40,12 +40,13 @@ pub(super) fn far_bounds(chart: [f32; 16], camera: [f32; 16], extent: [f32; 3]) 
     })
 }
 
-pub(in crate::services::render) fn model(
+/// Move a grid to the far face of the chart enclosure in the current view.
+pub fn model(
     mut plane: [f32; 16],
     chart: [f32; 16],
     camera: [f32; 16],
     placement: PlotPlanePlacement,
-) -> Result<[f32; 16], RenderError> {
+) -> Result<[f32; 16], ErrorReason> {
     let (extent, moved): ([f32; 3], [bool; 3]) = match placement {
         PlotPlanePlacement::Grid {
             extent,
@@ -67,7 +68,7 @@ pub(in crate::services::render) fn model(
     if plane.iter().all(|value| value.is_finite()) {
         Ok(plane)
     } else {
-        Err(RenderError::InvalidTransform)
+        Err(ErrorReason::InvalidGeometry)
     }
 }
 
@@ -217,7 +218,7 @@ impl PlotViewPlacementState {
         projection: [f32; 16],
         viewport: WorldViewport,
         time: f64,
-    ) -> Result<Vec<ScenePlotPlane<'a>>, RenderError> {
+    ) -> Result<Vec<ScenePlotPlane<'a>>, ErrorReason> {
         let mut arranged = Vec::new();
         self.place_into(planes, camera, projection, viewport, time, &mut arranged)?;
         Ok(arranged)
@@ -232,7 +233,7 @@ impl PlotViewPlacementState {
         viewport: WorldViewport,
         time: f64,
         arranged: &mut Vec<ScenePlotPlane<'a>>,
-    ) -> Result<(), RenderError> {
+    ) -> Result<(), ErrorReason> {
         if self.time.is_some_and(|previous| time < previous) {
             self.charts.clear();
         }
@@ -309,7 +310,7 @@ impl PlotViewPlacementState {
                 self.stations.push((station_key, station));
                 station
             };
-            let mut model = ipp_core::math::multiply(plane.chart_model, plane.plane.model);
+            let mut model = crate::math::multiply(plane.chart_model, plane.plane.model);
             for row in 0..3 {
                 model[12 + row] += (0..3)
                     .map(|col| plane.chart_model[col * 4 + row] * station[col])
@@ -420,8 +421,7 @@ fn visibility_scores(
     axis: u8,
     content: Option<[[f32; 3]; 2]>,
 ) -> [f32; 4] {
-    let Ok(inverse) =
-        ipp_core::systems::geometry::GeometryShapeTransform::new(chart.map(f64::from))
+    let Ok(inverse) = crate::systems::geometry::GeometryShapeTransform::new(chart.map(f64::from))
     else {
         return [0.0; 4];
     };

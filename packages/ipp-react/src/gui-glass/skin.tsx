@@ -165,7 +165,7 @@ export function GlassSkin({
             recipe={{ presentation: true, lighting: sceneLighting }}
             parameters={GLASS_PARAMETERS}
           >
-            <PaintShader>
+            <PaintShader backend="ipp">
               {appearance === "liquid" ? LIQUID_GLASS_SHADER : GLASS_SHADER}
             </PaintShader>
           </ShaderAsset>

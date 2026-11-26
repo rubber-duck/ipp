@@ -1,17 +1,17 @@
 //! View-dependent annotation placement over immutable Plot paint and glyph streams.
 
-use crate::RenderError;
-use ipp_core::systems::plot::PlotPlaneFacing;
+use crate::ErrorReason;
+use crate::systems::plot::PlotPlaneFacing;
 
 /// Compose first, then face this view: spatial attachments and entity transforms
 /// place the exact data anchor, while positive basis lengths retain physical size.
 /// Camera translation is irrelevant; using its right/up columns also keeps text
 /// upright under roll and avoids mirroring from a reflected chart transform.
-pub(in crate::services::render) fn model(
+pub fn model(
     mut model: [f32; 16],
     facing: PlotPlaneFacing,
     camera: [f32; 16],
-) -> Result<[f32; 16], RenderError> {
+) -> Result<[f32; 16], ErrorReason> {
     if facing == PlotPlaneFacing::Fixed {
         return Ok(model);
     }
@@ -25,7 +25,7 @@ pub(in crate::services::render) fn model(
     let right = length(&camera, 0);
     let up = length(&camera, 4);
     if right == 0.0 || up == 0.0 || !right.is_finite() || !up.is_finite() {
-        return Err(RenderError::InvalidTransform);
+        return Err(ErrorReason::InvalidGeometry);
     }
     for axis in 0..3 {
         model[axis] = camera[axis] / right * width;
@@ -39,7 +39,7 @@ pub(in crate::services::render) fn model(
     if model.iter().all(|value| value.is_finite()) {
         Ok(model)
     } else {
-        Err(RenderError::InvalidTransform)
+        Err(ErrorReason::InvalidGeometry)
     }
 }
 

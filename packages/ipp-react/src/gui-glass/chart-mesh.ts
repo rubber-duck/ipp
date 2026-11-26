@@ -16,7 +16,7 @@ out vec3 chartLight;
 void materialVertex() {
   ippDefaultVertex();
   chartOrigin=(u_model*vec4(0,0,0,1)).xyz;
-  chartLight=mat3(u_model)*p_light.xyz;
+  chartLight=mat3(u_model[0].xyz,u_model[1].xyz,u_model[2].xyz)*p_light.xyz;
 }
 `;
 

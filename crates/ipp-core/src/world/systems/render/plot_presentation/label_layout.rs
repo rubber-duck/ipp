@@ -13,10 +13,10 @@
 //! Offscreen ink keeps its retained placement and ordinary GPU clipping; fitting
 //! must not turn an invisible neighbouring chart into a viewport annotation.
 
-use super::super::outputs::scene::ScenePlotPlane;
-use ipp_core::systems::canvas::CanvasTarget;
-use ipp_core::systems::plot::{PlotPlaneLayout, PlotPlanePlacement, PlotPreparedGeometry};
-use ipp_core::{WorldRef, WorldViewport};
+use super::ScenePlotPlane;
+use crate::systems::canvas::CanvasTarget;
+use crate::systems::plot::{PlotPlaneLayout, PlotPlanePlacement, PlotPreparedGeometry};
+use crate::{WorldRef, WorldViewport};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
@@ -32,8 +32,10 @@ struct Previous {
     offset: [f32; 2],
 }
 
+/// View-local label and callout arrangement state. RenderService owns one value
+/// per selected Camera and discards it with that view's lifetime.
 #[derive(Default)]
-pub(in crate::services::render) struct PlotLabelLayoutState {
+pub struct PlotLabelLayoutState {
     viewport: [u32; 2],
     previous: BTreeMap<Key, Previous>,
     axes: super::view_placement::PlotViewPlacementState,
@@ -48,7 +50,7 @@ pub(in crate::services::render) struct PlotLabelLayoutState {
 
 impl PlotLabelLayoutState {
     #[cfg(test)]
-    pub(in crate::services::render) fn arrange<'a>(
+    fn arrange<'a>(
         &mut self,
         planes: &[ScenePlotPlane<'a>],
         projection: [f32; 16],
@@ -59,14 +61,15 @@ impl PlotLabelLayoutState {
         arranged
     }
 
-    pub(in crate::services::render) fn frame<'a>(
+    /// Prepare this frame's borrowed axes, ticks, callouts and connectors.
+    pub fn frame<'a>(
         &mut self,
         planes: &[ScenePlotPlane<'a>],
         camera: [f32; 16],
         projection: [f32; 16],
         viewport: WorldViewport,
         time: f64,
-    ) -> Result<super::label_storage::PlotPlaneFrame<'a>, crate::RenderError> {
+    ) -> Result<super::label_storage::PlotPlaneFrame<'a>, crate::ErrorReason> {
         let mut frame = super::label_storage::PlotPlaneFrame::new(self.buffers.clone());
         self.axes.place_into(
             planes,
@@ -926,7 +929,3 @@ fn connector_model(
 #[cfg(test)]
 #[path = "label_layout_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "profile_tests.rs"]
-mod profile_tests;

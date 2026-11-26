@@ -13,7 +13,7 @@ from .model import ROOT, Task
 from .processes import node, run
 
 DIRECTORY = ROOT / "target/performance-build/chart-data"
-CHART_PROFILE = "services::render::plot::label_layout::profile_tests::chart_profile"
+CHART_PROFILE = "services::render::plot::profile_tests::chart_profile"
 
 
 def build(instrumented: bool = False) -> None:

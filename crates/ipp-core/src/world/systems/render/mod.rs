@@ -15,6 +15,7 @@ pub use mesh_pose::MeshPose;
 
 pub(in crate::world) use mesh_pose::mesh_pose;
 
+pub mod plot_presentation;
 pub mod render_state;
 
 use crate::services::asset_management::AssetManagementService;

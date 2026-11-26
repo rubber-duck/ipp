@@ -17,7 +17,7 @@ export function cartoonPaperAssets(scope: string) {
   return (
     <>
       <ShaderAsset id={`${scope}/chart-paper`} recipe={{}} parameters={{}}>
-        <PaintShader>{`
+        <PaintShader backend="ipp">{`
           vec2 squares = position / 18.;
           float wash = clamp(1. - position.y / max(size.y, 1.), 0., 1.);
           ${grid}
@@ -30,7 +30,7 @@ export function cartoonPaperAssets(scope: string) {
         recipe={{ normals: true }}
         parameters={{}}
       >
-        <VertexShader requiredAttributes={7}>{`
+        <VertexShader backend="ipp" requiredAttributes={7}>{`
           out vec3 paperLocal;
           out float paperFace;
           void materialVertex() {
@@ -39,11 +39,11 @@ export function cartoonPaperAssets(scope: string) {
             paperFace = a_normal.y;
           }
         `}</VertexShader>
-        <FragmentShader requiredAttributes={7}>{`
+        <FragmentShader backend="ipp" requiredAttributes={7}>{`
           in vec3 paperLocal;
           in float paperFace;
           vec4 materialFragment() {
-            if (!gl_FrontFacing || paperFace < -.5) discard;
+            if (!ippFrontFacing() || paperFace < -.5) ippDiscard();
             vec2 squares = paperLocal.xz * 2.;
             float wash = .3 + .65 * (1. - v_uv.y);
             ${grid}

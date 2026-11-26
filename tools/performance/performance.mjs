@@ -18,9 +18,12 @@ const source = new Map([
   ["stress", "tests/performance/stress.ts"],
   ["robot", "tests/profiling/platformer-profile.test.ts"],
   ["cockpit-surfaces", "tests/performance/cockpit-surfaces.ts"],
+  ["metal-camera", "tests/performance/metal-camera.ts"],
+  ["gui-rendering", "tests/performance/metal-gallery.ts"],
+  ["metal-gallery", "tests/performance/metal-gallery.ts"],
 ]).get(scenario);
 if (source === undefined) throw new Error("Unknown performance scenario");
-if (scenario === "cockpit-surfaces") {
+if (scenario === "cockpit-surfaces" || scenario === "gui-rendering") {
   const root = JSON.parse(await readFile("tsconfig.json", "utf8"));
   const paths = Object.fromEntries(
     Object.entries(root.compilerOptions.paths).map(([key, values]) => [
@@ -28,6 +31,10 @@ if (scenario === "cockpit-surfaces") {
       values.map((value) => resolve(value)),
     ]),
   );
+  if (scenario === "gui-rendering") {
+    paths["@ipp/react"] = [resolve("packages/ipp-react/src/index.ts")];
+    paths["@ipp/react/*"] = [resolve("packages/ipp-react/src/*.ts")];
+  }
   paths["@ipp/host-contract"] = [resolve(contractDirectory, "generated.ts")];
   const configuration = `${output}.tsconfig.json`;
   await writeFile(
@@ -37,7 +44,11 @@ if (scenario === "cockpit-surfaces") {
       compilerOptions: { noEmit: true, paths },
       include: [
         resolve(source),
-        resolve("tests/performance/scenarios/cockpit-surfaces.ts"),
+        resolve(
+          scenario === "gui-rendering"
+            ? "tests/performance/drivers/native-gui-rendering.ts"
+            : "tests/performance/scenarios/cockpit-surfaces.ts",
+        ),
         resolve("examples/glsl.d.ts"),
       ],
     }),

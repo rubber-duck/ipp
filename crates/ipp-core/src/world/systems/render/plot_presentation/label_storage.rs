@@ -1,6 +1,6 @@
 //! Borrowed Plot presentation buffers, cleared before returning their capacity.
 
-use super::super::outputs::scene::ScenePlotPlane;
+use super::ScenePlotPlane;
 use std::{cell::RefCell, rc::Rc};
 
 pub(super) type PlotPlanePool = Rc<RefCell<PlotPlaneStorage<'static>>>;
@@ -11,7 +11,8 @@ pub(super) struct PlotPlaneStorage<'a> {
     arranged: Vec<ScenePlotPlane<'a>>,
 }
 
-pub(in crate::services::render) struct PlotPlaneFrame<'a> {
+/// Prepared planes borrowing the source publications until submission ends.
+pub struct PlotPlaneFrame<'a> {
     pub(super) placed: Vec<ScenePlotPlane<'a>>,
     pub(super) arranged: Vec<ScenePlotPlane<'a>>,
     pool: PlotPlanePool,

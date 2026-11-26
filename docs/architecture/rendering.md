@@ -22,9 +22,9 @@ A completion request may additionally require included content from exact child 
 
 SurfaceCanvas presents the child World's canvas through the selected [Surface implementation](#surface-presentation), using direct primitives or derived images with optional temporal caching. SurfaceCamera keeps an independent Camera domain. An opaque Camera covering the root Canvas behind its GUI draws directly at output resolution, then the overlay draws with isolated depth; panel-image budgets cannot lower the scene resolution. Other Camera surfaces use a color/depth target composited through the same Surface mapping. This selection preserves attachment ownership, projection, picking and publication evidence; [fullscreen composition](../../crates/ipp-render-gl/src/services/render/outputs/fullscreen.rs) owns eligibility. Each camera output defines a separate rendering domain; nested targets prepare before their consumers. Blend linearly within and between outputs, performing display conversion only at the root. Frozen contributions follow the [frame contract](runtime.md#frame-order) and [publication resource leases](assets.md#retention-and-recovery).
 
-## Compile-time GL devices
+## Rendering backends
 
-WebGL 2 and GLES 3 share preparation through compile-time devices. Bindings/dialects stay behind that boundary; Hosts own context libraries/shims. Future non-GL backends preserve World contracts without implementing the GL interface. Validate actual device capabilities; unsupported requirements need explicit errors or defined fallbacks.
+WebGL 2 and GLES 3 share preparation through compile-time devices. Hosts own context libraries and shims. The native Metal RenderService consumes the same completed World publications and owns its Metal resources, command encoding and GPU resource lifetimes. The macOS Host owns its clock, output selection and presentation surface. Validate actual device capabilities and report unsupported requirements or apply defined fallbacks.
 
 ## Material contract
 

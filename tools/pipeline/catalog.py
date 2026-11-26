@@ -152,12 +152,13 @@ REGRESSION_GROUPS = {
         ("blender", "blender-headless", "blender-disk-headless", "particles-blender"),
     ),
     "cef": RegressionGroup(
-        "Native CEF accelerated HTML/canvas integration on the platform GLES driver",
-        ("cef-surface", "native-cef"),
+        "Native CEF accelerated HTML and Canvas integration through native renderers",
+        ("cef-surface", "native-cef", "metal-cef"),
         steps=("check:cef-format", "check:cef-clippy", "check:cef-cache"),
     ),
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
+        ("metal-camera",),
         steps=(
             "test:shared-host:native",
             "test:native-window:macos",
@@ -665,6 +666,18 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     for name in ("gles-host", "gles-host-instrumentation"):
         build(name, (), (f"target/{name}",), ("node", "npm", "rust"), native_sources)
+    for name in ("metal-host", "metal-host-instrumentation"):
+        add(
+            Task(
+                f"build:{name}",
+                "Build the offscreen macOS Metal Host and generated client",
+                operation("build", name),
+                requirements=("node", "npm", "rust"),
+                outputs=(f"target/{name}",),
+                source_roots=native_sources,
+                platforms=("darwin",),
+            )
+        )
     # The shared development Host command; `host start` builds gles-host itself.
     build("shared-host", (), ("target/shared-host",), ("node", "npm"))
     build("mesh-pose-fixtures", (), ("target/mesh-pose-build",), ("node", "npm"))

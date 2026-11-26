@@ -66,6 +66,7 @@ COMPONENTS = [
     "PresentationGate",
     "GuiInputTarget",
     "CanvasHtml",
+    "GuiMeter",
     "BufferDataSourceBinding",
     "StreamingDataSourceBinding",
     "PlotFrame2d",

@@ -3,7 +3,7 @@
 
 pub(super) mod custom_material;
 mod custom_shader;
-pub(crate) mod ipp_shader;
+use ipp_core::services::asset_management::formats::ipp_shader;
 pub(super) mod programs;
 pub(super) mod shader;
 pub(super) mod shader_asset;

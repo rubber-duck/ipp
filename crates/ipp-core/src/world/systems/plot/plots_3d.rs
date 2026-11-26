@@ -13,7 +13,7 @@ use crate::ErrorReason;
 use crate::components::rows::Rows;
 use crate::services::asset_management::formats::drawing::FillRule;
 use crate::services::asset_management::formats::quadratic::{QuadraticContour, QuadraticSegment};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::f64::consts::TAU;
 use std::sync::Arc;
 
@@ -290,7 +290,7 @@ pub fn prepare_surface(
             .filter(|&[a, b, c]| series[a].valid && series[b].valid && series[c].valid)
             .collect();
         let normals = surface_normals(&points, &triangles);
-        let mut edges = BTreeSet::new();
+        let mut edges = Vec::new();
         let mut pick_sites = vec![None; points.len()];
         for [a, b, c] in triangles {
             // Positive X/Z orientation faces downward in the right-handed 3D frame.
@@ -316,10 +316,12 @@ pub fn prepare_surface(
             )?;
             if chart.wireframe {
                 for [a, b] in [[a, b], [b, c], [c, a]] {
-                    edges.insert((a.min(b), a.max(b)));
+                    edges.push((a.min(b), a.max(b)));
                 }
             }
         }
+        edges.sort_unstable();
+        edges.dedup();
         for (a, b) in edges {
             meshes.line(
                 points[a],
@@ -726,20 +728,21 @@ impl MeshBuilder {
             a[2] * b[0] - a[0] * b[2],
             a[0] * b[1] - a[1] * b[0],
         ];
-        // Unlit edge strips need only exact degeneracy rejection. Normalizing
-        // their unused normal adds cost to dense cuboid preparation; f64 cross
-        // products of checked f32 positions remain finite and representable.
         if normal == [0.0; 3] {
             return Ok(());
         }
         // Compact unlit vertex colours retain restrained face contrast without
         // introducing a chart shader or requiring authored lights.
+        // A cross product of finite f32 positions lies inside f64's
+        // safe range for squaring, including subnormal input coordinates.
+        let length = (normal[0] * normal[0] + normal[1] * normal[1] + normal[2] * normal[2]).sqrt();
+        let face_normal = normal.map(|v| (v / length) as f32);
         let factor = if shade {
-            let length = normal[0].hypot(normal[1]).hypot(normal[2]);
-            let normal = normal.map(|v| (v / length) as f32);
             // Opposite X faces share a tone distinct from both Z faces, so
             // the same cuboid remains legible from either camera hemisphere.
-            0.17 + normal[1].max(0.0) * 0.75 + normal[0].abs() * 0.19 + normal[2].abs() * 0.02
+            0.17 + face_normal[1].max(0.0) * 0.75
+                + face_normal[0].abs() * 0.19
+                + face_normal[2].abs() * 0.02
         } else {
             1.0
         };
@@ -766,10 +769,7 @@ impl MeshBuilder {
             .extend(colors.map(|color| [color[0] * factor, color[1] * factor, color[2] * factor]));
         mesh.indices.extend([base, base + 1, base + 2]);
         let material = mesh.material.get_or_insert_with(Default::default);
-        let length = normal[0].hypot(normal[1]).hypot(normal[2]);
-        material
-            .normals
-            .extend(normals.unwrap_or([normal.map(|v| (v / length) as f32); 3]));
+        material.normals.extend(normals.unwrap_or([face_normal; 3]));
         material
             .colors
             .extend(colors.map(|color| [color[0], color[1], color[2]]));

@@ -70,6 +70,22 @@ function controlledTransport() {
   };
 }
 
+test("World receiver is installed in the attachment acknowledgement's transport turn", async () => {
+  const controlled = controlledTransport();
+  const host = await codec.IppHostClient.connectTransport(controlled.transport);
+  try {
+    const created = await host.createWorld({ selectedSystems: [] });
+    controlled.hold();
+    const opening = host.openWorld(created.reference);
+    controlled.release();
+    const [attached] = host.sessions.values();
+    assert.ok(attached);
+    assert.equal(await opening, attached);
+  } finally {
+    await host.close();
+  }
+});
+
 test("Host requests beyond the Host's admission window wait instead of failing", async () => {
   const controlled = controlledTransport();
   const host = await codec.IppHostClient.connectTransport(controlled.transport);

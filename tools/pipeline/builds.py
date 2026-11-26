@@ -233,6 +233,20 @@ def gles_host(directory: Path, instrumentation: bool, *, release: bool = False) 
     compile_client(directory, directory / "contract.bin")
 
 
+def metal_host(directory: Path, instrumentation: bool) -> None:
+    """Build the macOS Metal distribution and its generated native client."""
+    cargo(
+        "build",
+        "-p",
+        "ipp-metal-host",
+        "--release",
+        *(["--features", "instrumentation"] if instrumentation else []),
+    )
+    shutil.copy2(ROOT / "target/release/ipp-metal-host", directory / "ipp-metal-host")
+    native_contract(directory / "contract.bin", release=True)
+    compile_client(directory, directory / "contract.bin")
+
+
 def baseline_native() -> None:
     artifacts = ROOT / "target/integration-artifacts"
     with product(artifacts / "native") as native:
@@ -430,6 +444,9 @@ def build(name: str) -> None:
     elif name in ("gles-host", "gles-host-instrumentation"):
         with product(ROOT / "target" / name) as directory:
             gles_host(directory, name == "gles-host-instrumentation")
+    elif name in ("metal-host", "metal-host-instrumentation"):
+        with product(ROOT / "target" / name) as directory:
+            metal_host(directory, name == "metal-host-instrumentation")
     elif name in ("gallery-platformer-assets", "gallery-platformer-native-assets"):
         gallery_platformer_assets(native=name == "gallery-platformer-native-assets")
     elif name in ("demos-cockpit-assets", "demos-cockpit-native-assets"):

@@ -264,6 +264,9 @@ def parser() -> argparse.ArgumentParser:
             "gui-stress",
             "chart-data",
             "cockpit-surfaces",
+            "metal-camera",
+            "metal-gallery",
+            "gui-rendering",
             "plot-coverage",
         ),
         default="stress",
@@ -273,6 +276,19 @@ def parser() -> argparse.ArgumentParser:
         type=int,
         default=60,
         help="stress frames, or streaming updates for --scene retained-gui",
+    )
+    benchmarking.add_argument(
+        "--renderer",
+        choices=("metal", "gles"),
+        help="measure one native gui-rendering backend when reusing a pinned reference",
+    )
+    benchmarking.add_argument(
+        "--themes",
+        help="comma-separated gui-rendering skins (glass, cybertron, cartoon)",
+    )
+    benchmarking.add_argument(
+        "--projections",
+        help="comma-separated gui-rendering projections (canvas, flat, cylinder, sphere)",
     )
     benchmarking.add_argument("--group", type=int)
     benchmarking.add_argument(
@@ -299,7 +315,8 @@ def parser() -> argparse.ArgumentParser:
         "--warmup", type=int, default=2, help="untimed action cycles for chart-data"
     )
     benchmarking.add_argument(
-        "--cases", help="comma-separated chart-data case names; see its guide"
+        "--cases",
+        help="comma-separated chart-data, gallery or gui-rendering workload names",
     )
     benchmarking.add_argument(
         "--modes", help="comma-separated chart-data action modes (default: all)"

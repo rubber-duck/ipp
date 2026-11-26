@@ -316,6 +316,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ipp-metal-host"
+version = "0.1.0"
+dependencies = [
+ "ipp-core",
+ "ipp-host-session",
+ "ipp-protocol",
+ "ipp-render-metal",
+ "ipp-server",
+]
+
+[[package]]
 name = "ipp-protocol"
 version = "0.1.0"
 dependencies = [
@@ -324,6 +335,13 @@ dependencies = [
 
 [[package]]
 name = "ipp-render-gl"
+version = "0.1.0"
+dependencies = [
+ "ipp-core",
+]
+
+[[package]]
+name = "ipp-render-metal"
 version = "0.1.0"
 dependencies = [
  "ipp-core",

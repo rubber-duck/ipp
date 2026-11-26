@@ -127,31 +127,33 @@ export function cartoonChartAssets(scope: string) {
         recipe={{}}
         parameters={{ cream: "vec4", ink: "vec4" }}
       >
-        <PaintShader>{mark}</PaintShader>
+        <PaintShader backend="ipp">{mark}</PaintShader>
       </ShaderAsset>
       <ShaderAsset
         id={`${scope}/chart-crate`}
         recipe={{}}
         parameters={{ cream: "vec4", ink: "vec4" }}
       >
-        <PaintShader>{crate}</PaintShader>
+        <PaintShader backend="ipp">{crate}</PaintShader>
       </ShaderAsset>
       <ShaderAsset
         id={`${scope}/chart-card`}
         recipe={{}}
         parameters={{ ink: "vec4", body: "vec4" }}
       >
-        <PaintShader>{card}</PaintShader>
+        <PaintShader backend="ipp">{card}</PaintShader>
       </ShaderAsset>
       <ShaderAsset
         id={`${scope}/chart-mesh`}
         recipe={{ normals: true }}
         parameters={{ cream: "vec4", selected: "vec4" }}
       >
-        <VertexShader requiredAttributes={7}>
+        <VertexShader backend="ipp" requiredAttributes={7}>
           {"void materialVertex() { ippDefaultVertex(); }"}
         </VertexShader>
-        <FragmentShader requiredAttributes={7}>{mesh}</FragmentShader>
+        <FragmentShader backend="ipp" requiredAttributes={7}>
+          {mesh}
+        </FragmentShader>
       </ShaderAsset>
     </>
   );

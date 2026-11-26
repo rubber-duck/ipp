@@ -1,6 +1,6 @@
 //! Host-owned source/request reconciliation and callback-scoped GPU import.
 
-use super::{CefSetup, engine::CefEngine};
+use super::CefSetup;
 use crate::egl::Context;
 use ipp_core::HostRuntime;
 use ipp_core::services::web_content::{
@@ -10,6 +10,7 @@ use ipp_render_gl::{
     GlesIOSurfaceImage, GlesIOSurfaceImport, GlesRenderDevice, RenderService, WebImageCompletion,
     WebImageReservation,
 };
+use ipp_server::services::cef::{CefEngine, page_url};
 use std::collections::BTreeMap;
 use std::ffi::{CStr, CString, c_char, c_void};
 use std::path::PathBuf;
@@ -179,29 +180,7 @@ impl CefProvider {
                     return Err("CEF source capacity or identity conflict".into());
                 }
                 let name = std::str::from_utf8(data).map_err(|e| e.to_string())?;
-                let path = self
-                    .root
-                    .join(name)
-                    .canonicalize()
-                    .map_err(|e| e.to_string())?;
-                if !path.starts_with(&self.root)
-                    || !path.is_file()
-                    || path.extension().is_none_or(|ext| ext != "html")
-                {
-                    return Err("CEF page must be HTML within the configured local root".into());
-                }
-                let encoded: String = path
-                    .to_string_lossy()
-                    .bytes()
-                    .map(|byte| {
-                        if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
-                            char::from(byte).to_string()
-                        } else {
-                            format!("%{byte:02X}")
-                        }
-                    })
-                    .collect();
-                let url = CString::new(format!("file://{encoded}")).map_err(|e| e.to_string())?;
+                let url = page_url(&self.root, std::path::Path::new(name))?;
                 self.next_source = self
                     .next_source
                     .checked_add(1)

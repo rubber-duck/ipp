@@ -142,3 +142,17 @@ fn raw_gl_calls_and_names_are_rejected() {
         .is_err()
     );
 }
+
+#[test]
+fn front_facing_uses_the_rasterizer_flag_only_in_materials() {
+    let body = "if (!ippFrontFacing()) ippDiscard();";
+    assert_eq!(
+        lower(body, IppShaderTarget::GlslEs300).unwrap(),
+        "if (!gl_FrontFacing) discard;"
+    );
+    assert_eq!(
+        lower(body, IppShaderTarget::Msl).unwrap(),
+        "if (!ipp_front_facing) discard_fragment();"
+    );
+    assert!(validate_paint(body).is_err());
+}

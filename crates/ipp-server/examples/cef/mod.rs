@@ -1,8 +1,6 @@
 //! Optional native browser engine. Platform objects never enter World state.
 
 #[cfg(target_os = "macos")]
-mod engine;
-#[cfg(target_os = "macos")]
 mod provider;
 #[cfg(target_os = "macos")]
 pub(crate) use provider::CefProvider;

@@ -5,6 +5,8 @@ members = [
     "crates/ipp-protocol",
     "crates/ipp-host-session",
     "crates/ipp-render-gl",
+    "crates/ipp-render-metal",
+    "crates/ipp-metal-host",
     "crates/ipp-wasm",
     "crates/ipp-server",
     "tools/ipp-schema-derive",
@@ -23,6 +25,8 @@ ipp-core = { path = "crates/ipp-core", default-features = false }
 ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
 ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
 ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
+ipp-render-metal = { path = "crates/ipp-render-metal", default-features = false }
+ipp-server = { path = "crates/ipp-server", default-features = false }
 ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }
 # Smol components: portable task primitives are shared; reactors and blocking
 # pools are native-only. Defaults are disabled to keep WASM free of OS IO.

@@ -53,7 +53,7 @@ export function GlassChartAssets({
         recipe={{ presentation: true, lighting: true }}
         parameters={GLASS_CHART_PAINT_PARAMETERS}
       >
-        <PaintShader>{GLASS_CHART_PAINT}</PaintShader>
+        <PaintShader backend="ipp">{GLASS_CHART_PAINT}</PaintShader>
       </ShaderAsset>
       <ShaderAsset
         key={`${id}-mesh`}
@@ -61,10 +61,16 @@ export function GlassChartAssets({
         recipe={GLASS_CHART_MESH_RECIPE}
         parameters={GLASS_CHART_MESH_PARAMETERS}
       >
-        <VertexShader requiredAttributes={GLASS_CHART_MESH_ATTRIBUTES}>
+        <VertexShader
+          backend="ipp"
+          requiredAttributes={GLASS_CHART_MESH_ATTRIBUTES}
+        >
           {GLASS_CHART_MESH_VERTEX}
         </VertexShader>
-        <FragmentShader requiredAttributes={GLASS_CHART_MESH_ATTRIBUTES}>
+        <FragmentShader
+          backend="ipp"
+          requiredAttributes={GLASS_CHART_MESH_ATTRIBUTES}
+        >
           {GLASS_CHART_MESH_FRAGMENT}
         </FragmentShader>
       </ShaderAsset>

@@ -6,21 +6,101 @@ use std::path::Path;
 
 unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
+    fn dlopen(path: *const c_char, flags: i32) -> *mut c_void;
+    fn dlerror() -> *const c_char;
+    fn dlsym(library: *mut c_void, name: *const c_char) -> *const c_void;
+    fn dlclose(library: *mut c_void) -> i32;
 }
-use crate::egl::Library;
+use std::os::unix::ffi::OsStrExt;
 
-pub(super) type Paint = unsafe extern "C" fn(*mut c_void, u64, *mut c_void, u32, u32);
-pub(super) type Event = unsafe extern "C" fn(*mut c_void, u64, u32, *const c_char);
+struct Library(*mut c_void);
 
-pub(super) struct CefEngine {
+impl Library {
+    fn open(path: &Path) -> Result<Self, String> {
+        let path = CString::new(path.as_os_str().as_bytes()).map_err(|error| error.to_string())?;
+        // SAFETY: The configured trusted library path is terminated and lives through dlopen.
+        let handle = unsafe { dlopen(path.as_ptr(), 2 | 4) };
+        if handle.is_null() {
+            // SAFETY: dlerror returns a terminated loader-owned message if present.
+            let error = unsafe { dlerror() };
+            let message = if error.is_null() {
+                "could not open the CEF engine".into()
+            } else {
+                // SAFETY: Copy the current thread's message before another loader call.
+                unsafe { CStr::from_ptr(error) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            return Err(message);
+        }
+        Ok(Self(handle))
+    }
+
+    fn symbol(&self, name: &CStr) -> *const c_void {
+        // SAFETY: The library and terminated name remain live. Function signatures are
+        // checked by the versioned ABI loader, and engine code remains mapped.
+        unsafe { dlsym(self.0, name.as_ptr()) }
+    }
+}
+
+impl Drop for Library {
+    fn drop(&mut self) {
+        // SAFETY: A library only drops before successful initialization. In-use engines
+        // retain process-lifetime Objective-C classes using ManuallyDrop.
+        unsafe { dlclose(self.0) };
+    }
+}
+
+/// Resolve an authored local HTML page inside the Host's canonical source root.
+pub fn page_url(root: &Path, name: &Path) -> Result<CString, String> {
+    let page = root
+        .join(name)
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    if !page.starts_with(root)
+        || !page.is_file()
+        || page.extension().is_none_or(|extension| extension != "html")
+    {
+        return Err("CEF page must be HTML within the configured local root".into());
+    }
+    let encoded: String = page
+        .to_string_lossy()
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || b"/-._~".contains(&byte) {
+                char::from(byte).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    CString::new(format!("file://{encoded}")).map_err(|error| error.to_string())
+}
+
+/// Callback-borrowed BGRA IOSurface paint.
+pub type Paint = unsafe extern "C" fn(*mut c_void, u64, *mut c_void, u32, u32);
+/// Callback-borrowed terminated browser event text.
+pub type Event = unsafe extern "C" fn(*mut c_void, u64, u32, *const c_char);
+
+/// Dynamically loaded native CEF entry points.
+pub struct CefEngine {
+    /// Pump browser work on the Host thread.
     pub pump: unsafe extern "C" fn(),
+    /// Schedule a browser for an admitted page.
     pub create: unsafe extern "C" fn(u64, *const c_char, u32, u32) -> i32,
+    /// Request an accelerated paint from a live browser.
     pub begin_frame: unsafe extern "C" fn(u64),
+    /// Close the selected browser.
     pub close: unsafe extern "C" fn(u64),
+    /// Forward pointer input to a live browser.
     pub pointer: unsafe extern "C" fn(u64, u32, u32, f64, f64, f64, f64),
+    /// Forward a key event to a live browser.
     pub key: unsafe extern "C" fn(u64, u32, u32),
+    /// Forward callback-borrowed UTF-8 text.
     pub text: unsafe extern "C" fn(u64, *const c_char),
+    /// Forward the current browser focus state.
     pub focus: unsafe extern "C" fn(u64, i32),
+    /// Begin or continue shutdown until all browsers have closed.
     pub shutdown: unsafe extern "C" fn() -> i32,
     // CEF registers process-lifetime Objective-C classes. Keep code mapped even
     // after orderly shutdown; unloading those classes is not supported by ObjC.

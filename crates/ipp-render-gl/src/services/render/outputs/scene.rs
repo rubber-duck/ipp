@@ -12,18 +12,9 @@ use ipp_core::systems::{
     },
     render::{PublishedRenderItem, RenderPublication, RenderSystem},
 };
-use ipp_core::{EntityId, HostRuntime, OutputRef, WorldPublicationId, WorldRef};
+use ipp_core::{HostRuntime, OutputRef, WorldPublicationId, WorldRef};
 
-/// World-qualified presentation lifetime; never a mutable ECS lookup token.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RenderEntity {
-    /// Exact producing World lifetime.
-    pub world: WorldRef,
-    /// Generational entity within the producing World.
-    pub entity: EntityId,
-    /// Captured presentation component lifetime.
-    pub incarnation: u64,
-}
+pub use ipp_core::systems::render::plot_presentation::{RenderEntity, ScenePlotPlane};
 
 #[derive(Clone)]
 pub(in crate::services::render) struct SceneOutputSurface {
@@ -64,18 +55,6 @@ impl SceneOutputSurface {
 /// Current fault eligibility only, not routed-input authorization.
 pub(super) fn world_interaction_eligible(host: &HostRuntime, world: WorldRef) -> bool {
     host.world_fault(world) == Ok(None)
-}
-
-#[derive(Clone)]
-pub(in crate::services::render) struct ScenePlotPlane<'a> {
-    pub entity: RenderEntity,
-    pub target: ipp_core::systems::canvas::CanvasTarget,
-    pub publication: WorldPublicationId,
-    pub model: [f32; 16],
-    pub chart_model: [f32; 16],
-    pub paint: Option<&'a ipp_core::systems::canvas::CanvasPaintInstance>,
-    pub geometry: &'a std::sync::Arc<ipp_core::systems::plot::PlotPreparedGeometry>,
-    pub plane: &'a ipp_core::systems::plot::PlotPublishedPlane,
 }
 
 pub(in crate::services::render) struct SceneItem<'a> {
@@ -362,10 +341,12 @@ impl<'a> RenderScene<'a> {
                                     chart_model,
                                     camera_model,
                                     plane.placement,
-                                )?,
+                                )
+                                .map_err(|_| RenderError::InvalidTransform)?,
                                 plane.facing,
                                 camera_model,
-                            )?,
+                            )
+                            .map_err(|_| RenderError::InvalidTransform)?,
                         });
                     }
                 }

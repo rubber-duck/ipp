@@ -121,6 +121,8 @@ Shapes, lighting, particles and charts need no Blender installation. The complet
 
 The cockpit browser pane can use the optional native CEF engine on Apple Silicon. Install its build tools with `brew install cmake ninja`, then start with `node tools/shared-host/shared-host.mjs host start --gallery --window --cef`. The build pipeline installs the pinned, checksum-verified CEF archive in the shared cache and packages its helper applications. Runtime startup loads that installation; it never downloads. See the [native engine guide](../../crates/ipp-server/cef/README.md) for lifecycle, supported input and validation.
 
+Build the [direct Metal Host](../../crates/ipp-render-metal/README.md) with `python tools/ipp.py build metal-host` for offscreen Camera and Canvas rendering. Its generated native client is written beside the executable.
+
 ### Optional compiler cache
 
 Every worktree has its own `target/`, because Cargo locks that directory for the length of a build. [sccache](https://github.com/mozilla/sccache) lets worktrees reuse each other's compiled third-party crates instead. It is a choice for each machine: the repository does not configure it, and every build and pipeline step works without it.

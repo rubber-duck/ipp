@@ -44,7 +44,9 @@ const glassAssets = (scope: string, sceneLighting: boolean, liquid = false) => (
         recipe={{ presentation: true, lighting: sceneLighting }}
         parameters={GLASS_PARAMETERS}
       >
-        <PaintShader>{liquid ? LIQUID_GLASS_SHADER : GLASS_SHADER}</PaintShader>
+        <PaintShader backend="ipp">
+          {liquid ? LIQUID_GLASS_SHADER : GLASS_SHADER}
+        </PaintShader>
       </ShaderAsset>
     </Entity>
     <GlassChartAssets id={`${scope}/charts`} />

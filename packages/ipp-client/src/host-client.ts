@@ -358,11 +358,17 @@ export abstract class HostClientBase<T extends Client> {
   }
 
   async openWorld(world: WorldReference): Promise<T> {
-    return this.acceptAttachment(
-      await this.request(this.hostTag("HOST_REQUEST_OPEN_WORLD"), (writer) =>
-        writeWorldReference(writer, world),
-      ),
+    // An uncapped Host can deliver many World messages in the same socket turn
+    // as the attachment acknowledgement. Install the receiver in that turn.
+    let client!: T;
+    await this.request(
+      this.hostTag("HOST_REQUEST_OPEN_WORLD"),
+      (writer) => writeWorldReference(writer, world),
+      (reader) => {
+        client = this.acceptAttachment(reader);
+      },
     );
+    return client;
   }
 
   async resolveWorld(world: WorldSelector): Promise<WorldReference> {

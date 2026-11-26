@@ -24,6 +24,7 @@
 //! | `ippLoad(tex, coord, lod)` | Unfiltered integer texel fetch |
 //! | `ippTextureSize(tex, lod)` | Texture dimensions at `lod` as an int vector |
 //! | `ippMul(a, b)` | Matrix/vector multiplication in the target's semantics |
+//! | `ippFrontFacing()` | Rasterizer front-face flag for mesh fragments |
 //! | `ippDiscard()` | Fragment discard |
 //! | `ippFragmentCoord()` | Fragment position in pixels as a 2-vector |
 //!
@@ -43,12 +44,9 @@
 //! rather than mistranslated; native source remains available through a
 //! renderer-specific backend entry for anything outside this subset.
 
-/// A renderer backend an `ipp` body can be lowered to. Only the GLSL target
-/// has a device backend today; the HLSL and Metal lowerings are snapshot-tested
-/// here and consumed by their future backends (ipp-fnir.15, ipp-fnir.16).
-#[allow(dead_code)]
+/// The target language for mechanical lowering of portable IPP shader source.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum IppShaderTarget {
+pub enum IppShaderTarget {
     /// WebGL 2 and GLES 3 (`glsl-es-300`).
     GlslEs300,
     /// Direct3D 11 HLSL.
@@ -57,11 +55,12 @@ pub(crate) enum IppShaderTarget {
     Msl,
 }
 
-const INTRINSICS: [&str; 8] = [
+const INTRINSICS: [&str; 9] = [
     "ippSampleBias",
     "ippTextureSize",
     "ippSampleLod",
     "ippFragmentCoord",
+    "ippFrontFacing",
     "ippSample",
     "ippDiscard",
     "ippLoad",
@@ -73,11 +72,45 @@ const INTRINSICS: [&str; 8] = [
 /// points exactly as it does for a renderer-specific body. Comments are
 /// blanked (newlines preserved) before validation and rewriting, so comment
 /// text is never parsed as shader code and generated line numbers stay put.
-pub(crate) fn lower(body: &str, target: IppShaderTarget) -> Result<String, String> {
+pub fn lower(body: &str, target: IppShaderTarget) -> Result<String, String> {
     let masked = mask_comments(body)?;
     validate_body(&masked)?;
     let rewritten = rewrite_intrinsics(&masked, target)?;
     Ok(map_tokens(&rewritten, target))
+}
+
+/// Check that a Canvas paint stays in its function and preserves its coverage.
+pub fn validate_paint(body: &str) -> Result<(), String> {
+    let code = mask_comments(body)?;
+    if code.trim().is_empty() || code.contains('#') {
+        return Err("A paint needs a body without preprocessing directives".into());
+    }
+
+    let mut depth = 0i64;
+    for character in code.chars() {
+        match character {
+            '{' => depth += 1,
+            '}' => depth -= 1,
+            _ => continue,
+        }
+        if depth < 0 {
+            return Err("A paint body cannot close its function".into());
+        }
+    }
+    if depth != 0 {
+        return Err("A paint body leaves a brace open".into());
+    }
+    if let Some(name) = identifiers(&code).find(|name| {
+        matches!(
+            *name,
+            "discard" | "discard_fragment" | "ippDiscard" | "ippFrontFacing"
+        ) || ["v_", "u_", "a_", "IPP_", "ipp_"]
+            .iter()
+            .any(|prefix| name.starts_with(prefix))
+    }) {
+        return Err(format!("A paint body cannot use {name}"));
+    }
+    Ok(())
 }
 
 /// Replace `//` and `/* */` comment characters with spaces, preserving bytes
@@ -303,6 +336,13 @@ fn emit_intrinsic(name: &str, args: &[String], target: IppShaderTarget) -> Resul
                 _ => "discard".into(),
             }
         }
+        ("ippFrontFacing", _) => {
+            expect(0)?;
+            match target {
+                IppShaderTarget::GlslEs300 => "gl_FrontFacing".into(),
+                _ => "ipp_front_facing".into(),
+            }
+        }
         ("ippFragmentCoord", _) => {
             expect(0)?;
             match target {
@@ -371,6 +411,8 @@ fn map_word(word: &str, target: IppShaderTarget) -> &str {
         ("dFdy", IppShaderTarget::Hlsl) => "ddy",
         ("dFdx", IppShaderTarget::Msl) => "dfdx",
         ("dFdy", IppShaderTarget::Msl) => "dfdy",
+        ("atan", IppShaderTarget::Msl) => "ipp_atan",
+        ("mod", IppShaderTarget::Msl) => "ipp_mod",
         _ => word,
     }
 }

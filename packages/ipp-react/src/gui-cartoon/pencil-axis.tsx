@@ -9,7 +9,7 @@ export function pencilAxisAsset(scope: string) {
       recipe={{}}
       parameters={{ pressure: "f32" }}
     >
-      <PaintShader>{`
+      <PaintShader backend="ipp">{`
         bool horizontal = size.x >= size.y;
         vec2 point = horizontal ? position : position.yx;
         float width = max(min(size.x, size.y), .00001);

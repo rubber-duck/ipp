@@ -92,6 +92,8 @@ impl PlotSystem {
         entity: EntityId,
         component: u16,
     ) -> Result<PlotRetainedChart, ErrorReason> {
+        #[cfg(feature = "instrumentation")]
+        let _trace = crate::profiling::CpuTraceScope::new("PlotSystem.prepare-chart");
         let consumer = context
             .world
             .register_data_binding_presentation_consumer(entity, component)?;

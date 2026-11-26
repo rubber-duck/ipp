@@ -1,5 +1,7 @@
 import { cybertronTokens } from "@ipp/react/gui-cybertron";
-import type { GuiKitTokens } from "@ipp/react/gui-kit";
+import { createElement } from "react";
+import { PlotSkinProvider } from "@ipp/react";
+import type { GuiSkinDefinition, GuiKitTokens } from "@ipp/react/gui-kit";
 /** Real-source 3D Plot fixture shared by native visual iteration and future scenarios. */
 import type {
   AnimationWorldClient,
@@ -112,6 +114,7 @@ interface Plot3dChart {
   readonly camera: bigint;
   readonly binding: RootBinding;
   readonly source: string;
+  readonly producer: DatasetProducer;
   readonly font: string;
   readonly component: string;
   readonly root: ReactWorldRoot;
@@ -191,6 +194,12 @@ export async function openPlot3d(
   font: Uint8Array<ArrayBuffer>,
   name: string,
   tokens: GuiKitTokens = cybertronTokens,
+  options?: {
+    onlyChart?: string;
+    skin?: GuiSkinDefinition;
+    surfaceDivisions?: number;
+    pointRows?: number;
+  },
 ): Promise<Plot3dScene> {
   const {
     accent: CYAN,
@@ -214,21 +223,41 @@ export async function openPlot3d(
   const barRows = [35, 75, 45, 25, 60, 85, 50, 30, 55, 70, 40, 20].map(
     (value, i) => data(i % 4, value, Math.floor(i / 4), 15 + ((i * 17) % 75)),
   );
-  const bars = await source("bars-and-points", barRows);
+  const densePointRows = options?.pointRows;
+  const pointValues =
+    densePointRows === undefined
+      ? barRows
+      : Array.from({ length: densePointRows }, (_, i) => {
+          const x = (3 * (i % 32)) / 31;
+          const z =
+            (2 * Math.floor(i / 32)) /
+            Math.max(1, Math.ceil(densePointRows / 32) - 1);
+          return data(
+            x,
+            48 + 29 * Math.sin(2 * x + z),
+            z,
+            50 + 25 * Math.cos(3 * z - x),
+          );
+        });
+  const bars = await source("bars-and-points", pointValues);
   const single = await source(
     "single-row",
     [30, 50, 35, 45].map((value, i) => data(i, value, 0)),
   );
   const surfaceRows: DatasetValue[][] = [];
-  for (let x = 0; x <= 16; x++)
-    for (let z = 0; z <= 16; z++) {
-      const px = (x * 10) / 16,
-        pz = (z * 10) / 16;
+  const divisions = options?.surfaceDivisions ?? 16;
+  const center = Math.floor(divisions / 2);
+  for (let x = 0; x <= divisions; x++)
+    for (let z = 0; z <= divisions; z++) {
+      const px = (x * 10) / divisions,
+        pz = (z * 10) / divisions;
       const y =
         0.3 +
         2.5 * Math.exp(-((px - 3) ** 2 + (pz - 4) ** 2) / 5) +
         2.8 * Math.exp(-((px - 7.5) ** 2 + (pz - 7.5) ** 2) / 4);
-      surfaceRows.push(data(px, y, pz, y, x === 8 && z === 8 ? 0 : 1));
+      surfaceRows.push(
+        data(px, y, pz, y, x === center && z === center ? 0 : 1),
+      );
     }
   const surface = await source("height", surfaceRows);
   const pie = await source("pie", [
@@ -258,6 +287,7 @@ export async function openPlot3d(
     extra: Fields = {},
     pointScale = false,
   ) => {
+    if (options?.onlyChart !== undefined && key !== options.onlyChart) return;
     const world = await host.createWorld({
       symbolicId: `plots-3d/${name}/${key}`,
       temporary: true,
@@ -359,6 +389,13 @@ export async function openPlot3d(
       seriesRows,
       labelRows,
       extra,
+      undefined,
+      undefined,
+      undefined,
+      options?.skin
+        ? (children) =>
+            createElement(PlotSkinProvider, { skin: options.skin! }, children)
+        : undefined,
     );
     const output = await host.bindOutput(world.reference, camera, "camera");
     const binding = await host.setRootOutput(output, PLOT_3D_EXTENT);
@@ -371,6 +408,7 @@ export async function openPlot3d(
       camera,
       binding,
       source: producer.source,
+      producer: producer.producer,
       font: fontAsset.source,
       component,
     });

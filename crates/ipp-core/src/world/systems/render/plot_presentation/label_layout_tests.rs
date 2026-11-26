@@ -132,33 +132,33 @@ fn impossible_density_is_bounded_deterministic_and_never_hides_labels() {
 
 #[test]
 fn history_is_weak_source_qualified_and_resets_on_viewport_change() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
     let world = host.world_ref(id).unwrap();
     let publication = host.latest_publication(id).unwrap();
-    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let entity = crate::EntityId::from_bits((1 << 32) | 1);
     let target = CanvasTarget {
         entity,
-        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        component: crate::ComponentValue::PLOT_POINTS3D,
         incarnation: 1,
     };
     let source = Arc::new(PlotPreparedGeometry::default());
     let mut model = IDENTITY;
     model[5] = -1.0;
-    let retained = ipp_core::systems::plot::PlotPublishedPlane {
+    let retained = crate::systems::plot::PlotPublishedPlane {
         part: 0,
         model,
-        facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+        facing: crate::systems::plot::PlotPlaneFacing::Camera,
         layout: PlotPlaneLayout::Callout,
-        placement: ipp_core::systems::plot::PlotPlanePlacement::Fixed,
+        placement: crate::systems::plot::PlotPlanePlacement::Fixed,
         bounds: Some([0.0, 0.0, 0.1, 0.05]),
         clip: [-1.0, -1.0, 1.0, 1.0],
         primitives: Arc::from([]),
     };
     let plane = ScenePlotPlane {
         paint: None,
-        entity: crate::services::render::outputs::scene::RenderEntity {
+        entity: crate::systems::render::plot_presentation::RenderEntity {
             world,
             entity,
             incarnation: 1,
@@ -255,36 +255,36 @@ fn finite_stations_outside_gl_depth_do_not_participate_in_layout() {
 
 #[test]
 fn offscreen_ink_keeps_its_station_and_cannot_displace_visible_labels() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
     let world = host.world_ref(id).unwrap();
     let publication = host.latest_publication(id).unwrap();
-    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let entity = crate::EntityId::from_bits((1 << 32) | 1);
     let target = CanvasTarget {
         entity,
-        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        component: crate::ComponentValue::PLOT_POINTS3D,
         incarnation: 1,
     };
     let source = Arc::new(PlotPreparedGeometry::default());
     let mut model = IDENTITY;
     model[5] = -1.0;
-    let label = ipp_core::systems::plot::PlotPublishedPlane {
+    let label = crate::systems::plot::PlotPublishedPlane {
         part: 0,
         model,
-        facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+        facing: crate::systems::plot::PlotPlaneFacing::Camera,
         layout: PlotPlaneLayout::Title(0),
         placement: PlotPlanePlacement::Fixed,
         bounds: Some([-0.1, -0.02, 0.1, 0.02]),
         clip: [-100.0, -100.0, 100.0, 100.0],
         primitives: Arc::from([]),
     };
-    let visible = ipp_core::systems::plot::PlotPublishedPlane {
+    let visible = crate::systems::plot::PlotPublishedPlane {
         part: 1,
         layout: PlotPlaneLayout::Callout,
         ..label.clone()
     };
-    let connector = ipp_core::systems::plot::PlotPublishedPlane {
+    let connector = crate::systems::plot::PlotPublishedPlane {
         part: 2,
         layout: PlotPlaneLayout::Connector {
             panel: 0,
@@ -295,7 +295,7 @@ fn offscreen_ink_keeps_its_station_and_cannot_displace_visible_labels() {
     };
     let scene_plane = |plane| ScenePlotPlane {
         paint: None,
-        entity: crate::services::render::outputs::scene::RenderEntity {
+        entity: crate::systems::render::plot_presentation::RenderEntity {
             world,
             entity,
             incarnation: 1,
@@ -464,15 +464,15 @@ fn small_disjoint_tick_ink_is_admitted_without_fixed_pixel_padding() {
 
 #[test]
 fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
     let world = host.world_ref(id).unwrap();
     let publication = host.latest_publication(id).unwrap();
-    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let entity = crate::EntityId::from_bits((1 << 32) | 1);
     let target = CanvasTarget {
         entity,
-        component: ipp_core::ComponentValue::PLOT_POINTS3D,
+        component: crate::ComponentValue::PLOT_POINTS3D,
         incarnation: 1,
     };
     let source = Arc::new(PlotPreparedGeometry::default());
@@ -490,10 +490,10 @@ fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
                 let mut model = IDENTITY;
                 model[5] = -1.0;
                 model[12] = part as f32 * 0.06;
-                ipp_core::systems::plot::PlotPublishedPlane {
+                crate::systems::plot::PlotPublishedPlane {
                     part,
                     model,
-                    facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+                    facing: crate::systems::plot::PlotPlaneFacing::Camera,
                     layout: PlotPlaneLayout::Tick(0),
                     placement: PlotPlanePlacement::Axis {
                         extent: [0.6, 0.1, 0.1],
@@ -514,7 +514,7 @@ fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
                 model[13] = plane.model[12] * chart[1];
                 ScenePlotPlane {
                     paint: None,
-                    entity: crate::services::render::outputs::scene::RenderEntity {
+                    entity: crate::systems::render::plot_presentation::RenderEntity {
                         world,
                         entity,
                         incarnation: 1,
@@ -602,18 +602,18 @@ fn crowded_ticks_are_omitted_in_one_lane_and_return_without_stale_history() {
 
 #[test]
 fn moving_face_lane_stays_beside_its_axis_instead_of_the_enclosure_hull() {
-    let mut host = ipp_core::HostRuntime::new();
+    let mut host = crate::HostRuntime::new();
     let id = host.create_world(Default::default(), &[]).unwrap();
     host.frame(0.0).unwrap();
     let world = host.world_ref(id).unwrap();
-    let entity = ipp_core::EntityId::from_bits((1 << 32) | 1);
+    let entity = crate::EntityId::from_bits((1 << 32) | 1);
     let source = Arc::new(PlotPreparedGeometry::default());
     let mut model = IDENTITY;
     model[5] = -1.0;
-    let retained = ipp_core::systems::plot::PlotPublishedPlane {
+    let retained = crate::systems::plot::PlotPublishedPlane {
         part: 0,
         model,
-        facing: ipp_core::systems::plot::PlotPlaneFacing::Camera,
+        facing: crate::systems::plot::PlotPlaneFacing::Camera,
         layout: PlotPlaneLayout::Tick(1),
         placement: PlotPlanePlacement::Axis {
             extent: [0.8, 0.8, 0.5],
@@ -626,14 +626,14 @@ fn moving_face_lane_stays_beside_its_axis_instead_of_the_enclosure_hull() {
     };
     let plane = ScenePlotPlane {
         paint: None,
-        entity: crate::services::render::outputs::scene::RenderEntity {
+        entity: crate::systems::render::plot_presentation::RenderEntity {
             world,
             entity,
             incarnation: 1,
         },
         target: CanvasTarget {
             entity,
-            component: ipp_core::ComponentValue::PLOT_POINTS3D,
+            component: crate::ComponentValue::PLOT_POINTS3D,
             incarnation: 1,
         },
         publication: host.latest_publication(id).unwrap(),

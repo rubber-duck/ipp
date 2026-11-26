@@ -338,13 +338,15 @@ impl<D: RenderDevice> RenderService<D> {
             #[cfg(feature = "instrumentation")]
             let _trace = ipp_core::profiling::CpuTraceScope::new("RenderService.plot-labels");
             let layout = self.plot_label_layouts.entry(world.selection).or_default();
-            layout.frame(
-                &world.plot_planes,
-                camera_model,
-                view_projection,
-                viewport,
-                presentation_time,
-            )?
+            layout
+                .frame(
+                    &world.plot_planes,
+                    camera_model,
+                    view_projection,
+                    viewport,
+                    presentation_time,
+                )
+                .map_err(|_| RenderError::InvalidTransform)?
         };
         let frustum = ipp_core::systems::geometry::frustum_planes(view_projection);
         // Cache repaints ran before `begin_frame`; their draws count here.

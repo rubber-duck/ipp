@@ -26,7 +26,7 @@ export const meterAsset = (scope: string) => (
     recipe={{ presentation: true }}
     parameters={{ ink: "vec4" }}
   >
-    <PaintShader>{meterPaint}</PaintShader>
+    <PaintShader backend="ipp">{meterPaint}</PaintShader>
   </ShaderAsset>
 );
 export const meterAppearance = (scope: string) => ({

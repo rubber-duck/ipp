@@ -12,6 +12,8 @@ Crates enforce ownership/platform isolation. Related systems stay modules; share
 | `ipp-protocol` | Hello and contract exchange, generated codecs and snapshot encoding |
 | `ipp-host-session` | Host task execution, shared queues, frame dispatch, correlation and responses |
 | `ipp-render-gl` | WebGL/GLES rendering and GPU resources |
+| `ipp-render-metal` | Native Metal rendering and GPU resources |
+| `ipp-metal-host` | The macOS Metal distribution of the native server |
 | `ipp-wasm`, `ipp-server` | Platform clocks, transport, I/O, contexts and presentation |
 | `ipp-schema-derive`, `ipp-schema-gen` | Compile-time access and verified-target generation |
 
@@ -24,7 +26,7 @@ A build varies along three axes and nothing else:
 | Axis | Choices | Decides |
 | --- | --- | --- |
 | Instrumentation | Production, instrumentation | Whether test controls and profiling hooks are compiled |
-| Rendering backend | None, WebGL 2, GLES 3 | The one renderer a host distribution links; never two, never an unused one |
+| Rendering backend | None, WebGL 2, GLES 3, native Metal (macOS) | The one renderer a host distribution links; never two, never an unused one |
 | Host target | Native, WASM | Platform clocks, transport, I/O and contexts |
 
 Every scene capability is compiled into every build: spatial state, property and skeletal animation, constraints, persistence, mesh poses, particles, Surfaces, GUI, shadows, built-ins, and material/texture/light declarations with geometry queries. A rendering build carries each capability's presentation path for its one backend. A capability is not a Cargo feature, and adding one does not add a build configuration.

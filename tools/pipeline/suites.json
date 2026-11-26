@@ -1,4 +1,44 @@
 {
+  "metal-camera": {
+    "description": "Completed native Metal and GLES Camera and Canvas frames on Apple hardware",
+    "sourceRoots": [
+      "crates/ipp-render-metal/",
+      "crates/ipp-metal-host/",
+      "tests/rendering/metal-camera.native.test.ts",
+      "tests/rendering/scenarios/metal-camera.ts",
+      "tests/rendering/scenarios/metal-canvas-retention.ts",
+      "tests/rendering/scenarios/metal-composition.ts"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "command": ["@node", "--test", "dist/tests/rendering/metal-camera.native.test.js"],
+        "builds": ["metal-host", "metal-host-instrumentation", "gles-host", "typescript", "font-assets"],
+        "requirements": ["node", "npm", "gles"],
+        "platforms": ["darwin"]
+      }
+    ]
+  },
+  "metal-cef": {
+    "description": "CEF accelerated IOSurface paint and macOS Metal recovery through completed Canvas frames",
+    "sourceRoots": [
+      "crates/ipp-metal-host/",
+      "crates/ipp-render-metal/",
+      "crates/ipp-server/cef/",
+      "crates/ipp-server/src/services/cef.rs",
+      "tests/rendering/metal-cef.native.test.ts",
+      "tests/rendering/fixtures/native-cef/"
+    ],
+    "commands": [
+      {
+        "name": "macos",
+        "command": ["@node", "--test", "dist/tests/rendering/metal-cef.native.test.js"],
+        "builds": ["metal-host-instrumentation", "cef-engine", "typescript"],
+        "requirements": ["node", "npm"],
+        "platforms": ["darwin"]
+      }
+    ]
+  },
   "cef-surface": {
     "description": "Opt-in real CEF accelerated HTML/canvas textures through the native GLES Surface renderer",
     "sourceRoots": [
@@ -3238,6 +3278,7 @@
   "plots": {
     "description": "Retained source-bound 2D/3D and typed React charts, exact row picks and source/parameter edits through native GLES and worker WASM/WebGL",
     "sourceRoots": [
+      "crates/ipp-core/src/world/systems/render/plot_presentation/",
       "crates/ipp-core/src/world/systems/plot/",
       "crates/ipp-render-gl/src/services/render/assets/generated_paths.rs",
       "crates/ipp-render-gl/src/services/render/assets/generated_meshes.rs",

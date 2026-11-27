@@ -15,6 +15,13 @@ ipp-host-session.workspace = true
 ipp-protocol.workspace = true
 ipp-render-gl = { workspace = true, optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+ipp-render-webgpu = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["OffscreenCanvas"] }
+
 [features]
 default = []
 instrumentation = [
@@ -22,7 +29,9 @@ instrumentation = [
     "ipp-protocol/instrumentation",
     "ipp-host-session/instrumentation",
     "ipp-render-gl?/instrumentation",
+    "ipp-render-webgpu?/instrumentation",
 ]
+webgpu = ["dep:ipp-render-webgpu", "dep:js-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:web-sys"]
 render = ["dep:ipp-render-gl"]
 
 [lints]

@@ -265,6 +265,7 @@ def parser() -> argparse.ArgumentParser:
             "chart-data",
             "cockpit-surfaces",
             "metal-camera",
+            "webgpu-camera",
             "metal-gallery",
             "gui-rendering",
             "plot-coverage",
@@ -279,8 +280,8 @@ def parser() -> argparse.ArgumentParser:
     )
     benchmarking.add_argument(
         "--renderer",
-        choices=("metal", "gles"),
-        help="measure one native gui-rendering backend when reusing a pinned reference",
+        choices=("metal", "gles", "webgpu", "all"),
+        help="select native gallery or GUI renderers (all includes WebGPU over Metal)",
     )
     benchmarking.add_argument(
         "--themes",

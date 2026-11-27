@@ -158,7 +158,7 @@ REGRESSION_GROUPS = {
     ),
     "gles": RegressionGroup(
         "All native GLES frame scenarios; requires configured EGL/GLES libraries",
-        ("metal-camera",),
+        ("metal-camera", "webgpu-camera"),
         steps=(
             "test:shared-host:native",
             "test:native-window:macos",
@@ -567,6 +567,7 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
         "gallery",
         (
             "browser:render",
+            "browser:webgpu",
             "react",
             "gallery-assets",
             "font-assets",
@@ -666,11 +667,16 @@ def catalog(egl_directory: str | None = None) -> dict[str, Task]:
     )
     for name in ("gles-host", "gles-host-instrumentation"):
         build(name, (), (f"target/{name}",), ("node", "npm", "rust"), native_sources)
-    for name in ("metal-host", "metal-host-instrumentation"):
+    for name in (
+        "metal-host",
+        "metal-host-instrumentation",
+        "webgpu-host",
+        "webgpu-host-instrumentation",
+    ):
         add(
             Task(
                 f"build:{name}",
-                "Build the offscreen macOS Metal Host and generated client",
+                f"Build the offscreen {name} and generated client",
                 operation("build", name),
                 requirements=("node", "npm", "rust"),
                 outputs=(f"target/{name}",),

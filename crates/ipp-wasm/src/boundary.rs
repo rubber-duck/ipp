@@ -646,7 +646,7 @@ impl WasmHostBoundary {
         self.output_bytes().len()
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     pub(crate) fn presentation(
         &mut self,
     ) -> Option<&mut crate::services::render::RenderSurfaceService> {
@@ -655,7 +655,7 @@ impl WasmHostBoundary {
             .map(|session| &mut session.services_mut().presentation)
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     pub(crate) fn presentation_host(
         &mut self,
     ) -> Option<(

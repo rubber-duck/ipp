@@ -281,9 +281,12 @@ impl Frame {
         {
             return false;
         }
+        let screen = matches!(binding, Some(CanvasBinding::Screen(_)));
         let (image, owner, path, start, layer) = match binding {
             Some(CanvasBinding::Bitmap(o)) => (Some(o.texture()), None, None, 0, 0),
-            Some(CanvasBinding::Target(t)) => (Some(&t.color), t.owner.as_ref(), None, 0, 0),
+            Some(CanvasBinding::Screen(t) | CanvasBinding::Target(t)) => {
+                (Some(&t.color), t.owner.as_ref(), None, 0, 0)
+            }
             Some(CanvasBinding::Layer {
                 target: t,
                 id,
@@ -308,7 +311,24 @@ impl Frame {
         if size_of_val(params) > uploads::INLINE_LIMIT {
             return false;
         }
-        let mode = if self.layered {
+        let cached = if cover.plot
+            && cover.depth_test
+            && self.is_root
+            && prog.is_none()
+            && self.recording.is_none()
+        {
+            path.and_then(|page| self.path_masks.visit(vertices, page, start, paint.options))
+        } else {
+            None
+        };
+        let path = cached.as_ref().map(|(buffer, _, _)| buffer).or(path);
+        let mode = if screen && analytic.is_some_and(|a| a.mapping.uses_columns()) {
+            COLUMN_SCREEN_PAINT
+        } else if screen {
+            SCREEN_PAINT
+        } else if cached.is_some() {
+            MASKED_PATH
+        } else if self.layered {
             LAYERS
         } else if let Some(a) = analytic {
             if a.mapping.is_cylinder() && image.is_none() && (path.is_none() || prog.is_none()) {
@@ -371,7 +391,12 @@ impl Frame {
                 ..*v
             }));
         b.vertex_count += vertices.len();
-        b.stage.paints.push(*paint);
+        let mut paint = *paint;
+        if let Some((_, rect, height)) = &cached {
+            paint.fill[0] = *rect;
+            paint.fill[1][0] = *height as f32;
+        }
+        b.stage.paints.push(paint);
         let mut first_edge = 0;
         let mut offset = 0;
         if let Some(a) = analytic {

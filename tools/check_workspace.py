@@ -13,6 +13,9 @@ CORE = "ipp-core"
 RENDER = "ipp-render-gl"
 METAL_RENDER = "ipp-render-metal"
 METAL_HOST = "ipp-metal-host"
+SCENE = "ipp-render-scene"
+WEBGPU = "ipp-render-webgpu"
+WEBGPU_HOST = "ipp-webgpu-host"
 HOST_SESSION = "ipp-host-session"
 MACROS = "ipp-schema-derive"
 HOSTS = ("ipp-server", "ipp-wasm")
@@ -27,10 +30,13 @@ FEATURES = {
     HOST_SESSION: {"default", INSTRUMENTATION},
     RENDER: {"default", INSTRUMENTATION},
     METAL_RENDER: {"default", INSTRUMENTATION},
+    SCENE: {"default"},
+    WEBGPU: {"default", INSTRUMENTATION},
+    WEBGPU_HOST: {"default", INSTRUMENTATION},
     METAL_HOST: {"default", INSTRUMENTATION},
     "ipp-server": {"default", INSTRUMENTATION},
     # The WASM host links its one renderer only with `render`.
-    "ipp-wasm": {"default", INSTRUMENTATION, "render"},
+    "ipp-wasm": {"default", INSTRUMENTATION, "render", "webgpu"},
     MACROS: {"default"},
     "ipp-schema-gen": {"default"},
 }
@@ -39,9 +45,13 @@ EDGES = {
     "ipp-protocol": {CORE},
     HOST_SESSION: {CORE, "ipp-protocol"},
     RENDER: {CORE},
-    METAL_RENDER: {CORE},
+    SCENE: {CORE},
+    METAL_RENDER: {CORE, SCENE},
+    WEBGPU: {CORE, SCENE},
+    WEBGPU_HOST: {CORE, HOST_SESSION, "ipp-protocol", "ipp-server", WEBGPU},
     METAL_HOST: {CORE, HOST_SESSION, "ipp-protocol", "ipp-server", METAL_RENDER},
-    **{host: {CORE, "ipp-protocol", HOST_SESSION, RENDER} for host in HOSTS},
+    "ipp-server": {CORE, "ipp-protocol", HOST_SESSION, RENDER},
+    "ipp-wasm": {CORE, "ipp-protocol", HOST_SESSION, RENDER, WEBGPU},
     MACROS: set(),
     "ipp-schema-gen": set(),
 }
@@ -253,7 +263,19 @@ def main():
             features,
             features,
         )
-        count += 3
+        browser_gpu = graph("ipp-wasm", "wasm32-unknown-unknown", ["webgpu", *features])
+        require(
+            WEBGPU in browser_gpu
+            and RENDER not in browser_gpu
+            and "webgpu" in browser_gpu["wgpu"]
+            and "metal" not in browser_gpu["wgpu"],
+            "Browser WebGPU distribution must link only its WebGPU renderer",
+        )
+        require(
+            browser_gpu[WEBGPU] == set(features),
+            "Browser WebGPU instrumentation forwarding",
+        )
+        count += 4
         metal = graph(METAL_HOST, "aarch64-apple-darwin", features)
         require(
             set(metal) & EDGES.keys()
@@ -264,6 +286,7 @@ def main():
                 "ipp-protocol",
                 "ipp-server",
                 METAL_RENDER,
+                SCENE,
                 METAL_HOST,
             },
             "Mac Metal Host must resolve the native server and only the Metal renderer",
@@ -272,7 +295,30 @@ def main():
             metal[CORE] == metal[HOST_SESSION] == metal[METAL_RENDER] == set(features),
             "Mac Metal Host must forward instrumentation to runtime, session and renderer",
         )
-        count += 1
+        webgpu = graph(WEBGPU_HOST, "aarch64-apple-darwin", features)
+        require(
+            set(webgpu) & EDGES.keys()
+            == {
+                CORE,
+                MACROS,
+                HOST_SESSION,
+                "ipp-protocol",
+                "ipp-server",
+                SCENE,
+                WEBGPU,
+                WEBGPU_HOST,
+            },
+            "WebGPU Host must resolve the native server and only its WebGPU renderer",
+        )
+        require(
+            webgpu[CORE] == webgpu[HOST_SESSION] == webgpu[WEBGPU] == set(features),
+            "WebGPU Host must consistently forward instrumentation",
+        )
+        require(
+            "metal" in webgpu["wgpu"] and not {"angle", "gles"} & webgpu["wgpu"],
+            "Native comparison must use the wgpu Metal adapter",
+        )
+        count += 2
     print(
         f"Checked {len(EDGES)} crate boundaries and {count} resolved native/WASM feature graphs."
     )

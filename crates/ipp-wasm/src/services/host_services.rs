@@ -1,7 +1,7 @@
 //! The browser worker's `HostServices` implementation and the Host composed
 //! from it.
 
-#[cfg(all(feature = "render", target_arch = "wasm32"))]
+#[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
 use super::render;
 
 use std::collections::VecDeque;
@@ -16,7 +16,7 @@ pub(crate) struct WasmHostServices {
     input: ipp_host_session::services::gui_input::GuiHostInputService,
     pending: VecDeque<ipp_core::AssetAcquisitionRequest>,
     outbox: VecDeque<Vec<u8>>,
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     pub(crate) presentation: render::RenderSurfaceService,
 }
 
@@ -96,7 +96,7 @@ impl HostServices for WasmHostServices {
         self.presentation.profile_cancel(capture);
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn record_frame(&mut self, host: &mut HostRuntime, frame: &ipp_core::HostFrameReport) {
         self.presentation.record_frame(host, frame);
     }
@@ -115,8 +115,8 @@ impl HostServices for WasmHostServices {
             input: Default::default(),
             pending: VecDeque::new(),
             outbox: VecDeque::new(),
-            #[cfg(all(feature = "render", target_arch = "wasm32"))]
-            presentation: render::RenderSurfaceService::new(host),
+            #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
+            presentation: render::RenderSurfaceService::new(host)?,
         })
     }
 
@@ -126,12 +126,12 @@ impl HostServices for WasmHostServices {
         Some(&mut self.input)
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn render_viewport(&self) -> Option<(u32, u32)> {
         self.presentation.viewport()
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn prepare_presentation(
         &mut self,
         host: &mut HostRuntime,
@@ -140,7 +140,7 @@ impl HostServices for WasmHostServices {
         self.presentation.prepare(host, selected)
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn presentation_surface(
         &self,
     ) -> Result<
@@ -150,7 +150,7 @@ impl HostServices for WasmHostServices {
         self.presentation.surface()
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn configure_presentation(
         &mut self,
         viewport: ipp_core::WorldViewport,
@@ -158,7 +158,7 @@ impl HostServices for WasmHostServices {
         self.presentation.configure(viewport)
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn present(
         &mut self,
         host: &HostRuntime,
@@ -179,12 +179,12 @@ impl HostServices for WasmHostServices {
         )
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn progress_assets(&mut self, host: &mut HostRuntime) {
         self.presentation.progress_resources(host);
     }
 
-    #[cfg(all(feature = "render", target_arch = "wasm32"))]
+    #[cfg(all(any(feature = "render", feature = "webgpu"), target_arch = "wasm32"))]
     fn progress_resources(&mut self, host: &mut HostRuntime) {
         self.presentation.progress_resources(host);
     }

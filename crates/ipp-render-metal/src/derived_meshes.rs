@@ -11,10 +11,7 @@ use ipp_core::{
     },
 };
 
-use crate::{
-    assets,
-    device::{Device, MeshBuffers},
-};
+use crate::device::{Device, MeshBuffers};
 
 pub(super) struct DerivedMesh {
     pub(super) buffers: MeshBuffers,
@@ -46,7 +43,7 @@ impl DerivedMeshes {
         let (last, mesh) = self.debug.entry(visual.mesh_key()).or_insert_with(|| {
             let mesh = builtin::debug_mesh(visual).ok().and_then(|mesh| {
                 let triangles = (mesh.indices().len() / 3) as u32;
-                let vertices = assets::mesh_vertices(&mesh).ok()?;
+                let vertices = ipp_render_scene::mesh::mesh_vertices(&mesh).ok()?;
                 Some(DerivedMesh {
                     buffers: device.mesh(&vertices, mesh.indices())?,
                     triangles,

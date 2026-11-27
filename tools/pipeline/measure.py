@@ -37,8 +37,16 @@ def distribution(root: Path, profile: str, features: list[str]) -> dict:
     javascript = sorted(directory.glob("*.js"))
     # Use the renderer's actual generated, comment-stripped shader copies.
     shader_root = root / "target/wasm32-unknown-unknown/release-small/build"
-    shaders = tuple(sorted(shader_root.glob("ipp-render-gl-*/out/render/**/*")))
-    shaders = tuple(path for path in shaders if path.is_file())
+    if "webgpu" in features:
+        shader_root = root / "crates/ipp-render-webgpu/src"
+        candidates = sorted(
+            path
+            for path in shader_root.iterdir()
+            if path.suffix in {".wgsl", ".glsl", ".frag", ".vert"}
+        )
+    else:
+        candidates = sorted(shader_root.glob("ipp-render-gl-*/out/render/**/*"))
+    shaders = tuple(path for path in candidates if path.is_file())
     record = artifact(wasm)
     record["wasm"] = analyze_wasm(wasm.read_bytes(), shaders)
     js = [artifact(path) for path in javascript]
@@ -85,7 +93,13 @@ def main(argv: list[str]) -> None:
     parser.add_argument(
         "--profile",
         action="append",
-        choices=["headless", "render", "render-instrumentation"],
+        choices=[
+            "headless",
+            "render",
+            "render-instrumentation",
+            "webgpu",
+            "webgpu-instrumentation",
+        ],
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--compare", type=Path)

@@ -14,7 +14,8 @@ use ipp_core::{
 use crate::canvas::{CanvasScene, decoded};
 
 #[derive(Clone)]
-pub(super) struct CanvasDamage {
+/// Paint identities and bounds of the last rendered Canvas image.
+pub struct CanvasDamage {
     entries: Arc<[Arc<CanvasPaintEntry>]>,
     bounds: Arc<[CanvasClip]>,
     extent: [f32; 2],
@@ -24,7 +25,8 @@ pub(super) struct CanvasDamage {
 }
 
 impl CanvasDamage {
-    pub(super) fn capture(
+    /// Capture the current entries, reusing bounds for identical resource-backed primitives.
+    pub fn capture(
         host: &HostRuntime,
         scene: CanvasScene<'_>,
         size: [u32; 2],
@@ -52,7 +54,8 @@ impl CanvasDamage {
         }
     }
 
-    pub(super) fn region(&self, old: Option<&Self>) -> Option<[u32; 4]> {
+    /// Calculate a bounded pixel scissor covering both old and new changed entries.
+    pub fn region(&self, old: Option<&Self>) -> Option<[u32; 4]> {
         let old = old?;
         if self.size != old.size
             || self.extent != old.extent
@@ -100,7 +103,8 @@ impl CanvasDamage {
         (area > 0 && area * 5 < full * 3).then_some([start[0], start[1], width, height])
     }
 
-    pub(super) fn entries(
+    /// Iterate over every current entry whose footprint overlaps the repaint region.
+    pub fn entries(
         &self,
         [x, y, width, height]: [u32; 4],
     ) -> impl Iterator<Item = &CanvasPaintEntry> {
@@ -144,7 +148,8 @@ fn extend(result: &mut Option<CanvasClip>, rect: CanvasClip) {
     }
 }
 
-fn paint_bounds(
+/// Conservative logical Canvas bounds including outlines, clipping and glow.
+pub fn paint_bounds(
     host: &HostRuntime,
     scene: CanvasScene<'_>,
     entry: &CanvasPaintEntry,

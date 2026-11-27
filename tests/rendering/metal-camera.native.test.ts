@@ -14,7 +14,10 @@ import { runNativeEnvironment } from "../harness/native.js";
 import { assertMetalCamera, metalCamera } from "./scenarios/metal-camera.js";
 import { assertCanvasRetention } from "./scenarios/metal-canvas-retention.js";
 
-import { metalComposition } from "./scenarios/metal-composition.js";
+import {
+  assertCompositionPixels,
+  metalComposition,
+} from "./scenarios/metal-composition.js";
 
 test("camera and nested canvas presentation through native Metal and GLES", {
   timeout: 120_000,
@@ -186,40 +189,25 @@ test("camera and nested canvas presentation through native Metal and GLES", {
       join(metal.evidence, `composition-difference-${i}.png`),
       encodePng(differenceImage(reference, actual, 2)),
     );
-    if (i === 2) {
-      for (const [x, y, rgb] of [
-        [58, 48, [137, 0, 0]],
-        [64, 38, [0, 255, 255]],
-        [72, 48, [255, 0, 0]],
-      ] as const) {
-        const pixel = y * actual.width + x;
-        const lanes = actual.pixels.subarray(pixel * 4, pixel * 4 + 3);
-        assert.ok(
-          rgb.every((value, lane) => Math.abs(value - lanes[lane]!) <= 3),
-          `cylinder paint at (${x}, ${y}) is ${lanes}, expected ${rgb}; see ${metal.evidence}`,
-        );
-        assert.ok(pixelDifference(reference, actual, pixel) <= 2);
-      }
-      continue;
-    }
-    // Sample away from analytic edges and texture filtering boundaries.
-    for (const [x, y, rgb] of [
-      [12, 30, [5, 188, 12]],
-      [33, 48, [0, 0, 255]],
-      [73, 30, [255, 255, 0]],
-      [78, 40, [188, 188, 188]],
-      [14, 15, [0, 255, 255]],
-      [66, 83, [10, 14, 20]],
-      [106, 78, [255, 0, 0]],
-    ] as const) {
-      const pixel = y * actual.width + x;
-      const lanes = actual.pixels.subarray(pixel * 4, pixel * 4 + 3);
-      assert.ok(
-        rgb.every((value, lane) => Math.abs(value - lanes[lane]!) <= 4),
-        `composition-${i} pixel (${x}, ${y}) is ${lanes}, expected ${rgb}; see ${metal.evidence}`,
-      );
-      assert.ok(pixelDifference(reference, actual, pixel) <= 2);
-    }
+    assertCompositionPixels(actual, i, metal.evidence);
+    const probes =
+      i === 2
+        ? ([
+            [58, 48],
+            [64, 38],
+            [72, 48],
+          ] as const)
+        : ([
+            [12, 30],
+            [33, 48],
+            [73, 30],
+            [78, 40],
+            [14, 15],
+            [66, 83],
+            [106, 78],
+          ] as const);
+    for (const [x, y] of probes)
+      assert.ok(pixelDifference(reference, actual, y * actual.width + x) <= 2);
   }
   for (const [i, reference] of gles.frames.entries()) {
     const actual: RgbaFrame = metal.frames[i]!;

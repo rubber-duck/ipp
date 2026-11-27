@@ -1,5 +1,5 @@
 /** Browser adapter: surface, physical input, asset fetch and connection lifetime. */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { isGallerySkin } from "./shared/skin-preference.js";
 import { DEMO_FONTS } from "./shared/fonts.js";
 import { createRoot } from "react-dom/client";
@@ -13,14 +13,18 @@ import { IppCanvas, type IppCanvasHandle } from "@ipp/react/web";
 import { createGuiUnhandledInputGate } from "@ipp/react/gui";
 import { DemoApplication, DEMO_SYSTEMS } from "./application.js";
 import { browserGalleryAssets } from "./browser-assets.js";
-import { GALLERY_RUNTIME, GALLERY_WHEEL_STEP } from "./shared/runtime.js";
+import {
+  GALLERY_RUNTIME,
+  GALLERY_WEBGPU_RUNTIME,
+  GALLERY_WHEEL_STEP,
+} from "./shared/runtime.js";
 import { installCameraControls } from "./shared/camera-controls.js";
 import {
   PLATFORMER_ASSETS,
   PLATFORMER_SOURCE,
 } from "./scenes/platformer/scene-file.js";
 
-const contract = await import(`${GALLERY_RUNTIME}generated.js`);
+type GalleryBackend = "WebGPU" | "WebGL 2";
 declare global {
   interface Window {
     ippDemoApplication?: DemoApplication;
@@ -29,7 +33,23 @@ declare global {
   }
 }
 
-function BrowserDemos() {
+function BrowserDemos({
+  backend,
+  fallback,
+}: {
+  backend: GalleryBackend;
+  fallback: () => void;
+}) {
+  const directory =
+    backend === "WebGPU" ? GALLERY_WEBGPU_RUNTIME : GALLERY_RUNTIME;
+  const runtime = useMemo(
+    () => browserRuntime(new URL(directory, window.location.href)),
+    [directory],
+  );
+  const contract = useRef<
+    import("./application.js").DemoApplicationContext["contract"] | undefined
+  >(undefined);
+  const started = useRef(false);
   const assets = useMemo(
     () => browserGalleryAssets(new URL(window.location.href)),
     [],
@@ -46,7 +66,7 @@ function BrowserDemos() {
   const [, changed] = useState(0);
   const [failure, setFailure] = useState<string>();
   useEffect(() => {
-    if (!canvas) return;
+    if (!canvas || !contract.current) return;
     const lifetime = new AbortController();
     const params = new URLSearchParams(window.location.search);
     const skin = params.get("skin");
@@ -55,7 +75,9 @@ function BrowserDemos() {
       {
         canvas,
         assets,
-        contract,
+        contract: contract.current,
+        renderer: backend,
+        generatedModuleUrl: runtime.generatedModuleUrl,
         signal: lifetime.signal,
         onError: (error) => setFailure(error.message),
         renderScaleChanged: setRenderScale,
@@ -83,7 +105,7 @@ function BrowserDemos() {
       delete window.ippDemoScene;
       void app.dispose().catch(console.error);
     };
-  }, [canvas, assets, applications]);
+  }, [canvas, assets, applications, backend, runtime]);
   useEffect(
     () => () => {
       const element =
@@ -133,90 +155,131 @@ function BrowserDemos() {
     return () => controls.dispose();
   }, [canvas, application, application?.sceneId, gate]);
   return (
-    <IppCanvas
-      id="stage"
-      className="stage"
-      canvasProps={{
-        id: "ipp-demo-canvas",
-        style: { width: "100%", height: "100%" },
-      }}
-      runtime={{
-        ...browserRuntime(new URL(GALLERY_RUNTIME, window.location.href)),
-        resourceUrls: [
-          { prefix: PLATFORMER_SOURCE, baseUrl: assets.url(PLATFORMER_ASSETS) },
-          {
-            prefix: "https://cockpit.ipp.invalid/",
-            baseUrl: assets.url("/target/demos-cockpit-assets/"),
+    <>
+      {failure && (
+        <div role="alert" className="gallery-error">
+          {failure}
+        </div>
+      )}
+      <IppCanvas
+        id="stage"
+        className="stage"
+        canvasProps={{
+          id: "ipp-demo-canvas",
+          style: { width: "100%", height: "100%" },
+        }}
+        runtime={{
+          ...runtime,
+          resourceUrls: [
+            {
+              prefix: PLATFORMER_SOURCE,
+              baseUrl: assets.url(PLATFORMER_ASSETS),
+            },
+            {
+              prefix: "https://cockpit.ipp.invalid/",
+              baseUrl: assets.url("/target/demos-cockpit-assets/"),
+            },
+          ],
+        }}
+        world={{
+          create: {
+            selectedSystems: DEMO_SYSTEMS,
+            canvas: { extent: [960, 640], unitsPerMetre: 1 },
           },
-        ],
-      }}
-      world={{
-        create: {
-          selectedSystems: DEMO_SYSTEMS,
-          canvas: { extent: [960, 640], unitsPerMetre: 1 },
-        },
-      }}
-      output={
-        canvas?.client.worldReference
-          ? canvasOutput(canvas.client.worldReference)
-          : null
-      }
-      renderScale={renderScale}
-      guiInput={{
-        unhandledInputGate: gate,
-        wheelStep: GALLERY_WHEEL_STEP,
-        awaitPointerDown: true,
-        onInputOutcome: (input, outcome) => {
-          const pending = application?.handlePhysicalInput(input, outcome);
-          if ("pointer" in input) {
-            const element =
-              document.querySelector<HTMLCanvasElement>("#ipp-demo-canvas");
-            const pointer = Number(BigInt.asIntN(32, input.pointer));
-            if (
-              input.kind === "pointerDown" &&
-              outcome.disposition !== "routed" &&
-              application?.capturingSceneInput &&
-              element
-            ) {
-              // Routed presses already have GUI capture. On a scene handoff,
-              // a touch may have ended while the Host was deciding the press.
-              try {
-                element.setPointerCapture(pointer);
-                scenePointers.add(pointer);
-              } catch (error) {
-                if (
-                  !(
-                    error instanceof DOMException &&
-                    error.name === "NotFoundError"
+        }}
+        output={
+          canvas?.client.worldReference
+            ? canvasOutput(canvas.client.worldReference)
+            : null
+        }
+        renderScale={renderScale}
+        guiInput={{
+          unhandledInputGate: gate,
+          wheelStep: GALLERY_WHEEL_STEP,
+          awaitPointerDown: true,
+          onInputOutcome: (input, outcome) => {
+            const pending = application?.handlePhysicalInput(input, outcome);
+            if ("pointer" in input) {
+              const element =
+                document.querySelector<HTMLCanvasElement>("#ipp-demo-canvas");
+              const pointer = Number(BigInt.asIntN(32, input.pointer));
+              if (
+                input.kind === "pointerDown" &&
+                outcome.disposition !== "routed" &&
+                application?.capturingSceneInput &&
+                element
+              ) {
+                // Routed presses already have GUI capture. On a scene handoff,
+                // a touch may have ended while the Host was deciding the press.
+                try {
+                  element.setPointerCapture(pointer);
+                  scenePointers.add(pointer);
+                } catch (error) {
+                  if (
+                    !(
+                      error instanceof DOMException &&
+                      error.name === "NotFoundError"
+                    )
                   )
-                )
-                  throw error;
+                    throw error;
+                }
+              }
+              if (
+                (input.kind === "pointerUp" ||
+                  input.kind === "pointerCancel") &&
+                scenePointers.delete(pointer) &&
+                element?.hasPointerCapture(pointer)
+              ) {
+                element.releasePointerCapture(pointer);
               }
             }
-            if (
-              (input.kind === "pointerUp" || input.kind === "pointerCancel") &&
-              scenePointers.delete(pointer) &&
-              element?.hasPointerCapture(pointer)
-            ) {
-              element.releasePointerCapture(pointer);
-            }
-          }
-          return pending?.catch((error) => setFailure(String(error)));
-        },
-      }}
-      onReady={setCanvas}
-      beforeClose={(handle) => applications.get(handle)?.dispose()}
-      onViewChange={(view) => {
-        if (view)
-          void application?.resize(view.binding.viewport).catch(console.error);
-      }}
-      onError={(error) => setFailure(error.message)}
-      aria-label={failure ?? "IPP interactive demos"}
+            return pending?.catch((error) => setFailure(String(error)));
+          },
+        }}
+        initialize={async () => {
+          contract.current = await import(runtime.generatedModuleUrl);
+        }}
+        onReady={(handle) => {
+          started.current = true;
+          setCanvas(handle);
+        }}
+        beforeClose={(handle) => applications.get(handle)?.dispose()}
+        onViewChange={(view) => {
+          if (view)
+            void application
+              ?.resize(view.binding.viewport)
+              .catch(console.error);
+        }}
+        onError={(error) => {
+          if (!started.current && backend === "WebGPU") {
+            console.info(
+              "Gallery WebGPU startup failed; trying WebGL 2",
+              error.message,
+            );
+            fallback();
+          } else setFailure(error.message);
+        }}
+        aria-label={failure ?? "IPP interactive demos"}
+      />
+    </>
+  );
+}
+
+function Gallery() {
+  const [backend, setBackend] = useState<GalleryBackend>(() =>
+    "gpu" in navigator && navigator.gpu ? "WebGPU" : "WebGL 2",
+  );
+  return (
+    <BrowserDemos
+      key={backend}
+      backend={backend}
+      fallback={() => setBackend("WebGL 2")}
     />
   );
 }
+
 const mount = document.getElementById("app");
 if (!mount) throw new Error("Missing application surface");
 const root = createRoot(mount);
-root.render(<BrowserDemos />);
+root.render(<Gallery />);
 window.addEventListener("pagehide", () => root.unmount(), { once: true });

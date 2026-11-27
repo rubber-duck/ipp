@@ -41,7 +41,6 @@ struct RasterVertex {
     float4 color;
     float2 uv;
     float weight;
-    float sprite;
     float3 world_position;
     float3 world_normal;
     float4 surface [[flat]];
@@ -126,7 +125,7 @@ static RasterVertex mesh_default_vertex(uint index, MeshVertex v,
     float weight = material.options.z != 0.0f ? v.color_weight.w : 1.0f;
     float3 world_position = (material.world_from_mesh * p).xyz;
     float3 world_normal = unit(normal_direction(linear_part(material.world_from_mesh), normal));
-    return {clip, float4(color * material.color.rgb, material.color.a), v.uv.xy, weight, signbit(material.color.a) ? 1.0f : 0.0f,
+    return {clip, float4(color * material.color.rgb, material.color.a), v.uv.xy, weight,
             world_position, world_normal, material.surface, material.effects,
             float4(0.0), float4(0.0), float4(0.0), float4(0.0)};
 }
@@ -304,9 +303,39 @@ fragment float4 mesh_fragment(RasterVertex input [[stage_in]],
     }
     float3 color = clamp(sampled * input.color.rgb, 0.0f, 1.0f);
     if (input.surface.z != 0.0f) color = direct_light(input, color, lighting, shadows);
-    float alpha = abs(input.color.a);
-    if (input.sprite != 0.0f) {
-        alpha *= 1.0f - smoothstep(0.35f, 0.5f, length(input.uv - 0.5f));
+    return float4(color, abs(input.color.a));
+}
+
+struct SpriteView { float4x4 projection; float4 right, up; };
+struct Sprite { float4 center_scale, rotation, color; };
+struct SpriteRaster { float4 position [[position]]; float2 uv; float4 color [[flat]]; };
+
+vertex SpriteRaster sprite_vertex(uint index [[vertex_id]], uint instance [[instance_id]],
+                                 device const Sprite *sprites [[buffer(0)]],
+                                 constant SpriteView &view [[buffer(1)]]) {
+    // The strip uses the same two triangles as the indexed sprite quad.
+    constexpr float2 corners[4] = {float2(0.5, -0.5), float2(0.5, 0.5), float2(-0.5, -0.5), float2(-0.5, 0.5)};
+    const device Sprite &sprite = sprites[instance];
+    float2 v = sprite.rotation.xy;
+    float len2 = dot(v, v);
+    float2 sc = float2(0, 1);
+    if (sprite.rotation.w != 0.0) {
+        if (len2 > 1e-12) sc = v * rsqrt(len2);
+    } else if (len2 > 0.0) {
+        // Double the quaternion's half-angle without converting it to radians.
+        sc = float2(2.0 * v.x * v.y, v.y * v.y - v.x * v.x) / len2;
     }
-    return float4(color, alpha);
+    float2 corner = corners[index];
+    float3 right = view.right.xyz * sc.y + view.up.xyz * sc.x;
+    float3 up = view.up.xyz * sc.y - view.right.xyz * sc.x;
+    float3 world = sprite.center_scale.xyz + (corner.x * sprite.center_scale.w)*right + (corner.y * sprite.rotation.z)*up;
+    float4 clip = view.projection * float4(world, 1);
+    clip.z = (clip.z + clip.w) * 0.5;
+    return {clip, float2(0.5 + corner.x, 0.5 - corner.y), sprite.color};
+}
+
+fragment float4 sprite_fragment(SpriteRaster input [[stage_in]], texture2d<float> image [[texture(0)]]) {
+    constexpr sampler texels(coord::normalized, address::repeat, filter::nearest);
+    float alpha = abs(input.color.a) * (1.0f - smoothstep(0.35f, 0.5f, length(input.uv - 0.5f)));
+    return float4(clamp(image.sample(texels, input.uv).rgb * input.color.rgb, 0.0f, 1.0f), alpha);
 }

@@ -26,6 +26,7 @@ import {
 export async function withMetalCamera<T>(
   host: HostClientBase<Client>,
   run: (output: OutputReference) => Promise<T>,
+  grid?: { columns: number; rows: number },
 ): Promise<T> {
   const world = await host.createWorld({
     selectedSystems: selectSystems(SCENE, SKINNING, PARTICLES),
@@ -186,6 +187,38 @@ export async function withMetalCamera<T>(
         ),
       ]),
     );
+    if (grid) {
+      // Issue one bounded batch per row. All cubes fit inside the benchmark's
+      // orthographic view and share the existing mesh and material pipeline.
+      // At 720p the centers are 36 pixels apart and edges fall between samples.
+      for (let row = 0; row < grid.rows; row++) {
+        successfulBatch(
+          await client.batch(
+            Array.from({ length: grid.columns }, (_, column) => {
+              const alias = 32 + row * grid.columns + column;
+              const entity = { kind: "alias", alias } as const;
+              return [
+                createEntity(alias, `grid-${row}-${column}`),
+                insertComponent(client, "Transform", entity, {
+                  x: (column + 0.5 - grid.columns / 2) / 5,
+                  y: (row + 0.5 - grid.rows / 2) / 5,
+                  z: -6,
+                  sx: 2 / 15,
+                  sy: 2 / 15,
+                  sz: 2 / 15,
+                }),
+                insertComponent(client, "MeshInstance", entity, { source }),
+                insertComponent(client, "UnlitMaterial", entity, {
+                  r: 0.2 + (0.6 * column) / grid.columns,
+                  g: 0.2 + (0.6 * row) / grid.rows,
+                  b: 0.5,
+                }),
+              ];
+            }).flat(),
+          ),
+        );
+      }
+    }
     let observed = await client.inspect();
     while (
       ![source, texture, stretched, skeleton, skin, bent, strip].every((uri) =>
@@ -255,6 +288,62 @@ export async function metalCamera(
       } finally {
         await profiler.release(id);
       }
+    }
+    // Exercise both sprite blend modes over the red cube, and a third sprite behind it.
+    const sprites = await host.openWorld(output.world);
+    try {
+      successfulBatch(
+        await sprites.batch([
+          ...[
+            { x: -0.3, y: 0.4, z: -1, blend: 0 },
+            { x: 0.3, y: 0.4, z: -1, blend: 1 },
+            { x: 0, y: 0.7, z: -2.9, blend: 1 },
+          ].flatMap(({ x, y, z, blend }, i) => {
+            const entity = { kind: "alias", alias: i + 1 } as const;
+            return [
+              createEntity(entity.alias, `fixed-sprite-${i}`),
+              insertComponent(sprites, "Transform", entity, { x, y, z }),
+              insertComponent(sprites, "ParticleEmitter", entity, {
+                burst: 1,
+                rate: 0,
+                speed: 0,
+                lifetime: 1000,
+                size: 0.27,
+              }),
+              insertComponent(sprites, "ParticleSprite", entity, {
+                r: 0,
+                g: 1,
+                b: 0,
+                opacity: 0.5,
+                end_opacity: 0.5,
+                end_size: 1,
+                blend,
+              }),
+            ];
+          }),
+        ]),
+      );
+      const fixed = await host.presentation.capture(resized, {
+        afterOutputs: [output],
+        afterSequence: after.sequence,
+      });
+      assert.equal(fixed.failedDrawCalls, 0);
+      assert.equal(fixed.triangles, after.triangles + 6);
+      const pixels = new Uint8Array(fixed.pixels);
+      for (const [x, y, expected] of [
+        [45, 31, [188, 188, 0]],
+        [57, 31, [255, 188, 0]],
+        [51, 25, [255, 0, 0]],
+      ] as const) {
+        const at = (y * fixed.view.binding.viewport.width + x) * 4;
+        const rgb = pixels.subarray(at, at + 3);
+        assert.ok(
+          expected.every((v, i) => Math.abs(rgb[i]! - v) <= 2),
+          `sprite at (${x}, ${y}) is ${rgb}, expected ${expected}`,
+        );
+      }
+    } finally {
+      await sprites.close();
     }
     await host.presentation.clear(resized);
     return { captures: [capture, after], profile };

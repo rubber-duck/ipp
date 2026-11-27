@@ -70,6 +70,8 @@ export interface GallerySceneContext {
   readonly assets: GalleryAssets;
   /** The generated module belonging to this exact Host target. */
   readonly contract: Readonly<Record<string, unknown>>;
+  /** Browser module used by secondary workers connecting to this Host. */
+  readonly generatedModuleUrl?: string;
   readonly signal: AbortSignal;
   readonly onError?: (error: Error) => void;
   /** Root-owned presentation operations qualify the active child camera. */

@@ -1,8 +1,30 @@
 {
+  "webgpu-camera": {
+    "description": "Native WebGPU Camera publication, resize and pixel parity on the hardware Metal adapter",
+    "sourceRoots": [
+      "crates/ipp-render-webgpu/",
+      "crates/ipp-webgpu-host/",
+      "crates/ipp-render-scene/",
+      "tests/rendering/webgpu-camera.native.test.ts",
+      "tests/rendering/scenarios/metal-camera.ts",
+      "tests/rendering/scenarios/metal-composition.ts",
+      "tests/rendering/scenarios/metal-canvas-retention.ts"
+    ],
+    "commands": [
+      {
+        "name": "native",
+        "command": ["@node", "--test", "dist/tests/rendering/webgpu-camera.native.test.js"],
+        "builds": ["webgpu-host", "typescript","font-assets"],
+        "requirements": ["node", "npm"],
+        "platforms": ["darwin"]
+      }
+    ]
+  },
   "metal-camera": {
     "description": "Completed native Metal and GLES Camera and Canvas frames on Apple hardware",
     "sourceRoots": [
       "crates/ipp-render-metal/",
+      "crates/ipp-render-scene/",
       "crates/ipp-metal-host/",
       "tests/rendering/metal-camera.native.test.ts",
       "tests/rendering/scenarios/metal-camera.ts",

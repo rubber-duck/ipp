@@ -31,6 +31,7 @@ export async function withCanvasRetention<T>(
     move: (x: number) => Promise<void>;
     cache: (enabled: boolean) => Promise<void>;
     projectSphere: () => Promise<void>;
+    replaceTarget: () => Promise<void>;
   }) => Promise<T>,
 ): Promise<T> {
   const scene = await host.createWorld({
@@ -142,7 +143,7 @@ export async function withCanvasRetention<T>(
         aliasId(placed, 1),
         "camera",
       );
-      const view = await host.presentation.select(
+      let view = await host.presentation.select(
         await host.presentation.surface(),
         await host.setRootOutput(output, {
           width: 640,
@@ -201,6 +202,15 @@ export async function withCanvasRetention<T>(
                 ),
               ]),
             );
+          },
+          async replaceTarget() {
+            for (const width of [642, 640]) {
+              view = await host.presentation.resize(view, {
+                width,
+                height: 400,
+                devicePixelRatio: 1,
+              });
+            }
           },
           async projectSphere() {
             const entity = { kind: "handle", id: aliasId(placed, 2) } as const;
@@ -313,6 +323,20 @@ export async function assertCanvasRetention(
         sphere,
         "retained sphere changed the presented pixels",
       );
+      await canvas.move(116);
+      const moved = await canvas.capture();
+      assert.ok(
+        moved.some((value, i) => value !== sphere[i]),
+        "sphere edit must change the capture",
+      );
+      await record("sphere-damage", moved);
+      await canvas.replaceTarget();
+      const fresh = await canvas.capture();
+      assert.equal(
+        moved.findIndex((value, i) => value !== fresh[i]),
+        -1,
+        "sparse sphere edit must match a full redraw",
+      );
       const profile = await profiler?.stop();
       if (profile) {
         assert.ok(
@@ -320,6 +344,12 @@ export async function assertCanvasRetention(
             (event) => event.name === "MetalCanvasBatches.replay",
           ),
           "expected warmed two-root Canvas batches to replay",
+        );
+        assert.ok(
+          profile.trace?.events.some(
+            (event) => event.name === "MetalCanvasDamage.root_repaint",
+          ),
+          "expected the moving mark on a sphere to use the root damage scissor",
         );
       }
     } finally {

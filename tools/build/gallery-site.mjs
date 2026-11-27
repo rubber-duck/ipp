@@ -8,6 +8,7 @@ import { artifact, bundleBrowser, workspace } from "./helpers.mjs";
 // to index.html, so these URLs work unchanged at /, /ipp/ or a custom subdirectory.
 const locations = [
   ["/examples/demos/scenes/cockpit/browser-pages/", "./browser-pages/"],
+  ["/target/browser-build/webgpu/", "./runtime-webgpu/"],
   ["/target/browser-build/render/", "./runtime/"],
   ["/target/terminal-build/", "./terminal/"],
   ["/target/gallery-assets/", "./assets/"],
@@ -87,23 +88,27 @@ export async function buildGallerySite(output) {
       `browser-pages/${name}`,
     );
 
-  const runtime = "target/browser-build/render";
-  await mkdir(resolve(output, "runtime"), { recursive: true });
-  for (const name of await readdir(resolve(workspace, runtime))) {
-    if (name.endsWith(".js")) {
-      const { code } = await transform(
-        await readFile(resolve(workspace, runtime, name), "utf8"),
-        {
-          loader: "js",
-          format: "esm",
-          target: "es2023",
-          minify: true,
-          legalComments: "none",
-        },
-      );
-      await writeFile(resolve(output, "runtime", name), code);
-    } else if (name === "runtime.wasm" || name === "SLUG-NOTICE") {
-      await copy(`${runtime}/${name}`, `runtime/${name}`);
+  for (const [runtime, destination] of [
+    ["target/browser-build/render", "runtime"],
+    ["target/browser-build/webgpu", "runtime-webgpu"],
+  ]) {
+    await mkdir(resolve(output, destination), { recursive: true });
+    for (const name of await readdir(resolve(workspace, runtime))) {
+      if (name.endsWith(".js")) {
+        const { code } = await transform(
+          await readFile(resolve(workspace, runtime, name), "utf8"),
+          {
+            loader: "js",
+            format: "esm",
+            target: "es2023",
+            minify: true,
+            legalComments: "none",
+          },
+        );
+        await writeFile(resolve(output, destination, name), code);
+      } else if (name === "runtime.wasm" || name === "SLUG-NOTICE") {
+        await copy(`${runtime}/${name}`, `${destination}/${name}`);
+      }
     }
   }
 

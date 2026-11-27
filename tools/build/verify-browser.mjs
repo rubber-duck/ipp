@@ -25,7 +25,9 @@ const SURFACE_RESOURCE_BRIDGE_IMPORTS = [
 ];
 const request = JSON.parse(await readFile(process.argv[2], "utf8"));
 const { configuration, features, directory } = request;
-const rendering = features.includes("render");
+const webgl = features.includes("render");
+const webgpu = features.includes("webgpu");
+const rendering = webgl || webgpu;
 const instrumentation = features.includes("instrumentation");
 await mkdir(directory, { recursive: true });
 const runtimePath = resolve(directory, "runtime.wasm");
@@ -115,6 +117,7 @@ assert.equal(client.components.BaseColorTexture.id, 19);
 
 const hostArtifacts = await assembleBrowserHost(directory, {
   rendering,
+  webgpu,
   instrumentation,
 });
 const runtimeBytes = await readFile(runtimePath);
@@ -126,7 +129,8 @@ const importNamed = (name) => glImports.some((entry) => entry.name === name);
 const embeds = (text) => runtimeBytes.includes(Buffer.from(text));
 
 // Renderer axis: a headless distribution links no GL, shaders or bridge.
-assert.equal(imports("ipp_gl"), rendering, "GL imports differ from renderer");
+assert.equal(imports("ipp_gl"), webgl, "GL imports differ from renderer");
+assert.equal(imports("./bindings_bg.js"), webgpu);
 assert.equal(imports("ipp_presentation"), rendering);
 assert.equal(typeof runtime.ipp_render_attach === "function", rendering);
 for (const text of [
@@ -139,7 +143,8 @@ for (const text of [
   "u_joints",
   "u_pose_weight",
 ])
-  assert.equal(embeds(text), rendering, `${text} differs from renderer`);
+  if (!webgpu)
+    assert.equal(embeds(text), webgl, `${text} differs from renderer`);
 for (const name of [
   "create_texture",
   "create_gui_batch",
@@ -147,8 +152,8 @@ for (const name of [
   "draw_pose",
   ...SURFACE_RESOURCE_BRIDGE_IMPORTS,
 ])
-  assert.equal(importNamed(name), rendering, `${name} differs from renderer`);
-if (rendering) {
+  assert.equal(importNamed(name), webgl, `${name} differs from renderer`);
+if (webgl) {
   const bridge = await readFile(resolve(directory, "webgl.js"), "utf8");
   for (const name of [
     "set_lighting",
@@ -192,7 +197,7 @@ assert.equal(
 );
 assert.equal(
   typeof runtime.ipp_test_asset_export_staging_gate === "function",
-  instrumentation && rendering,
+  instrumentation && webgl,
 );
 for (const name of [
   "ipp_resource_poll",
@@ -237,10 +242,10 @@ for (const [name, expected] of [
   ["ipp_render_surface_cache_records_ptr", rendering],
   ["ipp_render_surface_cache_records_len", rendering],
   ["ipp_resource_buffered_bytes", true],
-  ["ipp_render_set_exhaustive_draw_checks", rendering && instrumentation],
-  ["ipp_render_set_glyph_atlas_limits", rendering && instrumentation],
-  ["ipp_render_set_surface_cache_budget", rendering && instrumentation],
-  ["ipp_profile_shadow_draw_calls", rendering && instrumentation],
+  ["ipp_render_set_exhaustive_draw_checks", webgl && instrumentation],
+  ["ipp_render_set_glyph_atlas_limits", webgl && instrumentation],
+  ["ipp_render_set_surface_cache_budget", webgl && instrumentation],
+  ["ipp_profile_shadow_draw_calls", webgl && instrumentation],
   ["ipp_profile_control", instrumentation],
   ["ipp_instrumentation_panic", instrumentation],
 ])
@@ -258,7 +263,7 @@ const shipped = async (name) =>
     () => false,
   );
 assert.equal(await shipped("profile-worker.js"), instrumentation);
-assert.equal(await shipped("render-testing.js"), rendering && instrumentation);
+assert.equal(await shipped("render-testing.js"), webgl && instrumentation);
 const workerSource = await readFile(
   resolve(directory, "wasm-worker.js"),
   "utf8",

@@ -1,0 +1,17 @@
+[package]
+name = "ipp-render-scene"
+description = "Camera and Canvas preparation from immutable IPP publications"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+ipp-core.workspace = true
+
+[features]
+default = []
+
+[lints]
+workspace = true

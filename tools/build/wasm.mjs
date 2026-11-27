@@ -9,6 +9,7 @@ export async function instantiate(path) {
   for (const item of WebAssembly.Module.imports(module)) {
     assert.ok(
       [
+        "./bindings_bg.js",
         "ipp_gl",
         "ipp_presentation",
         "ipp_diagnostics",

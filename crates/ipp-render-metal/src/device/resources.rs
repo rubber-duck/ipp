@@ -26,7 +26,10 @@ pub(super) struct Backend {
     pub(super) gpu: Gpu<dyn MTLDevice>,
     pub(super) queue: Gpu<dyn MTLCommandQueue>,
     pub(super) programs: Programs,
+    pub(super) path_masks: RefCell<super::path_masks::PathMasks>,
+    pub(super) write_path_mask: Pipeline,
     pub(super) clear: Pipeline,
+    pub(super) clear_root: Pipeline,
     pub(super) depth: [Gpu<dyn MTLDepthStencilState>; 3],
     pub(super) columns: Gpu<dyn MTLComputePipelineState>,
     web: Gpu<dyn MTLComputePipelineState>,
@@ -205,7 +208,7 @@ impl Device {
             let mut programs = Programs::new(
                 &gpu,
                 &lib,
-                &(OPAQUE..=PLOT_ALPHA).collect::<Vec<_>>(),
+                &(OPAQUE..=COLUMN_SCREEN_PAINT).collect::<Vec<_>>(),
                 false,
             )?;
             programs.shadow = Some(simple_pipeline(
@@ -216,14 +219,26 @@ impl Device {
                 None,
                 true,
             )?);
-            let clear = simple_pipeline(
+            let clear_pipeline = |format| {
+                simple_pipeline(
+                    &gpu,
+                    &lib,
+                    "canvas_clear_vertex",
+                    Some("canvas_clear_fragment"),
+                    Some(format),
+                    true,
+                )
+            };
+            let clear = clear_pipeline(LINEAR)?;
+            let write_path_mask = simple_pipeline(
                 &gpu,
                 &lib,
-                "canvas_clear_vertex",
-                Some("canvas_clear_fragment"),
-                Some(LINEAR),
+                "canvas_vertex",
+                Some("canvas_write_path_mask"),
+                None,
                 true,
             )?;
+            let clear_root = clear_pipeline(ROOT)?;
             let compute = |name| {
                 gpu.newComputePipelineStateWithFunction_error(&*function(&lib, name)?)
                     .map_err(|e| e.to_string())
@@ -261,6 +276,7 @@ impl Device {
                 queue,
                 programs,
                 clear,
+                clear_root,
                 depth,
                 columns,
                 web,
@@ -269,6 +285,8 @@ impl Device {
                 empty_depth,
                 empty_columns,
                 root: Default::default(),
+                path_masks: Default::default(),
+                write_path_mask,
                 submitted: Default::default(),
                 pool: Default::default(),
                 maps: Default::default(),

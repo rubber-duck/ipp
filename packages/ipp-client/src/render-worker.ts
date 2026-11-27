@@ -12,18 +12,22 @@ import type {
 import { DiagnosticLogger, type LogLevel } from "./logging.js";
 import type { RenderTesting } from "./render-testing.js";
 
+declare const IPP_WEBGPU: boolean;
+
 /** Imported only by a worker initialized with an OffscreenCanvas. */
-interface WebGlHostExports {
-  imports: WebAssembly.Imports[string];
+interface BrowserDevice {
+  imports?: WebAssembly.Imports[string];
+  bindings?: WebAssembly.Imports[string];
+  start?(exports: WebAssembly.Exports): Promise<void>;
   stageHtmlImage(image: HtmlElementImage): number;
   releaseWebImage(id: number): void;
-  setMemory(memory: WebAssembly.Memory): void;
-  resize(width: number, height: number): void;
+  setMemory?(memory: WebAssembly.Memory): void;
+  resize?(width: number, height: number): void;
   capture(): Uint8Array<ArrayBuffer>;
   isContextLost(): boolean;
   dispose(): void;
-  loseContext(): void;
-  restoreContext(): void;
+  loseContext?(): void;
+  restoreContext?(): void;
   info(): Record<string, unknown>;
 }
 
@@ -134,21 +138,25 @@ export class RenderWorkerService {
 
   private constructor(
     private readonly canvas: OffscreenCanvas,
-    private readonly device: WebGlHostExports,
+    private readonly device: BrowserDevice,
     private readonly post: (message: unknown, transfer: Transferable[]) => void,
     private readonly fail: (error: Error) => void,
     private readonly logger: DiagnosticLogger,
     testing: RenderTestingModule | undefined,
   ) {
+    const loseContext = device.loseContext?.bind(device);
+    const restoreContext = device.restoreContext?.bind(device);
     this.testing =
       testing &&
+      loseContext &&
+      restoreContext &&
       new testing.RenderTesting({
         logger,
         session: () => this.session,
         lossObserved: () => this.lossObserved,
         isContextLost: () => device.isContextLost(),
-        loseContext: () => device.loseContext(),
-        restoreContext: () => device.restoreContext(),
+        loseContext,
+        restoreContext,
         suspend: () => this.suspend(),
         fail,
       });
@@ -162,12 +170,13 @@ export class RenderWorkerService {
       [],
     );
     this.imports = {
-      ipp_gl: device.imports,
+      ...(device.imports ? { ipp_gl: device.imports } : {}),
+      ...(device.bindings ? { "./bindings_bg.js": device.bindings } : {}),
       ipp_presentation: {
         resize: (width: number, height: number): number => {
           try {
             validateViewport(width, height);
-            if (device.isContextLost()) return 0;
+            if (!device.resize || device.isContextLost()) return 0;
             device.resize(width, height);
             return Number(canvas.width === width && canvas.height === height);
           } catch {
@@ -198,8 +207,10 @@ export class RenderWorkerService {
         },
       },
     };
-    canvas.addEventListener("webglcontextlost", this.lost);
-    canvas.addEventListener("webglcontextrestored", this.restored);
+    if (!IPP_WEBGPU) {
+      canvas.addEventListener("webglcontextlost", this.lost);
+      canvas.addEventListener("webglcontextrestored", this.restored);
+    }
   }
 
   static async create(
@@ -212,17 +223,25 @@ export class RenderWorkerService {
   ): Promise<RenderWorkerService> {
     validateViewport(canvas.width, canvas.height);
     // Only rendering distributions ship this binding; a headless worker has no GL dependency.
-    const module = (await import(new URL("webgl.js", wasmUrl).href)) as {
-      createWebGlDevice(canvas: OffscreenCanvas): WebGlHostExports;
-    };
+    const device: BrowserDevice = IPP_WEBGPU
+      ? await (
+          await import(new URL("webgpu.js", wasmUrl).href)
+        ).createWebGpuDevice(canvas, fail)
+      : (await import(new URL("webgl.js", wasmUrl).href)).createWebGlDevice(
+          canvas,
+        );
     return new RenderWorkerService(
       canvas,
-      module.createWebGlDevice(canvas),
+      device,
       post,
       fail,
       new DiagnosticLogger("renderer", logLevel),
       testing,
     );
+  }
+
+  async start(exports: WebAssembly.Exports): Promise<void> {
+    await this.device.start?.(exports);
   }
 
   initialize(
@@ -256,7 +275,7 @@ export class RenderWorkerService {
     );
     this.ingress = ingress;
     this.session = session;
-    this.device.setMemory(this.runtime.memory);
+    this.device.setMemory?.(this.runtime.memory);
     this.testing?.initialize(exports);
     if (!this.device.isContextLost()) this.attach();
   }
@@ -487,8 +506,10 @@ export class RenderWorkerService {
     if (this.closed) return;
     this.closed = true;
     this.testing?.close();
-    this.canvas.removeEventListener("webglcontextlost", this.lost);
-    this.canvas.removeEventListener("webglcontextrestored", this.restored);
+    if (!IPP_WEBGPU) {
+      this.canvas.removeEventListener("webglcontextlost", this.lost);
+      this.canvas.removeEventListener("webglcontextrestored", this.restored);
+    }
     this.suspend();
     this.device.dispose();
     this.logger.log("info", "renderer.closed", () => ({

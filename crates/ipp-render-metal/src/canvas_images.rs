@@ -1,14 +1,11 @@
-//! Renderer-owned images for authored optional Surface caching.
+//! Renderer-owned images for Canvas paint and authored Surface caching.
 
-use std::rc::Rc;
+use ipp_render_scene::screen_damage::CanvasSurfaceView;
+use std::{rc::Rc, sync::Arc};
 
 use ipp_core::{
     HostRuntime, WorldPublicationId,
-    systems::{
-        canvas::CanvasPaintEntry,
-        geometry::GeometryShape,
-        surface::{SurfaceCachePolicy, SurfaceGeometry},
-    },
+    systems::canvas::{CanvasPaintEntry, CanvasPrimitive},
 };
 
 use crate::{
@@ -41,16 +38,61 @@ impl CanvasContent {
         }) {
             return None;
         }
+        Some(Self::from_scene(scene))
+    }
+
+    fn from_scene(scene: CanvasScene<'_>) -> Self {
+        let canvas = scene.canvas;
         let revisions = [
             canvas.layout_revision,
             canvas.paint_revision,
             canvas.resource_revision,
             canvas.paints_revision,
         ];
-        Some(Self {
+        Self {
             revisions,
             extent: canvas.logical_extent.map(f32::to_bits),
-        })
+        }
+    }
+}
+
+/// Screen-space paint is reusable only for the same view, Canvas and target extent.
+pub(super) struct ProjectedPaint {
+    pub(super) content: CanvasContent,
+    pub(super) view: Option<CanvasSurfaceView>,
+    pub(super) size: [u32; 2],
+    pub(super) frame: u64,
+    pub(super) image: Option<PaintImage>,
+}
+
+#[derive(Clone)]
+pub(super) struct PaintImage {
+    pub(super) target: Rc<Target>,
+    pub(super) bounds: [f32; 4],
+}
+
+impl ProjectedPaint {
+    pub(super) fn content(
+        scene: CanvasScene<'_>,
+        entries: &[Arc<CanvasPaintEntry>],
+    ) -> Option<CanvasContent> {
+        let live = |entry: &Arc<CanvasPaintEntry>| match entry.as_ref() {
+            CanvasPaintEntry::Primitive {
+                primitive,
+                ..
+            } => matches!(primitive, CanvasPrimitive::Html { .. }),
+            CanvasPaintEntry::Attachment(_) => true,
+        };
+        if entries.len() < 2
+            || scene.canvas.interaction.requires_direct()
+            || entries.iter().any(live)
+        {
+            return None;
+        }
+
+        // The root viewport has no world-space lighting. On a Surface the key
+        // also contains the exact presentation transform and lighting used by authored paints.
+        Some(CanvasContent::from_scene(scene))
     }
 }
 
@@ -64,60 +106,4 @@ pub(super) struct CachedCanvas {
     pub(super) band: u8,
 }
 
-pub(super) fn projected_size(
-    geometry: &SurfaceGeometry,
-    matrix: [f32; 16],
-    viewport: [u32; 2],
-    policy: SurfaceCachePolicy,
-) -> Option<[u32; 2]> {
-    let GeometryShape::Box {
-        min,
-        max,
-    } = geometry.bounds([0.0; 2]).ok()?
-    else {
-        return None;
-    };
-    let mut low = [f32::INFINITY; 2];
-    let mut high = [f32::NEG_INFINITY; 2];
-    let mut in_front = false;
-    let mut behind = false;
-    for corner in 0..8 {
-        let p: [f32; 3] = std::array::from_fn(|i| {
-            if corner & (1 << i) == 0 {
-                min[i] as f32
-            } else {
-                max[i] as f32
-            }
-        });
-        let clip: [f32; 4] = std::array::from_fn(|i| {
-            matrix[12 + i] + matrix[i] * p[0] + matrix[4 + i] * p[1] + matrix[8 + i] * p[2]
-        });
-        if clip[3] <= 1e-6 {
-            behind = true;
-            continue;
-        }
-        in_front = true;
-        for i in 0..2 {
-            let ndc = clip[i] / clip[3];
-            low[i] = low[i].min(ndc);
-            high[i] = high[i].max(ndc);
-        }
-    }
-    if !in_front || (0..2).any(|i| low[i] > 1.0 || high[i] < -1.0) {
-        return None;
-    }
-
-    let limit = policy.texture_limit(2048);
-    Some(std::array::from_fn(|i| {
-        let span = if behind {
-            2.0
-        } else {
-            high[i] - low[i]
-        };
-        let pixels = (viewport[i] as f32 * span * 0.5 * policy.resolution_scale)
-            .ceil()
-            .clamp(1.0, limit as f32) as u32;
-        // A modest allocation step absorbs small changes in projected support.
-        pixels.next_multiple_of(32).min(limit)
-    }))
-}
+pub(super) use ipp_render_scene::canvas::projected_size;

@@ -5,8 +5,11 @@ members = [
     "crates/ipp-protocol",
     "crates/ipp-host-session",
     "crates/ipp-render-gl",
+    "crates/ipp-render-scene",
     "crates/ipp-render-metal",
     "crates/ipp-metal-host",
+    "crates/ipp-render-webgpu",
+    "crates/ipp-webgpu-host",
     "crates/ipp-wasm",
     "crates/ipp-server",
     "tools/ipp-schema-derive",
@@ -25,7 +28,11 @@ ipp-core = { path = "crates/ipp-core", default-features = false }
 ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
 ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
 ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
+ipp-render-scene = { path = "crates/ipp-render-scene", default-features = false }
 ipp-render-metal = { path = "crates/ipp-render-metal", default-features = false }
+ipp-render-webgpu = { path = "crates/ipp-render-webgpu", default-features = false }
+# Native and browser distributions share shader frontends and select their target backend.
+wgpu = { version = "=30.0.2", default-features = false, features = ["std", "wgsl", "glsl"] }
 # Typed bindings used only by the native Apple renderer and drawable presentation.
 objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
@@ -38,6 +45,10 @@ objc2-metal = { version = "=0.3.2", default-features = false, features = [
     "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "MTLArgument",
 ] }
 objc2-quartz-core = { version = "=0.3.2", default-features = false, features = ["CAMetalLayer", "CALayer", "objc2-core-foundation", "objc2-metal"] }
+js-sys = { version = "=0.3.107", default-features = false, features = ["std"] }
+wasm-bindgen = { version = "=0.2.130", default-features = false, features = ["std"] }
+wasm-bindgen-futures = { version = "=0.4.80", default-features = false, features = ["std"] }
+web-sys = { version = "=0.3.107", default-features = false }
 bytemuck = { version = "=1.25.0", default-features = false, features = ["derive", "min_const_generics"] }
 ipp-server = { path = "crates/ipp-server", default-features = false }
 ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }

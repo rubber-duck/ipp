@@ -20,6 +20,8 @@ import { withMetalCamera } from "../rendering/scenarios/metal-camera.js";
 const config: {
   source: { revision: string; sourceSha256: string };
   metal: string;
+  webgpu?: string;
+  cases?: string[];
   gles: string;
   eglDirectory: string;
   repetitions: number;
@@ -49,7 +51,8 @@ const hash = async (file: string) =>
   createHash("sha256")
     .update(await readFile(file))
     .digest("hex");
-const images: Partial<Record<"metal" | "gles", RgbaFrame>> = {};
+type Backend = "metal" | "gles" | "webgpu";
+const images = new Map<string, Partial<Record<Backend, RgbaFrame>>>();
 const runs: unknown[] = [];
 const failures: string[] = [];
 const report = {
@@ -74,14 +77,28 @@ function percentiles(data: readonly number[]) {
 
 try {
   for (let repeat = 0; repeat < config.repetitions; repeat++) {
-    const order =
-      repeat % 2 === 0
-        ? (["metal", "gles"] as const)
-        : (["gles", "metal"] as const);
-    for (const backend of order) {
-      const product = resolve(config[backend]);
-      const metal = backend === "metal";
-      const executable = join(product, metal ? "ipp-metal-host" : "gles_host");
+    const backends: Backend[] = config.webgpu
+      ? ["metal", "gles", "webgpu"]
+      : ["metal", "gles"];
+    const start = repeat % backends.length;
+    const order = [...backends.slice(start), ...backends.slice(0, start)];
+    const cases =
+      config.cases ?? (config.webgpu ? ["camera", "mesh-grid"] : ["camera"]);
+    for (const { backend, workload } of order.flatMap((backend) =>
+      cases.map((workload) => ({ backend, workload })),
+    )) {
+      const grid =
+        workload === "mesh-grid" ? { columns: 32, rows: 20 } : undefined;
+      const expectedTriangles =
+        112 + (grid ? grid.columns * grid.rows * 12 : 0);
+      const references = images.get(workload) ?? {};
+      images.set(workload, references);
+      const product = resolve(config[backend]!);
+      const gles = backend === "gles";
+      const executable = join(
+        product,
+        gles ? "gles_host" : `ipp-${backend}-host`,
+      );
       const schemaArtifact = join(product, "contract.bin");
       const clientModule = join(product, "generated.js");
       const identity = {
@@ -92,7 +109,9 @@ try {
       const contract = (await import(
         pathToFileURL(clientModule).href
       )) as typeof import("@ipp/host-contract");
-      const label = `${backend}-${repeat}`;
+      const label = config.webgpu
+        ? `${workload}-${backend}-${repeat}`
+        : `${backend}-${repeat}`;
       try {
         const run = await runNativeEnvironment(
           label,
@@ -103,15 +122,17 @@ try {
             evidenceParent: out,
             readinessTimeoutMs: 30_000,
             operationTimeoutMs: 35_000,
-            environment: { IPP_LOG: "info" },
+            environment: {
+              IPP_LOG: "info",
+            },
             extraArguments: [
               "--uncapped",
-              ...(metal ? [] : ["--egl-dir", config.eglDirectory]),
+              ...(gles ? ["--egl-dir", config.eglDirectory] : []),
             ],
           },
           controller.signal,
           async (environment) => {
-            const host = metal
+            const host = !gles
               ? await contract.IppHostClient.connectWebSocket(environment.url)
               : await contract.IppHostClient.connectTransport(
                   nativePresentationTransport(
@@ -136,13 +157,14 @@ try {
                     });
                     assert.ok(completed.sequence > sequence);
                     assert.equal(completed.failedDrawCalls, 0);
-                    assert.equal(completed.triangles, 112);
-                    assert.equal(completed.drawCalls, metal ? 5 : 7);
+                    assert.equal(completed.triangles, expectedTriangles);
+                    if (grid) assert.ok(completed.drawCalls > 0);
+                    else assert.equal(completed.drawCalls, gles ? 7 : 5);
                     sequence = completed.sequence;
                     return completed;
                   };
                   await frame();
-                  const device = metal
+                  const device = !gles
                     ? (
                         await readFile(
                           join(
@@ -151,11 +173,25 @@ try {
                           ),
                           "utf8",
                         )
-                      ).match(/\[IPP Metal\] device=(.+)/)?.[1]
+                      ).match(
+                        backend === "webgpu"
+                          ? /\[IPP WebGPU\] device=(.+)/
+                          : /\[IPP Metal\] device=(.+)/,
+                      )?.[1]
                     : (await renderDiagnostics(host)?.statistics())?.device
                         .renderer;
                   assert.match(String(device), /Apple|Metal/i);
                   assert.doesNotMatch(String(device), /swiftshader|llvmpipe/i);
+                  if (backend === "webgpu")
+                    assert.match(String(device), /^Metal .+/);
+                  if (config.webgpu) {
+                    const ready = await host.presentation.capture(view, {
+                      afterOutputs: [output],
+                    });
+                    assert.equal(ready.failedDrawCalls, 0);
+                    assert.equal(ready.triangles, expectedTriangles);
+                    sequence = ready.sequence;
+                  }
                   const before = machine();
                   const warm = performance.now();
                   do {
@@ -208,7 +244,7 @@ try {
                     afterOutputs: [output],
                     afterSequence: sequence,
                   });
-                  assert.equal(capture.triangles, 112);
+                  assert.equal(capture.triangles, expectedTriangles);
                   assert.equal(capture.failedDrawCalls, 0);
                   const image = {
                     width: viewport.width,
@@ -217,14 +253,15 @@ try {
                   };
                   const png = `${label}.png`;
                   await writeFile(join(out, png), encodePng(image));
-                  images[backend] ??= image;
-                  const reference = images[backend];
+                  references[backend] ??= image;
+                  const reference = references[backend];
                   assert.deepEqual(
                     image.pixels,
                     reference.pixels,
                     `Stable ${backend} image`,
                   );
-                  const other = images[metal ? "gles" : "metal"];
+                  const other =
+                    backend === "metal" ? references.gles : references.metal;
                   let pixelsOverTwo = 0;
                   if (other) {
                     for (
@@ -243,6 +280,7 @@ try {
                   await host.presentation.clear(view);
                   return {
                     label,
+                    workload,
                     backend,
                     repeat,
                     device,
@@ -258,15 +296,29 @@ try {
                     triangles: capture.triangles,
                   };
                 },
+                grid,
               );
             } finally {
-              await host.close();
+              // The environment owns and reaps the process. Preserve the measured
+              // outcome when only the final native close handshake expires.
+              await host.close().catch(async (error: unknown) => {
+                if (
+                  !(error instanceof Error) ||
+                  error.message !== "WebSocket close timed out"
+                )
+                  throw error;
+                await environment.evidence.record("client_close_timeout", {
+                  backend,
+                });
+              });
             }
           },
         );
         runs.push({ ...run.value, evidence: run.evidenceDirectory });
       } catch (error) {
-        failures.push(error instanceof Error ? error.message : String(error));
+        failures.push(
+          `${label}: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
       await save();
       await setTimeout(200, undefined, { signal: controller.signal });

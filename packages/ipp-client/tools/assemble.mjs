@@ -126,7 +126,7 @@ export function assembleClientSupport(destination) {
  */
 export async function assembleBrowserHost(
   destination,
-  { rendering = false, instrumentation = false } = {},
+  { rendering = false, webgpu = false, instrumentation = false } = {},
 ) {
   const modules = [
     "wasm-worker.ts",
@@ -139,7 +139,7 @@ export async function assembleBrowserHost(
       ? ["render-worker.ts", "html-worker.ts", "presentation.ts"]
       : []),
     ...(instrumentation ? ["profile-worker.ts"] : []),
-    ...(rendering && instrumentation ? ["render-testing.ts"] : []),
+    ...(rendering && !webgpu && instrumentation ? ["render-testing.ts"] : []),
   ];
   // Reusing an output directory must remove worker modules this configuration
   // omits; the client support modules beside it stay.
@@ -153,7 +153,9 @@ export async function assembleBrowserHost(
       await rm(resolve(destination, name.replace(/\.ts$/, ".js")), {
         force: true,
       });
-  if (!rendering) await rm(resolve(destination, "webgl.js"), { force: true });
+  if (!rendering || webgpu)
+    await rm(resolve(destination, "webgl.js"), { force: true });
+  if (!webgpu) await rm(resolve(destination, "webgpu.js"), { force: true });
   const surfaceNotice = resolve(destination, "SLUG-NOTICE");
   if (rendering)
     copyFileSync(
@@ -169,28 +171,39 @@ export async function assembleBrowserHost(
     platform: "browser",
     target: "es2023",
     legalComments: "none",
-    define: { IPP_INSTRUMENTATION: String(instrumentation) },
+    define: {
+      IPP_INSTRUMENTATION: String(instrumentation),
+      IPP_WEBGPU: String(webgpu),
+    },
   });
   if (rendering)
     await build({
       entryPoints: [
         resolve(
           source,
-          "../../../crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts",
+          webgpu
+            ? "../../../crates/ipp-render-webgpu/src/browser-device.ts"
+            : "../../../crates/ipp-render-gl/src/services/render/device/webgl/webgl.ts",
         ),
       ],
-      outfile: resolve(destination, "webgl.js"),
+      outfile: resolve(destination, webgpu ? "webgpu.js" : "webgl.js"),
       bundle: true,
       format: "esm",
       platform: "browser",
       target: "es2023",
       minifySyntax: true,
-      define: { IPP_INSTRUMENTATION: String(instrumentation) },
+      define: {
+        IPP_INSTRUMENTATION: String(instrumentation),
+        IPP_WEBGPU: String(webgpu),
+      },
     });
   return [
     ...modules.map((name) =>
       resolve(destination, name.replace(/\.ts$/, ".js")),
     ),
-    ...(rendering ? [resolve(destination, "webgl.js"), surfaceNotice] : []),
+    ...(rendering
+      ? [resolve(destination, webgpu ? "webgpu.js" : "webgl.js"), surfaceNotice]
+      : []),
+    ...(webgpu ? [resolve(destination, "bindings_bg.js")] : []),
   ];
 }

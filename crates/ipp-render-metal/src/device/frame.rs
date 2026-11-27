@@ -1,6 +1,6 @@
 use super::{
     canvas::Batch,
-    pipelines::{PLOT_ALPHA, PLOT_OPAQUE},
+    pipelines::{PLOT_ALPHA, PLOT_OPAQUE, SPRITE_ADDITIVE, SPRITE_ALPHA},
     resources::{Submission, command_error, region},
     uploads::{self, Uploads},
     *,
@@ -20,6 +20,7 @@ pub(crate) struct Frame {
     shadow_pass: bool,
     pub(super) state: Option<(usize, usize)>,
     pub(super) batch: Batch,
+    pub(super) path_masks: super::path_masks::PathMasks,
     pub(crate) canvas_vertices: Vec<CanvasVertex>,
     pub(super) recording: Option<Vec<Batch>>,
     pub(super) columns: Option<Buffer>,
@@ -39,7 +40,10 @@ impl Frame {
         let cmd = dev.queue.commandBuffer().ok_or("No Metal command buffer")?;
         #[cfg(feature = "instrumentation")]
         cmd.setLabel(Some(objc2_foundation::ns_string!("IPP root output")));
+        let mut path_masks = std::mem::take(&mut *dev.path_masks.borrow_mut());
+        path_masks.begin(root.size);
         Ok(Self {
+            path_masks,
             dev,
             target_size: root.size,
             root,
@@ -91,7 +95,7 @@ impl Frame {
         self.render_pass(Some(target), [0.; 4], Some(lighting), None, Some(rect))
     }
 
-    fn render_pass(
+    pub(crate) fn render_pass(
         &mut self,
         target: Option<&Target>,
         bg: [f32; 4],
@@ -162,7 +166,12 @@ impl Frame {
                 width: w as usize,
                 height: h as usize,
             });
-            e.setRenderPipelineState(&self.dev.clear);
+            e.setRenderPipelineState(if self.is_root {
+                &self.dev.clear_root
+            } else {
+                &self.dev.clear
+            });
+            uploads::inline(&e, false, 1, bytemuck::bytes_of(&bg));
             e.setDepthStencilState(Some(&self.dev.depth[2]));
             e.setCullMode(MTLCullMode::None);
             // SAFETY: The clear shader synthesizes a full-screen triangle from three vertex IDs.
@@ -302,6 +311,48 @@ impl Frame {
             producer: Some(self.cmd.clone()),
         });
         self.columns = Some(b);
+        true
+    }
+
+    pub(crate) fn sprites(
+        &mut self,
+        view: &crate::particles::SpriteView,
+        sprites: &[crate::particles::Sprite],
+        texture: Option<&Object>,
+        additive: bool,
+    ) -> bool {
+        if !self.flush() {
+            return false;
+        }
+        let bytes = bytemuck::cast_slice(sprites);
+        let Some((buffer, offset)) = self.uploads.reserve(&self.dev, bytes.len()) else {
+            return false;
+        };
+        uploads::write(&buffer, offset, bytes);
+        let mode = if additive {
+            SPRITE_ADDITIVE
+        } else {
+            SPRITE_ALPHA
+        };
+        let pipeline = self.dev.programs.get(mode, self.is_root);
+        let e = self.encoder.as_ref().unwrap();
+        e.setRenderPipelineState(pipeline);
+        e.setDepthStencilState(Some(&self.dev.depth[1]));
+        e.setCullMode(MTLCullMode::Back);
+        self.state = Some((mode, Retained::as_ptr(pipeline) as usize));
+        uploads::vertex(e, 0, &buffer, offset);
+        uploads::inline(e, true, 1, bytemuck::bytes_of(view));
+        uploads::texture(e, 0, texture.map_or(&self.dev.white, Object::texture));
+        // SAFETY: Four procedural corners index one uploaded instance per sprite. The
+        // frame retains the upload range until this command buffer finishes.
+        unsafe {
+            e.drawPrimitives_vertexStart_vertexCount_instanceCount(
+                MTLPrimitiveType::TriangleStrip,
+                0,
+                4,
+                sprites.len(),
+            );
+        }
         true
     }
 
@@ -452,10 +503,11 @@ impl Frame {
         mut self,
         capture: Option<&mut [u8]>,
         gpu_seconds: Option<&mut f64>,
-    ) -> Result<u32, String> {
+    ) -> Result<(u32, u32, u32), String> {
         if !self.close_pass() {
             return Err("Could not encode Metal Canvas batch".into());
         }
+        let (mask_draws, mask_triangles) = self.path_masks.finish(&self.dev, &self.cmd, &self.root);
         let [w, h] = self.root.size.map(|v| v as usize);
         let row = w * 4;
         let stride = uploads::aligned(row);
@@ -522,6 +574,7 @@ impl Frame {
                 uploads: self.uploads.used,
             });
         }
-        Ok(self.merged)
+        *self.dev.path_masks.borrow_mut() = self.path_masks;
+        Ok((self.merged, mask_draws, mask_triangles))
     }
 }

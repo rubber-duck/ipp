@@ -7,8 +7,10 @@ use ipp_core::systems::{
 
 const MAX_CLIP_EDGES: usize = 32;
 
-pub(super) struct AnalyticSurface<'a> {
-    pub(super) geometry: &'a SurfaceGeometry,
+/// The view-dependent ray mapping and conservative primitive covers for one curved Surface.
+pub struct AnalyticSurface<'a> {
+    /// Published geometry used by drawing and hit testing.
+    pub geometry: &'a SurfaceGeometry,
     scale: [f64; 2],
     extent: [f64; 2],
     mapping: AnalyticMapping,
@@ -17,7 +19,8 @@ pub(super) struct AnalyticSurface<'a> {
 
 #[repr(C)]
 #[derive(Clone, Copy, PartialEq, bytemuck::NoUninit)]
-pub(super) struct AnalyticMapping {
+/// Transforms and coefficients shared by every primitive on this Surface.
+pub struct AnalyticMapping {
     // Shape, signed curvature, root index, domain radius.
     parameters: [f32; 4],
     projection: [f32; 16],
@@ -29,22 +32,41 @@ pub(super) struct AnalyticMapping {
 }
 
 impl AnalyticMapping {
-    pub(super) fn is_near_root(&self) -> bool {
+    /// Pack the ray equation, homogeneous transforms and content-space conversion into texture rows.
+    pub fn records(&self) -> impl Iterator<Item = [f32; 4]> {
+        std::iter::once(self.parameters)
+            .chain(self.projection.as_chunks::<4>().0.iter().copied())
+            .chain(self.inverse.as_chunks::<4>().0.iter().copied())
+            .chain(self.world.as_chunks::<4>().0.iter().copied())
+            .chain(std::iter::once(self.chart_to_root))
+    }
+
+    /// Homogeneous near point for a vertex of the conservative screen-space cover.
+    pub fn ray_origin(&self, point: [f32; 2]) -> [f32; 4] {
+        let m = &self.inverse;
+        std::array::from_fn(|i| m[i] * point[0] + m[i + 4] * point[1] - m[i + 8] + m[i + 12])
+    }
+
+    /// Whether this mapping selects the nearer ray intersection.
+    pub fn is_near_root(&self) -> bool {
         self.parameters[2] != 0.0
     }
 
-    pub(super) fn is_cylinder(&self) -> bool {
+    /// Whether the Surface has cylindrical curvature.
+    pub fn is_cylinder(&self) -> bool {
         self.parameters[0] == 1.0
     }
 
-    pub(super) fn uses_columns(&self) -> bool {
+    /// Whether this mapping references a prepared column table.
+    pub fn uses_columns(&self) -> bool {
         self.options[0] != 0
     }
 }
 
 #[repr(C)]
-#[derive(Default, Clone, Copy, bytemuck::NoUninit)]
-pub(super) struct AnalyticDraw {
+#[derive(Default, Copy, Clone, bytemuck::NoUninit)]
+/// Paint placement and clip planes for a single conservative draw.
+pub struct AnalyticDraw {
     local_x: [f32; 4],
     local_y: [f32; 4],
     clip_rectangle: [f32; 4],
@@ -52,14 +74,36 @@ pub(super) struct AnalyticDraw {
     clip_edges: [f32; 4],
 }
 
-pub(super) struct AnalyticPrimitive<'a> {
-    pub(super) mapping: &'a AnalyticMapping,
-    pub(super) draw: AnalyticDraw,
-    pub(super) edges: Vec<[f32; 4]>,
+impl AnalyticDraw {
+    /// Counterclockwise strip corners in normalized screen coordinates.
+    pub fn cover(&self) -> [[f32; 2]; 4] {
+        self.cover
+    }
+
+    /// Per-primitive inverse placement, root clip and count of additional clipping planes.
+    pub fn records(&self) -> [[f32; 4]; 4] {
+        [
+            self.local_x,
+            self.local_y,
+            self.clip_rectangle,
+            self.clip_edges,
+        ]
+    }
+}
+
+/// Projected paint primitive with its Surface mapping and bounded clip polygon.
+pub struct AnalyticPrimitive<'a> {
+    /// Ray and chart conversion shared with neighboring paints.
+    pub mapping: &'a AnalyticMapping,
+    /// Per-primitive inverse and coverage bounds.
+    pub draw: AnalyticDraw,
+    /// Additional half-planes for a nonrectangular clip.
+    pub edges: Vec<[f32; 4]>,
 }
 
 impl<'a> AnalyticSurface<'a> {
-    pub(super) fn prepare(
+    /// Build a ray mapping when the geometry and transforms admit analytic projection.
+    pub fn prepare(
         geometry: &'a SurfaceGeometry,
         view: [f32; 16],
         world: [f32; 16],
@@ -100,21 +144,25 @@ impl<'a> AnalyticSurface<'a> {
         })
     }
 
-    pub(super) fn batch_mapping(&self) -> (AnalyticMapping, [f64; 2], [f64; 2]) {
+    /// Return the common transform, chart extent and content scale for batched draws.
+    pub fn batch_mapping(&self) -> (AnalyticMapping, [f64; 2], [f64; 2]) {
         (self.mapping, self.scale, self.extent)
     }
 
-    pub(super) fn set_scale(&mut self, scale: [f64; 2]) {
+    /// Set physical units per Canvas unit.
+    pub fn set_scale(&mut self, scale: [f64; 2]) {
         self.scale = scale;
         self.mapping.chart_to_root[2] = scale[0].recip() as f32;
         self.mapping.chart_to_root[3] = -scale[1].recip() as f32;
     }
 
-    pub(super) fn select_root(&mut self, near: bool) {
+    /// Select which valid ray intersection contributes to this pass.
+    pub fn select_root(&mut self, near: bool) {
         self.mapping.parameters[2] = f32::from(near);
     }
 
-    pub(super) fn needs_near_root(&self) -> bool {
+    /// Whether both roots can contribute within the visible chart.
+    pub fn needs_near_root(&self) -> bool {
         let inverse = self.mapping.inverse.map(f64::from);
         let eye_w = inverse[11];
         let lateral_w = inverse[3].abs() + inverse[7].abs();
@@ -132,7 +180,8 @@ impl<'a> AnalyticSurface<'a> {
         x * x + y * y + z * z >= 1.0 - 64.0 * f64::from(f32::EPSILON)
     }
 
-    pub(super) fn column_mapping(&self) -> Option<AnalyticMapping> {
+    /// Return a column-separable mapping when the same root applies throughout each screen column.
+    pub fn column_mapping(&self) -> Option<AnalyticMapping> {
         let [shape, curvature, _, _] = self.mapping.parameters;
         let m = self.mapping.inverse;
         let projection = self.mapping.projection;
@@ -160,12 +209,14 @@ impl<'a> AnalyticSurface<'a> {
         Some(self.mapping)
     }
 
-    pub(super) fn use_columns(&mut self, start: u32) {
+    /// Bind the first record of a device-prepared column table.
+    pub fn use_columns(&mut self, start: u32) {
         self.mapping.options[0] = start + 1;
         self.mapping.options[1] = self.viewport[0] + 1;
     }
 
-    pub(super) fn draw(
+    /// Build the conservative cover and inverse placement for a clipped primitive.
+    pub fn draw(
         &self,
         polygon: &[[f32; 2]],
         bounds: CanvasClip,

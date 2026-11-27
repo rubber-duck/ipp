@@ -116,6 +116,10 @@ try {
       controller.signal,
       async (scenario) => {
         await scenario.page.setViewportSize({ width: 1280, height: 800 });
+        // This scenario observes counters from the WebGL distribution.
+        await scenario.page.addInitScript(() => {
+          Reflect.deleteProperty(Navigator.prototype, "gpu");
+        });
         const g = await openApplication(scenario, {
           entryPath: "/target/gallery-trace/index.html",
           helperPath: "/target/gallery-trace/application-browser-helper.js",

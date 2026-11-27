@@ -1,17 +1,16 @@
 //! Native Metal rendering of completed IPP World publications.
 #![cfg(target_os = "macos")]
 
-mod analytic_surface;
+use ipp_render_scene::analytic_surface;
 mod assets;
 mod canvas;
 mod canvas_batches;
-mod canvas_damage;
+use ipp_render_scene::canvas_damage;
 mod canvas_images;
 mod custom_mesh;
 mod derived_meshes;
 mod device;
-mod fill_grid;
-mod lighting;
+use ipp_render_scene::lighting;
 mod particles;
 mod paths;
 mod service;

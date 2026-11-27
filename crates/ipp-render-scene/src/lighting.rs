@@ -12,19 +12,30 @@ use ipp_core::{
     },
 };
 
-use crate::service::MetalRenderError;
+/// The selected Camera or light transform could not define a rendering view.
+#[derive(Debug)]
+pub struct InvalidCamera;
 
-pub(super) const MAX_DOMAIN_LIGHTS: usize = 8;
-pub(super) const SHADOW_TILE: u32 = 1024;
+/// Maximum lights bound for a single draw.
+pub const MAX_DOMAIN_LIGHTS: usize = 8;
 
+/// Edge length of a spotlight atlas tile.
+pub const SHADOW_TILE: u32 = 1024;
+
+/// Fixed-layout light inputs for a draw.
 #[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq, bytemuck::NoUninit)]
-pub(super) struct Lighting {
-    camera: [f32; 4],
-    ambient_count: [f32; 4],
-    lights: [[[f32; 4]; 4]; MAX_DOMAIN_LIGHTS],
-    shadow_matrices: [[f32; 16]; MAX_DOMAIN_LIGHTS],
-    shadow_settings: [[f32; 4]; MAX_DOMAIN_LIGHTS],
+pub struct Lighting {
+    /// World-space camera position or orthographic direction.
+    pub camera: [f32; 4],
+    /// Ambient RGB and selected light count.
+    pub ambient_count: [f32; 4],
+    /// Position, direction, color and cone data for each selected light.
+    pub lights: [[[f32; 4]; 4]; MAX_DOMAIN_LIGHTS],
+    /// Per-light World to shadow clip transform.
+    pub shadow_matrices: [[f32; 16]; MAX_DOMAIN_LIGHTS],
+    /// Atlas slot, bias, inverse tile size and grid width.
+    pub shadow_settings: [[f32; 4]; MAX_DOMAIN_LIGHTS],
 }
 
 struct Candidate {
@@ -42,13 +53,15 @@ struct LightSelection {
 }
 
 #[derive(Default)]
-pub(super) struct LightSelections {
+/// Per-receiver hysteresis across frames.
+pub struct LightSelections {
     previous: BTreeMap<(OutputRef, RenderEntity), LightSelection>,
     frame: u64,
 }
 
 impl LightSelections {
-    pub(super) fn begin_frame(&mut self, host: &HostRuntime, frame: u64) {
+    /// Advance the light history and prune expired receivers.
+    pub fn begin_frame(&mut self, host: &HostRuntime, frame: u64) {
         self.frame = frame;
         if !frame.is_multiple_of(120) {
             return;
@@ -64,7 +77,8 @@ impl LightSelections {
     }
 }
 
-pub(super) struct LightCatalog {
+/// Lights and atlas assignments in one completed Camera domain.
+pub struct LightCatalog {
     camera: [f32; 4],
     ambient: [f32; 3],
     candidates: Vec<Candidate>,
@@ -72,21 +86,18 @@ pub(super) struct LightCatalog {
 }
 
 impl LightCatalog {
-    pub(super) fn prepare(
+    /// Collect lights through the spatial publication traversal.
+    pub fn prepare(
         host: &HostRuntime,
         traversal: &mut PublishedSceneTraversal,
         output: OutputRef,
         publication: WorldPublicationId,
         camera: &CameraPublication,
-    ) -> Result<Self, MetalRenderError> {
-        let pose = camera
-            .pose
-            .render_matrix()
-            .map_err(|_| MetalRenderError::InvalidCamera)?;
+    ) -> Result<Self, InvalidCamera> {
+        let pose = camera.pose.render_matrix().map_err(|_| InvalidCamera)?;
         let eye = [pose[12], pose[13], pose[14]];
         let camera = if camera.projection.projection == 1 {
-            let [x, y, z] =
-                unit([pose[8], pose[9], pose[10]]).ok_or(MetalRenderError::InvalidCamera)?;
+            let [x, y, z] = unit([pose[8], pose[9], pose[10]]).ok_or(InvalidCamera)?;
             [x, y, z, 1.0]
         } else {
             [eye[0], eye[1], eye[2], 0.0]
@@ -99,7 +110,7 @@ impl LightCatalog {
         };
         traversal
             .reset(host, publication, Some(output))
-            .map_err(|_| MetalRenderError::InvalidCamera)?;
+            .map_err(|_| InvalidCamera)?;
         while let Some(visit) = traversal.next(host) {
             let Some(scene) = visit
                 .publication
@@ -111,10 +122,7 @@ impl LightCatalog {
             if visit.publication.id == publication {
                 catalog.ambient = scene.state.ambient_light;
             }
-            let placement = visit
-                .placement
-                .render_matrix()
-                .map_err(|_| MetalRenderError::InvalidCamera)?;
+            let placement = visit.placement.render_matrix().map_err(|_| InvalidCamera)?;
             for source in &scene.lights {
                 let model = ipp_core::math::multiply(placement, source.model);
                 let Some([x, y, z]) = unit([-model[8], -model[9], -model[10]]) else {
@@ -179,11 +187,13 @@ impl LightCatalog {
         Ok(catalog)
     }
 
-    pub(super) fn over_capacity(&self) -> bool {
+    /// Whether receivers need their own light selection.
+    pub fn over_capacity(&self) -> bool {
         self.candidates.len() > MAX_DOMAIN_LIGHTS
     }
 
-    pub(super) fn root(&self) -> Lighting {
+    /// Default selection for the domain.
+    pub fn root(&self) -> Lighting {
         let mut result = self.blank();
         for (slot, candidate) in self.candidates.iter().take(MAX_DOMAIN_LIGHTS).enumerate() {
             self.push(&mut result, slot, candidate);
@@ -191,7 +201,8 @@ impl LightCatalog {
         result
     }
 
-    pub(super) fn select(
+    /// Rank bounded influences for this receiver.
+    pub fn select(
         &self,
         output: OutputRef,
         receiver: RenderEntity,
@@ -252,13 +263,15 @@ impl LightCatalog {
         }
     }
 
-    pub(super) fn shadow_views(&self) -> impl Iterator<Item = (u32, [f32; 16])> + '_ {
+    /// Assigned shadow tiles and their projection matrices.
+    pub fn shadow_views(&self) -> impl Iterator<Item = (u32, [f32; 16])> + '_ {
         self.candidates
             .iter()
             .filter_map(|candidate| candidate.shadow)
     }
 
-    pub(super) fn shadow_grid(&self) -> u32 {
+    /// Tiles per edge of the atlas.
+    pub fn shadow_grid(&self) -> u32 {
         self.shadow_grid
     }
 }
@@ -315,7 +328,7 @@ fn shadow_matrix(
     entity: EntityId,
     model: [f32; 16],
     light: ipp_core::components::Light,
-) -> Result<[f32; 16], MetalRenderError> {
+) -> Result<[f32; 16], InvalidCamera> {
     let cross = |a: [f32; 3], b: [f32; 3]| {
         [
             a[1] * b[2] - a[2] * b[1],
@@ -323,22 +336,35 @@ fn shadow_matrix(
             a[0] * b[1] - a[1] * b[0],
         ]
     };
-    let front = unit([model[8], model[9], model[10]]).ok_or(MetalRenderError::InvalidCamera)?;
-    let right = unit(cross([model[4], model[5], model[6]], front))
-        .ok_or(MetalRenderError::InvalidCamera)?;
+    let front = unit([model[8], model[9], model[10]]).ok_or(InvalidCamera)?;
+    let right = unit(cross([model[4], model[5], model[6]], front)).ok_or(InvalidCamera)?;
     let up = cross(front, right);
     let pose = GeometryShapeTransform::from_matrix([
         right[0], right[1], right[2], 0.0, up[0], up[1], up[2], 0.0, front[0], front[1], front[2],
         0.0, model[12], model[13], model[14], 1.0,
     ])
-    .map_err(|_| MetalRenderError::InvalidCamera)?;
+    .map_err(|_| InvalidCamera)?;
     let projection = Camera {
         fov_y: 2.0 * light.outer_cone,
         near: light.shadow_near,
         far: light.range,
         ..Camera::default()
     };
-    let prepared = camera::prepare_affine(entity, &projection, &pose, 1, 1)
-        .map_err(|_| MetalRenderError::InvalidCamera)?;
+    let prepared =
+        camera::prepare_affine(entity, &projection, &pose, 1, 1).map_err(|_| InvalidCamera)?;
     Ok(prepared.view_projection)
+}
+
+/// Transform local mesh bounds for per-draw light ranking.
+pub fn light_receiver(model: [f32; 16], bounds: Option<([f32; 3], [f32; 3])>) -> ([f32; 3], f32) {
+    let (min, max) = bounds.unwrap_or(([0.0; 3], [0.0; 3]));
+    let center: [f32; 3] = std::array::from_fn(|i| min[i].midpoint(max[i]));
+    let half: [f32; 3] = std::array::from_fn(|i| (max[i] - min[i]) * 0.5);
+    let position = std::array::from_fn(|i| {
+        model[12 + i] + model[i] * center[0] + model[4 + i] * center[1] + model[8 + i] * center[2]
+    });
+    let extent: [f32; 3] = std::array::from_fn(|i| {
+        model[i].abs() * half[0] + model[4 + i].abs() * half[1] + model[8 + i].abs() * half[2]
+    });
+    (position, extent[0].hypot(extent[1]).hypot(extent[2]))
 }

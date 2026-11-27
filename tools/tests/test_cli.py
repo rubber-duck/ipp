@@ -452,10 +452,12 @@ class PlanningTests(unittest.TestCase):
     def test_application_build_does_not_prepare_test_fixtures(self):
         gallery = plan("build", "gallery")
         ids = [task.id for task in gallery.tasks]
-        self.assertIn("build:browser:render", ids)
         self.assertNotIn("build:gallery-fixtures", ids)
         self.assertNotIn("build:typescript", ids)
-        self.assertEqual(sum(id_.startswith("build:browser:") for id_ in ids), 1)
+        self.assertEqual(
+            {name for name in ids if name.startswith("build:browser:")},
+            {"build:browser:render", "build:browser:webgpu"},
+        )
 
     def test_typecheck_prepares_its_actual_target(self):
         ids = [task.id for task in plan("check", "typecheck").tasks]

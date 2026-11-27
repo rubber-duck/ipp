@@ -19,6 +19,7 @@ const source = new Map([
   ["robot", "tests/profiling/platformer-profile.test.ts"],
   ["cockpit-surfaces", "tests/performance/cockpit-surfaces.ts"],
   ["metal-camera", "tests/performance/metal-camera.ts"],
+  ["webgpu-camera", "tests/performance/metal-camera.ts"],
   ["gui-rendering", "tests/performance/metal-gallery.ts"],
   ["metal-gallery", "tests/performance/metal-gallery.ts"],
 ]).get(scenario);

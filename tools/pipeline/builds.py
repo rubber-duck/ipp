@@ -7,6 +7,8 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import tomllib
+import subprocess
 from typing import Iterator
 
 from .artifacts import digest, source_identity, write_json
@@ -120,10 +122,48 @@ def wasm(features: list[str], profile: str, directory: Path) -> None:
         profile,
         *(["--features", ",".join(features)] if features else []),
     )
-    shutil.copy2(
-        ROOT / "target/wasm32-unknown-unknown" / profile / "ipp_wasm.wasm",
-        directory / "runtime.wasm",
-    )
+    compiled = ROOT / "target/wasm32-unknown-unknown" / profile / "ipp_wasm.wasm"
+    if "webgpu" in features:
+        # Generate bindings with the exact version used by the runtime.
+        tool_root = ROOT / "target/browser-tools"
+        bindgen = (
+            tool_root
+            / "bin"
+            / ("wasm-bindgen.exe" if os.name == "nt" else "wasm-bindgen")
+        )
+        version = tomllib.loads((ROOT / "Cargo.toml").read_text())["workspace"][
+            "dependencies"
+        ]["wasm-bindgen"]["version"].removeprefix("=")
+        if (
+            not bindgen.exists()
+            or subprocess.check_output([bindgen, "--version"], text=True).strip()
+            != f"wasm-bindgen {version}"
+        ):
+            cargo(
+                "install",
+                "--root",
+                str(tool_root),
+                "--version",
+                f"={version}",
+                "wasm-bindgen-cli",
+            )
+        run(
+            [
+                str(bindgen),
+                "--target",
+                "bundler",
+                "--no-typescript",
+                "--out-name",
+                "bindings",
+                "--out-dir",
+                str(directory),
+                str(compiled),
+            ]
+        )
+        (directory / "bindings.js").unlink()
+        (directory / "bindings_bg.wasm").rename(directory / "runtime.wasm")
+    else:
+        shutil.copy2(compiled, directory / "runtime.wasm")
     target("export", directory / "runtime.wasm", directory / "contract.bin")
 
 
@@ -233,16 +273,16 @@ def gles_host(directory: Path, instrumentation: bool, *, release: bool = False) 
     compile_client(directory, directory / "contract.bin")
 
 
-def metal_host(directory: Path, instrumentation: bool) -> None:
-    """Build the macOS Metal distribution and its generated native client."""
+def native_render_host(directory: Path, package: str, instrumentation: bool) -> None:
+    """Build a native renderer distribution and its generated native client."""
     cargo(
         "build",
         "-p",
-        "ipp-metal-host",
+        package,
         "--release",
         *(["--features", "instrumentation"] if instrumentation else []),
     )
-    shutil.copy2(ROOT / "target/release/ipp-metal-host", directory / "ipp-metal-host")
+    shutil.copy2(ROOT / "target/release" / package, directory / package)
     native_contract(directory / "contract.bin", release=True)
     compile_client(directory, directory / "contract.bin")
 
@@ -444,9 +484,18 @@ def build(name: str) -> None:
     elif name in ("gles-host", "gles-host-instrumentation"):
         with product(ROOT / "target" / name) as directory:
             gles_host(directory, name == "gles-host-instrumentation")
-    elif name in ("metal-host", "metal-host-instrumentation"):
+    elif name in (
+        "metal-host",
+        "metal-host-instrumentation",
+        "webgpu-host",
+        "webgpu-host-instrumentation",
+    ):
         with product(ROOT / "target" / name) as directory:
-            metal_host(directory, name == "metal-host-instrumentation")
+            native_render_host(
+                directory,
+                f"ipp-{name.removesuffix('-instrumentation')}",
+                name.endswith("-instrumentation"),
+            )
     elif name in ("gallery-platformer-assets", "gallery-platformer-native-assets"):
         gallery_platformer_assets(native=name == "gallery-platformer-native-assets")
     elif name in ("demos-cockpit-assets", "demos-cockpit-native-assets"):

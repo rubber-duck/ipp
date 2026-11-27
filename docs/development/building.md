@@ -90,7 +90,7 @@ python tools/ipp.py dev headless-client ws://127.0.0.1:9231
 
 `build gallery-site` writes a standalone release to `target/gallery-site/`: HTML, minified application/styles/runtime modules, release-small WASM, gallery assets and license notices. Relative URLs support both a domain root and a project subdirectory. `build-report.json` records file hashes and raw/gzip size estimates; published files remain uncompressed for the host to negotiate HTTP compression. The complete GUI font remains available for editable text.
 
-`test gallery-site` builds the release and exercises every gallery page through HTTP gzip, worker/WASM and WebGL at root and project URLs, retaining frame and network evidence under `target/integration-artifacts/gallery-site/`. It does not test asset reacquisition after explicit eviction: the browser provider currently requires strong recovery validators, while Pages may return weak ETags for compressed responses.
+`test gallery-site` builds the release and exercises the gallery through HTTP gzip and worker/WASM at root and project URLs, including WebGPU, adapter rejection and WebGL 2 fallback, retaining frame and network evidence under `target/integration-artifacts/gallery-site/`. It does not test asset reacquisition after explicit eviction: the browser provider currently requires strong recovery validators, while Pages may return weak ETags for compressed responses.
 
 The [Pages workflow](../../.github/workflows/gallery-pages.yml) builds and uploads the site artifact, then deploys on pushes to `main` or manual runs from `main`. It caches Cargo compilation, cancels superseded runs and keeps integration tests outside deployment. Set the repository's **Settings → Pages → Build and deployment → Source** to **GitHub Actions** before the first deployment. Building locally does not publish the site.
 
@@ -122,6 +122,10 @@ Shapes, lighting, particles and charts need no Blender installation. The complet
 The cockpit browser pane can use the optional native CEF engine on Apple Silicon. Install its build tools with `brew install cmake ninja`, then start with `node tools/shared-host/shared-host.mjs host start --gallery --window --cef`. The build pipeline installs the pinned, checksum-verified CEF archive in the shared cache and packages its helper applications. Runtime startup loads that installation; it never downloads. See the [native engine guide](../../crates/ipp-server/cef/README.md) for lifecycle, supported input and validation.
 
 Build the [direct Metal Host](../../crates/ipp-render-metal/README.md) with `python tools/ipp.py build metal-host` for offscreen Camera and Canvas rendering. Its generated native client is written beside the executable.
+
+The browser gallery tries the WebGPU worker first and opens a fresh WebGL 2 canvas if startup fails. The Display menu identifies the active renderer. Build the WebGPU browser distribution with `python tools/ipp.py build browser:webgpu`. This build uses the pinned wasm-bindgen CLI under `target/browser-tools/` to generate browser bindings. WebGL and headless builds omit those dependencies.
+
+Build the native WebGPU comparison Host with `python tools/ipp.py build webgpu-host`. Run it with `target/webgpu-host/ipp-webgpu-host` on a Mac with a hardware Metal device. It renders Camera and Canvas outputs, nested Cameras, flat and curved Surfaces, GUI paints and paths, spatial Plots, mesh and sprite particles, and spotlight shadows. The WebGPU Host uses wgpu's WGSL and GLSL frontends for built-in and authored programs. The GLSL frontend adds the `pp-rs` preprocessor to this distribution. External Chromium image import is available in the CEF distributions. The [native WebGPU comparison](../../tests/performance/README.md#native-webgpu-comparison) exercises completed captures and release throughput on the demo gallery and the GUI board.
 
 ### Optional compiler cache
 

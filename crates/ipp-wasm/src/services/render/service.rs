@@ -9,7 +9,8 @@ use ipp_host_session::{HostPresentationFailure, PresentationDrawSummary};
 use ipp_protocol::host::presentation::{PresentationError, PresentationSurface};
 use ipp_render_gl::{RenderError, RenderService, WebGlRenderDevice};
 
-use crate::BOUNDARY;
+#[cfg(feature = "instrumentation")]
+use super::exports::{read, update};
 
 #[link(wasm_import_module = "ipp_presentation")]
 unsafe extern "C" {
@@ -27,7 +28,7 @@ pub(crate) struct RenderSurfaceService {
     height: u32,
     context: u64,
     /// Packed record export and the totals it accumulates across renders.
-    statistics: super::statistics::RenderStatisticsRecord,
+    pub(super) statistics: super::statistics::RenderStatisticsRecord,
     /// World of the last completed render, whose records a capture reads.
     rendered_world: Option<ipp_core::WorldId>,
     /// Reused scratch for the records export.
@@ -115,7 +116,7 @@ impl RenderSurfaceService {
         self.renderer.export_asset(provider, format, observer)
     }
 
-    pub(crate) fn new(world: &mut ipp_core::HostRuntime) -> Self {
+    pub(crate) fn new(world: &mut ipp_core::HostRuntime) -> Result<Self, String> {
         let mut renderer = RenderService::new(WebGlRenderDevice::new()).expect("empty renderer");
         renderer.set_asset_export_delay(std::rc::Rc::new(|duration| {
             Box::pin(crate::services::task_scheduler::timer::BrowserTaskTimer::new(duration))
@@ -124,7 +125,7 @@ impl RenderSurfaceService {
         renderer
             .install(world)
             .expect("factories registered before source use");
-        Self {
+        Ok(Self {
             renderer,
             web_content: Default::default(),
             #[cfg(feature = "instrumentation")]
@@ -137,7 +138,7 @@ impl RenderSurfaceService {
             rendered_world: None,
             surface_cache_diagnostics: Vec::new(),
             surface_cache_records: Vec::new(),
-        }
+        })
     }
 
     pub(crate) fn progress_resources(&mut self, host: &mut ipp_core::HostRuntime) {
@@ -189,7 +190,7 @@ impl RenderSurfaceService {
         Ok(())
     }
 
-    fn attach(
+    pub(super) fn attach(
         &mut self,
         host: &mut ipp_core::HostRuntime,
         width: u32,
@@ -214,7 +215,7 @@ impl RenderSurfaceService {
         Ok(())
     }
 
-    fn detach_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), String> {
+    pub(super) fn detach_host(&mut self, host: &mut ipp_core::HostRuntime) -> Result<(), String> {
         #[cfg(feature = "instrumentation")]
         if self.active {
             self.renderer.invalidate_gpu_context();
@@ -233,7 +234,15 @@ impl RenderSurfaceService {
     }
 
     /// Build the records export for the World of the last completed render.
-    fn surface_cache_records(&mut self) -> &[u32] {
+    pub(super) fn statistics_words(&mut self) -> &[u32] {
+        self.statistics.fill(self.renderer.statistics())
+    }
+
+    pub(super) fn surface_record_count(&self) -> usize {
+        self.surface_cache_records.len()
+    }
+
+    pub(super) fn surface_cache_records(&mut self) -> &[u32] {
         self.surface_cache_records.clear();
         let Some(world) = self.rendered_world else {
             return &self.surface_cache_records;
@@ -351,147 +360,12 @@ fn presentation_failure(error: RenderError) -> HostPresentationFailure {
     }
 }
 
-fn update(
-    action: impl FnOnce(&mut RenderSurfaceService, &mut ipp_core::HostRuntime) -> Result<(), String>,
-) -> u32 {
-    BOUNDARY.with_borrow_mut(|boundary| {
-        let result = boundary
-            .presentation_host()
-            .ok_or_else(|| "session is closed".to_owned())
-            .and_then(|(presentation, host)| action(presentation, host));
-        match result {
-            Ok(()) => 1,
-            Err(error) => u32::from(boundary.fail(&error)),
-        }
-    })
-}
-
-fn read<T: Default>(read: impl FnOnce(&RenderSurfaceService) -> T) -> T {
-    BOUNDARY
-        .with_borrow_mut(|boundary| boundary.presentation().map(|p| read(p)).unwrap_or_default())
-}
-
-/// Attach only after the host binds WASM memory to its live WebGL device.
-// SAFETY: Unique host symbol; calls are exclusive on the owning worker, no borrowed state escapes.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_attach(width: u32, height: u32) -> u32 {
-    update(|presentation, world| presentation.attach(world, width, height))
-}
-
-/// Largest drawing-buffer width the device accepts, or zero while it cannot report.
-// SAFETY: Unique symbol; returns an owned scalar under exclusive Host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_max_viewport_width() -> u32 {
-    read(|presentation| {
-        presentation
-            .renderer
-            .viewport_limits()
-            .map_or(0, |limits| limits.max_width)
-    })
-}
-
-/// Largest drawing-buffer height the device accepts, or zero while it cannot report.
-// SAFETY: Unique symbol; returns an owned scalar under exclusive Host access.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_max_viewport_height() -> u32 {
-    read(|presentation| {
-        presentation
-            .renderer
-            .viewport_limits()
-            .map_or(0, |limits| limits.max_height)
-    })
-}
-
-/// Discard context-scoped state before loss/replacement; retain the logical world.
-// SAFETY: Unique symbol; resource invalidation and destruction are exclusive and retain no aliases.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_detach() -> u32 {
-    update(|presentation, host| presentation.detach_host(host))
-}
-
 /// Shadow submissions for the opt-in benchmark, separate from main-pass draws.
 // SAFETY: Unique diagnostic symbol; owned scalar under exclusive Host access.
 #[cfg(feature = "instrumentation")]
 #[unsafe(no_mangle)]
 pub extern "C" fn ipp_profile_shadow_draw_calls() -> u32 {
     read(|presentation| presentation.renderer.statistics().shadow_draw_calls)
-}
-
-/// Fill the packed statistics record of the last completed render and return
-/// it; [`ipp_render_statistics_len`] gives its length. The layout is documented
-/// in `services/render/statistics.rs`. Null while no session is open.
-// SAFETY: Unique symbol; the pointer refers to presentation-owned storage that
-// stays valid and unaliased by Rust until the next call of this export or the
-// session closes. The caller copies it synchronously.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_statistics_ptr() -> *const u32 {
-    BOUNDARY.with_borrow_mut(|boundary| {
-        boundary
-            .presentation()
-            .map_or(std::ptr::null(), |presentation| {
-                let statistics = *presentation.renderer.statistics();
-                presentation.statistics.fill(&statistics).as_ptr()
-            })
-    })
-}
-
-/// Words in the record at [`ipp_render_statistics_ptr`].
-// SAFETY: Unique symbol; returns a constant scalar.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_statistics_len() -> u32 {
-    super::statistics::RECORD_WORDS as u32
-}
-
-/// Whole-Host ordinary-layout membership JSON, copied synchronously by the worker.
-// SAFETY: Unique diagnostic symbol. Exclusive boundary access fills owned storage;
-// the returned bytes remain valid until the next call or Host destruction, without Rust aliases.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_gui_layout_ptr() -> *const u8 {
-    BOUNDARY.with_borrow_mut(|boundary| {
-        boundary
-            .presentation()
-            .map_or(std::ptr::null(), |presentation| {
-                presentation.statistics.layout_json().as_ptr()
-            })
-    })
-}
-
-/// Bytes at the last pointer returned by `ipp_render_gui_layout_ptr`.
-// SAFETY: Unique diagnostic symbol. Exclusive boundary access returns only an owned scalar.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_gui_layout_len() -> u32 {
-    read(|presentation| presentation.statistics.layout_json_len() as u32)
-}
-
-/// Build the Surface cache records of the last completed frame and return
-/// them, or null when there are none. Each record has
-/// `SURFACE_CACHE_RECORD_WORDS` little-endian `u32` words;
-/// [`ipp_render_surface_cache_records_len`] gives the word count of this build.
-// SAFETY: Unique symbol; the pointer refers to presentation-owned storage that
-// stays valid and unaliased by Rust until the next call of this export, a
-// render, or the session closes. The caller copies it synchronously.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_surface_cache_records_ptr() -> *const u32 {
-    BOUNDARY.with_borrow_mut(|boundary| {
-        boundary
-            .presentation()
-            .map_or(std::ptr::null(), |presentation| {
-                let records = presentation.surface_cache_records();
-                if records.is_empty() {
-                    std::ptr::null()
-                } else {
-                    records.as_ptr()
-                }
-            })
-    })
-}
-
-/// Length in `u32` words of the records the last
-/// [`ipp_render_surface_cache_records_ptr`] call built.
-// SAFETY: Unique symbol; returns a length without retaining a reference.
-#[unsafe(no_mangle)]
-pub extern "C" fn ipp_render_surface_cache_records_len() -> u32 {
-    read(|presentation| presentation.surface_cache_records.len() as u32)
 }
 
 /// Testing override of this context's renderer-owned glyph atlas bounds: its

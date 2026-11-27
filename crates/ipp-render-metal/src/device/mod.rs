@@ -6,6 +6,7 @@ use std::{cell::RefCell, rc::Rc};
 
 mod canvas;
 mod frame;
+mod path_masks;
 mod pipelines;
 mod resources;
 mod uploads;
@@ -50,16 +51,7 @@ impl Object {
 }
 
 pub(super) struct Device(RefCell<Rc<Backend>>);
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct MeshVertex {
-    pub(super) position: [f32; 4],
-    pub(super) color_weight: [f32; 4],
-    pub(super) uv: [f32; 4],
-    pub(super) joints: [u32; 4],
-    pub(super) joint_weights: [f32; 4],
-    pub(super) normal: [f32; 4],
-}
+pub(super) use ipp_render_scene::mesh::MeshVertex;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::NoUninit)]
@@ -77,40 +69,7 @@ impl Material {
     pub(super) const MAX_INSTANCES: usize = 1024;
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-pub(super) struct CanvasVertex {
-    pub(super) clip: [f32; 4],
-    pub(super) local: [f32; 2],
-    pub(super) world: [f32; 4],
-    pub(super) right: [f32; 3],
-    pub(super) down: [f32; 3],
-    pub(super) normal: [f32; 3],
-    pub(super) slot: u32,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable, Default)]
-pub(super) struct CanvasPaint {
-    pub(super) tint: [f32; 4],
-    pub(super) bounds: [f32; 4],
-    pub(super) fill: [[f32; 4]; 2],
-    pub(super) gradient: [f32; 4],
-    pub(super) border: [f32; 4],
-    pub(super) options: [f32; 4],
-    pub(super) shape: [f32; 4],
-    pub(super) segment: [[f32; 4]; 2],
-    pub(super) cut: [f32; 4],
-    pub(super) accent: [f32; 4],
-    pub(super) glow_color: [f32; 4],
-    pub(super) glow: [f32; 4],
-    pub(super) checker: [[f32; 4]; 2],
-    pub(super) section: [f32; 4],
-    pub(super) clip: [f32; 4],
-    pub(super) paint_origin_scale: [f32; 4],
-    pub(super) paint_size_opacity: [f32; 4],
-    pub(super) paint_data: [f32; 4],
-}
+pub(crate) use ipp_render_scene::canvas::{CanvasPaint, CanvasVertex};
 
 #[derive(Clone)]
 pub(super) struct Target {
@@ -133,6 +92,7 @@ impl Target {
 pub(super) enum CanvasBinding<'a> {
     Bitmap(&'a Object),
     Target(&'a Target),
+    Screen(&'a Target),
     Layer {
         target: &'a Target,
         id: u32,
@@ -148,7 +108,6 @@ pub(super) enum CanvasBinding<'a> {
 pub(super) enum Blend {
     Opaque,
     Alpha,
-    Additive,
 }
 
 pub(super) struct MeshBuffers {
@@ -165,6 +124,7 @@ pub(super) struct PaintParameters<'a> {
 pub(super) struct CanvasCoverage<'a> {
     pub(super) analytic: Option<&'a AnalyticPrimitive<'a>>,
     pub(super) depth_test: bool,
+    pub(super) plot: bool,
     pub(super) layer_owner: u32,
 }
 

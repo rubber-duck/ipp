@@ -288,8 +288,6 @@ export class AnimationSession {
     }
     await this.render();
     for (const [id, option] of Object.entries(options)) {
-      if (option.time !== undefined)
-        await this.control(id, { action: "seek", time: option.time });
       await this.control(id, {
         action:
           option.state === "playing"
@@ -298,6 +296,9 @@ export class AnimationSession {
               ? "pause"
               : "stop",
       });
+      // A running controller can advance between an acknowledged seek and pause.
+      if (option.time !== undefined)
+        await this.control(id, { action: "seek", time: option.time });
     }
   }
 

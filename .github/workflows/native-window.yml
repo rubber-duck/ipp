@@ -5,11 +5,15 @@ on:
       - "crates/ipp-server/**"
       - "crates/ipp-render-gl/**"
       - "crates/ipp-render-metal/**"
+      - "crates/ipp-render-scene/**"
+      - "crates/ipp-render-webgpu/**"
+      - "crates/ipp-webgpu-host/**"
       - "crates/ipp-metal-host/**"
       - "tools/shared-host/**"
       - "tools/pipeline/**"
       - "tests/rendering/native-cef.test.mjs"
       - "tests/rendering/metal-camera.native.test.ts"
+      - "tests/rendering/webgpu-camera.native.test.ts"
       - "tests/rendering/metal-cef.native.test.ts"
       - "tests/rendering/scenarios/metal-composition.ts"
       - "tests/rendering/scenarios/metal-camera.ts"
@@ -61,7 +65,7 @@ jobs:
           done
           echo "IPP_EGL_LIBRARY_DIR=$ipp_angle/lib" >> "$GITHUB_ENV"
       - name: Exercise native window and offscreen clients
-        run: python tools/ipp.py regression --only test:native-window:macos --only test:shared-host:native --only test:native-cef:macos --only test:metal-camera:native --only test:metal-cef:macos
+        run: python tools/ipp.py regression --only test:native-window:macos --only test:shared-host:native --only test:native-cef:macos --only test:webgpu-camera:native --only test:metal-camera:native --only test:metal-cef:macos
       - name: Preserve frame and failure evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -73,6 +77,7 @@ jobs:
             target/integration-artifacts/native-cef/
             target/integration-artifacts/shared-host/
             target/integration-artifacts/ipp-integration-metal-cef-*/
+            target/integration-artifacts/ipp-integration-webgpu-camera-*/
             target/integration-artifacts/ipp-integration-metal-host-*/
             target/integration-artifacts/ipp-integration-metal-host-instrumentation-*/
             target/integration-artifacts/ipp-integration-gles-host-*/

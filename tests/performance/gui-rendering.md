@@ -1,10 +1,10 @@
 # Native GUI rendering benchmark
 
-The board exercises the real GUI kit and Data Service plots on Metal and hardware GLES. It keeps every specimen at the same coordinates and size across individual, mixed and removal measurements. A Host-clock animation moves an eight-pixel mark along the lower edge to invalidate the Canvas while the controls and source data stay fixed. Each case starts a fresh Host on each backend. Cartoon notifications use the same authored tilt across mounts. Steady redraw windows hold component and dataset values fixed. The live-chart cases also measure dataset edits through the next Host frame. Use the [React GUI stress benchmark](gui-stress.md) for interaction, layout churn and action latency.
+The board exercises the real GUI kit and Data Service plots on native Metal, hardware GLES and WebGPU. It keeps every specimen at the same coordinates and size across individual, mixed and removal measurements. A Host-clock animation moves an eight-pixel mark along the lower edge to invalidate the Canvas while the controls and source data stay fixed. Each case starts a fresh Host on each backend. Cartoon notifications use the same authored tilt across mounts. Steady redraw windows hold component and dataset values fixed. The live-chart cases also measure dataset edits through the next Host frame. Use the [React GUI stress benchmark](gui-stress.md) for interaction, layout churn and action latency.
 
 ## Run a comparison
 
-Run these on a Mac with hardware ANGLE. The full board runs with every gallery theme (Glass, Cybertron and Cartoon) on a direct Canvas and on flat, cylindrical and spherical Surfaces. Each Surface run uses one orthographic camera and one attached board. It has no other scene content. The flat Surface controls for camera and attachment costs. The board is four metres wide with coincident layers. Both curved geometries use a curvature of 0.45 per metre. The camera keeps the pixel scale at the centre constant, so the projected screen area decreases toward the edges.
+Run these on a Mac with a hardware Metal device. Runs that include GLES also require the ANGLE libraries. The full board runs with every gallery theme (Glass, Cybertron and Cartoon) on a direct Canvas and on flat, cylindrical and spherical Surfaces. Each Surface run uses one orthographic camera and one attached board. It has no other scene content. The flat Surface controls for camera and attachment costs. The board is four metres wide with coincident layers. Both curved geometries use a curvature of 0.45 per metre. The camera keeps the pixel scale at the centre constant, so the projected screen area decreases toward the edges.
 
 ```sh
 export IPP_EGL_LIBRARY_DIR=/path/to/angle/lib
@@ -13,7 +13,7 @@ python tools/ipp.py benchmark native --scene gui-rendering --themes glass --proj
 python tools/ipp.py benchmark native --scene gui-rendering --cases all --instrumented --frames 80 --repetitions 1 --output target/performance/gui-rendering-gpu
 ```
 
-Use `--renderer metal` or `--renderer gles` to repeat one side against a saved reference. Match the fixtures, capture dimensions and reference executable identity across runs.
+Use `--renderer all` to rotate all three backends, or select one with `--renderer metal`, `--renderer gles` or `--renderer webgpu`. Match the fixtures, capture dimensions and reference executable identity across runs.
 
 With no filters, the default sweep measures the full theme and projection matrix, then includes an empty board, each family and each open overlay on the direct Glass Canvas. Pass comma-separated `--themes`, `--projections` and `--cases` to select a cross product. The projection keys are `canvas`, `flat`, `cylinder` and `sphere`. Each selected specimen keeps its original position, size and caption. A `without-<id>` case removes the specimen and its caption. Include `all` and its `without-` case in the same run to measure the difference.
 

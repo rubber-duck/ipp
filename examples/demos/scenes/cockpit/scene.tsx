@@ -418,10 +418,11 @@ export const cockpitScene: GallerySceneDefinition = {
                 terminal = startBrowserTerminal(
                   context.canvas.host,
                   asset("terminal-worker.js"),
-                  new URL(
-                    `${GALLERY_RUNTIME}generated.js`,
-                    window.location.href,
-                  ).href,
+                  context.generatedModuleUrl ??
+                    new URL(
+                      `${GALLERY_RUNTIME}generated.js`,
+                      window.location.href,
+                    ).href,
                   {
                     world,
                     target: target.id,

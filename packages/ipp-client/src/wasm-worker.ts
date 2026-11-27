@@ -23,6 +23,7 @@ import {
  * controls, and only then are they loaded.
  */
 declare const IPP_INSTRUMENTATION: boolean;
+declare const IPP_WEBGPU: boolean;
 
 /** Dedicated worker owns ingress, the frame clock, and optional presentation. */
 const FRAME_INTERVAL_MS = 1_000 / 60;
@@ -448,9 +449,10 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         if (!(init.canvas instanceof OffscreenCanvas))
           throw new Error("Expected a transferred OffscreenCanvas");
         const { RenderWorkerService } = await import("./render-worker.js");
-        const testing = IPP_INSTRUMENTATION
-          ? await import("./render-testing.js")
-          : undefined;
+        const testing =
+          IPP_INSTRUMENTATION && !IPP_WEBGPU
+            ? await import("./render-testing.js")
+            : undefined;
         if (closed) return;
         const created = await RenderWorkerService.create(
           init.canvas,
@@ -526,42 +528,43 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
           run: runFrame,
         });
         installTaskTesting(instance.exports, cancelFrame);
-        Object.assign(globalThis, {
-          ippAssetExportTasks: {
-            hold() {
-              holdAssetTimers = true;
-              (
-                instance.exports.ipp_test_asset_export_staging_gate as (
-                  enabled: number,
-                ) => void
-              )(1);
+        if (!IPP_WEBGPU)
+          Object.assign(globalThis, {
+            ippAssetExportTasks: {
+              hold() {
+                holdAssetTimers = true;
+                (
+                  instance.exports.ipp_test_asset_export_staging_gate as (
+                    enabled: number,
+                  ) => void
+                )(1);
+              },
+              waiting: () => heldAssetTimers.size,
+              suspend() {
+                cancelFrame();
+              },
+              release() {
+                (
+                  instance.exports.ipp_test_asset_export_staging_gate as (
+                    enabled: number,
+                  ) => void
+                )(0);
+                holdAssetTimers = false;
+                const held = [...heldAssetTimers.values()];
+                heldAssetTimers.clear();
+                for (const ready of held) ready();
+              },
+              tick: (world: bigint) =>
+                (
+                  instance.exports.ipp_test_asset_export_world_tick as (
+                    world: bigint,
+                  ) => bigint
+                )(world),
+              resume() {
+                scheduleFrame();
+              },
             },
-            waiting: () => heldAssetTimers.size,
-            suspend() {
-              cancelFrame();
-            },
-            release() {
-              (
-                instance.exports.ipp_test_asset_export_staging_gate as (
-                  enabled: number,
-                ) => void
-              )(0);
-              holdAssetTimers = false;
-              const held = [...heldAssetTimers.values()];
-              heldAssetTimers.clear();
-              for (const ready of held) ready();
-            },
-            tick: (world: bigint) =>
-              (
-                instance.exports.ipp_test_asset_export_world_tick as (
-                  world: bigint,
-                ) => bigint
-              )(world),
-            resume() {
-              scheduleFrame();
-            },
-          },
-        });
+          });
         evaluate = timed.evaluate;
         step = timed.run;
       }
@@ -577,6 +580,8 @@ globalThis.onmessage = (event: MessageEvent<unknown>) => {
         };
       if (runtime.ipp_diagnostics_set_level(threshold) !== 1)
         throw new Error("WASM diagnostic level configuration failed");
+      if (presentation) await presentation.start(instance.exports);
+      if (closed) return;
       const session = freshSession();
       checkResult(runtime.ipp_host_open(session));
       if (assetCacheBytes !== undefined)

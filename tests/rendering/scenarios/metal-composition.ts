@@ -125,6 +125,14 @@ export async function metalComposition(host: HostClientBase<Client>) {
         parameters: { red: "f32" },
         backends: {
           ipp: { paint: "return vec4(p_red, color.g, 0.0, color.a);" },
+          "glsl-es-300": {
+            paint: `mat2 a = mat2(1.0, p_red, -1.0, 2.0);
+mat3 b = mat3(vec3(a[0], 0.5), vec3(a[1], 0.0), vec3(0.25, 1.0, 1.0));
+mat4 m = mat4(vec4(b[0], 0.0), vec4(b[1], 0.25), vec4(b[2], 0.0), vec4(2.0, 1.0, 0.0, 1.0));
+vec2 xy = inverse(a) * (a * color.rg);
+vec3 rgb = inverse(b) * (b * vec3(p_red, xy.y, 0.0));
+return inverse(m) * (m * vec4(rgb, color.a));`,
+          },
         },
       });
       const material = await upload(scene, {
@@ -504,6 +512,54 @@ export async function metalComposition(host: HostClientBase<Client>) {
           new Uint8Array(first.pixels),
           new Uint8Array(second.pixels),
         );
+        // A moving opaque mesh must occlude paint retained at the cylinder's screen depth.
+        const blocker = { kind: "alias", alias: 1 } as const;
+        const added = successfulBatch(
+          await scene.batch([
+            createEntity(1, "panel-occluder"),
+            insertComponent(scene, "Transform", blocker, {
+              z: -1,
+              sx: 0.4,
+              sy: 0.4,
+              sz: 0.1,
+            }),
+            insertComponent(scene, "MeshInstance", blocker, {
+              source: "ipp://mesh/cube?width=1&height=1&length=1",
+            }),
+            insertComponent(scene, "UnlitMaterial", blocker, {
+              r: 0,
+              g: 1,
+              b: 0,
+            }),
+          ]),
+        );
+        const covered = await host.presentation.capture(view, {
+          afterOutputs: curveOutputs,
+          afterSequence: second.sequence,
+        });
+        const at = (48 * 129 + 58) * 4;
+        assert.deepEqual(
+          [...new Uint8Array(covered.pixels).slice(at, at + 3)],
+          [0, 255, 0],
+        );
+        successfulBatch(
+          await scene.batch([
+            setFloat(
+              { kind: "handle", id: aliasId(added, 1) },
+              "Transform",
+              "x",
+              10,
+            ),
+          ]),
+        );
+        const revealed = await host.presentation.capture(view, {
+          afterOutputs: curveOutputs,
+          afterSequence: covered.sequence,
+        });
+        assert.deepEqual(
+          new Uint8Array(revealed.pixels),
+          new Uint8Array(second.pixels),
+        );
         return [initial, resized, second].map((capture) => {
           const { width, height } = capture.view.binding.viewport;
           return { width, height, pixels: new Uint8Array(capture.pixels) };
@@ -519,5 +575,44 @@ export async function metalComposition(host: HostClientBase<Client>) {
     }
   } finally {
     await host.destroyWorld(root.reference);
+  }
+}
+
+export function assertCompositionPixels(
+  actual: { width: number; pixels: Uint8Array },
+  i: number,
+  evidence: string,
+) {
+  if (i === 2) {
+    for (const [x, y, rgb] of [
+      [58, 48, [137, 0, 0]],
+      [64, 38, [0, 255, 255]],
+      [72, 48, [255, 0, 0]],
+    ] as const) {
+      const pixel = y * actual.width + x;
+      const lanes = actual.pixels.subarray(pixel * 4, pixel * 4 + 3);
+      assert.ok(
+        rgb.every((value, lane) => Math.abs(value - lanes[lane]!) <= 3),
+        `cylinder paint at (${x}, ${y}) is ${lanes}, expected ${rgb}; see ${evidence}`,
+      );
+    }
+    return;
+  }
+  // Sample away from analytic edges and texture filtering boundaries.
+  for (const [x, y, rgb] of [
+    [12, 30, [5, 188, 12]],
+    [33, 48, [0, 0, 255]],
+    [73, 30, [255, 255, 0]],
+    [78, 40, [188, 188, 188]],
+    [14, 15, [0, 255, 255]],
+    [66, 83, [10, 14, 20]],
+    [106, 78, [255, 0, 0]],
+  ] as const) {
+    const pixel = y * actual.width + x;
+    const lanes = actual.pixels.subarray(pixel * 4, pixel * 4 + 3);
+    assert.ok(
+      rgb.every((value, lane) => Math.abs(value - lanes[lane]!) <= 4),
+      `composition-${i} pixel (${x}, ${y}) is ${lanes}, expected ${rgb}; see ${evidence}`,
+    );
   }
 }

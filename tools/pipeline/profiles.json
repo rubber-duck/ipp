@@ -6,6 +6,12 @@
     "render": {
       "features": ["render"]
     },
+    "webgpu-instrumentation": {
+      "features": ["webgpu", "instrumentation"]
+    },
+    "webgpu": {
+      "features": ["webgpu"]
+    },
     "render-instrumentation": {
       "features": ["render", "instrumentation"]
     }

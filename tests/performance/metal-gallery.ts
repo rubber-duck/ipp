@@ -20,8 +20,9 @@ const config: Omit<GalleryBenchmarkConfig, "backend" | "repeat"> & {
   projections?: string[] | null;
   metal: string;
   gles: string;
+  webgpu?: string;
   repetitions: number;
-  renderer?: "metal" | "gles";
+  renderer?: "metal" | "gles" | "webgpu" | "all";
 } = JSON.parse(process.argv[2]!);
 const output = resolve(config.output);
 await mkdir(output, { recursive: true });
@@ -84,18 +85,24 @@ const save = () =>
 const cases = gui ? guiCases(config) : [undefined];
 try {
   for (let repeat = 0; repeat < config.repetitions; repeat++) {
-    const order =
-      repeat % 2 === 0
-        ? (["metal", "gles"] as const)
-        : (["gles", "metal"] as const);
+    const available: GalleryBenchmarkConfig["backend"][] = config.webgpu
+      ? ["metal", "gles", "webgpu"]
+      : ["metal", "gles"];
+    const offset = repeat % available.length;
+    const order = [...available.slice(offset), ...available.slice(0, offset)];
     for (const boardCase of repeat % 2 ? cases.toReversed() : cases) {
       for (const backend of order) {
-        if (config.renderer && backend !== config.renderer) continue;
+        if (
+          config.renderer &&
+          config.renderer !== "all" &&
+          backend !== config.renderer
+        )
+          continue;
         controller.signal.throwIfAborted();
-        const product = resolve(config[backend]);
+        const product = resolve(config[backend]!);
         const executable = join(
           product,
-          backend === "metal" ? "ipp-metal-host" : "gles_host",
+          backend === "gles" ? "gles_host" : `ipp-${backend}-host`,
         );
         const schemaArtifact = join(product, "contract.bin");
         const finish = join(output, `${backend}-${repeat}`);
@@ -117,7 +124,9 @@ try {
               readinessTimeoutMs: 30_000,
               operationTimeoutMs: 300_000,
               ...(gui ? { closeTimeoutMs: 15000 } : {}),
-              environment: { IPP_LOG: "info" },
+              environment: {
+                IPP_LOG: "info",
+              },
               extraArguments: [
                 "--uncapped",
                 ...(backend === "gles"
@@ -193,7 +202,7 @@ try {
               );
               const result = JSON.parse(stdout).report;
               const device =
-                backend === "metal"
+                backend !== "gles"
                   ? (
                       await readFile(
                         join(
@@ -202,12 +211,13 @@ try {
                         ),
                         "utf8",
                       )
-                    ).match(/\[IPP Metal\] device=([^\r\n]+)/)?.[1]
+                    ).match(/\[IPP (?:Metal|WebGPU)\] device=([^\r\n]+)/)?.[1]
                   : (result.device?.renderer ??
                     result.device?.unmaskedRenderer);
               if (result.failures?.length && !device)
                 throw new Error(JSON.stringify(result.failures));
               assert.ok(device, "No hardware renderer identity");
+              if (backend === "webgpu") assert.match(device, /^Metal .+/);
               assert.doesNotMatch(
                 device,
                 /llvmpipe|softpipe|swiftshader|lavapipe|software/i,

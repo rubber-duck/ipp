@@ -8,6 +8,8 @@ use ipp_core::{
     },
 };
 
+use ipp_render_scene::mesh::mesh_vertices;
+
 use crate::device::{Device, MeshBuffers, MeshVertex, Object};
 
 pub(super) struct MetalMesh {
@@ -66,34 +68,6 @@ pub(super) fn mesh_loader(device: Rc<Device>) -> impl AssetLoader<Data = MetalMe
         }
         Ok(data)
     })
-}
-
-pub(super) fn mesh_vertices(mesh: &MeshAsset) -> Result<Vec<MeshVertex>, String> {
-    let mut vertices = Vec::new();
-    vertices
-        .try_reserve_exact(mesh.vertex_count())
-        .map_err(|error| error.to_string())?;
-    for (i, &[x, y, z]) in mesh.positions().iter().enumerate() {
-        let [r, g, b] = mesh.colors().map_or([1.0; 3], |colors| colors[i]);
-        let weight = mesh
-            .texture_weights()
-            .map_or(1.0, |weights| f32::from(weights[i]) / 255.0);
-        let [u, v] = mesh.uvs().map_or([0.0; 2], |uvs| uvs[i]);
-        let [nx, ny, nz] = mesh.normals().map_or([0.0; 3], |normals| normals[i]);
-        vertices.push(MeshVertex {
-            position: [x, y, z, 1.0],
-            color_weight: [r, g, b, weight],
-            uv: [u, v, 0.0, 0.0],
-            joints: mesh
-                .joint_indices()
-                .map_or([0; 4], |joints| joints[i].map(u32::from)),
-            joint_weights: mesh
-                .joint_weights()
-                .map_or([1.0, 0.0, 0.0, 0.0], |weights| weights[i]),
-            normal: [nx, ny, nz, 0.0],
-        });
-    }
-    Ok(vertices)
 }
 
 pub(super) struct MetalTexture {

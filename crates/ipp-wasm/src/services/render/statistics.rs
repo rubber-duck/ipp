@@ -15,63 +15,72 @@
 //! from zero-filled storage. The separate membership record retains World
 //! lifetimes, evaluation/gate status and retired work independently of draws.
 
+#[cfg(feature = "render")]
 use ipp_render_gl::RenderStatistics;
 
 pub(crate) const FLAGS: usize = 0;
-pub(crate) const UPLOADED_BYTES: usize = 1;
-pub(crate) const TOTAL_UPLOADED_BYTES: usize = 2;
-pub(crate) const UNSHADOWED_LIGHTS: usize = 3;
-pub(crate) const SHADOW_DRAW_CALLS: usize = 4;
-pub(crate) const SHADOW_RESIDENT_BYTES: usize = 5;
-pub(crate) const GUI_BATCHES: usize = 6;
-pub(crate) const GUI_REBUILDS: usize = 7;
-pub(crate) const GUI_ALLOCATIONS: usize = 8;
-pub(crate) const GUI_RESIDENT_BYTES: usize = 9;
-pub(crate) const GLYPH_MISSES: usize = 10;
-pub(crate) const GLYPH_POPULATES: usize = 11;
-pub(crate) const GLYPH_POPULATION_FAILURES: usize = 12;
-pub(crate) const GLYPH_PAGE_RETIREMENTS: usize = 13;
-pub(crate) const GLYPH_PAGES: usize = 14;
-pub(crate) const GLYPH_RESIDENT_BYTES: usize = 15;
-pub(crate) const TOTAL_GUI_REBUILDS: usize = 16;
-pub(crate) const TOTAL_GUI_ALLOCATIONS: usize = 17;
-pub(crate) const TOTAL_GLYPH_MISSES: usize = 18;
-pub(crate) const TOTAL_GLYPH_POPULATES: usize = 19;
-pub(crate) const TOTAL_GLYPH_POPULATION_FAILURES: usize = 20;
-pub(crate) const TOTAL_GLYPH_PAGE_RETIREMENTS: usize = 21;
-pub(crate) const ANALYTIC_GLYPH_RESIDENT_BYTES: usize = 22;
-pub(crate) const SURFACE_CACHE_REPAINTS: usize = 23;
-pub(crate) const SURFACE_CACHE_REUSES: usize = 24;
-pub(crate) const SURFACE_CACHE_DIRECT: usize = 25;
-pub(crate) const SURFACE_CACHE_FALLBACKS: usize = 26;
-pub(crate) const SURFACE_CACHE_ANIMATED: usize = 27;
-pub(crate) const SURFACE_CACHE_ALLOCATIONS: usize = 28;
-pub(crate) const SURFACE_CACHE_ENTRIES: usize = 29;
-pub(crate) const SURFACE_CACHE_RESIDENT_BYTES: usize = 30;
-pub(crate) const TOTAL_SURFACE_CACHE_REPAINTS: usize = 31;
-pub(crate) const TOTAL_SURFACE_CACHE_REUSES: usize = 32;
-pub(crate) const TOTAL_SURFACE_CACHE_DIRECT: usize = 33;
-pub(crate) const TOTAL_SURFACE_CACHE_FALLBACKS: usize = 34;
-pub(crate) const TOTAL_SURFACE_CACHE_ALLOCATIONS: usize = 35;
 pub(crate) const GUI_LAYOUT_REFLOWS: usize = 36;
 pub(crate) const GUI_TEXT_MEASUREMENTS: usize = 37;
 pub(crate) const TOTAL_GUI_LAYOUT_REFLOWS: usize = 38;
 pub(crate) const TOTAL_GUI_TEXT_MEASUREMENTS: usize = 39;
-pub(crate) const GUI_HASHES: usize = 40;
-pub(crate) const TOTAL_GUI_HASHES: usize = 41;
 
-pub(crate) const SURFACE_CACHE_PARTIAL_REPAINTS: usize = 42;
-pub(crate) const SURFACE_CACHE_REPAINT_PIXELS: usize = 43;
-pub(crate) const SURFACE_CACHE_FULL_PIXELS: usize = 44;
-pub(crate) const TOTAL_SURFACE_CACHE_PARTIAL_REPAINTS: usize = 45;
-pub(crate) const TOTAL_SURFACE_CACHE_REPAINT_PIXELS: usize = 46;
-pub(crate) const TOTAL_SURFACE_CACHE_FULL_PIXELS: usize = 47;
+#[cfg(feature = "render")]
+use gl_words::*;
+
+#[cfg(feature = "render")]
+mod gl_words {
+    pub(super) const UPLOADED_BYTES: usize = 1;
+    pub(super) const TOTAL_UPLOADED_BYTES: usize = 2;
+    pub(super) const UNSHADOWED_LIGHTS: usize = 3;
+    pub(super) const SHADOW_DRAW_CALLS: usize = 4;
+    pub(super) const SHADOW_RESIDENT_BYTES: usize = 5;
+    pub(super) const GUI_BATCHES: usize = 6;
+    pub(super) const GUI_REBUILDS: usize = 7;
+    pub(super) const GUI_ALLOCATIONS: usize = 8;
+    pub(super) const GUI_RESIDENT_BYTES: usize = 9;
+    pub(super) const GLYPH_MISSES: usize = 10;
+    pub(super) const GLYPH_POPULATES: usize = 11;
+    pub(super) const GLYPH_POPULATION_FAILURES: usize = 12;
+    pub(super) const GLYPH_PAGE_RETIREMENTS: usize = 13;
+    pub(super) const GLYPH_PAGES: usize = 14;
+    pub(super) const GLYPH_RESIDENT_BYTES: usize = 15;
+    pub(super) const TOTAL_GUI_REBUILDS: usize = 16;
+    pub(super) const TOTAL_GUI_ALLOCATIONS: usize = 17;
+    pub(super) const TOTAL_GLYPH_MISSES: usize = 18;
+    pub(super) const TOTAL_GLYPH_POPULATES: usize = 19;
+    pub(super) const TOTAL_GLYPH_POPULATION_FAILURES: usize = 20;
+    pub(super) const TOTAL_GLYPH_PAGE_RETIREMENTS: usize = 21;
+    pub(super) const ANALYTIC_GLYPH_RESIDENT_BYTES: usize = 22;
+    pub(super) const SURFACE_CACHE_REPAINTS: usize = 23;
+    pub(super) const SURFACE_CACHE_REUSES: usize = 24;
+    pub(super) const SURFACE_CACHE_DIRECT: usize = 25;
+    pub(super) const SURFACE_CACHE_FALLBACKS: usize = 26;
+    pub(super) const SURFACE_CACHE_ANIMATED: usize = 27;
+    pub(super) const SURFACE_CACHE_ALLOCATIONS: usize = 28;
+    pub(super) const SURFACE_CACHE_ENTRIES: usize = 29;
+    pub(super) const SURFACE_CACHE_RESIDENT_BYTES: usize = 30;
+    pub(super) const TOTAL_SURFACE_CACHE_REPAINTS: usize = 31;
+    pub(super) const TOTAL_SURFACE_CACHE_REUSES: usize = 32;
+    pub(super) const TOTAL_SURFACE_CACHE_DIRECT: usize = 33;
+    pub(super) const TOTAL_SURFACE_CACHE_FALLBACKS: usize = 34;
+    pub(super) const TOTAL_SURFACE_CACHE_ALLOCATIONS: usize = 35;
+    pub(super) const GUI_HASHES: usize = 40;
+    pub(super) const TOTAL_GUI_HASHES: usize = 41;
+    pub(super) const SURFACE_CACHE_PARTIAL_REPAINTS: usize = 42;
+    pub(super) const SURFACE_CACHE_REPAINT_PIXELS: usize = 43;
+    pub(super) const SURFACE_CACHE_FULL_PIXELS: usize = 44;
+    pub(super) const TOTAL_SURFACE_CACHE_PARTIAL_REPAINTS: usize = 45;
+    pub(super) const TOTAL_SURFACE_CACHE_REPAINT_PIXELS: usize = 46;
+    pub(super) const TOTAL_SURFACE_CACHE_FULL_PIXELS: usize = 47;
+}
+
 /// Words in the record.
 pub(crate) const RECORD_WORDS: usize = 48;
 
 pub(crate) const FLAG_LAYOUT: u32 = 1;
 
 /// Per-frame counters the record also accumulates.
+#[cfg(feature = "render")]
 const ACCUMULATED: [(usize, usize); 16] = [
     (UPLOADED_BYTES, TOTAL_UPLOADED_BYTES),
     (GUI_REBUILDS, TOTAL_GUI_REBUILDS),
@@ -100,6 +109,7 @@ const ACCUMULATED: [(usize, usize); 16] = [
 /// Totals of the presentation service and the record storage it exports.
 pub(crate) struct RenderStatisticsRecord {
     words: [u32; RECORD_WORDS],
+    #[cfg(feature = "render")]
     totals: [u32; RECORD_WORDS],
     /// Whole-Host layout words of the last evaluation boundary.
     layout: Option<[u32; 4]>,
@@ -111,6 +121,7 @@ impl RenderStatisticsRecord {
     pub(crate) fn new() -> Self {
         Self {
             words: [0; RECORD_WORDS],
+            #[cfg(feature = "render")]
             totals: [0; RECORD_WORDS],
             layout: None,
             host_layout: Default::default(),
@@ -139,6 +150,7 @@ impl RenderStatisticsRecord {
     }
 
     /// Add one completed render to the totals: a few additions per frame.
+    #[cfg(feature = "render")]
     pub(crate) fn accumulate(&mut self, statistics: &RenderStatistics) {
         let frame = per_frame(statistics);
 
@@ -148,6 +160,7 @@ impl RenderStatisticsRecord {
     }
 
     /// Fill the record from the last completed render and return its storage.
+    #[cfg(feature = "render")]
     pub(crate) fn fill(&mut self, statistics: &RenderStatistics) -> &[u32; RECORD_WORDS] {
         self.words = per_frame(statistics);
 
@@ -155,6 +168,10 @@ impl RenderStatisticsRecord {
             self.words[total] = self.totals[total];
         }
 
+        self.with_layout()
+    }
+
+    pub(super) fn with_layout(&mut self) -> &[u32; RECORD_WORDS] {
         if let Some(layout) = self.layout {
             self.words[FLAGS] |= FLAG_LAYOUT;
             [
@@ -170,6 +187,7 @@ impl RenderStatisticsRecord {
 }
 
 /// Per-frame words of one render's statistics; totals and flags are zero.
+#[cfg(feature = "render")]
 fn per_frame(statistics: &RenderStatistics) -> [u32; RECORD_WORDS] {
     let mut words = [0; RECORD_WORDS];
     words[UPLOADED_BYTES] = statistics.uploaded_bytes;
@@ -207,6 +225,6 @@ fn per_frame(statistics: &RenderStatistics) -> [u32; RECORD_WORDS] {
     words
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "render"))]
 #[path = "statistics_tests.rs"]
 mod tests;

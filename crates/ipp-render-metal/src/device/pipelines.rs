@@ -4,6 +4,7 @@ use objc2_foundation::NSString;
 use std::{ffi::c_void, ptr::NonNull};
 
 pub(super) const OPAQUE: usize = 0;
+pub(super) const SPRITE_ADDITIVE: usize = 2;
 pub(super) const ANALYTIC: usize = 3;
 pub(super) const LAYERS: usize = 4;
 pub(super) const AFFINE: usize = 5;
@@ -15,6 +16,10 @@ pub(super) const CYLINDER_SHAPE: usize = 10;
 pub(super) const CYLINDER_PATH: usize = 11;
 pub(super) const PLOT_OPAQUE: usize = 12;
 pub(super) const PLOT_ALPHA: usize = 13;
+pub(super) const MASKED_PATH: usize = 14;
+pub(super) const SCREEN_PAINT: usize = 15;
+pub(super) const SPRITE_ALPHA: usize = 16;
+pub(super) const COLUMN_SCREEN_PAINT: usize = 17;
 pub(super) const ROOT: MTLPixelFormat = MTLPixelFormat::RGBA8Unorm_sRGB;
 pub(super) const LINEAR: MTLPixelFormat = MTLPixelFormat::RGBA16Float;
 
@@ -36,14 +41,15 @@ impl Programs {
         modes: &[usize],
         mesh: bool,
     ) -> Result<Self, String> {
-        let mut variants = vec![[None, None]; PLOT_ALPHA + 1];
+        let mut variants = vec![[None, None]; COLUMN_SCREEN_PAINT + 1];
         for &mode in modes {
             for (i, format) in [ROOT, LINEAR].into_iter().enumerate() {
                 if mode == LAYERS && i == 0 {
                     continue;
                 }
                 let desc = MTLRenderPipelineDescriptor::new();
-                let canvas = (ANALYTIC..=CYLINDER_PATH).contains(&mode);
+                let canvas = (ANALYTIC..=CYLINDER_PATH).contains(&mode)
+                    || matches!(mode, MASKED_PATH | SCREEN_PAINT | COLUMN_SCREEN_PAINT);
                 #[cfg(feature = "instrumentation")]
                 desc.setLabel(Some(if canvas {
                     objc2_foundation::ns_string!("IPP Canvas")
@@ -59,16 +65,21 @@ impl Programs {
                     }
                     LAYERS => ("canvas_vertex", "canvas_layer_fragment"),
                     AFFINE => ("canvas_vertex", "canvas_affine_fragment"),
+                    SPRITE_ALPHA | SPRITE_ADDITIVE => ("sprite_vertex", "sprite_fragment"),
+                    SCREEN_PAINT | COLUMN_SCREEN_PAINT => {
+                        ("canvas_intersection_vertex", "canvas_screen_fragment")
+                    }
+                    MASKED_PATH => ("canvas_vertex", "canvas_read_path_mask"),
                     IMAGE => ("canvas_vertex", "canvas_image_fragment"),
                     PLOT_OPAQUE | PLOT_ALPHA => ("plot_color_vertex", "plot_color_fragment"),
                     _ if mesh => ("custom_vertex", "custom_fragment"),
                     _ => ("mesh_vertex", "mesh_fragment"),
                 };
                 desc.setVertexFunction(Some(&*function(library, vertex)?));
-                let frag = if canvas {
+                let frag = if canvas && mode != MASKED_PATH {
                     let constants = MTLFunctionConstantValues::new();
                     for (i, v) in [
-                        matches!(mode, COLUMN_SHAPE | COLUMN_PATH),
+                        matches!(mode, COLUMN_SHAPE | COLUMN_PATH | COLUMN_SCREEN_PAINT),
                         matches!(mode, COLUMN_SHAPE | CYLINDER_SHAPE),
                         matches!(mode, CYLINDER_SHAPE | CYLINDER_PATH),
                     ]
@@ -109,7 +120,7 @@ impl Programs {
                     MTLBlendFactor::SourceAlpha
                 });
                 color.setSourceAlphaBlendFactor(MTLBlendFactor::One);
-                let dest = if mode == 2 {
+                let dest = if mode == SPRITE_ADDITIVE {
                     MTLBlendFactor::One
                 } else {
                     MTLBlendFactor::OneMinusSourceAlpha

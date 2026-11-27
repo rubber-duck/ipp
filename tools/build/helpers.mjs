@@ -32,6 +32,7 @@ export function bundleBrowser(
       // A test bundle of the worker pairs with a normal runtime; assembled
       // distributions define this from their own build configuration.
       IPP_INSTRUMENTATION: "false",
+      IPP_WEBGPU: "false",
       ...(options.define ?? {
         "process.env.NODE_ENV": JSON.stringify(environment),
       }),

@@ -82,10 +82,13 @@ def validate_catalog() -> None:
         raise ValueError("CI must invoke the maintained Python pipeline")
     # Distributions vary only along the instrumentation and renderer axes.
     for name, profile in PROFILES["browser"].items():
-        if set(profile) != {"features"} or not set(profile["features"]) <= {
-            "render",
-            "instrumentation",
-        }:
+        if set(profile) != {"features"}:
+            raise ValueError(f"Invalid browser profile: {name}")
+        features = set(profile["features"])
+        if (
+            features - {"render", "webgpu", "instrumentation"}
+            or {"render", "webgpu"} <= features
+        ):
             raise ValueError(f"Invalid browser profile: {name}")
     print(
         f"Validated {len(tasks)} tasks, {len(SUITES)} suites and {count} CI invocations."

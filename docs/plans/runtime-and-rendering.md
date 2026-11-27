@@ -2,6 +2,8 @@
 
 [Runtime](../architecture/runtime.md) · [Assets](../architecture/assets.md) · [Rendering](../architecture/rendering.md) · [Workspace](../architecture/rust-workspace.md)
 
+Exercise browser renderer selection against the published gallery, including a working WebGPU worker, rejected initialization and a browser without WebGPU. Verify the selected API in the menu and compare completed scene captures through the same client on both distributions.
+
 ## Host execution
 
 Extend shared session policy and native/browser adapters through generic Host/World interfaces. Compile attachment traversal at structural boundaries and separate parent-first evaluation from child-first output assembly and root presentation. Supply scoped parent/view context without retained World borrows. Multiplex independent World sessions while keeping presentation selection explicit. Use real clients to verify parent/sibling progress during an open child batch on the same connection, attachment publication, expiry, pause/resume, congestion and teardown.
@@ -60,9 +62,11 @@ Retain prepared geometry, material state and draw records through versioned publ
 
 Extend authored Canvas paints with the [presentation context](../architecture/rendering.md#presentation-aware-paints) supplied by RenderService, independent of local geometry and component values. Reuse camera/light publication inputs, preserve real flat/curved Surface coordinates during image rasterization, and include relevant context changes in image refresh decisions. Exercise view-only and light-only changes, layered and nested canvases, root defaults, rear views and context recovery through native GLES and worker WebGL captures; assert geometry reuse alongside changing optical pixels. Share the reviewed optical model between the Glass study and production skin, retaining native states and connected parent surfaces; validate the production components alongside the material study.
 
-### Native Metal rendering
+### Native Metal and WebGPU rendering
 
 Consume the [same immutable World outputs](../architecture/rendering.md#shared-render-service) with native Metal passes and resources. Share renderer-neutral preparation where the algorithms must agree, including portable shader lowering and Plot view layout. Keep authored layout, hit testing and World evaluation observable on the CPU. Assess Metal instancing and bounded command submission with the same scene batches on GLES. Measure GPU candidates such as per-view particle packing, visibility preparation and Canvas path filtering against their upload and dispatch costs. Use GPU conversion for borrowed IOSurface images, preserving publication authority across context replacement.
+
+Choose WebGPU bindings within the limits requested from the native Metal adapter. Validate Camera, Canvas and nested Surface composition through the same generated-client scenarios as Metal, including independent pixel checks after edits. Measure the gallery and GUI board on all three native renderers with matched hardware, workloads and serial release timing.
 
 Drive Camera and Canvas composition through the generated clients and owned offscreen Hosts. Compare completed frames from both devices on Apple hardware with independent assertions for depth, child placement, painter order and color. Include nested and curved Surfaces, authored paints, and CEF import across recovery. Time the full demo gallery on normal release builds and collect CPU and GPU profiles separately through the instrumentation Hosts.
 

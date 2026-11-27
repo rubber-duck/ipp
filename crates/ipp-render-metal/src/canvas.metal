@@ -766,6 +766,37 @@ float path_coverage(const device float4 *records, float2 local, float mode, floa
 
 // The clip-space quad only bounds work. This writes depth and samples the
 // actual cylinder or sphere with the same stable equation as headless input.
+static bool canvas_mask_index(float2 position, float4 rect, uint height, thread uint &index) {
+    uint2 pixel = uint2(position) - uint2(rect.xy);
+    if (any(pixel >= uint2(uint(rect.z), height))) return false;
+    index = uint(rect.w) + pixel.y * uint(rect.z) + pixel.x;
+    return true;
+}
+
+fragment void canvas_write_path_mask(CanvasRaster raster [[stage_in]],
+                                     constant float4 &rect [[buffer(1)]],
+                                     const device float4 *path [[buffer(2)]],
+                                     device float *samples [[buffer(3)]],
+                                     constant float4 &options [[buffer(4)]]) {
+    float coverage = path_coverage(
+        path, raster.local, options.x, options.y, dfdx(raster.local), dfdy(raster.local));
+    uint index;
+    if (canvas_mask_index(raster.position.xy, rect, uint(options.z), index)) samples[index] = coverage;
+}
+
+fragment float4 canvas_read_path_mask(CanvasRaster raster [[stage_in]],
+                                      constant CanvasPaint *paints [[buffer(1)]],
+                                      const device float *samples [[buffer(2)]]) {
+    constant CanvasPaint &paint = paints[raster.slot];
+    float2 footprint = max(abs(dfdx(raster.local)) + abs(dfdy(raster.local)), float2(1.0 / 65536.0));
+    float2 inside = min(raster.local - paint.clip.xy, paint.clip.zw - raster.local);
+    float clip = clamp(min(inside.x / footprint.x, inside.y / footprint.y) + 0.5, 0.0, 1.0);
+    uint index;
+    if (!canvas_mask_index(raster.position.xy, paint.fill[0], uint(paint.fill[1].x), index)) return float4(0.0);
+    float alpha = paint.tint.a * samples[index];
+    return float4(paint.tint.rgb * alpha, alpha) * clip;
+}
+
 struct CanvasFragment {
     float4 color [[color(0)]];
     float depth [[depth(any)]];
@@ -1000,6 +1031,22 @@ static CanvasFragment canvas_shade(CanvasRaster raster, constant Lighting &scene
     return {color * (clip * coverage), depth};
 }
 
+// The stored pixel already contains analytic edge coverage. Test its original
+// surface depth against the live scene at this exact sample location.
+fragment CanvasFragment canvas_screen_fragment(CanvasRaster raster [[stage_in]],
+                                  texture2d<float, access::read> image [[texture(0)]],
+                                  constant CanvasAnalytic *intersection [[buffer(5)]],
+                                  constant CanvasMapping &mapping [[buffer(8)]],
+                                  const device CanvasColumn *columns [[buffer(9)]],
+                                  constant uint4 *bindings [[buffer(6)]],
+                                  constant float4 *edges [[buffer(7)]]) {
+    float coverage, depth;
+    uint slot = raster.slot;
+    analytic_canvas(raster, mapping, intersection[slot], columns,
+                    edges + ((bindings[slot].w & 0xffffu) - 1), coverage, depth);
+    return {image.read(uint2(raster.position.xy)), depth};
+}
+
 // Each rasterized primitive selects its own paint, path and coverage record.
 fragment CanvasFragment canvas_fragment(CanvasRaster raster [[stage_in]],
                                        constant Lighting &lighting [[buffer(0)]],
@@ -1097,6 +1144,6 @@ vertex float4 canvas_clear_vertex(uint index [[vertex_id]]) {
     return float4(points[index], 0.0, 1.0);
 }
 
-fragment float4 canvas_clear_fragment() {
-    return float4(0.0);
+fragment float4 canvas_clear_fragment(constant float4 &background [[buffer(1)]]) {
+    return background;
 }

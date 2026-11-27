@@ -5,7 +5,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use ipp_core::services::web_content::{
     WebContentImageDescription, WebContentRequestId, WebContentSourceId,
 };
+#[cfg(feature = "render")]
 use ipp_render_gl::WebImageReservation;
+#[cfg(not(feature = "render"))]
+use ipp_render_webgpu::WebImageReservation;
 
 use super::RenderSurfaceService;
 use crate::BOUNDARY;
@@ -22,6 +25,13 @@ pub(super) struct BrowserWebContent {
 }
 
 impl RenderSurfaceService {
+    fn refresh_html(&mut self, host: &mut ipp_core::HostRuntime) {
+        #[cfg(feature = "render")]
+        let _ = self.renderer.refresh_web_images(host);
+        #[cfg(not(feature = "render"))]
+        self.canvas.refresh_web_images(host);
+    }
+
     fn html_register(&mut self, host: &mut ipp_core::HostRuntime, id: u32) -> bool {
         if id <= self.web_content.next_source || self.web_content.sources.len() >= 32 {
             return false;
@@ -33,9 +43,10 @@ impl RenderSurfaceService {
     }
 
     fn html_poll(&mut self, host: &mut ipp_core::HostRuntime) -> *const u32 {
+        let active = self.viewport().is_some();
         let state = &mut self.web_content;
         state.records.clear();
-        if !self.active {
+        if !active {
             return std::ptr::null();
         }
         let requests: Vec<_> = host.web_content().requests().cloned().collect();
@@ -155,7 +166,11 @@ pub extern "C" fn ipp_html_reserve(ticket_id: u32, width: u32, height: u32) -> u
             surface.web_content.error = "HTML capture extent is invalid or already reserved".into();
             return 0;
         }
-        match surface.renderer.reserve_web_image(
+        #[cfg(feature = "render")]
+        let owner = &mut surface.renderer;
+        #[cfg(not(feature = "render"))]
+        let owner = &surface.canvas;
+        match owner.reserve_web_image(
             host,
             *request,
             WebContentImageDescription {
@@ -191,24 +206,33 @@ pub extern "C" fn ipp_html_complete(ticket_id: u32, image: u32) -> u32 {
         };
         if !host.web_content().requests().any(|live| live.id == request) {
             drop(ticket);
-            let _ = surface.renderer.refresh_web_images(host);
+            surface.refresh_html(host);
             return 2;
         }
         if image == 0 {
             drop(ticket);
-            let _ = surface.renderer.refresh_web_images(host);
+            surface.refresh_html(host);
             return 0;
         }
         let Some(ticket) = ticket else {
             surface.web_content.error = "HTML capture was not admitted".into();
             return 0;
         };
-        let size = ticket.pixel_size();
-        match surface
-            .renderer
-            .import_reserved_web_image(host, ticket, |device, destination| {
-                device.copy_web_image(image, destination, size)
-            }) {
+        #[cfg(feature = "render")]
+        let imported = {
+            let size = ticket.pixel_size();
+            surface
+                .renderer
+                .import_reserved_web_image(host, ticket, |device, destination| {
+                    device.copy_web_image(image, destination, size)
+                })
+                .map_err(|e| e.to_string())
+        };
+        #[cfg(not(feature = "render"))]
+        let imported = surface
+            .canvas
+            .import_web_image(host, ticket, image, &surface.upload);
+        match imported {
             Ok(_) => 1,
             Err(error) => {
                 surface.web_content.error = format!("HTML import failed: {error}");

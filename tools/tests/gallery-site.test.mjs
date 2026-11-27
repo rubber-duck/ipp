@@ -1,4 +1,4 @@
-/** Exercise only the published files through HTTP, the real worker and WebGL. */
+/** Exercise only the published files through HTTP, the real worker and both browser renderers. */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
@@ -68,8 +68,8 @@ async function serveSite(prefix) {
   };
 }
 
-async function captureScene(page) {
-  return page.evaluate(async () => {
+async function captureScene(page, options = {}) {
+  return page.evaluate(async ({ waitForRendererLabel, fontChange }) => {
     const handle = window.ippDemoCanvas;
     if (!handle) throw new Error("Gallery did not expose its live canvas");
     const output = window.ippDemoApplication.sceneOutput;
@@ -80,6 +80,36 @@ async function captureScene(page) {
       await handle.flush();
       const state = await client.inspect();
       const { shell } = await window.ippDemoApplication.inspectApplication();
+      const button = shell.entities.find(
+        (entity) => entity.metadata.symbolicId === "demo-controls-toggle",
+      );
+      const fields = (name) =>
+        button.components.find(
+          (component) => component.component === client.components[name].id,
+        ).fields;
+      const font = {
+        key: window.ippDemoApplication.options.font,
+        source: fields("GuiFont").source,
+        button: String(button.id),
+        width: fields("CanvasBounds").width,
+      };
+      if (fontChange) {
+        const { key, previousWidth, initialFont } = fontChange;
+        const originalWidth = Math.abs(font.width - initialFont.width) < 0.1;
+        if (
+          font.key !== key ||
+          !font.source.endsWith(`/${key}.ippf`) ||
+          Math.abs(font.width - previousWidth) <= 2 ||
+          originalWidth !== (key === initialFont.key)
+        ) {
+          if (performance.now() >= deadline)
+            throw new Error(
+              `Gallery font layout did not settle for ${key}: ${JSON.stringify(font)}`,
+            );
+          await client.waitForFrame(state.tick);
+          continue;
+        }
+      }
       const cockpit =
         window.ippDemoApplication.sceneId === "cockpit"
           ? await window.ippDemoApplication.inspect()
@@ -141,14 +171,46 @@ async function captureScene(page) {
         canvas
           .getContext("2d")
           .putImageData(new ImageData(pixels, width, height), 0, 0);
-        const button = shell.entities.find(
-          (entity) => entity.metadata.symbolicId === "demo-controls-toggle",
+        const rendererLabel = shell.entities.find(
+          (e) => e.metadata.symbolicId === "demo-renderer",
         );
-        const fields = (name) =>
-          button.components.find(
-            (component) => component.component === client.components[name].id,
-          ).fields;
+        const bounds = rendererLabel?.components.find(
+          (c) => c.component === client.components.CanvasBounds.id,
+        )?.fields;
+        let labelInk = 0;
+        if (waitForRendererLabel && bounds) {
+          const ratio = frame.view.binding.viewport.devicePixelRatio;
+          for (
+            let y = Math.max(0, Math.floor(bounds.y * ratio));
+            y < Math.min(height, (bounds.y + bounds.height) * ratio);
+            y++
+          ) {
+            for (
+              let x = Math.max(0, Math.floor(bounds.x * ratio));
+              x < Math.min(width, (bounds.x + bounds.width) * ratio);
+              x++
+            ) {
+              const pixel = 4 * (y * width + x);
+              if (
+                pixels[pixel] > 100 &&
+                pixels[pixel + 1] > 120 &&
+                pixels[pixel + 2] > 130
+              )
+                labelInk++;
+            }
+          }
+        }
+        // Menu layout and font publication can settle on different frames.
+        if (waitForRendererLabel && labelInk <= 30) {
+          if (performance.now() >= deadline)
+            throw new Error(
+              `Renderer label did not become visible: ${labelInk} ink pixels`,
+            );
+          await client.waitForFrame(state.tick);
+          continue;
+        }
         return {
+          labelInk,
           width,
           height,
           drawCalls: frame.drawCalls,
@@ -157,12 +219,7 @@ async function captureScene(page) {
           fallbackRed,
           blueInk,
           sequence: String(frame.sequence),
-          font: {
-            key: window.ippDemoApplication.options.font,
-            source: fields("GuiFont").source,
-            button: String(button.id),
-            width: fields("CanvasBounds").width,
-          },
+          font,
           cockpit: cockpit && {
             sceneWorld: `${output.world.incarnation}:${output.world.id}`,
             focusedPanel: Math.round(cockpit.options.carousel),
@@ -226,7 +283,7 @@ async function captureScene(page) {
         throw new Error("Gallery resources did not finish loading");
       await client.waitForFrame(state.tick);
     }
-  });
+  }, options);
 }
 
 async function press(page, id) {
@@ -388,6 +445,19 @@ test("the release gallery is complete and renders at root and project URLs", {
       const context = await browser.newContext({
         viewport: { width: 800, height: 600 },
       });
+      const expectedRenderer = prefix === "/" ? "WebGPU" : "WebGL 2";
+      if (expectedRenderer === "WebGL 2") {
+        // Expose WebGPU on the page but reject adapter acquisition inside the real worker.
+        await context.route("**/runtime-webgpu/webgpu.js", async (route) => {
+          const response = await route.fetch();
+          await route.fulfill({
+            response,
+            body:
+              'Object.defineProperty(navigator.gpu, "requestAdapter", {value: async () => null});\n' +
+              (await response.text()),
+          });
+        });
+      }
       const page = await context.newPage();
       page.setDefaultTimeout(60_000);
       const errors = [];
@@ -427,6 +497,43 @@ test("the release gallery is complete and renders at root and project URLs", {
             await page.evaluate(() => window.ippDemoApplication.sceneId),
             scene,
           );
+          if (index === 0) {
+            await press(page, "demo-display");
+            const selected = await page.evaluate(
+              async (directory) => {
+                const app = window.ippDemoApplication;
+                const { shell } = await app.inspectApplication();
+                const label = shell.entities.find(
+                  (e) => e.metadata.symbolicId === "demo-renderer",
+                );
+                const { presentationOf } = await import(
+                  new URL(directory + "/presentation.js", location.href)
+                );
+                const stats = await presentationOf(
+                  window.ippDemoCanvas.host,
+                ).statistics();
+                return {
+                  text: label?.components
+                    .map((c) => c.fields.text)
+                    .find(Boolean),
+                  api: stats.device.api,
+                };
+              },
+              expectedRenderer === "WebGPU" ? "./runtime-webgpu" : "./runtime",
+            );
+            assert.deepEqual(selected, {
+              text: `Renderer · ${expectedRenderer}`,
+              api: expectedRenderer,
+            });
+            const menu = await captureScene(page, {
+              waitForRendererLabel: true,
+            });
+            await writeFile(
+              resolve(evidence, `${label}-renderer.png`),
+              Buffer.from(menu.png.split(",")[1], "base64"),
+            );
+            await press(page, "demo-display");
+          }
           const { png, ...frame } = await captureScene(page);
           await writeFile(
             resolve(evidence, `${label}-${scene}.png`),
@@ -510,14 +617,18 @@ test("the release gallery is complete and renders at root and project URLs", {
               ...frame.cockpit.panels.map(({ world }) => world),
             ];
             await press(page, "demo-display");
+            let previousWidth = frame.font.width;
             for (const font of ["noto-sans", "lilita-one", "shure-tech-mono"]) {
               await press(page, "demo-font-picker");
               await press(page, `demo-font-picker/options/${font}`);
-              await page.waitForFunction(
-                (font) => window.ippDemoApplication.options.font === font,
-                font,
-              );
-              const { png, ...selected } = await captureScene(page);
+              const { png, ...selected } = await captureScene(page, {
+                fontChange: {
+                  key: font,
+                  previousWidth,
+                  initialFont: frame.font,
+                },
+              });
+              previousWidth = selected.font.width;
               await writeFile(
                 resolve(evidence, `${label}-cockpit-${font}.png`),
                 Buffer.from(png.split(",")[1], "base64"),
@@ -597,13 +708,21 @@ test("the release gallery is complete and renders at root and project URLs", {
             );
           }
         }
+        if (expectedRenderer === "WebGPU")
+          assert.ok(
+            !server.requests.some(
+              ({ path }) => path === prefix + "runtime/runtime.wasm",
+            ),
+          );
         assert.deepEqual(errors, []);
         assert.deepEqual(
           server.requests.filter(({ status }) => status !== 200),
           [],
         );
         for (const required of [
-          "runtime/runtime.wasm",
+          ...(expectedRenderer === "WebGPU"
+            ? ["runtime-webgpu/runtime.wasm"]
+            : ["runtime-webgpu/runtime.wasm", "runtime/runtime.wasm"]),
           "assets/shared/shure-tech-mono.ippf",
           "assets/shared/noto-sans.ippf",
           "assets/shared/lilita-one.ippf",
@@ -641,4 +760,35 @@ test("the release gallery is complete and renders at root and project URLs", {
     await browser.close();
   }
   console.log(`Static gallery evidence: ${evidence}`);
+});
+
+test("a browser without WebGPU goes straight to WebGL 2", {
+  timeout: 90000,
+}, async () => {
+  const server = await serveSite("/gallery/");
+  try {
+    const browser = await chromium.launch(browserLaunchOptions());
+    try {
+      const page = await browser.newPage();
+      await page.addInitScript(() =>
+        Reflect.deleteProperty(Navigator.prototype, "gpu"),
+      );
+      await page.goto(server.url);
+      await page.waitForFunction(() => !!window.ippDemoCanvas);
+      const { foreground } = await captureScene(page);
+      assert.ok(foreground > 500);
+      assert.ok(
+        server.requests.some(({ path }) =>
+          path.endsWith("/runtime/runtime.wasm"),
+        ),
+      );
+      assert.ok(
+        !server.requests.some(({ path }) => path.includes("/runtime-webgpu/")),
+      );
+    } finally {
+      await browser.close();
+    }
+  } finally {
+    await server.close();
+  }
 });

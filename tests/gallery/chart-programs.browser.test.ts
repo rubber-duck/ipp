@@ -17,6 +17,10 @@ test("unchanged chart revisits reuse real WebGL programs through the shared outp
     context.signal,
     async (environment) => {
       await environment.page.setViewportSize({ width: 480, height: 320 });
+      // The program probe observes WebGL shader compilation in the fallback worker.
+      await environment.page.addInitScript(() => {
+        Reflect.deleteProperty(Navigator.prototype, "gpu");
+      });
       const programs = observeChartPrograms(environment.page);
       const app = await openApplication(environment, {
         entryPath: "/examples/demos/index.html#charts",

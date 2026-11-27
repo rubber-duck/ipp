@@ -105,6 +105,8 @@ interface OwnedAssets extends GalleryAssets {
   close?(): Promise<void>;
 }
 export interface DemoApplicationContext extends GallerySceneContext {
+  /** Graphics API of the successfully opened presentation Host. */
+  readonly renderer?: string;
   readonly sceneDefinition?: (id: string) => GallerySceneDefinition;
   readonly sceneDefinitions?: readonly GallerySceneDefinition[];
   readonly assetsFor?: (client: Client) => OwnedAssets;
@@ -450,6 +452,14 @@ export class DemoApplication implements GallerySceneMount {
           fitWidth={!narrow}
         >
           <Form id="demo-display-content">
+            {this.context.renderer && (
+              <TextLine
+                id="demo-renderer"
+                text={`Renderer · ${this.context.renderer}`}
+                tone="neutral"
+                size="small"
+              />
+            )}
             <Field id="demo-skin-field" label="Skin">
               <Dropdown
                 id="demo-skin-picker"
@@ -723,6 +733,9 @@ export class DemoApplication implements GallerySceneMount {
           canvas,
           assets,
           contract: this.context.contract,
+          ...(this.context.generatedModuleUrl && {
+            generatedModuleUrl: this.context.generatedModuleUrl,
+          }),
           signal,
           onError: report,
           diagnostics: this.diagnostics,

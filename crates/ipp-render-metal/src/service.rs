@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc};
+use std::{cell::RefCell, collections::BTreeMap, fmt, rc::Rc, sync::Arc};
 
 use ipp_core::{
     HostRuntime, OutputKind, OutputPublicationObservation, OutputRef, PublishedSceneTraversal,
@@ -23,22 +23,24 @@ use ipp_core::{
     },
 };
 
+use ipp_render_scene::screen_damage::{CanvasSurfaceView, Repaint, ScreenDamage};
+
 use crate::{
     analytic_surface::AnalyticSurface,
     assets::{self, MetalMesh, MetalTexture},
     canvas::{
         CanvasAssets, CanvasPass, CanvasPlacement, CanvasProjection, CanvasScene, PaintSources,
-        camera_slots,
+        camera_slots, image_layer_order, surface_projection,
     },
     canvas_batches::{CanvasBatches, Lookup, PRIMITIVES_PER_RUN, RunKey},
     canvas_damage::CanvasDamage,
-    canvas_images::{self, CachedCanvas, CanvasContent},
+    canvas_images::{self, CachedCanvas, CanvasContent, PaintImage, ProjectedPaint},
     custom_mesh::CustomDraw,
     derived_meshes::DerivedMeshes,
     device::{
         Blend, CanvasBinding, Device, Frame, Material, MeshBuffers, MeshStreams, Object, Target,
     },
-    lighting::{LightCatalog, LightSelections, Lighting, SHADOW_TILE},
+    lighting::{LightCatalog, LightSelections, Lighting, SHADOW_TILE, light_receiver},
     particles,
     paths::PathCache,
     shaders,
@@ -75,6 +77,12 @@ impl fmt::Display for MetalRenderError {
 }
 
 impl std::error::Error for MetalRenderError {}
+
+impl From<ipp_render_scene::lighting::InvalidCamera> for MetalRenderError {
+    fn from(_: ipp_render_scene::lighting::InvalidCamera) -> Self {
+        Self::InvalidCamera
+    }
+}
 
 /// Completed draw statistics.
 #[derive(Default)]
@@ -123,10 +131,15 @@ struct OutputSource {
 }
 
 struct DrawResources<'a> {
+    root: OutputRef,
+    old_damage: Option<ScreenDamage>,
+    next_damage: Option<ScreenDamage>,
     frame: &'a mut Frame,
     summary: &'a mut MetalFrameSummary,
     images: BTreeMap<ImageKey, PreparedImage>,
     fullscreen: Option<(OutputSource, [f64; 2])>,
+    overlay: Option<PaintImage>,
+    paint_pixels: u64,
     included: BTreeMap<OutputRef, WorldPublicationId>,
     viewport: [u32; 2],
     target_pixels: u64,
@@ -147,9 +160,31 @@ struct RetainedImage {
 }
 
 impl DrawResources<'_> {
+    fn root_repaint(
+        &mut self,
+        host: &HostRuntime,
+        scene: CanvasScene<'_>,
+        view: Option<CanvasSurfaceView>,
+    ) -> Option<Repaint> {
+        let (damage, repaint) =
+            ScreenDamage::prepare(self.old_damage.take(), host, scene, self.viewport, view)?;
+        self.next_damage = Some(damage);
+        if repaint.is_some() {
+            self.summary.draw_calls += 1;
+            self.summary.triangles += 1;
+        }
+        repaint
+    }
+
     fn image_key(output: OutputRef, physical: [f64; 2]) -> ImageKey {
         (output, physical.map(f64::to_bits))
     }
+}
+
+enum Blended {
+    Mesh(usize),
+    Sprite(usize),
+    Surface,
 }
 
 struct SurfaceVisit<'a> {
@@ -159,6 +194,7 @@ struct SurfaceVisit<'a> {
     model: [f32; 16],
     analytic: Option<AnalyticSurface<'a>>,
     column_start: Option<u32>,
+    paint_image: Option<Rc<Target>>,
 }
 
 /// Metal device and resource loaders for one Host's offscreen presentation.
@@ -167,14 +203,16 @@ pub struct MetalRenderService {
     traversal: PublishedSceneTraversal,
     viewport: Option<(u32, u32)>,
     instances: Vec<Material>,
-    particle_quad: MeshBuffers,
+    sprites: Vec<particles::Sprite>,
     paths: RefCell<PathCache>,
     generated: DerivedMeshes,
     plot_layouts: BTreeMap<OutputRef, PlotLabelLayoutState>,
     light_selections: LightSelections,
     targets: BTreeMap<ImageKey, RetainedImage>,
     cached_canvases: BTreeMap<OutputRef, CachedCanvas>,
+    projected_paints: BTreeMap<(OutputRef, OutputRef), ProjectedPaint>,
     canvas_batches: RefCell<CanvasBatches>,
+    root_damage: Option<ScreenDamage>,
     frame_number: u64,
     shadows: BTreeMap<OutputRef, (u32, u64, Rc<Object>)>,
     web_images: WebImages,
@@ -254,11 +292,9 @@ impl MetalRenderService {
             ipp_core::services::asset_management::formats::shader::SHADER_TYPE,
             move || shaders::loader(shader_device.clone()),
         )?;
-        let particle_quad = particles::quad(&device)
-            .ok_or_else(|| "could not upload the Metal particle quad".to_string())?;
         Ok(Self {
             device,
-            particle_quad,
+            sprites: Vec::new(),
             traversal: PublishedSceneTraversal::default(),
             viewport: None,
             instances: Vec::with_capacity(Material::MAX_INSTANCES),
@@ -268,7 +304,9 @@ impl MetalRenderService {
             light_selections: LightSelections::default(),
             targets: BTreeMap::new(),
             cached_canvases: BTreeMap::new(),
+            projected_paints: Default::default(),
             canvas_batches: RefCell::default(),
+            root_damage: None,
             frame_number: 0,
             shadows: BTreeMap::new(),
             web_images: WebImages::default(),
@@ -280,9 +318,6 @@ impl MetalRenderService {
     /// Replace failed command storage while preserving the Host and its asset identities.
     pub fn recover(&mut self, host: &mut HostRuntime) -> Result<(), MetalRenderError> {
         let device = Device::new().map_err(MetalRenderError::Device)?;
-        let quad = particles::quad(&device).ok_or_else(|| {
-            MetalRenderError::Device("could not restore particle geometry".into())
-        })?;
         if let Some((width, height)) = self.viewport
             && !device.resize(width, height)
         {
@@ -297,8 +332,10 @@ impl MetalRenderService {
                 .map_err(MetalRenderError::Device)?;
         }
 
+        self.root_damage = None;
         self.targets.clear();
         self.cached_canvases.clear();
+        self.projected_paints.clear();
         *self.canvas_batches.get_mut() = CanvasBatches::default();
         self.shadows.clear();
         host.web_content_mut().renderer_invalidated();
@@ -307,7 +344,6 @@ impl MetalRenderService {
         self.generated = DerivedMeshes::default();
         self.plot_layouts.clear();
         self.light_selections = LightSelections::default();
-        self.particle_quad = quad;
         self.device.replace(device);
 
         let resources = host.asset_resources_mut();
@@ -411,6 +447,7 @@ impl MetalRenderService {
                 "could not allocate frame attachments".into(),
             ));
         }
+        self.root_damage = None;
         self.viewport = Some((viewport.width, viewport.height));
         Ok(())
     }
@@ -438,6 +475,7 @@ impl MetalRenderService {
             objc2::rc::autoreleasepool(|_| self.draw_frame(host, view, capture, observations));
         if result.is_err() {
             self.cached_canvases.clear();
+            self.projected_paints.clear();
             *self.canvas_batches.get_mut() = CanvasBatches::default();
         }
         result
@@ -474,6 +512,8 @@ impl MetalRenderService {
         });
         self.cached_canvases
             .retain(|_, canvas| self.frame_number - canvas.frame <= 1);
+        self.projected_paints
+            .retain(|_, p| self.frame_number - p.frame <= 1);
         self.targets
             .retain(|_, image| self.frame_number - image.frame <= 1);
         self.shadows
@@ -489,6 +529,11 @@ impl MetalRenderService {
         let mut frame = self.device.frame().map_err(MetalRenderError::Device)?;
         let mut summary = MetalFrameSummary::default();
         let mut draw = DrawResources {
+            root: output,
+            overlay: None,
+            paint_pixels: 0,
+            old_damage: self.root_damage.take(),
+            next_damage: None,
             frame: &mut frame,
             summary: &mut summary,
             images: BTreeMap::new(),
@@ -505,26 +550,49 @@ impl MetalRenderService {
         let extent = draw.viewport.map(f64::from);
         self.prepare_children(host, source, &mut draw, 0)?;
         if let Some(scene) = root_canvas {
+            let repaint = draw.root_repaint(host, scene, None);
+            if repaint.is_none()
+                && let Some((first, painters)) = scene.canvas.entries.split_first()
+                && let CanvasPaintEntry::Attachment(slot) = first.as_ref()
+                && scene
+                    .child(host, slot)
+                    .is_some_and(|(output, _)| output.kind() == OutputKind::Camera)
+            {
+                draw.overlay = self.prepare_projected_paint(
+                    host,
+                    scene,
+                    painters,
+                    None,
+                    draw.viewport,
+                    &CanvasProjection::viewport(scene.canvas.logical_extent),
+                    &mut draw,
+                )?;
+            }
             if let Some((background, extent)) = draw.fullscreen {
                 self.camera_pass(host, background, extent, None, &mut draw)?;
-            } else if !draw.frame.pass(None, BACKGROUND, None, None) {
+            } else if !draw.frame.render_pass(
+                None,
+                BACKGROUND,
+                None,
+                None,
+                repaint.as_ref().map(|r| r.scissor),
+            ) {
                 return Err(MetalRenderError::Device(
                     "could not encode Canvas pass".into(),
                 ));
             }
-            self.draw_canvas(
+            self.draw_canvas_region(
                 host,
                 scene,
                 &CanvasPlacement::root(scene.canvas.logical_extent),
                 &CanvasProjection::viewport(scene.canvas.logical_extent),
-                None,
                 &mut draw,
-                0,
-                None,
+                repaint.as_ref(),
             );
         } else {
             self.camera_pass(host, source, extent, None, &mut draw)?;
         }
+        let next_damage = draw.next_damage;
         let included = draw.included;
 
         #[cfg(feature = "instrumentation")]
@@ -533,21 +601,121 @@ impl MetalRenderService {
         let gpu_seconds = self.gpu_timing.then_some(&mut seconds);
         #[cfg(not(feature = "instrumentation"))]
         let gpu_seconds = None;
-        let merged = frame
+        let (merged, mask_draws, mask_triangles) = frame
             .finish(capture, gpu_seconds)
             .map_err(MetalRenderError::Device)?;
-        summary.draw_calls = summary.draw_calls.saturating_sub(merged);
+        summary.draw_calls = summary
+            .draw_calls
+            .saturating_sub(merged)
+            .saturating_add(mask_draws);
+        summary.triangles = summary.triangles.saturating_add(mask_triangles);
         #[cfg(feature = "instrumentation")]
         if seconds.is_finite() && seconds > 0.0 {
             summary.gpu_elapsed_ns = Some((seconds * 1e9).round() as u64);
         }
 
         if summary.failed_draw_calls == 0 {
+            self.root_damage = next_damage;
             for observation in observations {
                 observation.publication = included.get(&observation.output).copied();
             }
         }
         Ok(summary)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_projected_paint(
+        &mut self,
+        host: &HostRuntime,
+        scene: CanvasScene<'_>,
+        entries: &[Arc<CanvasPaintEntry>],
+        view: Option<CanvasSurfaceView>,
+        size: [u32; 2],
+        projection: &CanvasProjection<'_>,
+        draw: &mut DrawResources<'_>,
+    ) -> Result<Option<PaintImage>, MetalRenderError> {
+        let Some(content) = ProjectedPaint::content(scene, entries) else {
+            return Ok(None);
+        };
+
+        let extent = scene.canvas.logical_extent;
+        let output = scene.canvas.selection;
+        let key = (view.as_ref().map_or(output, |v| v.camera), output);
+        // Optional paint images have a separate budget from required child Camera targets.
+        let pixels = u64::from(size[0]) * u64::from(size[1]);
+        if draw.paint_pixels + pixels > 8 * 1024 * 1024 {
+            return Ok(None);
+        }
+
+        let stable = self
+            .projected_paints
+            .get(&key)
+            .is_some_and(|p| p.size == size && p.view == view && p.content == content);
+        if !stable {
+            self.projected_paints.insert(
+                key,
+                ProjectedPaint {
+                    content,
+                    view,
+                    size,
+                    frame: self.frame_number,
+                    image: None,
+                },
+            );
+            return Ok(None);
+        }
+
+        draw.paint_pixels += pixels;
+        let paint = self
+            .projected_paints
+            .get_mut(&key)
+            .expect("matched paint inputs");
+        paint.frame = self.frame_number;
+        if let Some(image) = &paint.image {
+            return Ok(Some(image.clone()));
+        }
+
+        let Some(target) = self.device.target(size, false).map(Rc::new) else {
+            return Ok(None);
+        };
+        if !draw.frame.pass(
+            Some(&target),
+            [0.; 4],
+            view.as_ref().map(|v| &v.lighting),
+            None,
+        ) {
+            return Err(MetalRenderError::Device(
+                "could not encode projected Canvas paint".into(),
+            ));
+        }
+        let failures = draw.summary.failed_draw_calls;
+        self.draw_canvas_primitives(
+            host,
+            scene,
+            &CanvasPlacement::root(extent),
+            projection,
+            draw,
+            entries.iter().map(AsRef::as_ref),
+        );
+        if draw.summary.failed_draw_calls != failures {
+            return Ok(None);
+        }
+
+        let mut bounds = [extent[0], extent[1], 0., 0.];
+        for entry in entries {
+            let rect = ipp_render_scene::canvas_damage::paint_bounds(host, scene, entry);
+            for i in 0..2 {
+                let pad = extent[i] / size[i] as f32;
+                bounds[i] = bounds[i].min(rect[i] - pad).max(0.);
+                bounds[i + 2] = bounds[i + 2].max(rect[i + 2] + pad).min(extent[i]);
+            }
+        }
+        let image = PaintImage {
+            target,
+            bounds,
+        };
+        self.projected_paints.get_mut(&key).unwrap().image = Some(image.clone());
+        Ok(Some(image))
     }
 
     fn prepare_children(
@@ -714,6 +882,7 @@ impl MetalRenderService {
                         model,
                         analytic: None,
                         column_start: None,
+                        paint_image: None,
                     });
                 }
             }
@@ -779,20 +948,114 @@ impl MetalRenderService {
         }
         let shadow = self.shadow_pass(host, source, &lights, draw)?;
         prepare_canvas_columns(&mut surfaces, camera.view_projection, viewport, draw.frame);
+        let repaint = if target.is_none()
+            && output == draw.root
+            && !lights.over_capacity()
+            && shadow.is_none()
+            && let [visit] = surfaces.as_slice()
+            && visit.edge.layer_spacing == 0.0
+            && visit.edge.surface_cache_policy.is_none()
+            && let Some(world) = host.publication(publication)
+            && !world
+                .attachments
+                .iter()
+                .any(|edge| edge.mode == WorldAttachmentMode::Spatial)
+            && world
+                .chunk(RenderSystem::ID)
+                .and_then(|chunk| chunk.data::<RenderPublication>())
+                .is_none_or(|scene| {
+                    scene.items.is_empty()
+                        && !scene
+                            .debug
+                            .iter()
+                            .any(|item| scene.state.show_all_debug_geometries || item.is_rendered)
+                })
+            && world
+                .chunk(PlotSystem::ID)
+                .and_then(|chunk| chunk.data::<PlotPublication>())
+                .is_none_or(|plot| plot.charts.is_empty())
+            && let Some(geometry) = &visit.edge.surface_geometry
+            && let Some(scene) = CanvasScene::new(host, visit.child.output, visit.child.publication)
+        {
+            draw.root_repaint(
+                host,
+                scene,
+                Some(CanvasSurfaceView {
+                    camera: output,
+                    projection: camera.view_projection,
+                    model: visit.model,
+                    geometry: geometry.clone(),
+                    lighting,
+                }),
+            )
+        } else {
+            None
+        };
+
+        if repaint.is_none()
+            && !lights.over_capacity()
+            && (target.is_some() || draw.next_damage.is_none() || output != draw.root)
+        {
+            for visit in &mut surfaces {
+                let Some(analytic) = &mut visit.analytic else {
+                    continue;
+                };
+                if analytic.needs_near_root() {
+                    continue;
+                }
+                let Some(scene) =
+                    CanvasScene::new(host, visit.child.output, visit.child.publication)
+                else {
+                    continue;
+                };
+                let geometry = visit.edge.surface_geometry.as_ref().unwrap();
+                let extent = scene.canvas.logical_extent;
+                let physical = geometry.physical_extent();
+                analytic.set_scale(std::array::from_fn(|i| physical[i] / f64::from(extent[i])));
+                if let Some(start) = visit.column_start {
+                    analytic.use_columns(start);
+                }
+                let view = CanvasSurfaceView {
+                    camera: output,
+                    projection: camera.view_projection,
+                    model: visit.model,
+                    geometry: geometry.clone(),
+                    lighting,
+                };
+                visit.paint_image = self
+                    .prepare_projected_paint(
+                        host,
+                        scene,
+                        &scene.canvas.entries,
+                        Some(view),
+                        viewport,
+                        &CanvasProjection::Analytic(analytic),
+                        draw,
+                    )?
+                    .map(|image| image.target);
+            }
+        }
+
         self.traversal
             .reset(host, publication, Some(output))
             .map_err(|_| MetalRenderError::InvalidCamera)?;
 
-        if !draw
-            .frame
-            .pass(target, BACKGROUND, Some(&lighting), shadow.as_deref())
-        {
+        if !draw.frame.render_pass(
+            target,
+            BACKGROUND,
+            Some(&lighting),
+            shadow.as_deref(),
+            repaint.as_ref().map(|r| r.scissor),
+        ) {
             return Err(MetalRenderError::Device(
                 "could not encode Camera pass".into(),
             ));
         }
 
         let mut pending: Option<MeshBindings<'_>> = None;
+        let sprite_view = particles::SpriteView::new(camera.view_projection, camera_pose);
+        let mut sprites = Vec::new();
+        let mut blended_meshes = Vec::new();
         let mut transparency = Vec::new();
         let frustum = frustum_planes(camera.view_projection);
         let mut plots = Vec::new();
@@ -856,24 +1119,39 @@ impl MetalRenderService {
                     incarnation: item.incarnation,
                 };
                 if let Some(particle) = item.item.particle.filter(|particle| particle.sprite) {
-                    let Some((bindings, material)) = sprite_draw(
-                        host,
-                        visit.publication.id,
-                        camera.view_projection,
-                        camera_pose,
-                        placement,
-                        &item.item,
-                        &self.particle_quad,
-                    ) else {
-                        draw.summary.fail();
-                        continue;
+                    let texture = if let Some(key) = item.item.texture {
+                        let Some(image) =
+                            asset::<MetalTexture>(host, visit.publication.id, key.asset)
+                                .and_then(|t| t.texture.as_ref())
+                        else {
+                            draw.summary.fail();
+                            continue;
+                        };
+                        Some(image)
+                    } else {
+                        None
+                    };
+                    let model = if placement == IDENTITY {
+                        item.item.model
+                    } else {
+                        ipp_core::math::multiply(placement, item.item.model)
                     };
                     let depth = if particle.additive {
                         f32::INFINITY
                     } else {
-                        material.clip_from_mesh[14]
+                        ipp_core::math::multiply(camera.view_projection, model)[14]
                     };
-                    transparency.push((depth, entity, particle.id, bindings, material));
+                    transparency.push((
+                        depth,
+                        entity,
+                        Some(particle.id),
+                        Blended::Sprite(sprites.len()),
+                    ));
+                    sprites.push((
+                        texture,
+                        particle.additive,
+                        sprite_view.instance(&item.item, particle, placement, model),
+                    ));
                     continue;
                 }
                 let Some((mut bindings, mut material)) = mesh_draw(
@@ -924,7 +1202,13 @@ impl MetalRenderService {
                     bindings.selected_lights = Some(Box::new(selected));
                 }
                 if bindings.blend != Blend::Opaque {
-                    transparency.push((material.clip_from_mesh[14], entity, 0, bindings, material));
+                    transparency.push((
+                        material.clip_from_mesh[14],
+                        entity,
+                        Some(0),
+                        Blended::Mesh(blended_meshes.len()),
+                    ));
+                    blended_meshes.push((bindings, material));
                     continue;
                 }
                 if let Some(previous) = &pending
@@ -1056,6 +1340,7 @@ impl MetalRenderService {
                 };
                 let placement = CanvasPlacement::rectangle(plane.plane.clip);
                 let mut pass = CanvasPass {
+                    plot: true,
                     frame: draw.frame,
                     summary: draw.summary,
                     projection: &projection,
@@ -1078,38 +1363,29 @@ impl MetalRenderService {
             }
         }
 
-        let mut order: Vec<_> = (0..transparency.len()).collect();
-        order.sort_unstable_by(|&left, &right| {
-            let a = &transparency[left];
-            let b = &transparency[right];
+        for visit in &surfaces {
+            transparency.push((
+                surface_depth(camera.view_projection, visit.model),
+                visit.entity,
+                None,
+                Blended::Surface,
+            ));
+        }
+        // A Surface precedes a mesh at identical depth and identity. Stable sorting
+        // retains publication order for ties within either type of mesh instance.
+        transparency.sort_by(|a, b| {
             b.0.total_cmp(&a.0)
                 .then_with(|| (a.1, a.2).cmp(&(b.1, b.2)))
-                .then(left.cmp(&right))
         });
-        let mut surfaces = surfaces.into_iter().peekable();
-        let mut meshes = order
-            .into_iter()
-            .map(|index| &transparency[index])
-            .peekable();
-        self.instances.clear();
-        let mut pending: Option<&MeshBindings<'_>> = None;
-        while surfaces.peek().is_some() || meshes.peek().is_some() {
-            if let Some(visit) = surfaces.next_if(|surface| {
-                meshes.peek().is_none_or(|mesh| {
-                    let depth = surface_depth(camera.view_projection, surface.model);
-                    depth
-                        .total_cmp(&mesh.0)
-                        .reverse()
-                        .then_with(|| surface.entity.cmp(&mesh.1))
-                        .is_le()
-                })
-            }) {
-                if let Some(bindings) = pending.take() {
-                    bindings.submit(draw.frame, &self.instances, draw.summary, Some(&lighting));
-                    self.instances.clear();
-                }
-                let selected =
-                    if lights.over_capacity() && visit.child.output.kind() == OutputKind::Canvas {
+        let mut surfaces = surfaces.into_iter();
+        let mut ordered = transparency.into_iter().map(|item| item.3).peekable();
+        while let Some(item) = ordered.next() {
+            match item {
+                Blended::Surface => {
+                    let visit = surfaces.next().expect("one ordered entry per Surface");
+                    let selected = if lights.over_capacity()
+                        && visit.child.output.kind() == OutputKind::Canvas
+                    {
                         Some(surface_lights(
                             &lights,
                             output,
@@ -1119,28 +1395,57 @@ impl MetalRenderService {
                     } else {
                         None
                     };
-                if let Some(selected) = &selected {
-                    draw.frame.lighting(selected);
+                    if let Some(selected) = &selected {
+                        draw.frame.lighting(selected);
+                    }
+                    self.draw_surface(host, visit, camera.view_projection, draw, repaint.as_ref())?;
+                    if selected.is_some() {
+                        draw.frame.lighting(&lighting);
+                    }
                 }
-                self.draw_surface(host, visit, camera.view_projection, draw)?;
-                if selected.is_some() {
-                    draw.frame.lighting(&lighting);
+                Blended::Mesh(index) => {
+                    let (bindings, material) = &blended_meshes[index];
+                    self.instances.clear();
+                    self.instances.push(*material);
+                    while let Some(Blended::Mesh(next)) = ordered.peek() {
+                        let (other, material) = &blended_meshes[*next];
+                        if self.instances.len() >= Material::MAX_INSTANCES
+                            || !bindings.matches(other)
+                        {
+                            break;
+                        }
+                        self.instances.push(*material);
+                        ordered.next();
+                    }
+                    bindings.submit(draw.frame, &self.instances, draw.summary, Some(&lighting));
                 }
-                continue;
+                Blended::Sprite(index) => {
+                    let (texture, additive, sprite) = sprites[index];
+                    self.sprites.clear();
+                    self.sprites.push(sprite);
+                    while let Some(Blended::Sprite(next)) = ordered.peek() {
+                        let (next_texture, next_additive, sprite) = sprites[*next];
+                        if self.sprites.len() >= particles::MAX_BATCH
+                            || next_additive != additive
+                            || next_texture.map(std::ptr::from_ref)
+                                != texture.map(std::ptr::from_ref)
+                        {
+                            break;
+                        }
+                        self.sprites.push(sprite);
+                        ordered.next();
+                    }
+                    if draw
+                        .frame
+                        .sprites(&sprite_view, &self.sprites, texture, additive)
+                    {
+                        draw.summary.draw_calls += 1;
+                        draw.summary.triangles += self.sprites.len() as u32 * 2;
+                    } else {
+                        draw.summary.fail();
+                    }
+                }
             }
-
-            let (_, _, _, bindings, material) = meshes.next().expect("pending blended mesh");
-            if let Some(previous) = pending
-                && (!previous.matches(bindings) || self.instances.len() == Material::MAX_INSTANCES)
-            {
-                previous.submit(draw.frame, &self.instances, draw.summary, Some(&lighting));
-                self.instances.clear();
-            }
-            pending = Some(bindings);
-            self.instances.push(*material);
-        }
-        if let Some(bindings) = pending {
-            bindings.submit(draw.frame, &self.instances, draw.summary, Some(&lighting));
         }
         draw.included.insert(output, publication);
         Ok(())
@@ -1479,6 +1784,7 @@ impl MetalRenderService {
         visit: SurfaceVisit<'_>,
         view_projection: [f32; 16],
         draw: &mut DrawResources<'_>,
+        repaint: Option<&Repaint>,
     ) -> Result<(), MetalRenderError> {
         let Some(geometry) = &visit.edge.surface_geometry else {
             return Ok(());
@@ -1503,6 +1809,7 @@ impl MetalRenderService {
                     let projection =
                         surface_projection(view_projection, model, geometry, [1.0; 2], offset);
                     let mut pass = CanvasPass {
+                        plot: false,
                         frame: draw.frame,
                         summary: draw.summary,
                         projection: &projection,
@@ -1521,6 +1828,7 @@ impl MetalRenderService {
                 let projection =
                     surface_projection(view_projection, model, geometry, [1.0; 2], 0.0);
                 let mut pass = CanvasPass {
+                    plot: false,
                     frame: draw.frame,
                     summary: draw.summary,
                     projection: &projection,
@@ -1551,6 +1859,18 @@ impl MetalRenderService {
                     |offset| surface_projection(view_projection, model, geometry, scale, offset);
                 if let Some(mut analytic) = visit.analytic {
                     analytic.set_scale(scale);
+                    if let Some(image) = visit.paint_image {
+                        let mut pass = CanvasPass {
+                            plot: false,
+                            frame: draw.frame,
+                            summary: draw.summary,
+                            projection: &CanvasProjection::Analytic(&analytic),
+                            owner: 0,
+                        };
+                        pass.draw_image(&placement, CanvasBinding::Screen(&image), extent);
+                        draw.included.insert(scene.canvas.selection, scene.world.id);
+                        return Ok(());
+                    }
                     let roots = if analytic.needs_near_root() {
                         &[false, true][..]
                     } else {
@@ -1561,29 +1881,25 @@ impl MetalRenderService {
                         if let Some(start) = visit.column_start {
                             analytic.use_columns(start);
                         }
-                        self.draw_canvas(
+                        self.draw_canvas_region(
                             host,
                             scene,
                             &placement,
                             &CanvasProjection::Analytic(&analytic),
-                            None,
                             draw,
-                            0,
-                            None,
+                            repaint,
                         );
                     }
                     return Ok(());
                 }
                 if spacing == 0.0 {
-                    self.draw_canvas(
+                    self.draw_canvas_region(
                         host,
                         scene,
                         &placement,
                         &projection(0.0),
-                        None,
                         draw,
-                        0,
-                        None,
+                        repaint,
                     );
                 } else {
                     for (layer, offset) in image_layer_order(
@@ -1609,6 +1925,35 @@ impl MetalRenderService {
             OutputKind::Camera => {}
         }
         Ok(())
+    }
+
+    fn draw_canvas_region(
+        &self,
+        host: &HostRuntime,
+        scene: CanvasScene<'_>,
+        placement: &CanvasPlacement,
+        projection: &CanvasProjection<'_>,
+        draw: &mut DrawResources<'_>,
+        repaint: Option<&Repaint>,
+    ) {
+        if let Some(repaint) = repaint {
+            #[cfg(feature = "instrumentation")]
+            let _trace = ipp_core::profiling::CpuTraceScope::new("MetalCanvasDamage.root_repaint");
+            self.draw_canvas_primitives(
+                host,
+                scene,
+                placement,
+                projection,
+                draw,
+                repaint
+                    .indices
+                    .iter()
+                    .map(|&i| scene.canvas.entries[i].as_ref()),
+            );
+            draw.included.insert(scene.canvas.selection, scene.world.id);
+        } else {
+            self.draw_canvas(host, scene, placement, projection, None, draw, 0, None);
+        }
     }
 
     fn draw_retained_canvas(
@@ -1698,6 +2043,7 @@ impl MetalRenderService {
                 unreachable!("only leaf Canvas entries use this path");
             };
             let mut pass = CanvasPass {
+                plot: false,
                 frame: draw.frame,
                 summary: draw.summary,
                 projection,
@@ -1743,7 +2089,17 @@ impl MetalRenderService {
             return;
         }
 
-        for entry in scene.canvas.entries.iter() {
+        let overlay = if depth == 0 && draw.root == scene.canvas.selection {
+            draw.overlay.take()
+        } else {
+            None
+        };
+        let entries = if overlay.is_some() {
+            &scene.canvas.entries[..1]
+        } else {
+            &scene.canvas.entries
+        };
+        for entry in entries {
             if layer.is_some_and(|layer| entry.layer() != layer) {
                 continue;
             }
@@ -1756,6 +2112,7 @@ impl MetalRenderService {
                     ..
                 } => {
                     let mut pass = CanvasPass {
+                        plot: false,
                         frame: draw.frame,
                         summary: draw.summary,
                         projection,
@@ -1804,6 +2161,7 @@ impl MetalRenderService {
                                     .get(&DrawResources::image_key(output, slot.physical_extent))
                             {
                                 let mut pass = CanvasPass {
+                                    plot: false,
                                     frame: draw.frame,
                                     summary: draw.summary,
                                     projection,
@@ -1829,35 +2187,22 @@ impl MetalRenderService {
                 }
             }
         }
+        if let Some(image) = overlay {
+            CanvasPass {
+                plot: false,
+                frame: draw.frame,
+                summary: draw.summary,
+                projection,
+                owner: 0,
+            }
+            .draw_image(
+                &CanvasPlacement::rectangle(image.bounds),
+                CanvasBinding::Target(&image.target),
+                scene.canvas.logical_extent,
+            );
+        }
         draw.included.insert(scene.canvas.selection, scene.world.id);
     }
-}
-
-fn image_layer_order(
-    scene: CanvasScene<'_>,
-    geometry: &ipp_core::systems::surface::SurfaceGeometry,
-    view: [f32; 16],
-    model: [f32; 16],
-    spacing: f32,
-) -> impl Iterator<Item = (u32, f64)> {
-    let clip = ipp_core::math::multiply(view, model);
-    let center = geometry.physical_extent().map(|value| value * 0.5);
-    let mut layers: Vec<_> = scene
-        .canvas
-        .layers
-        .iter()
-        .filter_map(|layer| {
-            let offset = layer.offset * f64::from(spacing);
-            let sample = geometry.sample(center, offset).ok()?;
-            let z = f64::from(clip[14])
-                + (0..3)
-                    .map(|i| f64::from(clip[i * 4 + 2]) * sample.position[i])
-                    .sum::<f64>();
-            Some((layer.id, offset, z))
-        })
-        .collect();
-    layers.sort_by(|a, b| b.2.total_cmp(&a.2));
-    layers.into_iter().map(|(layer, offset, _)| (layer, offset))
 }
 
 fn submit_generated(
@@ -1933,40 +2278,6 @@ fn fullscreen_camera(
         },
         slot.physical_extent,
     ))
-}
-
-fn surface_projection(
-    view: [f32; 16],
-    world: [f32; 16],
-    geometry: &ipp_core::systems::surface::SurfaceGeometry,
-    scale: [f64; 2],
-    offset: f64,
-) -> CanvasProjection<'_> {
-    if let Some(local) = geometry.exact_affine(offset) {
-        let local = ipp_core::math::multiply(
-            local.map(|v| v as f32),
-            ipp_core::systems::canvas::CanvasAffine::axis_aligned(
-                [0.0; 2],
-                scale.map(|v| v as f32),
-            )
-            .matrix(),
-        );
-        let pose = ipp_core::math::multiply(world, local);
-        CanvasProjection::Plane {
-            matrix: ipp_core::math::multiply(view, pose),
-            world: Some(pose),
-        }
-    } else {
-        let matrix = ipp_core::math::multiply(view, world);
-        CanvasProjection::Surface {
-            matrix,
-            world,
-            geometry,
-            scale,
-            offset,
-            image_projection: None,
-        }
-    }
 }
 
 pub(super) fn asset<T: 'static>(
@@ -2067,19 +2378,6 @@ fn surface_lights(
     lights.select(output, surface.entity, center, radius, history)
 }
 
-fn light_receiver(model: [f32; 16], bounds: Option<([f32; 3], [f32; 3])>) -> ([f32; 3], f32) {
-    let (min, max) = bounds.unwrap_or(([0.0; 3], [0.0; 3]));
-    let center: [f32; 3] = std::array::from_fn(|i| min[i].midpoint(max[i]));
-    let half: [f32; 3] = std::array::from_fn(|i| (max[i] - min[i]) * 0.5);
-    let position = std::array::from_fn(|i| {
-        model[12 + i] + model[i] * center[0] + model[4 + i] * center[1] + model[8 + i] * center[2]
-    });
-    let extent: [f32; 3] = std::array::from_fn(|i| {
-        model[i].abs() * half[0] + model[4 + i].abs() * half[1] + model[8 + i].abs() * half[2]
-    });
-    (position, extent[0].hypot(extent[1]).hypot(extent[2]))
-}
-
 fn mesh_draw<'a>(
     host: &'a HostRuntime,
     publication: WorldPublicationId,
@@ -2150,60 +2448,6 @@ fn mesh_draw<'a>(
         palette,
         triangles: (mesh.metadata.index_count() / 3) as u32,
         blend: Blend::Opaque,
-        custom: None,
-        selected_lights: None,
-    };
-    Some((bindings, material))
-}
-
-fn sprite_draw<'a>(
-    host: &'a HostRuntime,
-    publication: WorldPublicationId,
-    view: [f32; 16],
-    camera: [f32; 16],
-    placement: [f32; 16],
-    item: &RenderItem,
-    quad: &'a MeshBuffers,
-) -> Option<(MeshBindings<'a>, Material)> {
-    let particle = item.particle?;
-    let model = particles::billboard(
-        item,
-        camera,
-        placement,
-        ipp_core::math::multiply(placement, item.model),
-    )?;
-    let texture = match item.texture {
-        Some(texture) => Some(
-            asset::<MetalTexture>(host, publication, texture.asset)?
-                .texture
-                .as_ref()?,
-        ),
-        None => None,
-    };
-    let material = Material {
-        clip_from_mesh: ipp_core::math::multiply(view, model),
-        world_from_mesh: model,
-        color: [
-            item.material.r,
-            item.material.g,
-            item.material.b,
-            -particle.opacity,
-        ],
-        options: [0.0; 4],
-        surface: [0.0; 4],
-        effects: [0.0, 0.0, 0.0, f32::from(texture.is_some())],
-    };
-    let bindings = MeshBindings {
-        mesh: quad,
-        pose: None,
-        texture,
-        palette: std::slice::from_ref(&IDENTITY),
-        triangles: 2,
-        blend: if particle.additive {
-            Blend::Additive
-        } else {
-            Blend::Alpha
-        },
         custom: None,
         selected_lights: None,
     };

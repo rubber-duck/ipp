@@ -15,7 +15,7 @@ import { image } from "../../../tools/shared-host/presentation.js";
 
 export interface GalleryBenchmarkConfig {
   readonly source: { revision: string; sourceSha256: string };
-  readonly backend: "metal" | "gles";
+  readonly backend: "metal" | "gles" | "webgpu";
   readonly repeat: number;
   readonly instrumented: boolean;
   readonly frames: number;

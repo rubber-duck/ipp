@@ -283,7 +283,7 @@ if (selection === "assets") {
     `${JSON.stringify(
       {
         scope:
-          "Native GUI application and React scenes to generated client to WASM to Rust WebGL",
+          "Native GUI application and React scenes to generated client to WASM to Rust WebGPU or WebGL",
         mesh: { format: "IPPM", version: 1, vertices: 24, indices: 36 },
         artifacts,
       },

@@ -46,6 +46,10 @@ test("platformer profiling preserves state and completed frames", {
     },
     context.signal,
     async (environment) => {
+      // This scenario observes counters from the WebGL distribution.
+      await environment.page.addInitScript(() => {
+        Reflect.deleteProperty(Navigator.prototype, "gpu");
+      });
       // The published gallery keeps its ordinary runtime URL. Redirect that
       // distribution as a whole to the verified instrumentation product.
       await environment.page

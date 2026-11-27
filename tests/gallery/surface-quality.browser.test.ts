@@ -17,6 +17,10 @@ test("cockpit scrolling and cache controls retain fullscreen scene detail", {
     context.signal,
     async (environment) => {
       await environment.page.setViewportSize({ width: 1224, height: 756 });
+      // This scenario observes counters from the WebGL distribution.
+      await environment.page.addInitScript(() => {
+        Reflect.deleteProperty(Navigator.prototype, "gpu");
+      });
       const app = await openApplication(environment);
       await exerciseSurfaceQuality(app, (name, data) =>
         environment.evidence.record(name, data),

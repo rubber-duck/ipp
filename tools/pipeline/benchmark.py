@@ -144,9 +144,12 @@ def register(tasks: dict[str, Task]) -> None:
 def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
     from .catalog import operation
 
-    if args.renderer and args.scene != "gui-rendering":
-        raise ValueError("--renderer applies to gui-rendering")
-    if (args.themes or args.projections) and args.scene != "gui-rendering":
+    if args.renderer and args.scene not in ("gui-rendering", "metal-gallery"):
+        raise ValueError("--renderer applies to gui-rendering and metal-gallery")
+    if (args.themes or args.projections) and args.scene not in (
+        "gui-rendering",
+        "metal-gallery",
+    ):
         raise ValueError("--themes and --projections apply to gui-rendering")
 
     if args.scene == "plot-coverage":
@@ -159,7 +162,12 @@ def plan(args: argparse.Namespace, tasks: dict[str, Task]) -> list[str]:
 
         return plan_cockpit(args, tasks)
 
-    if args.scene in ("metal-camera", "metal-gallery", "gui-rendering"):
+    if args.scene in (
+        "metal-camera",
+        "webgpu-camera",
+        "metal-gallery",
+        "gui-rendering",
+    ):
         from .metal_benchmark import plan as plan_metal
 
         return plan_metal(args, tasks)

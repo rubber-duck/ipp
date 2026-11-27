@@ -24,7 +24,7 @@ SurfaceCanvas presents the child World's canvas through the selected [Surface im
 
 ## Rendering backends
 
-WebGL 2 and GLES 3 share preparation through compile-time devices. Hosts own context libraries and shims. The native Metal RenderService consumes the same completed World publications and owns its Metal resources, command encoding and GPU resource lifetimes. The macOS Host owns its clock, output selection and presentation surface. Validate actual device capabilities and report unsupported requirements or apply defined fallbacks.
+WebGL 2 and GLES 3 share preparation through compile-time devices. Hosts own context libraries and shims. The native Metal RenderService consumes the same completed World publications and owns its Metal resources, command encoding and GPU resource lifetimes. The macOS Host owns its clock, output selection and presentation surface. A native WebGPU RenderService consumes the same publications and owns its pipelines, bindings and submission. The browser gallery selects a separate WebGPU worker distribution at startup and falls back to its WebGL 2 distribution if WebGPU initialization fails. Each worker owns its device and presentation canvas. The native comparison uses wgpu’s Metal backend on the same GPU as direct Metal and GLES. Validate actual device capabilities and report unsupported requirements or apply defined fallbacks.
 
 ## Material contract
 

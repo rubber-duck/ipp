@@ -22,8 +22,23 @@ python tools/ipp.py benchmark native --scene metal-gallery --cases shapes,platfo
 
 The release report measures presentation sequence changes per second and intervals between completed-frame responses. Those intervals include Host scheduling and transport, and presentation sequences count Host submissions. GPU diagnostic windows use command-buffer elapsed time on Metal and frame queries on GLES. Inspect each backend's available samples and clock scope separately. The reports retain source and executable identity, per-case samples, asset hashes and frame captures. Animated gallery captures document the rendered workloads. The paired correctness suite supplies deterministic pixel assertions.
 
+## Native WebGPU comparison
+
+The offscreen WebGPU Host uses wgpu's native Metal adapter. The direct Metal, GLES and WebGPU Hosts use independently generated native clients, the same fixtures and physical viewport. The Camera benchmark includes textured and posed meshes, skinning, lighting and particles. The gallery exercises complete applications, including a streaming chart variant. The [GUI board](gui-rendering.md) animates a small mark over 74 specimens across three skins and four projections. The runners rotate backend order and keep pixel readback outside release timing. Each report records binary identities, raw intervals and completed captures.
+
+```sh
+export IPP_EGL_LIBRARY_DIR=/path/to/angle/lib
+python tools/ipp.py test metal-camera webgpu-camera
+python tools/ipp.py benchmark native --scene webgpu-camera --repetitions 3
+python tools/ipp.py benchmark native --scene metal-gallery --renderer all --repetitions 3
+python tools/ipp.py benchmark native --scene gui-rendering --renderer all --cases all --repetitions 2
+```
+
+Release FPS counts increments of the selected Host's presentation sequence per wall-clock second. Camera textures whose complete visual inputs are unchanged can be sampled again in a new root draw. For a small edit to an isolated Canvas, direct Metal and WebGPU redraw the damaged area and overlapping paint. The gallery's moving content can differ between captures taken at independent Host times. Use the native composition pixel tests for deterministic checks.
+
 ## Measurements
 
+- [Native WebGPU, Metal and GLES on the Apple M4](webgpu-results.md)
 - [Expanded feature coverage baseline](feature-results.md)
 - [Chart and data measurements](chart-data-results.md)
 - [Native results and camera culling](native-results.md)

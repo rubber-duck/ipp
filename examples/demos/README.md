@@ -14,6 +14,8 @@ Run the browser application from the repository root:
 python tools/ipp.py dev gallery
 ```
 
+The gallery prefers WebGPU and falls back to WebGL 2 when WebGPU is unavailable. Open **Display** to see the active renderer.
+
 Open `/examples/demos/cartoon-controls/` on the same development server for the Cartoon control gallery. Use the section picker or arrows to browse the interactive controls. Each section has a shareable URL fragment.
 
 Run a persistent native application after starting a compatible shared Host:

@@ -1,5 +1,5 @@
 /** Pair within repetition so drift between sweeps does not become a removal cost. */
-type Backend = "metal" | "gles";
+type Backend = "metal" | "gles" | "webgpu";
 interface GuiResult {
   readonly name: string;
   readonly theme: string;
@@ -40,21 +40,32 @@ export function compareGuiRuns(
       ? sorted[middle]!
       : (sorted[middle - 1]! + sorted[middle]!) / 2;
   };
+  const hasWebGpu = runs.some((r) => r.backend === "webgpu");
   const cases = [...selections.values()];
   const withUpdates = !instrumented && cases.some((r) => r.dynamic);
   const withScroll = !instrumented && cases.some((r) => r.scroll);
   const rows = cases.map(({ name, theme, projection, dynamic }) => {
-    const times = { metal: [] as number[], gles: [] as number[] };
-    const savings = { metal: [] as number[], gles: [] as number[] };
-    const available = { metal: 0, gles: 0 };
-    const recorded = { metal: 0, gles: 0 };
+    const times = {
+      metal: [] as number[],
+      gles: [] as number[],
+      webgpu: [] as number[],
+    };
+    const savings = {
+      metal: [] as number[],
+      gles: [] as number[],
+      webgpu: [] as number[],
+    };
+    const available = { metal: 0, gles: 0, webgpu: 0 };
+    const recorded = { metal: 0, gles: 0, webgpu: 0 };
     const edits: Record<Backend, NonNullable<GuiResult["dynamic"]>[]> = {
       metal: [],
       gles: [],
+      webgpu: [],
     };
     const wheels: Record<Backend, NonNullable<GuiResult["scroll"]>[]> = {
       metal: [],
       gles: [],
+      webgpu: [],
     };
     for (const run of runs) {
       const same = run.result.runs.filter(
@@ -97,13 +108,20 @@ export function compareGuiRuns(
       median(savings.gles),
       times.metal.length,
       times.gles.length,
+      ...(hasWebGpu
+        ? [median(times.webgpu), median(savings.webgpu), times.webgpu.length]
+        : []),
       ...(instrumented
         ? [available.metal, recorded.metal, available.gles, recorded.gles]
         : []),
       ...(withUpdates
         ? [
             dynamic?.rowsPerUpdate,
-            ...[edits.metal, edits.gles].flatMap((samples) => [
+            ...[
+              edits.metal,
+              edits.gles,
+              ...(hasWebGpu ? [edits.webgpu] : []),
+            ].flatMap((samples) => [
               median(samples.map((r) => r.updateToFrameMs.p50)),
               median(samples.map((r) => r.updateToFrameMs.p95)),
               median(samples.map((r) => r.commitMs.p50)),
@@ -111,7 +129,11 @@ export function compareGuiRuns(
           ]
         : []),
       ...(withScroll
-        ? [wheels.metal, wheels.gles].flatMap((samples) => [
+        ? [
+            wheels.metal,
+            wheels.gles,
+            ...(hasWebGpu ? [wheels.webgpu] : []),
+          ].flatMap((samples) => [
             median(samples.map((r) => r.p50)),
             median(samples.map((r) => r.p95)),
           ])
@@ -131,6 +153,9 @@ export function compareGuiRuns(
         "gles_saved_ms",
         "metal_repeats",
         "gles_repeats",
+        ...(hasWebGpu
+          ? ["webgpu_" + metricName, "webgpu_saved_ms", "webgpu_repeats"]
+          : []),
         ...(instrumented
           ? [
               "metal_gpu_samples",
@@ -142,11 +167,13 @@ export function compareGuiRuns(
         ...(withUpdates
           ? [
               "rows_per_update",
-              ...["metal", "gles"].flatMap((backend) => [
-                backend + "_update_to_frame_p50_ms",
-                backend + "_update_to_frame_p95_ms",
-                backend + "_update_commit_p50_ms",
-              ]),
+              ...["metal", "gles", ...(hasWebGpu ? ["webgpu"] : [])].flatMap(
+                (backend) => [
+                  backend + "_update_to_frame_p50_ms",
+                  backend + "_update_to_frame_p95_ms",
+                  backend + "_update_commit_p50_ms",
+                ],
+              ),
             ]
           : []),
         ...(withScroll
@@ -155,6 +182,12 @@ export function compareGuiRuns(
               "metal_scroll_to_frame_p95_ms",
               "gles_scroll_to_frame_p50_ms",
               "gles_scroll_to_frame_p95_ms",
+              ...(hasWebGpu
+                ? [
+                    "webgpu_scroll_to_frame_p50_ms",
+                    "webgpu_scroll_to_frame_p95_ms",
+                  ]
+                : []),
             ]
           : []),
       ],

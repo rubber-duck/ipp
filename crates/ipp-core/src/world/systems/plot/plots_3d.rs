@@ -681,6 +681,18 @@ fn checked_point(point: [f32; 3]) -> Result<[f32; 3], ErrorReason> {
     }
 }
 
+fn triangle_cross(points: [[f32; 3]; 3]) -> [f64; 3] {
+    let a: [f64; 3] =
+        std::array::from_fn(|axis| f64::from(points[1][axis]) - f64::from(points[0][axis]));
+    let b: [f64; 3] =
+        std::array::from_fn(|axis| f64::from(points[2][axis]) - f64::from(points[0][axis]));
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
 #[derive(Default)]
 struct MeshBuilder {
     highlighted: bool,
@@ -689,6 +701,27 @@ struct MeshBuilder {
 }
 
 impl MeshBuilder {
+    fn chunk(&mut self, alpha: f32, vertices: usize) -> Result<&mut PlotMesh, ErrorReason> {
+        let key = alpha.to_bits();
+        let index = match self.current.get(&key).copied() {
+            Some(index) if self.chunks[index].positions.len() + vertices <= u16::MAX as usize => {
+                index
+            }
+            _ => {
+                let index = self.chunks.len();
+                let part = u32::try_from(index).map_err(|_| ErrorReason::Capacity)?;
+                self.chunks.push(PlotMesh {
+                    part,
+                    color: [1.0, 1.0, 1.0, alpha],
+                    ..PlotMesh::default()
+                });
+                self.current.insert(key, index);
+                index
+            }
+        };
+        Ok(&mut self.chunks[index])
+    }
+
     fn triangle(
         &mut self,
         points: [[f32; 3]; 3],
@@ -719,15 +752,7 @@ impl MeshBuilder {
         for point in points {
             checked_point(point)?;
         }
-        let a: [f64; 3] =
-            std::array::from_fn(|axis| f64::from(points[1][axis]) - f64::from(points[0][axis]));
-        let b: [f64; 3] =
-            std::array::from_fn(|axis| f64::from(points[2][axis]) - f64::from(points[0][axis]));
-        let normal = [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ];
+        let normal = triangle_cross(points);
         if normal == [0.0; 3] {
             return Ok(());
         }
@@ -747,22 +772,8 @@ impl MeshBuilder {
             1.0
         };
         let alpha = (colors[0][3] + colors[1][3] + colors[2][3]) / 3.0;
-        let key = alpha.to_bits();
-        let index = match self.current.get(&key).copied() {
-            Some(index) if self.chunks[index].positions.len() <= 65532 => index,
-            _ => {
-                let index = self.chunks.len();
-                let part = u32::try_from(index).map_err(|_| ErrorReason::Capacity)?;
-                self.chunks.push(PlotMesh {
-                    part,
-                    color: [1.0, 1.0, 1.0, alpha],
-                    ..PlotMesh::default()
-                });
-                self.current.insert(key, index);
-                index
-            }
-        };
-        let mesh = &mut self.chunks[index];
+        let highlighted = shade && self.highlighted;
+        let mesh = self.chunk(alpha, 3)?;
         let base = mesh.positions.len() as u16;
         mesh.positions.extend(points);
         mesh.colors
@@ -778,7 +789,7 @@ impl MeshBuilder {
         material.uvs.extend(uvs.map(|[u, v]| {
             [
                 u,
-                v + if shade && self.highlighted {
+                v + if highlighted {
                     2.0
                 } else {
                     0.0
@@ -1121,6 +1132,8 @@ impl MeshBuilder {
         };
         let u = cross(direction, reference);
         let ulength = dot(u, u).sqrt();
+        let normal_u = u.map(|v| v / ulength);
+        let normal_v = cross(direction, normal_u);
         let u = u.map(|v| v * width * 0.5 / ulength);
         let v = cross(direction, u);
         let corners: [[f32; 3]; 8] = std::array::from_fn(|i| {
@@ -1143,20 +1156,72 @@ impl MeshBuilder {
                     }
             })
         });
-        for [a, b, c, d] in [
+        const FACES: [[usize; 4]; 6] = [
             [0, 1, 3, 2],
             [4, 6, 7, 5],
             [0, 4, 5, 1],
             [1, 5, 7, 3],
             [3, 7, 6, 2],
             [2, 6, 4, 0],
-        ] {
-            self.quad(
-                [corners[a], corners[d], corners[c], corners[b]],
-                color,
-                false,
-            )?;
+        ];
+        // At very large coordinates a thin prism can collapse when converted to f32.
+        // Keep the ordinary triangle builder's degenerate-face and bounds handling in that case.
+        for point in corners {
+            checked_point(point)?;
         }
+        if FACES.iter().any(|&[a, b, c, d]| {
+            triangle_cross([corners[a], corners[d], corners[c]]) == [0.; 3]
+                || triangle_cross([corners[a], corners[c], corners[b]]) == [0.; 3]
+        }) {
+            for [a, b, c, d] in FACES {
+                self.quad(
+                    [corners[a], corners[d], corners[c], corners[b]],
+                    color,
+                    false,
+                )?;
+            }
+            return Ok(());
+        }
+
+        // Decoration never uses the data material. All six faces have the same unlit color.
+        let alpha = (color[3] + color[3] + color[3]) / 3.0;
+        let mesh = self.chunk(alpha, 8)?;
+        let base = mesh.positions.len() as u16;
+        let rgb = [color[0], color[1], color[2]];
+        mesh.positions.extend(corners);
+        mesh.colors.extend([rgb; 8]);
+        let material = mesh.material.get_or_insert_with(Default::default);
+        material.colors.extend([rgb; 8]);
+        // Each corner is shared by three mutually perpendicular prism faces.
+        for i in 0..8 {
+            material.normals.push(std::array::from_fn(|axis| {
+                let end = if i < 4 {
+                    -direction[axis]
+                } else {
+                    direction[axis]
+                };
+                let side = if i & 1 == 0 {
+                    normal_u[axis]
+                } else {
+                    -normal_u[axis]
+                };
+                let top = if i & 2 == 0 {
+                    normal_v[axis]
+                } else {
+                    -normal_v[axis]
+                };
+                (end + side + top) / 3.0_f32.sqrt()
+            }));
+        }
+        material.uvs.extend([[0.0; 2]; 8]);
+        let start = mesh.indices.len();
+        for [a, b, c, d] in FACES {
+            mesh.indices
+                .extend([a, d, c, a, c, b].map(|i| base + i as u16));
+        }
+        material
+            .decoration_indices
+            .extend_from_slice(&mesh.indices[start..]);
         Ok(())
     }
 }

@@ -291,6 +291,12 @@ impl MetalRenderService {
             ));
         }
 
+        if let Some(layer) = self.device.presentation_layer() {
+            device
+                .set_layer(Some(layer))
+                .map_err(MetalRenderError::Device)?;
+        }
+
         self.targets.clear();
         self.cached_canvases.clear();
         *self.canvas_batches.get_mut() = CanvasBatches::default();
@@ -409,6 +415,17 @@ impl MetalRenderService {
         Ok(())
     }
 
+    /// Mirror completed root frames to a host-owned Core Animation layer on the same GPU.
+    /// The embedding Host owns the layer's view, drawable size and event loop.
+    pub fn set_presentation_layer(
+        &self,
+        layer: Option<objc2::rc::Retained<objc2_quartz_core::CAMetalLayer>>,
+    ) -> Result<(), MetalRenderError> {
+        self.device
+            .set_layer(layer)
+            .map_err(MetalRenderError::Device)
+    }
+
     /// Present an exact output publication and optionally read back top-left RGBA8.
     pub fn draw(
         &mut self,
@@ -417,7 +434,8 @@ impl MetalRenderService {
         capture: Option<&mut [u8]>,
         observations: &mut [OutputPublicationObservation],
     ) -> Result<MetalFrameSummary, MetalRenderError> {
-        let result = self.draw_frame(host, view, capture, observations);
+        let result =
+            objc2::rc::autoreleasepool(|_| self.draw_frame(host, view, capture, observations));
         if result.is_err() {
             self.cached_canvases.clear();
             *self.canvas_batches.get_mut() = CanvasBatches::default();
@@ -468,9 +486,7 @@ impl MetalRenderService {
         } else {
             None
         };
-        let mut frame = self.device.frame().ok_or_else(|| {
-            MetalRenderError::Device("could not allocate a frame command buffer".into())
-        })?;
+        let mut frame = self.device.frame().map_err(MetalRenderError::Device)?;
         let mut summary = MetalFrameSummary::default();
         let mut draw = DrawResources {
             frame: &mut frame,

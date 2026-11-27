@@ -8,6 +8,12 @@ publish.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ipp-core.workspace = true
+bytemuck.workspace = true
+objc2.workspace = true
+objc2-foundation.workspace = true
+objc2-io-surface.workspace = true
+objc2-metal.workspace = true
+objc2-quartz-core.workspace = true
 
 [features]
 default = []

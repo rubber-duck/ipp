@@ -6,6 +6,14 @@ use crate::services::data::DataRowId;
 use crate::systems::data_bindings::DataBindingColumnView;
 use crate::{DynamicPropertyKind, DynamicValue};
 
+fn triangles(mesh: &PlotMesh) -> impl Iterator<Item = [[f32; 3]; 3]> {
+    mesh.indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .map(|indices| indices.map(|i| mesh.positions[usize::from(i)]))
+}
+
 fn input<'a>(
     rows: &'a [DataRowId],
     columns: &'a [(&'a str, &'a [ExpressionResult])],
@@ -291,7 +299,7 @@ fn cuboid_faces_are_outward_and_closed() {
     builder.cuboid([-1.0; 3], [1.0; 3], [1.0; 4]).unwrap();
     let mesh = &builder.chunks[0];
     assert_eq!(mesh.indices.len(), 36);
-    for face in mesh.positions.as_chunks::<3>().0.iter() {
+    for face in triangles(mesh) {
         let normal = cross(sub(face[1], face[0]), sub(face[2], face[0]));
         let centroid =
             std::array::from_fn(|axis| (face[0][axis] + face[1][axis] + face[2][axis]) / 3.0);
@@ -350,6 +358,13 @@ fn material_streams_partition_data_and_decorations_without_changing_default_geom
     let material = mesh.material.as_ref().unwrap();
     assert!(mesh.normals.is_empty());
     assert_eq!(mesh.indices.len(), 72);
+    assert_eq!(mesh.positions.len(), 36 + 8);
+    assert!(
+        material
+            .decoration_indices
+            .iter()
+            .all(|i| (36..44).contains(i))
+    );
     assert_eq!(material.data_indices, mesh.indices[..36]);
     assert_eq!(material.decoration_indices, mesh.indices[36..]);
     assert_eq!(material.colors.len(), mesh.positions.len());
@@ -381,6 +396,16 @@ fn material_streams_partition_data_and_decorations_without_changing_default_geom
 }
 
 #[test]
+fn collapsed_wire_faces_leave_no_unreferenced_bounds() {
+    let mut builder = MeshBuilder::default();
+    // At this magnitude the cross-section rounds to a single f32 position.
+    builder
+        .line([1e8, 1e8, 0.0], [1e8, 1e8, 1.0], 0.01, [1.0; 4])
+        .unwrap();
+    assert!(builder.chunks.is_empty());
+}
+
+#[test]
 fn disconnected_points_do_not_create_connecting_faces() {
     let rows = [DataRowId(4), DataRowId(19)];
     let x = numbers(&[1.0, 9.0]);
@@ -398,11 +423,7 @@ fn disconnected_points_do_not_create_connecting_faces() {
     // Face geometry plus ordinary edge strips, still one compact mesh batch.
     assert_eq!(output.meshes.len(), 1);
     assert!(output.meshes[0].indices.len() > 72);
-    for triangle in output
-        .meshes
-        .iter()
-        .flat_map(|mesh| mesh.positions.as_chunks::<3>().0.iter())
-    {
+    for triangle in output.meshes.iter().flat_map(triangles) {
         let width = triangle
             .iter()
             .map(|p| p[0])
@@ -843,7 +864,7 @@ fn edge_prism_faces_point_outward() {
     builder
         .line([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0], 0.1, [1.0; 4])
         .unwrap();
-    for face in builder.chunks[0].positions.as_chunks::<3>().0.iter() {
+    for face in triangles(&builder.chunks[0]) {
         let normal = cross(sub(face[1], face[0]), sub(face[2], face[0]));
         let centroid =
             std::array::from_fn(|axis| (face[0][axis] + face[1][axis] + face[2][axis]) / 3.0);

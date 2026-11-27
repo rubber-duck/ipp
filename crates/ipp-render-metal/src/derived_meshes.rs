@@ -89,8 +89,8 @@ fn plot_buffers(device: &Device, plot: &PlotPublishedMesh, custom: bool) -> Opti
         PlotMeshVariant::Data => &mesh.material.as_ref()?.data_indices,
         PlotMeshVariant::Decoration => &mesh.material.as_ref()?.decoration_indices,
     };
-    // Preserve the submitted triangle order and pack only its referenced
-    // vertices, including when data and decoration share a source mesh.
+    // Keep triangle order for blending. Data and decoration can reference different
+    // subsets of one mesh, so use indices only when they reduce the upload.
     let optical = custom && plot.variant == PlotMeshVariant::Data;
     let buffers = if optical {
         let material = mesh.material.as_ref()?;
@@ -107,16 +107,20 @@ fn plot_buffers(device: &Device, plot: &PlotPublishedMesh, custom: bool) -> Opti
             .collect();
         device.plot_triangles(&vertices)?
     } else {
-        let vertices: Vec<_> = indices
-            .iter()
-            .map(|&i| {
-                let i = usize::from(i);
-                let [x, y, z] = mesh.positions[i];
-                let [r, g, b] = mesh.colors.get(i).copied().unwrap_or([1.0; 3]);
-                [x, y, z, r, g, b]
-            })
-            .collect();
-        device.plot_triangles(&vertices)?
+        let vertex = |i: usize| {
+            let [x, y, z] = mesh.positions[i];
+            let [r, g, b] = mesh.colors.get(i).copied().unwrap_or([1.0; 3]);
+            [x, y, z, r, g, b]
+        };
+        if mesh.positions.len() * size_of::<[f32; 6]>() + size_of_val(indices.as_slice())
+            < indices.len() * size_of::<[f32; 6]>()
+        {
+            let vertices: Vec<_> = (0..mesh.positions.len()).map(vertex).collect();
+            device.mesh(&vertices, indices)?
+        } else {
+            let vertices: Vec<_> = indices.iter().map(|&i| vertex(usize::from(i))).collect();
+            device.plot_triangles(&vertices)?
+        }
     };
 
     Some(DerivedMesh {

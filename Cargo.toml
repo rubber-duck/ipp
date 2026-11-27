@@ -26,6 +26,19 @@ ipp-protocol = { path = "crates/ipp-protocol", default-features = false }
 ipp-host-session = { path = "crates/ipp-host-session", default-features = false }
 ipp-render-gl = { path = "crates/ipp-render-gl", default-features = false }
 ipp-render-metal = { path = "crates/ipp-render-metal", default-features = false }
+# Typed bindings used only by the native Apple renderer and drawable presentation.
+objc2 = { version = "=0.6.5", default-features = false, features = ["std"] }
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSString", "NSError"] }
+objc2-io-surface = { version = "=0.3.2", default-features = false, features = ["IOSurfaceRef"] }
+objc2-metal = { version = "=0.3.2", default-features = false, features = [
+    "std", "objc2-core-foundation", "objc2-io-surface", "MTLAllocation", "MTLBlitCommandEncoder", "MTLBuffer",
+    "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder",
+    "MTLComputePipeline", "MTLDepthStencil", "MTLDevice", "MTLDrawable", "MTLFunctionConstantValues",
+    "MTLLibrary", "MTLPixelFormat", "MTLRenderCommandEncoder", "MTLRenderPass",
+    "MTLRenderPipeline", "MTLResource", "MTLTexture", "MTLTypes", "MTLArgument",
+] }
+objc2-quartz-core = { version = "=0.3.2", default-features = false, features = ["CAMetalLayer", "CALayer", "objc2-core-foundation", "objc2-metal"] }
+bytemuck = { version = "=1.25.0", default-features = false, features = ["derive", "min_const_generics"] }
 ipp-server = { path = "crates/ipp-server", default-features = false }
 ipp-schema-derive = { path = "tools/ipp-schema-derive", default-features = false }
 # Smol components: portable task primitives are shared; reactors and blocking

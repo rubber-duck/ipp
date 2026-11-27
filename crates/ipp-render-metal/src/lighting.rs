@@ -18,7 +18,7 @@ pub(super) const MAX_DOMAIN_LIGHTS: usize = 8;
 pub(super) const SHADOW_TILE: u32 = 1024;
 
 #[repr(C)]
-#[derive(Clone, Default, PartialEq)]
+#[derive(Clone, Copy, Default, PartialEq, bytemuck::NoUninit)]
 pub(super) struct Lighting {
     camera: [f32; 4],
     ambient_count: [f32; 4],

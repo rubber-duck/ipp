@@ -66,6 +66,22 @@ static float3x3 linear_part(float4x4 transform) {
 struct PlotColorVertex { packed_float3 position, color; };
 struct PlotMaterialVertex { packed_float3 position, color; packed_float2 uv; packed_float3 normal; };
 
+// Decorations and default plot marks carry only position and unlit vertex color.
+struct PlotColorRaster { float4 position [[position]]; float4 color; };
+
+vertex PlotColorRaster plot_color_vertex(uint index [[vertex_id]], uint instance [[instance_id]],
+                                         device const PlotColorVertex *mesh [[buffer(0)]],
+                                         device const Material *materials [[buffer(1)]]) {
+    const device Material &material = materials[instance];
+    float4 clip = material.clip_from_mesh * float4(float3(mesh[index].position), 1.0f);
+    clip.z = (clip.z + clip.w) * 0.5f;
+    return {clip, float4(float3(mesh[index].color) * material.color.rgb, material.color.a)};
+}
+
+fragment float4 plot_color_fragment(PlotColorRaster input [[stage_in]]) {
+    return float4(clamp(input.color.rgb, 0.0f, 1.0f), abs(input.color.a));
+}
+
 static MeshVertex mesh_input_vertex(const device MeshVertex *mesh, uint index, float mode) {
     if (mode >= 0.0f) return mesh[index];
     MeshVertex v = {};

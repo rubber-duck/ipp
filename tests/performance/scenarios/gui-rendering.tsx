@@ -41,10 +41,21 @@ export async function openGuiCase(
   const { host } = context;
   const contract = context.contract as unknown as typeof Generated;
   const authored = boardSkins[theme](contract);
-  // Cartoon chooses from these authored tilts on mount. Use the same tilt for every comparison.
-  const skin = authored.notificationAngles?.length
-    ? { ...authored, notificationAngles: [authored.notificationAngles[0]!] }
-    : authored;
+  // Fresh Hosts must mount the same Cartoon notification, tab and segment tilts.
+  const skin = {
+    ...authored,
+    ...(authored.notificationAngles?.length && {
+      notificationAngles: authored.notificationAngles.slice(0, 1),
+    }),
+    ...(authored.themeVariants && {
+      themeVariants: Object.fromEntries(
+        Object.entries(authored.themeVariants).map(([theme, variants]) => [
+          theme,
+          variants.slice(0, 1),
+        ]),
+      ),
+    }),
+  };
   const live = name.endsWith("-live");
   if (isSpatialCase(name)) {
     const chartScene = await openPlot3d(

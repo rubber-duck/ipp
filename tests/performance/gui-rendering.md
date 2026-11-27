@@ -129,3 +129,77 @@ Across all 42 spatial pre/post-edits captures, 42 matched original Metal exactly
 Both dense spatial workloads beat GLES in all three themes. Small point plots and single-row bars favored GLES in all three themes. The source protocol delivers independent producer updates in order. For the seven-source board, the reported latency includes every source commit, binding observation and the next Host frame.
 
 The full 1,024-row planar comparison covered 72 release windows. Across all twelve theme and projection combinations, 48 of 48 optimized Metal before/after captures matched original Metal outside the redraw marker.
+
+## Rust Metal bindings and GPUI batching on Apple M4
+
+Three release Metal executables used the same Host, paint and coverage shaders, GUI fixtures and shared scene extraction from the working checkout at `6eaa3b0`. The baseline used IPP's Rust-to-Objective-C bridge. The second moved command encoding into Rust using `objc2-metal`, retaining the original six-vertex quads and upload allocation strategy. The third used four-vertex instanced strips, pooled transient uploads and compact immutable buffers for large retained batches. Splitting the experiment this way measures the Rust port separately from the GPU submission changes.
+
+The 27 configurations included the complete board with unchanged chart data, the complete board with 673 changed rows per update, and a 1,024-row live 3D terrain chart. The boards ran under Glass, Cybertron and Cartoon on direct Canvas, flat, cylinder and sphere. The spatial chart used its own camera. Each configuration ran in a fresh offscreen Host for at least 96 frames and 1.5 seconds, followed by 16 acknowledged data edits on the live workloads. Each set rotated the old Metal, Rust port, optimized Metal and GLES executables. The second Metal round reversed configuration order. The fixture selected the same authored Cartoon tab, segment and notification tilt on every mount. The comparison uses geometric means of per-configuration measurements. Frame intervals measure steady redraw throughput. Edit-to-frame includes the client commit and Host publication.
+
+A separate instrumented run measured the GPU command-buffer duration, CPU scene preparation and encoding before frame finalization, and new Metal upload-buffer allocations. It sampled the Glass board on direct Canvas, cylinder and sphere. Allocation counts cover Canvas batches, mesh uniforms and palettes, including new buffers for recordings. They exclude static assets, textures, readbacks and the cylinder intersection map.
+
+| Workload and metric (ms) | Original Metal | Rust port | Rust port with pooled uploads and strips | GLES |
+| --- | --: | --: | --: | --: |
+| Full board, steady frame interval | 2.479 | 2.283 | 2.209 | 3.678 |
+| Live board, steady frame interval between edits | 2.488 | 2.285 | 2.211 | 3.699 |
+| Live board, edit-to-frame p50 | 191.10 | 171.45 | 162.16 | 265.96 |
+| Live board, edit-to-frame p95 | 196.30 | 176.48 | 166.66 | 274.38 |
+| Live 3D terrain, steady frame interval | 0.234 | 0.235 | 0.228 | 0.183 |
+| Live 3D terrain, edit-to-frame p50 | 8.08 | 8.16 | 8.37 | 8.70 |
+| Live 3D terrain, edit-to-frame p95 | 8.94 | 8.95 | 10.51 | 9.50 |
+
+Both Metal changes reduced the full-board frame interval in all 12 theme/projection combinations. The Rust port reduced it by 7.9%. Pooled uploads and instanced strips reduced it by another 3.2% relative to the port. The improvement over the original renderer was 11.1% in the first round and 10.7% in the second. The live board spent 148.10 ms of its 162.16 ms median edit-to-frame interval waiting for the edit commit. Terrain edit latency increased most on Glass, from 9.99 ms to 11.71 ms at the median.
+
+| Glass workload | Draws per frame | Median CPU preparation and encoding, old → optimized (ms) | Median GPU command buffer, old → optimized (ms) | Mean new upload buffers per frame, old → optimized |
+| --- | --: | --: | --: | --: |
+| Direct Canvas | 365 | 0.336 → 0.133 | 1.276 → 1.203 | 11.00 → 0.00 |
+| Cylinder | 882 | 0.716 → 0.339 | 2.605 → 2.508 | 3.95 → 0.00 |
+| Sphere | 880 | 0.722 → 0.349 | 3.019 → 2.901 | 4.56 → 0.23 |
+| Live 3D terrain, steady redraw | 11 | 0.129 → 0.071 | 0.402 → 0.391 | 5.00 → 0.00 |
+
+The old and optimized renderers submitted the same draw and triangle counts for these boards. CPU samples exclude the final batch flush, commit and GPU wait. GPU scopes cover the full command buffer and synchronize the diagnostic Host. Release timings above use the normal in-flight queue. All times refer to offscreen rendering on this M4.
+
+Across the two Metal rounds, all 84 optimized captures matched the original renderer pixel for pixel outside the animated redraw marker. This includes every pre-edit and post-edit board. All 12 spatial pre/post captures matched over the full frame. For each of the 42 first-round images, the measured difference against GLES outside the marker was identical before and after the migration. The largest mean absolute RGB difference against GLES was 1.97 on the 0–255 scale on the Glass direct Canvas board.
+
+A separate two-round terrain trial changed only the upload strategy for large mesh uniforms and joint palettes. Allocating a new Metal buffer for each upload gave an 8.47 ms median edit-to-frame time and a 9.98 ms p95, versus 8.52 ms and 9.57 ms with pooling. The original bridge measured 8.02 ms and 8.84 ms in the same trial. Pooling stayed enabled. The remaining Glass terrain edit regression is examined in the follow-up below. A final run of the shipping Host across all 12 full boards measured a 2.22 ms geometric mean and matched the original pixels outside the marker in all 12 captures.
+
+## Profiling the live 3D terrain
+
+On Apple M4, the 960 × 760 offscreen chart replaced 1,024 source rows per edit. Each theme ran three fresh release Hosts for each of the three builds in the table, with at least 1.5 seconds of steady measurement per run. The table gives the median of the three steady submission intervals and the pooled p50 and p95 of 48 acknowledged edits. Each edit waited for the changed binding and a newer Host frame. GPU times came from separate instrumented runs. Each skin used the chart camera. Board projections do not apply to this fixture.
+
+| Theme | Previous Metal (redraw / edit p50 / edit p95, ms) | Updated Metal (ms) | Updated GLES (ms) | GPU p50, previous Metal / updated Metal / updated GLES (ms) |
+| --- | --: | --: | --: | --: |
+| Glass | 0.330 / 12.00 / 14.48 | 0.137 / 6.19 / 6.85 | 0.187 / 8.90 / 9.81 | 0.387 / 0.164 / 0.358 |
+| Cybertron | 0.200 / 8.26 / 8.95 | 0.087 / 5.58 / 6.47 | 0.173 / 7.22 / 8.04 | 0.261 / 0.081 / 0.178 |
+| Cartoon | 0.179 / 6.00 / 6.57 | 0.086 / 4.98 / 6.38 | 0.183 / 6.64 / 7.47 | 0.198 / 0.078 / 0.231 |
+
+The costliest layer was the spatial Canvas geometry around the data. Omitting the chart planes in a profiling build reduced the previous Glass GPU median from 0.389 to 0.182 ms. Omitting just the mesh wireframe saved 0.064 ms, and replacing the optical fragment with flat color saved 0.068 ms. The chart planes include many thin grid and axis paths. Expanding each path by at least one local unit gave the four coverage taps dozens of pixels of empty space to test on either side. Metal now maps one framebuffer pixel back through the plane and local transform to bound that work for orthographic world planes. Perspective and curved paths keep their original envelopes.
+
+Live wireframe edits also used to generate and upload 36 vertex records per edge. Plot now emits eight corners with the same 36 indices and triangle winding. Metal keeps the indices where they reduce upload size and uses a position-and-color pipeline for unlit marks. Glass keeps its full optical material. On Glass, the geometry change alone preserved both captured frames byte for byte. With indexed geometry and the unlit pipeline, GPU time was 0.339 ms. Tightening the chart-plane bounds reduced it to 0.164 ms with the same ten draws.
+
+The release comparison uses GLES rebuilt with the same shared Plot change. Original GLES measured 0.190 / 10.98 / 11.79 ms on Glass in the reference run. The pre-port Objective-C bridge measured 0.338 / 9.88 / 10.53 ms across three Glass runs. In a separate GLES diagnostic, adding a flush after each offscreen draw changed the interval from 0.189 to 0.199 ms, while finishing the GPU after every frame raised it to 0.736 ms. The normal submission interval and the separately sampled GPU duration measure different boundaries.
+
+A separate release trace timed dataset receipt, geometry preparation, mesh upload, and command submission on real edits. The native Host handles dataset requests, evaluates the World, presents, and then flushes the reply. This couples the client commit time to the cost of drawing the chart. Values below are medians in milliseconds over 32 edits per build. Stage medians can be taken from different edits.
+
+| Glass edit stage | Original bridge | Previous Metal | Updated Metal |
+| --- | --: | --: | --: |
+| Dataset handling before World evaluation | 0.473 | 0.412 | 0.347 |
+| Terrain geometry construction | 1.079 | 1.327 | 0.440 |
+| All chart mesh uploads | 0.441 | 0.548 | 0.191 |
+| Final encoder flush, queue retirement and commit | 0.005 | 0.004 | 0.003 |
+| Host receives FINISH to reply flush | 2.339 | 2.605 | 1.186 |
+| Client FINISH request to credit | 3.047 | 3.428 | 1.511 |
+
+Seven additional Glass runs sampled the CPU executing the identical JavaScript dataset encoder. The table reports the range of run medians. Effective GHz divides process cycles by active process CPU time during encoding. CPU IDs sampled at both ends of the encode identify the core class on this M4.
+
+| Glass client encoding | Release runs | Time (ms) | Million instructions | Million cycles | Effective GHz |
+| --- | --: | --: | --: | --: | --: |
+| Original bridge | 2 | 2.41 | 54.84–55.03 | 9.43–9.46 | 3.91–3.92 |
+| Previous Metal | 3 | 3.33–3.58 | 54.93–55.06 | 9.38–9.58 | 2.61–2.86 |
+| Updated Metal | 2 | 2.44–2.46 | 55.05–55.20 | 9.61–9.77 | 3.94 |
+
+The client began 112/112 measured encodes and ended 112/112 on performance cores. During the slower previous-Metal runs, the same encoding work took longer at a lower CPU operating rate. The Host geometry interval also tracked active thread time. Together with the cost of reconstructing the mesh and waiting for replies between redraws, this explains why faster CPU-side draw encoding could coexist with slower end-to-end edits. The CPU operating-rate observation is specific to this machine and uncapped workload.
+
+Across all six before/after Metal captures, 213 of 4,377,600 RGBA pixels differed from previous Metal. The largest frame difference was 54 pixels. The largest channel delta was 55/255. The shared Plot change altered 0 pixels across the six GLES captures. Updated Metal and GLES still differ in 12,973–32,933 pixels per frame.
+
+On the full flat Glass board, the previous and updated Metal builds measured 2.109 and 2.109 ms per submission. All pixels outside the animated marker matched. A separate live 1,024-point Glass plot improved from 0.336 to 0.179 ms per redraw and from 11.49 to 6.78 ms per edit in one run.

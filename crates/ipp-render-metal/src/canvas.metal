@@ -78,17 +78,14 @@ static CanvasRaster canvas_default_vertex(CanvasVertex v) {
 }
 
 vertex CanvasRaster canvas_vertex(const device CanvasVertex *vertices [[buffer(0)]],
-                                  uint index [[vertex_id]]) {
-    return canvas_default_vertex(vertices[index]);
+                                  uint index [[vertex_id]], uint instance [[instance_id]]) {
+    return canvas_default_vertex(vertices[index + 4 * instance]);
 }
 
 vertex CanvasRaster canvas_intersection_vertex(
     constant CanvasAnalytic *intersection [[buffer(1)]],
-    constant CanvasMapping &mapping [[buffer(2)]], uint index [[vertex_id]]) {
-    constexpr uint corners[6] = {0, 1, 2, 2, 1, 3};
-    uint slot = index / 6;
-    constant CanvasAnalytic &surface = intersection[slot];
-    float2 point = surface.cover[corners[index % 6]];
+    constant CanvasMapping &mapping [[buffer(2)]], uint corner [[vertex_id]], uint slot [[instance_id]]) {
+    float2 point = intersection[slot].cover[corner];
     // Analytic covering quads have unit clip W, so inverse projection is
     // affine across the raster interpolation domain.
     float4 origin = mapping.inverse * float4(point, -1.0, 1.0);

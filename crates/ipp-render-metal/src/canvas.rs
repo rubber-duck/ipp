@@ -386,6 +386,37 @@ pub(super) struct CanvasPass<'a, 'b> {
     pub(super) owner: u32,
 }
 
+/// Local extent of a framebuffer pixel on a parallel-projected world plane.
+/// Perspective and curved surfaces have a position-dependent footprint.
+fn plane_pixel_extent(
+    projection: &CanvasProjection<'_>,
+    affine: CanvasAffine,
+    target: [u32; 2],
+) -> Option<[f32; 2]> {
+    let CanvasProjection::Plane {
+        matrix,
+        world: Some(_),
+    } = projection
+    else {
+        return None;
+    };
+    if matrix[3] != 0.0 || matrix[7] != 0.0 || matrix[15] <= 0.0 {
+        return None;
+    }
+    let [sx, sy] = target.map(|n| n as f32 * 0.5 / matrix[15]);
+    let screen = CanvasAffine {
+        axes: [
+            [sx * matrix[0], sy * matrix[1]],
+            [sx * matrix[4], sy * matrix[5]],
+        ],
+        origin: [0.0; 2],
+    };
+    let inverse = screen.compose(affine).inverse()?;
+    Some(std::array::from_fn(|i| {
+        inverse.axes[0][i].abs() + inverse.axes[1][i].abs()
+    }))
+}
+
 impl CanvasPass<'_, '_> {
     pub(super) fn draw_image(
         &mut self,
@@ -672,8 +703,11 @@ impl CanvasPass<'_, '_> {
         let clip = inverse.bounds(clip);
         let [l, t, r, b] = path.bounds;
         let margin = ((r - l).max(b - t) / 16.0).max(1.0);
-        let content = corners([l - margin, t - margin, r + margin, b + margin])
-            .map(|point| affine.point(point));
+        // Each coverage tap is at most a quarter pixel along either screen axis.
+        // Allow a full pixel for raster rounding, bounded by the existing path envelope.
+        let [mx, my] = plane_pixel_extent(self.projection, affine, self.frame.target_size)
+            .map_or([margin; 2], |pixel| pixel.map(|v| v.min(margin)));
+        let content = corners([l - mx, t - my, r + mx, b + my]).map(|point| affine.point(point));
         let polygon = intersect(placement.polygon.clone(), &content);
         let placement = CanvasPlacement {
             affine,
@@ -722,7 +756,17 @@ impl CanvasPass<'_, '_> {
             }
             return;
         }
-        let mut vertices = Vec::new();
+        // The strip uses the same diagonal as the triangle fan for all convex clipped quads.
+        if matches!(self.projection, CanvasProjection::Plane { .. })
+            && let [a, b, c, d] = placement.polygon.as_ref()
+            && let [Some(b), Some(c), Some(a), Some(d)] =
+                [*b, *c, *a, *d].map(|p| self.projection.vertex(p, inverse.point(p)))
+        {
+            self.submit(&[b, c, a, d], paint, image, custom, None);
+            return;
+        }
+        let mut vertices = std::mem::take(&mut self.frame.canvas_vertices);
+        vertices.clear();
         if let CanvasProjection::Surface {
             geometry,
             scale,
@@ -782,6 +826,7 @@ impl CanvasPass<'_, '_> {
         if !vertices.is_empty() {
             self.submit(&vertices, paint, image, custom, None);
         }
+        self.frame.canvas_vertices = vertices;
     }
 
     fn submit(
@@ -804,7 +849,7 @@ impl CanvasPass<'_, '_> {
             },
         ) {
             self.summary.draw_calls = self.summary.draw_calls.saturating_add(1);
-            let triangles = if analytic.is_some() {
+            let triangles = if analytic.is_some() || vertices.len() == 4 {
                 2
             } else {
                 vertices.len() / 3
@@ -1090,4 +1135,37 @@ pub(super) fn camera_slots(scene: CanvasScene<'_>) -> impl Iterator<Item = &Canv
             CanvasPaintEntry::Attachment(slot) if slot.opacity > 0.0 => Some(slot),
             _ => None,
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projected_pixel_accounts_for_both_axes_and_target_dimensions() {
+        let mut matrix = CanvasAffine::IDENTITY.matrix();
+        let affine = CanvasAffine {
+            axes: [[1.0, 1.0], [-1.0, 1.0]],
+            origin: [12.0, 80.0],
+        };
+        let extent = |matrix| {
+            plane_pixel_extent(
+                &CanvasProjection::Plane {
+                    matrix,
+                    world: Some(matrix),
+                },
+                affine,
+                [100, 200],
+            )
+        };
+        // Half a local unit along either screen axis before the viewport scale.
+        for axis in extent(matrix).unwrap() {
+            assert!((axis - 0.015).abs() < 1e-6);
+        }
+        matrix[3] = 0.2;
+        assert!(extent(matrix).is_none());
+        matrix[3] = 0.0;
+        matrix[0] = 0.0;
+        assert!(extent(matrix).is_none());
+    }
 }

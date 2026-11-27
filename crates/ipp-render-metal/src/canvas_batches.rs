@@ -81,6 +81,7 @@ struct Run {
     range: Range<usize>,
     last_frame: u64,
     record_after: Instant,
+    required_bytes: usize,
     recording: Option<Recording>,
 }
 
@@ -183,6 +184,7 @@ impl CanvasBatches {
                 return Lookup::Replayed;
             }
             if self.now >= run.record_after
+                && run.required_bytes <= MAX_RETAINED_BYTES.saturating_sub(self.bytes)
                 && self.bytes < MAX_RETAINED_BYTES
                 && frame.begin_canvas_record()
             {
@@ -204,6 +206,7 @@ impl CanvasBatches {
                     last_frame: self.frame,
                     record_after: self.now + STABLE_FOR,
                     recording: None,
+                    required_bytes: 0,
                 },
             );
         }
@@ -217,9 +220,11 @@ impl CanvasBatches {
         let Some((draw_calls, triangles)) = counts else {
             return;
         };
-        if self.bytes + bytes <= MAX_RETAINED_BYTES
-            && let Some(run) = self.runs.get_mut(&id)
-        {
+        let Some(run) = self.runs.get_mut(&id) else {
+            return;
+        };
+        run.required_bytes = bytes;
+        if bytes <= MAX_RETAINED_BYTES.saturating_sub(self.bytes) {
             self.bytes += bytes;
             run.recording = Some(Recording {
                 buffer,

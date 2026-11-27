@@ -16,7 +16,7 @@ pub(super) struct AnalyticSurface<'a> {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, bytemuck::NoUninit)]
 pub(super) struct AnalyticMapping {
     // Shape, signed curvature, root index, domain radius.
     parameters: [f32; 4],
@@ -43,7 +43,7 @@ impl AnalyticMapping {
 }
 
 #[repr(C)]
-#[derive(Default)]
+#[derive(Default, Clone, Copy, bytemuck::NoUninit)]
 pub(super) struct AnalyticDraw {
     local_x: [f32; 4],
     local_y: [f32; 4],

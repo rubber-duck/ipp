@@ -5,6 +5,33 @@ export interface WebGlElementImage {
   close(): void;
 }
 
+/** Own a transferred bitmap as a canvas source so WebGL honors its alpha unpack state. */
+export class WebGlBitmapSource {
+  readonly canvas: OffscreenCanvas;
+  readonly #owner: ImageBitmapRenderingContext;
+
+  constructor(image: ImageBitmap) {
+    try {
+      this.canvas = new OffscreenCanvas(image.width, image.height);
+      const owner = this.canvas.getContext("bitmaprenderer");
+      if (!owner) throw new Error("Bitmap rendering context is unavailable");
+      owner.transferFromImageBitmap(image);
+      this.#owner = owner;
+    } catch (error) {
+      image.close();
+      throw error;
+    }
+  }
+
+  close(): void {
+    // Replacing the owned bitmap with transparent black releases its backing.
+    // Keep that replacement small even when retiring a large capture.
+    this.canvas.width = 1;
+    this.canvas.height = 1;
+    this.#owner.transferFromImageBitmap(null);
+  }
+}
+
 /** One-use browser snapshots; the Host reserves total image capacity before staging. */
 export function createWebGlWebImages(
   gl: WebGL2RenderingContext,
@@ -102,9 +129,6 @@ export function createWebGlWebImages(
           names.forEach((name) =>
             gl.pixelStorei(name, name === gl.UNPACK_ALIGNMENT ? 1 : 0),
           );
-          // The admitted producer supplies top-left, straight-alpha sRGB pixels.
-          // ImageBitmap's own orientation/premultiplication is fixed at creation;
-          // WebGL unpack flags cannot normalize an arbitrary bitmap producer.
           if (pending?.element) {
             // ElementImage authority belongs to this exact canvas, including
             // its transferred OffscreenCanvas. No ImageBitmap/readback bridge.
@@ -124,16 +148,22 @@ export function createWebGlWebImages(
               width,
               height,
             });
-          } else
-            gl.texSubImage2D(
-              gl.TEXTURE_2D,
-              0,
-              0,
-              0,
-              gl.RGBA,
-              gl.UNSIGNED_BYTE,
-              image as ImageBitmap,
-            );
+          } else {
+            const source = new WebGlBitmapSource(image as ImageBitmap);
+            try {
+              gl.texSubImage2D(
+                gl.TEXTURE_2D,
+                0,
+                0,
+                0,
+                gl.RGBA,
+                gl.UNSIGNED_BYTE,
+                source.canvas,
+              );
+            } finally {
+              source.close();
+            }
+          }
           options.check();
           return 1;
         } finally {

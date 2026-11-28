@@ -1,16 +1,20 @@
 import type { HtmlCanvasFrame } from "../support/html-canvas-producer.js";
+import { WebGlBitmapSource } from "../../../crates/ipp-render-gl/src/services/render/device/webgl/webgl-web-images.js";
 
+type RetainedFrame = Omit<HtmlCanvasFrame, "image"> & {
+  source: WebGlBitmapSource;
+};
 let gl: WebGL2RenderingContext;
 let texture: WebGLTexture | null = null;
 let program: WebGLProgram | null = null;
-let current: HtmlCanvasFrame | undefined;
+let current: RetainedFrame | undefined;
 let generation = 1;
 const statistics = { received: 0, rejected: 0, closed: 0, replayed: 0 };
 const send = (value: unknown) => globalThis.postMessage(value);
 
-function close(image: ImageBitmap): void {
+function close(image: ImageBitmap | WebGlBitmapSource): void {
   image.close();
-  if (image.width !== 0 || image.height !== 0)
+  if (image instanceof ImageBitmap && (image.width !== 0 || image.height !== 0))
     throw new Error("ImageBitmap did not close");
   statistics.closed++;
 }
@@ -43,7 +47,7 @@ function prepare(): void {
     throw new Error(gl.getProgramInfoLog(program)!);
 }
 
-function upload(frame: HtmlCanvasFrame): void {
+function upload(frame: RetainedFrame): void {
   if (texture) gl.deleteTexture(texture);
   texture = gl.createTexture();
   gl.bindTexture(gl.TEXTURE_2D, texture);
@@ -67,7 +71,7 @@ function upload(frame: HtmlCanvasFrame): void {
     0,
     gl.RGBA,
     gl.UNSIGNED_BYTE,
-    frame.image,
+    frame.source.canvas,
   );
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
@@ -142,9 +146,16 @@ globalThis.onmessage = ({ data }) => {
         });
         return;
       }
-      upload(frame);
-      if (current) close(current.image);
-      current = frame;
+      const { image, ...metadata } = frame;
+      const next = { ...metadata, source: new WebGlBitmapSource(image) };
+      try {
+        upload(next);
+      } catch (error) {
+        close(next.source);
+        throw error;
+      }
+      if (current) close(current.source);
+      current = next;
       draw();
       send({
         type: "frame",
@@ -186,7 +197,7 @@ globalThis.onmessage = ({ data }) => {
       generation++;
       send({ type: "invalidated", generation });
     } else if (data.operation === "dispose") {
-      if (current) close(current.image);
+      if (current) close(current.source);
       current = undefined;
       gl.deleteTexture(texture);
       gl.deleteProgram(program);

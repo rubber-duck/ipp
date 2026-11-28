@@ -173,9 +173,15 @@ export async function exerciseHtmlCanvasDeviceInfo(driver: HtmlCanvasDriver) {
 }
 
 async function deviceChecks(driver: HtmlCanvasDriver) {
-  const { checks } = await driver.call<{
+  const { checks, premultipliedPixel } = await driver.call<{
     checks: Record<string, boolean | number>;
+    premultipliedPixel: number[];
   }>("deviceChecks");
+  assert.ok(
+    Math.abs(premultipliedPixel[0]! - srgbOverBlack(255, 128 / 255)) <= 2,
+    `Premultiplied red must composite once over black: ${premultipliedPixel}`,
+  );
+  assert.deepEqual(premultipliedPixel.slice(1), [0, 0, 255]);
   for (const [name, result] of Object.entries(checks)) {
     if (name !== "fencePolls") assert.equal(result, true, name);
   }
@@ -183,5 +189,5 @@ async function deviceChecks(driver: HtmlCanvasDriver) {
     statistics: HtmlCanvasCapture["statistics"];
   }>("dispose");
   assert.equal(disposed.statistics.closed, disposed.statistics.received);
-  return { checks, consumer: disposed.statistics };
+  return { checks, premultipliedPixel, consumer: disposed.statistics };
 }

@@ -62,8 +62,8 @@ async function prepare(): Promise<void> {
     ...sources["surface_bitmap.frag"]!,
   );
 }
-function draw(): void {
-  require(current && texture, "No imported image");
+function draw(imageTexture = texture): void {
+  require(current && imageTexture, "No imported image");
   const mark = top;
   try {
     ok(
@@ -78,7 +78,7 @@ function draw(): void {
     ok(
       "draw_surface_bitmap",
       program,
-      texture,
+      imageTexture,
       floats([2, 0, 0, 0, 0, -2, 0, 0, 0, 0, 1, 0, -1, 1, 0, 1]),
       floats([0, 0, 1, 1]),
       floats([0, 0, 1, 1]),
@@ -167,14 +167,22 @@ function upload(frame: HtmlCanvasFrame): void {
   if (texture) call("delete_texture", texture);
   texture = replacement;
 }
-function snapshot(): ImageBitmap {
+async function checkBitmapImports() {
   const source = new OffscreenCanvas(8, 8);
-  const context = source.getContext("webgl2", { antialias: false })!;
-  context.clearColor(0, 1, 0, 1);
-  context.clear(context.COLOR_BUFFER_BIT);
-  const image = source.transferToImageBitmap();
-  context.getExtension("WEBGL_lose_context")?.loseContext();
-  return image;
+  const context = source.getContext("webgl2", {
+    antialias: false,
+    premultipliedAlpha: true,
+  })!;
+  // Saturated red at half opacity, stored premultiplied on every backend.
+  context.clearColor(128 / 255, 0, 0, 128 / 255);
+  try {
+    return await checks(() => {
+      context.clear(context.COLOR_BUFFER_BIT);
+      return source.transferToImageBitmap();
+    });
+  } finally {
+    context.getExtension("WEBGL_lose_context")?.loseContext();
+  }
 }
 async function event(name: string, action: () => void): Promise<void> {
   await new Promise<void>((resolve, reject) => {
@@ -190,7 +198,7 @@ async function event(name: string, action: () => void): Promise<void> {
     action();
   });
 }
-async function checks() {
+async function checks(snapshot: () => ImageBitmap) {
   let capabilityQueries = 0;
   const getParameter = gl.getParameter.bind(gl);
   gl.getParameter = (name) => {
@@ -259,6 +267,8 @@ async function checks() {
   require(next.width === 8, "Stale release closed a replacement");
   ok("web_image_copy", nextId, target, 8, 8);
   closed(next);
+  draw(target);
+  const premultipliedPixel = Array.from(device.capture().subarray(0, 4));
   const fence = ok("completion_fence_create");
   const deadline = performance.now() + 5000;
   let polls = 0;
@@ -317,16 +327,19 @@ async function checks() {
   require(refused, "Disposed bridge accepted staging");
   closed(afterDispose);
   return {
-    deviceInfoCached: true,
-    capacityRejected: true,
-    uploadErrorClosed: true,
-    extentRejected: true,
-    staleReleaseInert: true,
-    fenceCompleted: true,
-    fencePolls: polls,
-    lossInvalidated: true,
-    disposalClosed: true,
-    unpackStatePreserved: true,
+    premultipliedPixel,
+    checks: {
+      deviceInfoCached: true,
+      capacityRejected: true,
+      uploadErrorClosed: true,
+      extentRejected: true,
+      staleReleaseInert: true,
+      fenceCompleted: true,
+      fencePolls: polls,
+      lossInvalidated: true,
+      disposalClosed: true,
+      unpackStatePreserved: true,
+    },
   };
 }
 
@@ -370,7 +383,7 @@ globalThis.onmessage = async ({ data }) => {
     } else if (data.operation === "capture")
       send({ type: "capture", ...capture() });
     else if (data.operation === "deviceChecks")
-      send({ type: "deviceChecked", checks: await checks() });
+      send({ type: "deviceChecked", ...(await checkBitmapImports()) });
     else if (data.operation === "invalidate") {
       generation++;
       send({ type: "invalidated", generation });
